@@ -3131,7 +3131,7 @@ def test_custom_pricing_applies_cache_creation_input_cost_via_cache_write_tokens
 
 
 def test_extract_cache_read_tokens_anthropic_top_level():
-    from litellm.proxy.db.db_spend_update_writer import _extract_cache_read_tokens
+    from litellm.proxy.spend_tracking.savings import extract_cache_read_tokens as _extract_cache_read_tokens
 
     usage_obj = {
         "prompt_tokens": 100,
@@ -3143,7 +3143,7 @@ def test_extract_cache_read_tokens_anthropic_top_level():
 
 
 def test_extract_cache_read_tokens_openai_compatible_fallback():
-    from litellm.proxy.db.db_spend_update_writer import _extract_cache_read_tokens
+    from litellm.proxy.spend_tracking.savings import extract_cache_read_tokens as _extract_cache_read_tokens
 
     # Anthropic field absent — fall back to prompt_tokens_details.cached_tokens.
     usage_obj = {
@@ -3154,7 +3154,7 @@ def test_extract_cache_read_tokens_openai_compatible_fallback():
 
 
 def test_extract_cache_read_tokens_zero_when_missing():
-    from litellm.proxy.db.db_spend_update_writer import _extract_cache_read_tokens
+    from litellm.proxy.spend_tracking.savings import extract_cache_read_tokens as _extract_cache_read_tokens
 
     assert _extract_cache_read_tokens({}) == 0
     assert _extract_cache_read_tokens({"cache_read_input_tokens": None}) == 0
@@ -3165,9 +3165,7 @@ def test_extract_cache_read_tokens_zero_when_missing():
 
 
 def test_extract_cache_creation_tokens_anthropic_top_level():
-    from litellm.proxy.db.db_spend_update_writer import (
-        _extract_cache_creation_tokens,
-    )
+    from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens as _extract_cache_creation_tokens
 
     usage_obj = {
         "prompt_tokens": 100,
@@ -3179,9 +3177,7 @@ def test_extract_cache_creation_tokens_anthropic_top_level():
 
 
 def test_extract_cache_creation_tokens_openai_cache_write_alias():
-    from litellm.proxy.db.db_spend_update_writer import (
-        _extract_cache_creation_tokens,
-    )
+    from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens as _extract_cache_creation_tokens
 
     # kimi-k2 emits cache_write_tokens.
     usage_obj = {
@@ -3192,9 +3188,7 @@ def test_extract_cache_creation_tokens_openai_cache_write_alias():
 
 
 def test_extract_cache_creation_tokens_openai_cache_creation_alias():
-    from litellm.proxy.db.db_spend_update_writer import (
-        _extract_cache_creation_tokens,
-    )
+    from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens as _extract_cache_creation_tokens
 
     # Other OpenAI-compatible providers emit cache_creation_tokens.
     usage_obj = {
@@ -3205,9 +3199,7 @@ def test_extract_cache_creation_tokens_openai_cache_creation_alias():
 
 
 def test_extract_cache_creation_tokens_zero_when_missing():
-    from litellm.proxy.db.db_spend_update_writer import (
-        _extract_cache_creation_tokens,
-    )
+    from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens as _extract_cache_creation_tokens
 
     assert _extract_cache_creation_tokens({}) == 0
     assert _extract_cache_creation_tokens({"cache_creation_input_tokens": None}) == 0

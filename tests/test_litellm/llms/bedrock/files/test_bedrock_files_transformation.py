@@ -4,10 +4,14 @@ Test bedrock files transformation functionality
 
 import json
 import os
+from collections.abc import Mapping
 from unittest.mock import MagicMock
 from urllib.parse import unquote, urlparse
 
 import pytest
+from botocore.auth import S3SigV4Auth, SigV4Auth
+from botocore.awsrequest import AWSRequest
+from botocore.credentials import Credentials
 
 from litellm.llms.bedrock.files.transformation import BedrockJsonlFilesTransformation
 
@@ -442,7 +446,7 @@ class TestBedrockFilesTransformation:
 
         captured_optional_params: dict = {}
 
-        def fake_sign(content, api_base, optional_params):
+        def fake_sign(content, api_base, optional_params, s3_encryption_key_id=None):
             captured_optional_params.update(optional_params)
             return {"Authorization": "fake"}, content
 
@@ -498,7 +502,7 @@ class TestBedrockFilesTransformation:
 
         captured_optional_params: dict = {}
 
-        def fake_sign(content, api_base, optional_params):
+        def fake_sign(content, api_base, optional_params, s3_encryption_key_id=None):
             captured_optional_params.update(optional_params)
             return {"Authorization": "fake"}, content
 
@@ -513,6 +517,74 @@ class TestBedrockFilesTransformation:
         assert (
             captured_optional_params.get("aws_region_name") == "us-gov-west-1"
         ), "s3_region_name must override aws_region_name for SigV4 signing"
+
+    def _signed_upload_request(self, litellm_params: dict) -> dict:
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        config = BedrockFilesConfig()
+        jsonl_content = json.dumps(
+            {
+                "custom_id": "req-1",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "bedrock/amazon.nova-pro-v1:0",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "max_tokens": 10,
+                },
+            }
+        ).encode()
+
+        request = config.transform_create_file_request(
+            model="amazon.nova-pro-v1:0",
+            create_file_data={
+                "file": ("batch.jsonl", jsonl_content, "application/jsonl"),
+                "purpose": "batch",
+            },
+            optional_params={
+                "aws_access_key_id": "test-key-id",
+                "aws_secret_access_key": "test-secret",
+                "aws_region_name": "us-west-2",
+            },
+            litellm_params={"s3_bucket_name": "litellm-batch-bucket", **litellm_params},
+        )
+        assert isinstance(request, dict)
+        return request
+
+    def test_upload_signs_sse_kms_headers_when_key_configured(self, monkeypatch):
+        """
+        Buckets whose policy requires SSE-KMS reject the batch input-file PutObject
+        unless the upload carries the aws:kms encryption headers; they must also be
+        covered by SigV4 SignedHeaders or S3 answers SignatureDoesNotMatch.
+        """
+        monkeypatch.delenv("AWS_S3_ENCRYPTION_KEY_ID", raising=False)
+        kms_key = "arn:aws:kms:us-west-2:1234:key/abcd"
+
+        request = self._signed_upload_request({"s3_encryption_key_id": kms_key})
+
+        headers = {key.lower(): value for key, value in request["headers"].items()}
+        assert headers["x-amz-server-side-encryption"] == "aws:kms"
+        assert headers["x-amz-server-side-encryption-aws-kms-key-id"] == kms_key
+        signed_headers = headers["authorization"].split("SignedHeaders=")[1].split(",")[0]
+        assert "x-amz-server-side-encryption" in signed_headers
+        assert "x-amz-server-side-encryption-aws-kms-key-id" in signed_headers
+
+    def test_upload_reads_sse_kms_key_from_env(self, monkeypatch):
+        monkeypatch.setenv("AWS_S3_ENCRYPTION_KEY_ID", "env-kms-key")
+
+        request = self._signed_upload_request({})
+
+        headers = {key.lower(): value for key, value in request["headers"].items()}
+        assert headers["x-amz-server-side-encryption-aws-kms-key-id"] == "env-kms-key"
+
+    def test_upload_omits_sse_headers_when_no_key_configured(self, monkeypatch):
+        monkeypatch.delenv("AWS_S3_ENCRYPTION_KEY_ID", raising=False)
+
+        request = self._signed_upload_request({})
+
+        headers = {key.lower() for key in request["headers"]}
+        assert "x-amz-server-side-encryption" not in headers
+        assert "x-amz-server-side-encryption-aws-kms-key-id" not in headers
 
     def test_openai_passthrough_still_works(self):
         """
@@ -1213,9 +1285,16 @@ class TestBedrockFileContentTransformation:
         assert params == {}
 
         signed_headers = litellm_params[S3_SIGNED_GET_HEADERS_PARAM]
-        assert (
-            signed_headers["x-amz-content-sha256"] == hashlib.sha256(b"").hexdigest()
-        ), "GET has no payload, so the content hash must be the empty-body hash"
+        content_hashes = {
+            value
+            for name, value in signed_headers.items()
+            if name.lower() == "x-amz-content-sha256"
+        }
+        assert content_hashes == {hashlib.sha256(b"").hexdigest()}, (
+            "GET has no payload, so the content hash must be the empty-body hash."
+            " The header name is matched case-insensitively because botocore picks"
+            " its own casing and HTTP header names are case-insensitive"
+        )
         authorization = signed_headers["Authorization"]
         assert authorization.startswith("AWS4-HMAC-SHA256 Credential=AKIAEXAMPLE/")
         assert "/us-west-2/s3/aws4_request" in authorization
@@ -1487,3 +1566,129 @@ class TestBedrockFileContentTransformation:
             .startswith("AWS4-HMAC-SHA256")
         )
         assert response.content == b'{"recordId": "x"}'
+
+
+class TestBedrockFilesS3SignatureEncoding:
+    """
+    S3 rebuilds the canonical request from the wire path with single percent-encoding,
+    which botocore models as S3SigV4Auth. Plain SigV4Auth quotes the already encoded
+    path a second time, so an object key holding any character that percent-encodes
+    (a configured bucket prefix with a space) is signed over %2520 while the request
+    carries %20, and S3 answers 403 SignatureDoesNotMatch.
+    """
+
+    ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"
+    SECRET_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    BUCKET_WITH_SPACED_PREFIX = "my-bucket/LLM AI Projects"
+    REGION = "us-west-2"
+
+    def _credential_params(self) -> dict[str, str]:
+        return {
+            "aws_access_key_id": self.ACCESS_KEY,
+            "aws_secret_access_key": self.SECRET_KEY,
+            "aws_region_name": self.REGION,
+        }
+
+    def _signature_under(
+        self,
+        signer_cls: type[SigV4Auth],
+        method: str,
+        url: str,
+        body: bytes | None,
+        headers: Mapping[str, str],
+    ) -> str:
+        sent = {name.lower(): value for name, value in headers.items()}
+        signed_names = (
+            sent["authorization"].split("SignedHeaders=")[1].split(",")[0].split(";")
+        )
+        request = AWSRequest(
+            method=method,
+            url=url,
+            data=body,
+            headers={name: sent[name] for name in signed_names if name in sent},
+        )
+        request.context["timestamp"] = sent["x-amz-date"]
+        signer = signer_cls(
+            Credentials(self.ACCESS_KEY, self.SECRET_KEY), "s3", self.REGION
+        )
+        return signer.signature(
+            signer.string_to_sign(request, signer.canonical_request(request)), request
+        )
+
+    def _assert_signed_the_way_s3_reads_it(
+        self,
+        method: str,
+        url: str,
+        body: bytes | None,
+        headers: Mapping[str, str],
+    ) -> None:
+        assert "%20" in url, "the object key must reach the wire percent-encoded"
+        sent_signature = headers["Authorization"].split("Signature=")[1].strip()
+        assert sent_signature == self._signature_under(
+            S3SigV4Auth, method, url, body, headers
+        )
+        assert sent_signature != self._signature_under(
+            SigV4Auth, method, url, body, headers
+        )
+
+    def test_create_file_signs_spaced_object_key_the_way_s3_does(self) -> None:
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        content = json.dumps(
+            {
+                "custom_id": "1",
+                "body": {
+                    "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "messages": [{"role": "user", "content": "hello"}],
+                },
+            }
+        )
+        signed = BedrockFilesConfig().transform_create_file_request(
+            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            create_file_data={
+                "file": ("batch.jsonl", content.encode("utf-8"), "application/jsonl"),
+                "purpose": "batch",
+            },
+            optional_params=self._credential_params(),
+            litellm_params={
+                "s3_bucket_name": self.BUCKET_WITH_SPACED_PREFIX,
+                "s3_region_name": self.REGION,
+            },
+        )
+
+        self._assert_signed_the_way_s3_reads_it(
+            method="PUT",
+            url=signed["url"],
+            body=signed["data"].encode("utf-8"),
+            headers=signed["headers"],
+        )
+
+    def test_file_content_signs_spaced_object_key_the_way_s3_does(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.llms.bedrock.files.transformation import (
+            S3_SIGNED_GET_HEADERS_PARAM,
+            BedrockFilesConfig,
+        )
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", self.BUCKET_WITH_SPACED_PREFIX)
+        litellm_params = {
+            "s3_bucket_name": self.BUCKET_WITH_SPACED_PREFIX,
+            "s3_region_name": self.REGION,
+            **self._credential_params(),
+        }
+
+        url, _ = BedrockFilesConfig().transform_file_content_request(
+            file_content_request={
+                "file_id": "s3://my-bucket/LLM AI Projects/litellm-bedrock-files-model-abc.jsonl"
+            },
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        self._assert_signed_the_way_s3_reads_it(
+            method="GET",
+            url=url,
+            body=None,
+            headers=litellm_params[S3_SIGNED_GET_HEADERS_PARAM],
+        )

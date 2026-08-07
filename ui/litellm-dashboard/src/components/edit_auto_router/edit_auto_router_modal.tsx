@@ -11,6 +11,7 @@ import {
   getSemanticConfigError,
   getTierLabelsError,
   hydrateTierLabels,
+  normalizeClassifierLlmConfig,
   serializeTierLabels,
 } from "../add_model/build_complexity_router_config";
 import { KeywordTierRule } from "../add_model/KeywordTierRules";
@@ -44,6 +45,7 @@ const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "classifier_context_window_size",
   "classifier_context_per_turn_chars",
   "classifier_context_include_assistant_turns",
+  "classifier_fallback",
   "session_affinity",
   "adaptive",
   "adaptive_weights",
@@ -99,7 +101,11 @@ export const buildUpdatedComplexityRouterConfig = (
     tiers: value.tiers,
     ...(serializedTierLabels && { tier_labels: serializedTierLabels }),
     classifier_type: value.classifier_type,
-    ...(value.classifier_type === "llm" ? { classifier_llm_config: value.classifier_llm_config } : {}),
+    ...(value.classifier_type === "llm" && value.classifier_llm_config
+      ? { classifier_llm_config: normalizeClassifierLlmConfig(value.classifier_llm_config) }
+      : {}),
+    ...(value.classifier_type === "llm" &&
+      value.classifier_fallback !== undefined && { classifier_fallback: value.classifier_fallback }),
     ...(value.classifier_type === "llm" &&
       value.classifier_context_window_size !== undefined && {
         classifier_context_window_size: value.classifier_context_window_size,
@@ -152,8 +158,6 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
-  const [showCustomDefaultModel, setShowCustomDefaultModel] = useState<boolean>(false);
-  const [showCustomEmbeddingModel, setShowCustomEmbeddingModel] = useState<boolean>(false);
   const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
   const [routerConfig, setRouterConfig] = useState<any>(null);
   const [customTechnicalKeywords, setCustomTechnicalKeywords] = useState<string[]>([]);
@@ -243,6 +247,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             typeof parsedConfig.classifier_context_include_assistant_turns === "boolean"
               ? parsedConfig.classifier_context_include_assistant_turns
               : undefined,
+          classifier_fallback:
+            parsedConfig.classifier_fallback === "default_model" || parsedConfig.classifier_fallback === "heuristic"
+              ? parsedConfig.classifier_fallback
+              : undefined,
           session_affinity:
             typeof parsedConfig.session_affinity === "boolean"
               ? parsedConfig.session_affinity
@@ -298,11 +306,6 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         auto_router_embedding_model: modelData.litellm_params?.auto_router_embedding_model || "",
         model_access_group: modelData.model_info?.access_groups || [],
       });
-
-      // Check if using custom models
-      const allModelGroups = new Set(modelInfo.map((model) => model.model_group));
-      setShowCustomDefaultModel(!allModelGroups.has(modelData.litellm_params?.auto_router_default_model));
-      setShowCustomEmbeddingModel(!allModelGroups.has(modelData.litellm_params?.auto_router_embedding_model));
     } catch (error) {
       console.error("Error parsing auto router config:", error);
       NotificationsManager.fromBackend("Error loading auto router configuration");
@@ -506,9 +509,6 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
               >
                 <AntdSelect
                   placeholder="Select a default model"
-                  onChange={(value) => {
-                    setShowCustomDefaultModel(value === "custom");
-                  }}
                   options={[...modelOptions, { value: "custom", label: "Enter custom model name" }]}
                   showSearch={true}
                 />
@@ -522,9 +522,6 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
               >
                 <AntdSelect
                   placeholder="Select an embedding model"
-                  onChange={(value) => {
-                    setShowCustomEmbeddingModel(value === "custom");
-                  }}
                   options={[...modelOptions, { value: "custom", label: "Enter custom model name" }]}
                   showSearch={true}
                 />

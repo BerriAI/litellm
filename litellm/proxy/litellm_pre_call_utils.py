@@ -151,6 +151,20 @@ LITELLM_METADATA_ROUTES: Final = (
     "files",
 )
 
+LITELLM_TRACE_CONTROL_METADATA_FIELDS: Final = frozenset(
+    {
+        "mask_input",
+        "mask_output",
+        "session_id",
+        "trace_id",
+        "trace_metadata",
+        "trace_name",
+        "trace_release",
+        "trace_user_id",
+        "trace_version",
+    }
+)
+
 _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "proxy_server_request",
     "standard_logging_object",
@@ -262,29 +276,37 @@ def _reject_url_valued_destinations(data: dict[str, Any]) -> None:
     are unaffected, while admins can opt specific hosts back in via
     ``litellm.provider_url_destination_allowed_hosts``.
     """
-    allowed_hosts: Final = getattr(litellm, "provider_url_destination_allowed_hosts", []) or []
     for field in _URL_DESTINATION_REQUEST_FIELDS:
         value = data.get(field)
-        if not isinstance(value, str):
+        if isinstance(value, str):
+            reject_url_valued_destination(field, value)
+
+
+def reject_url_valued_destination(field: str, value: str) -> None:
+    """Reject a URL-valued destination identifier unless admin-allowlisted.
+
+    Operates on one field/value pair. ``_reject_url_valued_destinations`` applies
+    it across ``_URL_DESTINATION_REQUEST_FIELDS`` for a request body.
+    """
+    allowed_hosts: Final = getattr(litellm, "provider_url_destination_allowed_hosts", []) or []
+    for candidate in provider_url_destination_candidates(value):
+        if not candidate.lower().startswith(("http://", "https://")):
             continue
-        for candidate in provider_url_destination_candidates(value):
-            if not candidate.lower().startswith(("http://", "https://")):
-                continue
-            if is_url_destination_allowed_by_host(candidate, allowed_hosts):
-                continue
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "invalid_request",
-                    "param": field,
-                    "message": (
-                        f"URL-valued '{field}' is not allowed. Configure custom "
-                        "endpoints with api_base instead, or add the destination "
-                        "host to `provider_url_destination_allowed_hosts` in "
-                        "litellm_settings."
-                    ),
-                },
-            )
+        if is_url_destination_allowed_by_host(candidate, allowed_hosts):
+            continue
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "param": field,
+                "message": (
+                    f"URL-valued '{field}' is not allowed. Configure custom "
+                    "endpoints with api_base instead, or add the destination "
+                    "host to `provider_url_destination_allowed_hosts` in "
+                    "litellm_settings."
+                ),
+            },
+        )
 
 
 def _strip_untrusted_request_header_controls(
@@ -448,6 +470,18 @@ def _get_metadata_variable_name(request: Request) -> str:
         return "litellm_metadata"
 
     return "metadata"
+
+
+def _promoted_trace_control_fields(
+    requester_metadata: Mapping[str, Any],
+    litellm_metadata: Mapping[str, Any],
+) -> tuple[tuple[str, Any], ...]:
+    """Return the caller's trace-control fields that ``litellm_metadata`` does not already set."""
+    return tuple(
+        (key, value)
+        for key, value in requester_metadata.items()
+        if key in LITELLM_TRACE_CONTROL_METADATA_FIELDS and key not in litellm_metadata
+    )
 
 
 def _extract_generic_session_id_from_headers(
@@ -1662,6 +1696,13 @@ async def add_litellm_data_to_request(
     # paths may read from it.
     if "metadata" in data and isinstance(data["metadata"], dict):
         data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(data["metadata"])
+        if _metadata_variable_name == "litellm_metadata":
+            data[_metadata_variable_name].update(
+                _promoted_trace_control_fields(
+                    requester_metadata=data[_metadata_variable_name]["requester_metadata"],
+                    litellm_metadata=data[_metadata_variable_name],
+                )
+            )
 
     # Merge litellm_metadata into the metadata variable (preserving existing
     # values). Runs after the user_api_key_* / _pipeline_managed_guardrails

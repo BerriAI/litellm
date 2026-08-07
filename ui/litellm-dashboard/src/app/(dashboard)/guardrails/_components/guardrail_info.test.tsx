@@ -229,7 +229,7 @@ describe("Guardrail Info", () => {
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
     vi.mocked(networking.updateGuardrailCall).mockResolvedValue({ status: "success" });
 
-    const { getByText, getByRole, getAllByRole, getByLabelText } = render(
+    const { getByText, getByLabelText } = render(
       <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />,
     );
 

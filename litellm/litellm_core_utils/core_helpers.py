@@ -2,7 +2,7 @@
 ## Helper utilities
 import copy
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, Final, Literal, Union
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
     from litellm.types.utils import ModelResponseStream
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
@@ -131,6 +131,9 @@ _FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     "content_filter": "content_filter",
     # Anthropic Sonnet 4
     "content_filtered": "content_filter",
+    # Generic error passthrough (OpenRouter and other OpenAI-compatible providers
+    # emit lowercase "error" when a provider fails mid-stream)
+    "error": "stop",
 }
 
 

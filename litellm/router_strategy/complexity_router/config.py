@@ -59,6 +59,30 @@ class KeywordTierRule(BaseModel):
         return self
 
 
+class ReminderMarkerPair(BaseModel):
+    """One open/close delimiter pair a harness wraps injected context in.
+
+    Normalizing here rather than at the scan is what makes matching case-insensitive: markers reach
+    the scan already lowered, so it lowercases only the haystack and never the needles. Stripping
+    keeps YAML indentation whitespace from becoming part of the delimiter.
+    """
+
+    open: str = Field(description="Opening delimiter, e.g. '<system-reminder>'")
+    close: str = Field(description="Closing delimiter, e.g. '</system-reminder>'")
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "ReminderMarkerPair":
+        open_marker: Final = self.open.strip().lower()
+        close_marker: Final = self.close.strip().lower()
+        if not open_marker or not close_marker:
+            raise ValueError("reminder_markers entries must not be blank")
+        if open_marker == close_marker:
+            raise ValueError("reminder_markers open and close must be different strings")
+        self.open = open_marker
+        self.close = close_marker
+        return self
+
+
 # ─── Default Keyword Lists ───
 # Note: Keywords should be full words/phrases to avoid substring false positives.
 # The matching logic uses word boundary detection for single-word keywords.
@@ -249,6 +273,30 @@ class ClassifierLLMConfig(BaseModel):
         default=3000,
         description="Timeout budget for the classification call, in milliseconds",
     )
+    system_prompt: str | None = Field(
+        default=None,
+        description=(
+            "Replaces the built-in complexity rubric as the classifier's entire system role. When set, "
+            "neither the default rubric nor the context-window closing line is appended, so the prompt "
+            "owns the whole taxonomy and the tier names SIMPLE/MEDIUM/COMPLEX/REASONING become whatever "
+            "buckets it defines: a prompt that classifies data sensitivity routes on that instead of on "
+            "difficulty. Two consequences of full replacement. The default rubric's closing paragraph is "
+            "the classifier's prompt-injection defense, telling it that the caller's quoted system prompt "
+            "and prior turns are material to judge and never instructions; a replacement that omits it "
+            "lets a caller ask for a tier and get it. And the heuristic fallback still scores complexity, "
+            "so a router on some other taxonomy wants classifier_fallback='default_model'. Leave unset "
+            "for the built-in rubric. Only applies when classifier_type is 'llm'."
+        ),
+    )
+
+    @field_validator("system_prompt")
+    @classmethod
+    def _reject_blank_system_prompt(cls, value: str | None) -> str | None:
+        # A blank string is a misconfiguration, not a request for the default: it would send an
+        # empty system role and leave the classifier with no rubric at all. None means default.
+        if value is not None and not value.strip():
+            raise ValueError("classifier_llm_config.system_prompt must be non-empty; omit it to use the default rubric")
+        return value
 
 
 class ComplexityRouterConfig(BaseModel):
@@ -345,6 +393,19 @@ class ComplexityRouterConfig(BaseModel):
     classifier_llm_config: ClassifierLLMConfig | None = Field(
         default=None,
         description="Configuration for the LLM classifier; required when classifier_type is 'llm'",
+    )
+
+    classifier_fallback: Literal["heuristic", "default_model"] = Field(
+        default="heuristic",
+        description=(
+            "What classifies the request when the LLM classifier errors, times out, or returns an "
+            "unparseable response. 'heuristic' runs the local complexity scorer, which is right when the "
+            "classifier grades complexity too. 'default_model' skips scoring and routes to default_model, "
+            "which is what a classifier on some other taxonomy wants: a prompt that grades data "
+            "sensitivity has no use for a complexity score, and scoring one produces a tier unrelated to "
+            "what the operator configured. Requires default_model when set to 'default_model'. Only "
+            "applies when classifier_type is 'llm'."
+        ),
     )
 
     classifier_context_window_size: int = Field(
@@ -461,12 +522,15 @@ class ComplexityRouterConfig(BaseModel):
         description="RoutingPlugin instances that narrow the classified tier's candidate models before selection",
     )
 
-    reminder_markers: tuple[str, str] | None = Field(
+    reminder_markers: tuple[ReminderMarkerPair, ...] | None = Field(
         default=None,
+        min_length=1,
         description=(
-            "Override the (open, close) marker pair used to recognize and strip harness-injected "
-            "reminder blocks before classification. Defaults to Claude Code's convention, "
-            "('<system-reminder>', '</system-reminder>'), when unset. Matching is case-insensitive."
+            "Override the delimiter pairs used to recognize and strip harness-injected reminder "
+            "blocks before classification. A harness that wraps injected context differently per "
+            "agent type (main, subagent, cron) lists every pair it emits. Replaces, rather than "
+            "adds to, the built-in default of ('<system-reminder>', '</system-reminder>'), so a "
+            "harness that also emits that pair lists it too. Matching is case-insensitive."
         ),
     )
 
@@ -562,18 +626,6 @@ class ComplexityRouterConfig(BaseModel):
                 "plugins and adaptive=True cannot both be set: adaptive's bandit selection doesn't yet "
                 "consume plugin-narrowed candidate pools. Disable adaptive or remove plugins."
             )
-        return self
-
-    @model_validator(mode="after")
-    def _normalize_reminder_markers(self) -> "ComplexityRouterConfig":
-        if self.reminder_markers is None:
-            return self
-        open_marker, close_marker = (marker.strip().lower() for marker in self.reminder_markers)
-        if not open_marker or not close_marker:
-            raise ValueError("reminder_markers entries must not be blank")
-        if open_marker == close_marker:
-            raise ValueError("reminder_markers open and close must be different strings")
-        self.reminder_markers = (open_marker, close_marker)
         return self
 
     def tier_label(self, tier: ComplexityTier) -> str:

@@ -368,6 +368,17 @@ class TestAgentByIdKeyRedaction:
         assert resp.status_code == 200
         assert resp.json()["keys"] is None
 
+    def test_view_only_admin_reads_a_denied_agent_but_still_without_keys(self):
+        """proxy_admin_viewer skips the per-agent object_permission gate (denied
+        here) yet stays on the redacted response path."""
+        with patch(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.is_agent_allowed",
+            AsyncMock(return_value=False),
+        ):
+            resp = self._get_as(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+        assert resp.status_code == 200
+        assert resp.json()["keys"] is None
+
 
 # ---------- RBAC enforcement tests ----------
 
@@ -467,6 +478,82 @@ class TestAgentRBACInternalUserViewOnly:
             "/v1/agents/agent-123", headers={"Authorization": "Bearer k"}
         )
         assert resp.status_code == 403
+
+
+class TestAgentRBACProxyAdminViewOnly:
+    """Read-only proxy admins go through the object-permission scoped branch on
+    GET /v1/agents (the admin fast path stays full PROXY_ADMIN only, so viewers
+    cannot fan out health checks beyond their allowlist), and secret unredaction
+    also stays gated on full PROXY_ADMIN."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch):
+        from litellm.proxy.agent_endpoints import agent_registry as ar_mod
+
+        self.viewer_client = _make_app_with_role(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+        self.admin_client = _make_app_with_role(LitellmUserRoles.PROXY_ADMIN)
+        self.agents = [
+            AgentResponse(
+                agent_id=f"agent-{index}",
+                agent_name=f"Agent {index}",
+                agent_card_params=_sample_agent_card_params(),
+                litellm_params={"api_key": "sk-super-secret-agent-key"},
+            )
+            for index in (1, 2)
+        ]
+        self.mock_registry = MagicMock()
+        self.mock_registry.get_agent_list = MagicMock(return_value=self.agents)
+        monkeypatch.setattr(ar_mod, "global_agent_registry", self.mock_registry)
+
+        self.allowed_agents_spy = AsyncMock(return_value=["someone-elses-agent"])
+        monkeypatch.setattr(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
+            self.allowed_agents_spy,
+        )
+
+    def _list_agents(self, test_client: TestClient):
+        key_row = MagicMock()
+        key_row.token = "hash-aaa"
+        key_row.agent_id = "agent-1"
+        key_row.key_alias = "primary"
+        key_row.key_name = "sk-...aaa"
+
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=[])
+            mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
+                return_value=[key_row]
+            )
+            return test_client.get("/v1/agents", headers={"Authorization": "Bearer k"})
+
+    def test_should_scope_view_only_admin_to_allowed_agents(self):
+        """The key/team allowlist here excludes every registered agent; a viewer
+        on the admin fast path would see everything, so an empty response pins
+        that viewers stay in the scoped branch."""
+        resp = self._list_agents(self.viewer_client)
+
+        assert resp.status_code == 200
+        assert resp.json() == []
+        self.allowed_agents_spy.assert_awaited_once()
+
+    def test_should_still_redact_secrets_for_view_only_admin(self):
+        """An unrestricted viewer (empty allowlist means no restrictions) sees the
+        same agents as an admin but with keys stripped and litellm_params masked."""
+        self.allowed_agents_spy.return_value = []
+        viewer_resp = self._list_agents(self.viewer_client)
+        admin_resp = self._list_agents(self.admin_client)
+
+        assert viewer_resp.status_code == 200
+        viewer_by_id = {agent["agent_id"]: agent for agent in viewer_resp.json()}
+        assert set(viewer_by_id) == {"agent-1", "agent-2"}
+        assert viewer_by_id["agent-1"]["keys"] is None
+        assert "sk-super-secret-agent-key" not in viewer_resp.text
+
+        admin_by_id = {agent["agent_id"]: agent for agent in admin_resp.json()}
+        assert admin_by_id["agent-1"]["keys"][0]["token"] == "hash-aaa"
+        assert (
+            admin_by_id["agent-1"]["litellm_params"]["api_key"]
+            == "sk-super-secret-agent-key"
+        )
 
 
 class TestAgentRBACProxyAdmin:

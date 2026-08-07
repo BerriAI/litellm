@@ -8,7 +8,7 @@ import time
 import traceback
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
-from typing import Any, Final, NoReturn, TypeVar, Union, cast
+from typing import Any, Final, NoReturn, TypeVar, cast
 
 import anyio
 import httpx
@@ -99,7 +99,7 @@ class _ProviderChunkEarlyReturn:
     value: Any
 
 
-_ProviderChunkResult = Union[_ProviderChunkParsed, _ProviderChunkEarlyReturn]
+_ProviderChunkResult = _ProviderChunkParsed | _ProviderChunkEarlyReturn
 
 
 class CustomStreamWrapper:
@@ -256,9 +256,7 @@ class CustomStreamWrapper:
             chunk = chunk.strip()
             self.complete_response = self.complete_response.strip()
 
-            if chunk.startswith(self.complete_response):
-                # Remove last_sent_chunk only if it appears at the start of the new chunk
-                chunk = chunk[len(self.complete_response) :]
+            chunk = chunk.removeprefix(self.complete_response)
 
             self.complete_response += chunk
             return chunk

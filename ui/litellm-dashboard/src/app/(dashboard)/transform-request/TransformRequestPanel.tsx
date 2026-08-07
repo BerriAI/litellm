@@ -11,12 +11,6 @@ interface TransformRequestPanelProps {
   accessToken: string | null;
 }
 
-interface TransformResponse {
-  raw_request_api_base: string;
-  raw_request_body: Record<string, any>;
-  raw_request_headers: Record<string, string>;
-}
-
 const TransformRequestPanel: React.FC<TransformRequestPanelProps> = ({ accessToken }) => {
   const [originalRequestJSON, setOriginalRequestJSON] = useState(`{
   "model": "openai/gpt-4o",
