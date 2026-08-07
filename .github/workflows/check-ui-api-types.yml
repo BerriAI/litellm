@@ -2,21 +2,13 @@ name: Check UI API Types Sync
 
 on:
   pull_request:
-    paths:
-      - "litellm/proxy/**"
-      - "litellm/types/**"
-      - "ui/litellm-dashboard/src/lib/http/schema.d.ts"
-      - "ui/litellm-dashboard/scripts/gen-api-types.mjs"
-      - "ui/litellm-dashboard/package.json"
-      - "ui/litellm-dashboard/package-lock.json"
-      - ".github/workflows/check-ui-api-types.yml"
 
 permissions:
   contents: read
 
 jobs:
   check-sync:
-    name: Verify schema.d.ts matches the proxy OpenAPI spec
+    name: Verify openapi.json and schema.d.ts match the proxy
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -64,21 +56,7 @@ jobs:
         working-directory: ui/litellm-dashboard
         run: npm ci
 
-      - name: Regenerate types from the live spec
-        working-directory: ui/litellm-dashboard
+      - name: Verify generated files are up to date
         env:
           LITELLM_PYTHON: "uv run --no-sync python"
-        run: npm run gen:api
-
-      - name: Fail if types are stale
-        run: |
-          if ! git diff --exit-code -- ui/litellm-dashboard/src/lib/http/schema.d.ts; then
-            echo "::error file=ui/litellm-dashboard/src/lib/http/schema.d.ts::Generated API types are out of sync with the proxy OpenAPI spec."
-            echo ""
-            echo "A backend route or model changed without regenerating the dashboard types."
-            echo "To fix, run from ui/litellm-dashboard:"
-            echo "  npm run gen:api"
-            echo "then commit the updated src/lib/http/schema.d.ts."
-            exit 1
-          fi
-          echo "schema.d.ts is in sync with the proxy OpenAPI spec."
+        run: ./scripts/verify-codegen.sh

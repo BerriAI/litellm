@@ -2,7 +2,7 @@ Never put LiteLLM tokens or API keys in `localStorage`. `localStorage` survives 
 
 When you fix lint violations that are grandfathered in `eslint-suppressions.json`, run `eslint . --prune-suppressions` and commit the updated baseline so the gate ratchets down instead of leaving a stale suppression
 
-`src/lib/http/schema.d.ts` is generated from the proxy's OpenAPI spec; never hand-edit it. After changing a backend route or response model that the dashboard consumes, run `npm run gen:api` and commit the result (CI `Check UI API Types Sync` enforces this)
+`openapi.json` at the repo root and `src/lib/http/schema.d.ts` are both generated from the proxy's FastAPI app; never hand-edit either. After changing any backend route or response model, run `scripts/update-codegen.sh` from the repo root and commit both files. `scripts/verify-codegen.sh` is the same generator plus a `git status` check, and it runs on every PR as `Check UI API Types Sync`, so you can reproduce a CI failure locally with it
 
 Tests come in three tiers, named by the standard definitions. `Foo.test.tsx` is a unit test: one module, collaborators replaced by doubles, no multi-component tree, and it should run in milliseconds. `Foo.integration.test.tsx` renders a real component tree with real children and only stubs the network boundary; it costs seconds per case, so it earns its place by proving wiring that a unit test cannot reach. Browser-level tests live in `tests/e2e/ui/` as Playwright specs against a live proxy
 

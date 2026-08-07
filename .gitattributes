@@ -1,2 +1,3 @@
 *.ipynb linguist-vendored
 ui/litellm-dashboard/src/lib/http/schema.d.ts linguist-generated
+openapi.json linguist-generated
