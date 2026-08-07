@@ -395,9 +395,7 @@ def _get_redis_client_logic(**env_overrides):
     if _sentinel_password is not None:
         redis_kwargs["sentinel_password"] = _sentinel_password
 
-    _service_name: Final[str | None] = redis_kwargs.get("service_name", None) or get_secret(
-        "REDIS_SERVICE_NAME"
-    )
+    _service_name: Final[str | None] = redis_kwargs.get("service_name", None) or get_secret("REDIS_SERVICE_NAME")
 
     if _service_name is not None:
         redis_kwargs["service_name"] = _service_name

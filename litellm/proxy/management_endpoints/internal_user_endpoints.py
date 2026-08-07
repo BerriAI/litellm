@@ -584,7 +584,7 @@ async def new_user(
         special_keys: Final = ["token", "token_id"]
         response_dict: Final = {}
         for key, value in response.items():
-            if key in NewUserResponse.model_fields.keys() and key not in special_keys:
+            if key in NewUserResponse.model_fields and key not in special_keys:
                 response_dict[key] = value
 
         response_dict["key"] = response.get("token", "")
@@ -714,11 +714,10 @@ def _enforce_user_info_access(user_id: str | None, user_api_key_dict: UserAPIKey
     """
     if user_id is None:
         return
-    # Only true proxy admin bypasses ownership. PROXY_ADMIN_VIEW_ONLY is
-    # subject to the same `user_id == valid_token.user_id` rule that
-    # `RouteChecks.non_proxy_admin_allowed_routes_check` applies upstream
-    # for the `/user/info` route.
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+    # Admin-view roles (PROXY_ADMIN and PROXY_ADMIN_VIEW_ONLY) bypass
+    # ownership, mirroring the `/user/info` carve-out that
+    # `RouteChecks.non_proxy_admin_allowed_routes_check` applies upstream.
+    if _user_has_admin_view(user_api_key_dict):
         return
     if user_id == user_api_key_dict.user_id:
         return
@@ -862,7 +861,7 @@ async def user_info(
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
-        if user_id is None and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        if user_id is None and _user_has_admin_view(user_api_key_dict):
             return await _get_user_info_for_proxy_admin(user_api_key_dict=user_api_key_dict)
         elif user_id is None:
             user_id = user_api_key_dict.user_id
@@ -2651,6 +2650,13 @@ async def get_user_daily_activity(
         description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
         "Matches JavaScript's Date.getTimezoneOffset() convention.",
     ),
+    include_current_utc_day: bool = fastapi.Query(
+        default=False,
+        description="When the range ends on the caller's current local day, extend it to "
+        "today's UTC bucket so spend written after the caller's local midnight (in UTC "
+        "terms) is included. Requires the timezone parameter. Historical ranges are "
+        "never extended.",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> SpendAnalyticsPaginatedResponse:
     """
@@ -2712,6 +2718,7 @@ async def get_user_daily_activity(
             page=page,
             page_size=page_size,
             timezone_offset_minutes=timezone,
+            include_current_utc_day=include_current_utc_day,
             resolve_entity_metadata=lambda records: _resolve_user_email_metadata(prisma_client, records),
         )
 
