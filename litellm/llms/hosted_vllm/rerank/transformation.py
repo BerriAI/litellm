@@ -173,7 +173,14 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
 
     def _transform_response(self, response: dict) -> RerankResponse:
         # Extract usage information
-        usage_data: Final = response.get("usage", {})
+        # vLLM's /rerank endpoint returns usage under "meta", not "usage".
+        # Fall back to "usage" for compatibility with any variant that does return it.
+        _meta_data: Final = response.get("meta", {}) or {}
+        _billed_units_raw: Final = _meta_data.get("billed_units", {}) or {}
+        _tokens_raw: Final = _meta_data.get("tokens", {}) or {}
+        usage_data: Final = response.get("usage", {}) or {
+        "total_tokens": _billed_units_raw.get("total_tokens") or _tokens_raw.get("input_tokens", 0)
+    }
         _billed_units: Final = RerankBilledUnits(total_tokens=usage_data.get("total_tokens", 0))
         _tokens: Final = RerankTokens(input_tokens=usage_data.get("total_tokens", 0))
         rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
