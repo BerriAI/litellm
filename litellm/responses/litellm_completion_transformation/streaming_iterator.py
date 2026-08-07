@@ -105,6 +105,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._accumulated_reasoning_content_parts: list[str] = []
         self._accumulated_provider_specific_fields: dict[str, Any] = {}
         self._custom_tool_names: set[str] = extract_custom_tool_names(self.responses_api_request.get("tools"))
+        self._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+            self.responses_api_request.get("tools")
+        )
 
     def _get_or_assign_tool_output_index(self, call_id: str) -> int:
         existing: Final = self._tool_output_index_by_call_id.get(call_id)
@@ -125,9 +128,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return None
 
     def _responses_namespace_tool_call_fields(self, fn_name: str) -> tuple[str, str | None]:
-        tools = self.responses_api_request.get("tools")
-        namespace_map = LiteLLMCompletionResponsesConfig._namespace_tool_name_map(tools)
-        mapped = namespace_map.get(fn_name)
+        mapped: Final = self._namespace_tool_names.get(fn_name)
         if mapped:
             namespace, tool_name = mapped
             return tool_name, namespace
