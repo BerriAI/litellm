@@ -1,5 +1,4 @@
 import httpx
-import pytest
 
 from litellm.llms.byteplus.embedding.transformation import BytePlusEmbeddingConfig
 
@@ -134,5 +133,3 @@ class TestBytePlusEmbeddingConfig:
         assert data["model"] == "doubao-embedding-text"
         assert data["input"] == ["test text"]
         assert data["custom_param"] == "val"
-
-

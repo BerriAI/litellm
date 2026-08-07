@@ -1,5 +1,3 @@
-import pytest
-
 from litellm.llms.byteplus.image_generation.transformation import BytePlusImageGenerationConfig
 
 
@@ -54,4 +52,3 @@ class TestBytePlusImageGenerationConfig:
         assert req["model"] == "dola-seedream-5-0-pro-260628"
         assert req["prompt"] == "a cat"
         assert req["custom_field"] == "custom_val"
-

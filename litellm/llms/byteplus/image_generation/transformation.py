@@ -118,9 +118,7 @@ class BytePlusImageGenerationConfig(BaseImageGenerationConfig):
                 body[key] = optional_params[key]
 
         if "extra_body" in optional_params and isinstance(optional_params["extra_body"], dict):
-            extra_body: Final = {
-                k: v for k, v in optional_params["extra_body"].items() if k not in ("model", "prompt")
-            }
+            extra_body: Final = {k: v for k, v in optional_params["extra_body"].items() if k not in ("model", "prompt")}
             body.update(extra_body)
 
         return body
