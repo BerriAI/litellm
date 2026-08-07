@@ -212,11 +212,20 @@ def _resolve_constraint_only_pool(
     model: str,
     request_tags: object,
 ) -> tuple[Any, ...]:
-    pool: Final = _require_all_tags(
-        _exclude_deployments(_default_tagged_pool(healthy_deployments), excluded_set),
-        required_set,
+    pool: Final = (
+        _require_all_tags(_exclude_deployments(healthy_deployments, excluded_set), required_set)
+        if required_set
+        else _exclude_deployments(_default_tagged_pool(healthy_deployments), excluded_set)
     )
     return _resolve_or_fail_open(pool, healthy_deployments, excluded_set, required_set, model, request_tags)
+
+
+def _chain_tag_filtering_override(deployments: Sequence[Any] | Mapping[Any, Any]) -> bool | None:
+    for d in deployments:
+        value = (d.get("model_info") or MappingProxyType({})).get("enable_tag_filtering")
+        if value is not None:
+            return value
+    return None
 
 
 async def get_deployments_for_tag(
@@ -231,21 +240,29 @@ async def get_deployments_for_tag(
 
     Executes tag based filtering based on the tags in request metadata and the tags on the deployments
 
-    Runs when the router-level `enable_tag_filtering` is True or the request carries
-    `enable_tag_filtering=True` (set from key/team router_settings by the proxy).
-    A request-level False never disables a router-level True, so per-request settings
-    cannot escape an operator's global tag-routing policy.
+    Runs when the effective enable_tag_filtering is True. Effective value: a
+    request-level enable_tag_filtering=True (set from key/team router_settings by
+    the proxy) always wins; otherwise model_info.enable_tag_filtering on this model
+    group, if set on any of its deployments, overrides the router-wide default.
+    A request-level False never disables either of those, so per-request settings
+    cannot escape an operator's or a chain owner's tag-routing policy.
     """
-    request_enable_tag_filtering: Final = request_kwargs.get("enable_tag_filtering") if request_kwargs else None
-    if request_enable_tag_filtering is not True and llm_router_instance.enable_tag_filtering is not True:
-        return healthy_deployments
-
     if request_kwargs is None or not healthy_deployments:
         verbose_logger.debug(
             "get_deployments_for_tag: skipping tag filter (request_kwargs=%s, healthy_deployments=%s)",
             request_kwargs,
             healthy_deployments,
         )
+        return healthy_deployments
+
+    request_enable_tag_filtering: Final = request_kwargs.get("enable_tag_filtering")
+    chain_enable_tag_filtering: Final = _chain_tag_filtering_override(healthy_deployments)
+    chain_default: Final = (
+        chain_enable_tag_filtering
+        if chain_enable_tag_filtering is not None
+        else llm_router_instance.enable_tag_filtering
+    )
+    if request_enable_tag_filtering is not True and chain_default is not True:
         return healthy_deployments
 
     verbose_logger.debug("request metadata: %s", request_kwargs.get(metadata_variable_name))
