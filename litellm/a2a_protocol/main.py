@@ -13,7 +13,6 @@ import asyncio
 import datetime
 import uuid
 from collections.abc import AsyncIterator, Coroutine
-from http.cookiejar import DefaultCookiePolicy
 from typing import TYPE_CHECKING, Any, Final, Optional, cast
 
 import litellm
@@ -79,8 +78,6 @@ from litellm.a2a_protocol.exceptions import A2ALocalhostURLError
 
 # Use our custom resolver instead of the default A2A SDK resolver
 A2ACardResolver: Final = LiteLLMA2ACardResolver
-
-_BLOCK_ALL_COOKIES: Final = DefaultCookiePolicy(allowed_domains=())
 
 
 def _set_usage_on_logging_obj(
@@ -770,7 +767,6 @@ async def create_a2a_client(
         params={"timeout": timeout},
     )
     httpx_client: Final = _async_handler.client
-    httpx_client.cookies.jar.set_policy(_BLOCK_ALL_COOKIES)
     if extra_headers:
         verbose_proxy_logger.debug("A2A client created with extra_headers=%s", list(extra_headers.keys()))
 
