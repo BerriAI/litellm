@@ -304,8 +304,25 @@ def _resolve_constraint_only_pool(
     )
 
 
-def _chain_tag_filtering_override(deployments: Sequence[Any] | Mapping[Any, Any]) -> bool | None:
-    for d in deployments:
+def _chain_tag_filtering_override(
+    llm_router_instance: LitellmRouter,
+    model: str,
+    healthy_deployments: Sequence[Any] | Mapping[Any, Any],
+) -> bool | None:
+    # Resolved from every deployment configured for this model group, not just the
+    # ones that survived cooldown/health filtering (async_get_healthy_deployments
+    # filters cooldowns before calling get_deployments_for_tag) -- otherwise the
+    # sole deployment carrying this group's only explicit override loses its effect
+    # the moment it's transiently unhealthy, silently falling back to the
+    # router-wide default and letting an attacker disable a chain's tag policy by
+    # repeatedly failing that one deployment into cooldown. Falls back to
+    # healthy_deployments on a lookup error, preserving today's behavior rather
+    # than crashing the request.
+    try:
+        all_deployments: Final = llm_router_instance._get_all_deployments(model_name=model)
+    except Exception:  # noqa: BLE001  # fail safe toward today's healthy-only behavior on lookup errors
+        all_deployments = healthy_deployments
+    for d in all_deployments:
         value = (d.get("model_info") or MappingProxyType({})).get("enable_tag_filtering")
         if value is not None:
             return value
@@ -375,7 +392,7 @@ async def get_deployments_for_tag(
         return healthy_deployments
 
     request_enable_tag_filtering: Final = request_kwargs.get("enable_tag_filtering")
-    chain_enable_tag_filtering: Final = _chain_tag_filtering_override(healthy_deployments)
+    chain_enable_tag_filtering: Final = _chain_tag_filtering_override(llm_router_instance, model, healthy_deployments)
     chain_default: Final = (
         chain_enable_tag_filtering
         if chain_enable_tag_filtering is not None
