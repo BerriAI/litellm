@@ -22,6 +22,8 @@ def _as_admin():
 
 
 def _patch_credential(name: str, body: dict):
+    missing = object()
+    previous_override = app.dependency_overrides.get(user_api_key_auth, missing)
     app.dependency_overrides[user_api_key_auth] = _as_admin
     try:
         return client.patch(
@@ -30,7 +32,10 @@ def _patch_credential(name: str, body: dict):
             headers={"Authorization": "Bearer test-key"},
         )
     finally:
-        app.dependency_overrides.clear()
+        if previous_override is missing:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+        else:
+            app.dependency_overrides[user_api_key_auth] = previous_override
 
 
 def test_update_credential_answers_404_when_the_credential_does_not_exist():
