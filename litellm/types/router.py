@@ -146,6 +146,20 @@ class ModelInfo(BaseModel):
     # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked
     blocked: bool | None = None
 
+    # when tag-based routing's "!" or "&" constraints eliminate every deployment
+    # in this model group, fall back to the default-tagged pool instead of
+    # raising no_deployments_with_tag_routing. Defaults to False (raise), so
+    # existing "!" negation behavior is unchanged unless explicitly opted in.
+    allow_fail_open: bool | None = None
+
+    # per-model-group override for router_settings.enable_tag_filtering; unset
+    # defers to the router-wide default. Checked against any deployment in the
+    # group, so set it consistently across every deployment sharing this
+    # model_name. A request-level enable_tag_filtering=True (from key/team
+    # settings) still wins over this, exactly as it already does over the
+    # router-wide default.
+    enable_tag_filtering: bool | None = None
+
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided

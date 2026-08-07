@@ -4,9 +4,12 @@ Use this to route requests between Teams
 - If tags in request is a subset of tags in deployment, return deployment
 - if deployments are set with default tags, return all default deployment
 - If no default_deployments are set, return all deployments
+- A "!tag" excludes deployments carrying that tag; a "&tag" requires it
 """
 
 import re
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from litellm._logging import verbose_logger
@@ -114,14 +117,52 @@ def _match_deployment(
     return None
 
 
-def _split_tags(tags: list[str]) -> tuple[list[str], list[str]]:
-    positive: Final = [t for t in tags if not t.startswith("!")]
-    excluded: Final = [tag[1:] for tag in tags if tag.startswith("!") and len(tag) > 1]
-    return positive, excluded
+def _bare_tag_value(tag: str) -> str | None:
+    # Mirrors _split_tags' own stripping rule exactly, so a confirmed value
+    # compares equal to whatever required_set/excluded_set/positive_tags end up
+    # holding for the same tag: a "&"/"!" marker is stripped only when something
+    # follows it; a lone marker with nothing after it parses to nothing in any
+    # of the three sets, so it must not become a confirmed value either.
+    if tag.startswith(("&", "!")):
+        return tag[1:] if len(tag) > 1 else None
+    return tag
+
+
+def _strip_routing_prefix(tags: Sequence[str], prefix: str) -> tuple[tuple[str, ...], frozenset[str]]:
+    # Strips the configured routing-prefix marker from any tag carrying it, used
+    # exactly as configured with no delimiter auto-appended, and separately
+    # tracks the post-strip, post-marker-strip values that arrived prefixed: tags
+    # whose routing intent the caller declared explicitly, exempt from the "maybe
+    # foreign to this group" heuristics in _unknown_required_tag_hides_an_answer
+    # and _tag_known_to_group below. Confirmed values are compared against
+    # required_set/excluded_set downstream, which are themselves already stripped
+    # of their "&"/"!" marker by _split_tags -- confirmed must match that same
+    # bare form, not the raw post-prefix-strip value that still carries the
+    # marker character. An empty prefix must return every tag unconfirmed, not
+    # run every tag through str.startswith(""), which is trivially True for
+    # every string and would mark everything confirmed.
+    if not prefix:
+        return tuple(tags), frozenset()
+    rewritten: Final = tuple(t.removeprefix(prefix) for t in tags)
+    confirmed: Final = frozenset(
+        bare
+        for bare in (_bare_tag_value(t.removeprefix(prefix)) for t in tags if t.startswith(prefix))
+        if bare is not None
+    )
+    return rewritten, confirmed
+
+
+def _split_tags(tags: Sequence[str]) -> tuple[tuple[str, ...], list[str], tuple[str, ...]]:
+    required: Final = tuple(tag[1:] for tag in tags if tag.startswith("&") and len(tag) > 1)
+    positive: Final = [
+        t for t in tags if not t.startswith("!") and not t.startswith("&")
+    ]  # mutable-ok: feeds _match_deployment's existing list[str]-typed request_tags param
+    excluded: Final = tuple(tag[1:] for tag in tags if tag.startswith("!") and len(tag) > 1)
+    return required, positive, excluded
 
 
 def _exclude_deployments(
-    deployments: list[Any] | dict[Any, Any],
+    deployments: Sequence[Any] | Mapping[Any, Any],
     excluded_set: frozenset[str],
 ) -> list[Any]:
     if not excluded_set:
@@ -129,24 +170,223 @@ def _exclude_deployments(
     return [d for d in deployments if not excluded_set.intersection(d.get("litellm_params", {}).get("tags") or [])]
 
 
-def _require_candidates(
-    candidates: list[Any],
+def _require_all_tags(
+    deployments: Sequence[Any] | Mapping[Any, Any],
+    required_set: frozenset[str],
+) -> tuple[Any, ...]:
+    if not required_set:
+        return tuple(deployments)
+    return tuple(d for d in deployments if required_set.issubset(d.get("litellm_params", {}).get("tags") or []))
+
+
+def _default_tagged_pool(
+    deployments: Sequence[Any] | Mapping[Any, Any],
+) -> tuple[Any, ...]:
+    defaults: Final = tuple(d for d in deployments if "default" in (d.get("litellm_params", {}).get("tags") or []))
+    return defaults if defaults else tuple(deployments)
+
+
+def _known_tag_values(deployments: Sequence[Any] | Mapping[Any, Any]) -> frozenset[str]:
+    return frozenset(
+        tag for d in deployments for tag in (d.get("litellm_params", MappingProxyType({})).get("tags") or ())
+    )
+
+
+def _unknown_required_tag_hides_an_answer(
+    healthy_deployments: Sequence[Any] | Mapping[Any, Any],
+    excluded_set: frozenset[str],
+    required_set: frozenset[str],
+    routing_confirmed: frozenset[str],
+) -> bool:
+    # A caller-invented "&" tag (one no deployment in this group has ever carried)
+    # guarantees an empty required-AND result on its own, regardless of whether the
+    # rest of the request's required tags were satisfiable. Dropping the unknown
+    # tags and recomputing: if that reveals a specific, non-empty answer, the invented
+    # tag was the actual cause of the exhaustion, and fail-open must not paper over
+    # it. If every required tag is known, or none are, there's nothing hidden to
+    # protect: either the caller made a real, honestly-unsatisfiable ask (fail-open
+    # proceeds normally), or the whole required set is unrecognized noise with no
+    # narrower answer to hide behind it. routing_confirmed (tag_routing_prefix)
+    # counts as known too: the caller explicitly declared it a routing directive,
+    # so it is never treated as invented noise regardless of deployment vocabulary.
+    known_required: Final = required_set & (_known_tag_values(healthy_deployments) | routing_confirmed)
+    if not known_required or known_required == required_set:
+        return False
+    allowed: Final = _exclude_deployments(healthy_deployments, excluded_set)
+    return bool(_require_all_tags(allowed, known_required))
+
+
+def _chain_allows_fail_open(
+    healthy_deployments: Sequence[Any] | Mapping[Any, Any],
+    excluded_set: frozenset[str],
+    required_set: frozenset[str],
+    routing_confirmed: frozenset[str],
+) -> bool:
+    if _unknown_required_tag_hides_an_answer(healthy_deployments, excluded_set, required_set, routing_confirmed):
+        return False
+    return any((d.get("model_info") or {}).get("allow_fail_open") is True for d in healthy_deployments)
+
+
+def _trusted_only_pool(
+    healthy_deployments: Sequence[Any] | Mapping[Any, Any],
+    excluded_set: frozenset[str],
+    required_set: frozenset[str],
+    inherited_excluded_set: frozenset[str] | None,
+    inherited_required_set: frozenset[str] | None,
+) -> tuple[Any, ...]:
+    # inherited_*_set is None only when this request carries no origin information
+    # at all (e.g. direct SDK Router usage, bypassing the proxy layer that
+    # populates metadata.inherited_tags) -- treat every constraint as
+    # caller-controlled in that case (protected == empty), reproducing this
+    # function's pre-provenance behavior exactly: an unconditional fall-open to the
+    # full default-tagged pool, constraints discarded entirely. Otherwise, a tag
+    # value is protected the moment it has ANY inherited backing, even when the
+    # caller also happens to submit the identical value themselves -- set
+    # membership can't distinguish "this value came from policy" from "this value
+    # coincidentally matches policy," so presence in the inherited set (not
+    # absence from a caller-supplied set) is what must gate discardability. This
+    # is deliberately intersection with inherited_*_set, not subtraction of a
+    # caller-supplied set: subtraction would let a caller strip an inherited
+    # requirement's protection just by resubmitting its exact value alongside a
+    # conflicting one (e.g. inherited "&region:eu" plus caller "&region:eu"
+    # and "!region:eu" would otherwise cancel the inherited requirement out).
+    trusted_excluded: Final = (
+        frozenset[str]() if inherited_excluded_set is None else inherited_excluded_set & excluded_set
+    )
+    trusted_required: Final = (
+        frozenset[str]() if inherited_required_set is None else inherited_required_set & required_set
+    )
+    return _require_all_tags(_exclude_deployments(healthy_deployments, trusted_excluded), trusted_required)
+
+
+def _resolve_or_fail_open(
+    pool: Sequence[Any],
+    healthy_deployments: Sequence[Any] | Mapping[Any, Any],
+    excluded_set: frozenset[str],
+    required_set: frozenset[str],
+    inherited_excluded_set: frozenset[str] | None,
+    inherited_required_set: frozenset[str] | None,
+    routing_confirmed: frozenset[str],
     model: str,
-    request_tags: Any,
-) -> list[Any]:
-    if not candidates:
-        raise ValueError(
-            f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
+    request_tags: object,
+) -> tuple[Any, ...]:
+    if pool:
+        return tuple(pool)
+    if _chain_allows_fail_open(healthy_deployments, excluded_set, required_set, routing_confirmed):
+        # Fall open only within whatever still satisfies whichever constraints
+        # trace back to key/team policy. A constraint with no inherited backing at
+        # all (or, when inherited_tags is unavailable, any constraint at all) can
+        # be discarded; one inherited from key/team policy cannot -- if that alone
+        # is unsatisfiable, raise instead of silently routing around it.
+        trusted_pool: Final = _trusted_only_pool(
+            healthy_deployments, excluded_set, required_set, inherited_excluded_set, inherited_required_set
         )
-    return candidates
+        if trusted_pool:
+            return _default_tagged_pool(trusted_pool)
+    raise ValueError(
+        f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
+    )
 
 
-def _ban_only_base_pool(
-    deployments: list[Any] | dict[Any, Any],
-) -> list[Any]:
-    # Mirrors untagged-request semantics so callers can't use !tags to escape the default pool.
-    defaults: Final = [d for d in deployments if "default" in (d.get("litellm_params", {}).get("tags") or [])]
-    return defaults if defaults else list(deployments)
+def _resolve_constraint_only_pool(
+    healthy_deployments: Sequence[Any] | Mapping[Any, Any],
+    excluded_set: frozenset[str],
+    required_set: frozenset[str],
+    inherited_excluded_set: frozenset[str] | None,
+    inherited_required_set: frozenset[str] | None,
+    routing_confirmed: frozenset[str],
+    model: str,
+    request_tags: object,
+) -> tuple[Any, ...]:
+    pool: Final = (
+        _require_all_tags(_exclude_deployments(healthy_deployments, excluded_set), required_set)
+        if required_set
+        else _exclude_deployments(_default_tagged_pool(healthy_deployments), excluded_set)
+    )
+    return _resolve_or_fail_open(
+        pool,
+        healthy_deployments,
+        excluded_set,
+        required_set,
+        inherited_excluded_set,
+        inherited_required_set,
+        routing_confirmed,
+        model,
+        request_tags,
+    )
+
+
+def _all_deployments_or_fallback(
+    llm_router_instance: LitellmRouter,
+    model: str,
+    fallback: Sequence[Any] | Mapping[Any, Any],
+) -> Sequence[Any] | Mapping[Any, Any]:
+    try:
+        return llm_router_instance._get_all_deployments(model_name=model)
+    except Exception:  # noqa: BLE001  # fail safe toward today's healthy-only behavior on lookup errors
+        return fallback
+
+
+def _chain_tag_filtering_override(
+    llm_router_instance: LitellmRouter,
+    model: str,
+    healthy_deployments: Sequence[Any] | Mapping[Any, Any],
+) -> bool | None:
+    # Resolved from every deployment configured for this model group, not just the
+    # ones that survived cooldown/health filtering (async_get_healthy_deployments
+    # filters cooldowns before calling get_deployments_for_tag) -- otherwise the
+    # sole deployment carrying this group's only explicit override loses its effect
+    # the moment it's transiently unhealthy, silently falling back to the
+    # router-wide default and letting an attacker disable a chain's tag policy by
+    # repeatedly failing that one deployment into cooldown. Falls back to
+    # healthy_deployments on a lookup error, preserving today's behavior rather
+    # than crashing the request.
+    all_deployments: Final = _all_deployments_or_fallback(llm_router_instance, model, healthy_deployments)
+    for d in all_deployments:
+        value = (d.get("model_info") or MappingProxyType({})).get("enable_tag_filtering")
+        if value is not None:
+            return value
+    return None
+
+
+def _inherited_constraint_sets(
+    inherited_tags: object, routing_prefix: str
+) -> tuple[frozenset[str] | None, frozenset[str] | None]:
+    # None means no origin information is available at all (e.g. this request
+    # bypassed the proxy layer that populates metadata.inherited_tags, as direct
+    # SDK Router usage does) -- callers of this must treat that as "nothing is
+    # protected," not "nothing is inherited," see _trusted_only_pool.
+    # metadata.inherited_tags is a snapshot of whatever key/team/project policy
+    # merged into "tags" *before* this request's own caller-supplied tags were
+    # merged in on top (see litellm_pre_call_utils.py), so a value present here is
+    # policy-backed regardless of whether the caller also happens to submit the
+    # identical value. inherited_tags is stripped through the same routing_prefix
+    # as the main request tags so a policy-inherited prefixed tag still matches
+    # correctly against the (already-stripped) required_set/excluded_set computed
+    # from request_tags.
+    if not isinstance(inherited_tags, (list, tuple)):
+        return None, None
+    rewritten_inherited_tags: Final = _strip_routing_prefix(inherited_tags, routing_prefix)[0]
+    inherited_required, _inherited_positive, inherited_excluded = _split_tags(rewritten_inherited_tags)
+    return frozenset(inherited_required), frozenset(inherited_excluded)
+
+
+def _tag_known_to_group(
+    llm_router_instance: LitellmRouter,
+    model: str,
+    positive_tags: Sequence[str],
+    routing_confirmed: frozenset[str],
+) -> bool:
+    tag_set: Final = frozenset(positive_tags)
+    if tag_set & routing_confirmed:
+        return True
+    try:
+        all_deployments: Final = llm_router_instance._get_all_deployments(model_name=model)
+    except Exception:  # noqa: BLE001  # fail safe toward "unrecognized" so lookup errors preserve the existing silent-fallback behavior
+        return False
+    return any(
+        tag_set.intersection(d.get("litellm_params", MappingProxyType({})).get("tags") or ()) for d in all_deployments
+    )
 
 
 async def get_deployments_for_tag(
@@ -161,24 +401,29 @@ async def get_deployments_for_tag(
 
     Executes tag based filtering based on the tags in request metadata and the tags on the deployments
 
-    Runs when the router-level `enable_tag_filtering` is True or the request carries
-    `enable_tag_filtering=True` (set from key/team router_settings by the proxy).
-    A request-level False never disables a router-level True, so per-request settings
-    cannot escape an operator's global tag-routing policy.
+    Runs when the effective enable_tag_filtering is True. Effective value: a
+    request-level enable_tag_filtering=True (set from key/team router_settings by
+    the proxy) always wins; otherwise model_info.enable_tag_filtering on this model
+    group, if set on any of its deployments, overrides the router-wide default.
+    A request-level False never disables either of those, so per-request settings
+    cannot escape an operator's or a chain owner's tag-routing policy.
     """
-    request_enable_tag_filtering: Final = request_kwargs.get("enable_tag_filtering") if request_kwargs else None
-    if request_enable_tag_filtering is not True and llm_router_instance.enable_tag_filtering is not True:
-        return healthy_deployments
-
-    if request_kwargs is None:
+    if request_kwargs is None or not healthy_deployments:
         verbose_logger.debug(
-            "get_deployments_for_tag: request_kwargs is None returning healthy_deployments: %s",
+            "get_deployments_for_tag: skipping tag filter (request_kwargs=%s, healthy_deployments=%s)",
+            request_kwargs,
             healthy_deployments,
         )
         return healthy_deployments
 
-    if not healthy_deployments:
-        verbose_logger.debug("get_deployments_for_tag: empty or None healthy_deployments; skipping tag filter")
+    request_enable_tag_filtering: Final = request_kwargs.get("enable_tag_filtering")
+    chain_enable_tag_filtering: Final = _chain_tag_filtering_override(llm_router_instance, model, healthy_deployments)
+    chain_default: Final = (
+        chain_enable_tag_filtering
+        if chain_enable_tag_filtering is not None
+        else llm_router_instance.enable_tag_filtering
+    )
+    if request_enable_tag_filtering is not True and chain_default is not True:
         return healthy_deployments
 
     verbose_logger.debug("request metadata: %s", request_kwargs.get(metadata_variable_name))
@@ -186,29 +431,52 @@ async def get_deployments_for_tag(
         metadata: Final = request_kwargs[metadata_variable_name]
         request_tags: Final = metadata.get("tags")
         match_any: Final = llm_router_instance.tag_filtering_match_any
+        routing_prefix: Final = llm_router_instance.tag_routing_prefix or ""
 
         # Build header strings for regex matching from what the proxy already stores.
         # Currently we match against User-Agent; format matches "^User-Agent: claude-code/..."
         user_agent: Final = metadata.get("user_agent", "")
         header_strings: Final[list[str]] = [f"User-Agent: {user_agent}"] if user_agent else []
 
-        positive_tags, excluded_patterns = _split_tags(request_tags or [])
+        # A tag_routing_prefix-marked tag is stripped before matching -- everything
+        # downstream (_split_tags, deployment matching) works off the unprefixed
+        # value, exactly as if the caller had sent it unprefixed -- and its
+        # post-strip value is remembered in routing_confirmed as an explicit,
+        # caller-declared routing directive, exempt from the "maybe foreign to this
+        # group" heuristics that unprefixed tags still go through unchanged below.
+        rewritten_tags, routing_confirmed = _strip_routing_prefix(request_tags or [], routing_prefix)
+        required_tags, positive_tags, excluded_patterns = _split_tags(rewritten_tags)
+        inherited_required_set, inherited_excluded_set = _inherited_constraint_sets(
+            metadata.get("inherited_tags"), routing_prefix
+        )
 
         excluded_set: Final = frozenset(excluded_patterns)
-        candidates: Final = _exclude_deployments(healthy_deployments, excluded_set)
+        required_set: Final = frozenset(required_tags)
+        allowed_deployments: Final = _exclude_deployments(healthy_deployments, excluded_set)
+        candidates: Final = _require_all_tags(allowed_deployments, required_set)
 
         has_regex_deployments: Final = any(d.get("litellm_params", {}).get("tag_regex") for d in candidates)
-        has_tag_filter: Final = bool(positive_tags) or (bool(header_strings) and has_regex_deployments)
-        ban_only: Final = bool(excluded_set) and not has_tag_filter
+        has_positive_filter: Final = bool(positive_tags) or (
+            bool(header_strings) and has_regex_deployments and not required_set
+        )
+        constraint_only: Final = (bool(excluded_set) or bool(required_set)) and not has_positive_filter
 
-        if ban_only:
-            pool: Final = _exclude_deployments(_ban_only_base_pool(healthy_deployments), excluded_set)
-            return _require_candidates(pool, model, request_tags)
+        if constraint_only:
+            return _resolve_constraint_only_pool(
+                healthy_deployments,
+                excluded_set,
+                required_set,
+                inherited_excluded_set,
+                inherited_required_set,
+                routing_confirmed,
+                model,
+                request_tags,
+            )
 
         new_healthy_deployments: Final[list[Any]] = []
         default_deployments: Final[list[Any]] = []
 
-        if has_tag_filter:
+        if has_positive_filter:
             verbose_logger.debug(
                 "get_deployments_for_tag routing: request_tags=%s user_agent=%s",
                 request_tags,
@@ -245,9 +513,33 @@ async def get_deployments_for_tag(
                     default_deployments.append(deployment)
 
             if len(new_healthy_deployments) == 0 and len(default_deployments) == 0:
-                raise ValueError(
-                    f"{RouterErrors.no_deployments_with_tag_routing.value}."
-                    f" Passed model={model} and tags={request_tags}"
+                return _resolve_or_fail_open(
+                    (),
+                    healthy_deployments,
+                    excluded_set,
+                    required_set,
+                    inherited_excluded_set,
+                    inherited_required_set,
+                    routing_confirmed,
+                    model,
+                    request_tags,
+                )
+
+            if (
+                len(new_healthy_deployments) == 0
+                and positive_tags
+                and _tag_known_to_group(llm_router_instance, model, positive_tags, routing_confirmed)
+            ):
+                return _resolve_or_fail_open(
+                    (),
+                    healthy_deployments,
+                    excluded_set,
+                    required_set,
+                    inherited_excluded_set,
+                    inherited_required_set,
+                    routing_confirmed,
+                    model,
+                    request_tags,
                 )
 
             return new_healthy_deployments if len(new_healthy_deployments) > 0 else default_deployments
