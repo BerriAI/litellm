@@ -1173,6 +1173,36 @@ class TestBedrockFilesEmbeddingTransformation:
             is BedrockBatchRecordKind.CHAT
         )
 
+    @pytest.mark.parametrize("body", ["not a mapping", ["messages"], 7, None], ids=["str", "list", "int", "missing"])
+    def test_classify_batch_record_falls_back_to_chat_for_non_mapping_body(self, body):
+        """A malformed body must not crash the whole upload during classification.
+
+        Chat is the only kind whose transformer tolerates an unexpected shape and
+        raises a readable error; routing a non-mapping body anywhere else would
+        blow up on attribute access before the caller sees which record is bad.
+        """
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+        from litellm.types.llms.bedrock import BedrockBatchRecordKind
+
+        record = {"body": body} if body is not None else {}
+        assert BedrockFilesConfig._classify_batch_record(record) is BedrockBatchRecordKind.CHAT
+
+    def test_embedding_kind_is_rejected_by_the_chat_normalizer(self):
+        """Embeddings have no chat equivalent, so the normalizer refuses them outright.
+
+        The caller routes embeddings to the Titan transformer before ever getting
+        here; this guard is what keeps a future caller from quietly shipping an
+        embedding body through the chat path.
+        """
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+        from litellm.types.llms.bedrock import BedrockBatchRecordKind
+
+        with pytest.raises(ValueError, match="do not have a chat-completion equivalent"):
+            BedrockFilesConfig._transform_batch_body_to_chat_body(
+                {"model": "bedrock/amazon.titan-embed-text-v2:0", "input": "hi"},
+                BedrockBatchRecordKind.EMBEDDING,
+            )
+
     def test_explicit_chat_url_with_input_body_short_circuits_to_chat(self):
         """Explicit url=/v1/chat/completions wins even if body looks like embedding.
 
@@ -1425,6 +1455,35 @@ class TestBedrockBatchNonChatEndpointRecords:
         )
 
         assert model_input["metadata"] == {"tenant": "acct-1"}
+
+    @pytest.mark.parametrize("model_attr", ["ANTHROPIC_MODEL", "NOVA_MODEL"], ids=["anthropic", "nova"])
+    def test_modelled_providers_do_not_smuggle_metadata_into_the_bedrock_body(self, model_attr):
+        """Providers with a real InvokeModel schema leave `metadata` out of `modelInput`.
+
+        Batch `modelInput` has to match the model's own InvokeModel body, and
+        neither the Anthropic messages body nor the Nova body has a field for
+        arbitrary caller labels. Nova in particular answers `400 Malformed input
+        request` for any key it does not recognize, so translating `metadata`
+        into the Converse-level `requestMetadata` would fail the record rather
+        than preserve the labels. The passthrough providers keep it because
+        their body is the OpenAI request itself.
+        """
+        model_input = self._transform(
+            {
+                "custom_id": "4c",
+                "method": "POST",
+                "url": "/v1/responses",
+                "body": {
+                    "model": getattr(self, model_attr),
+                    "input": "hi",
+                    "max_output_tokens": 8,
+                    "metadata": {"tenant": "acct-1"},
+                },
+            }
+        )
+
+        assert "metadata" not in model_input
+        assert "requestMetadata" not in model_input
 
     @pytest.mark.parametrize(
         "body",
