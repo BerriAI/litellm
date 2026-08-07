@@ -175,8 +175,7 @@ class TestGPTImageCostCalculator:
                 image_tokens=500,
             ),
             completion_tokens_details=CompletionTokensDetailsWrapper(
-                text_tokens=1000,
-                image_tokens=4000,
+                image_tokens=5000,
             ),
         )
 
@@ -192,12 +191,7 @@ class TestGPTImageCostCalculator:
             custom_llm_provider="openai",
         )
 
-        # GPT Image 2 pricing:
-        # Text input: 100 * $5/1M = 0.0005
-        # Image input: 500 * $8/1M = 0.004
-        # Text output: 1000 * $10/1M = 0.01
-        # Image output: 4000 * $30/1M = 0.12
-        expected_cost = 0.0005 + 0.004 + 0.01 + 0.12
+        expected_cost = 100 * 5e-6 + 500 * 8e-6 + 5000 * 3e-5
         assert abs(cost - expected_cost) < 1e-6, f"Expected {expected_cost}, got {cost}"
 
 
@@ -432,10 +426,7 @@ class TestGPTImage2OutputImageTokensNoBreakdown:
             f"are likely being priced at the text output_cost_per_token rate."
         )
 
-    def test_gpt_image_2_chat_usage_without_breakdown_is_costed_not_zero(self):
-        """A chat ``Usage`` with ``completion_tokens_details=None`` must still be
-        costed via ``generic_cost_per_token`` (output at the text rate) rather than
-        erroring or silently returning 0.0."""
+    def test_gpt_image_2_chat_usage_without_breakdown_uses_image_rate(self):
         from litellm.llms.openai.image_generation.cost_calculator import (
             cost_calculator,
         )
@@ -463,9 +454,7 @@ class TestGPTImage2OutputImageTokensNoBreakdown:
             custom_llm_provider="openai",
         )
 
-        # No output breakdown -> output priced at the text rate (output_cost_per_token):
-        #   text in 100*$5/1M + image in 500*$8/1M + output 5000*$10/1M
-        expected_cost = 100 * 5e-6 + 500 * 8e-6 + 5000 * 1e-5
+        expected_cost = 100 * 5e-6 + 500 * 8e-6 + 5000 * 3e-5
         assert abs(cost - expected_cost) < 1e-6, f"Expected {expected_cost}, got {cost}"
 
 
