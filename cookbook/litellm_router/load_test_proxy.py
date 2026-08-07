@@ -97,9 +97,12 @@ def make_openai_completion(question):
         end_time = time.time()
 
         # Log the request details
+        if not response.choices or response.choices[0].message is None:
+            raise ValueError("LLM returned empty or filtered response")
+        content_preview = (response.choices[0].message.content or "")[:10]
         with open("request_log.txt", "a") as log_file:
             log_file.write(
-                f"Question: {question[:100]}\nResponse ID:{response.id} Content:{response.choices[0].message.content[:10]}\nTime: {end_time - start_time:.2f} seconds\n\n"
+                f"Question: {question[:100]}\nResponse ID:{response.id} Content:{content_preview}\nTime: {end_time - start_time:.2f} seconds\n\n"
             )
 
         return response
