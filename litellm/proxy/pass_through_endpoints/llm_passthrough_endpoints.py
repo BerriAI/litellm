@@ -1942,8 +1942,8 @@ async def openai_websocket_proxy_route(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth_websocket)],
 ) -> None:
     """WebSocket passthrough for OpenAI prefixes (realtime / responses.connect)."""
-    base_target_url = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
-    openai_api_key = passthrough_endpoint_router.get_credentials(
+    base_target_url: Final = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
+    openai_api_key: Final = passthrough_endpoint_router.get_credentials(
         custom_llm_provider=litellm.LlmProviders.OPENAI.value,
         region_name=None,
     )
@@ -1951,31 +1951,33 @@ async def openai_websocket_proxy_route(
         await websocket.close(code=1011)
         raise ValueError("Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.")
 
-    encoded_endpoint = httpx.URL(endpoint).path
-    if not encoded_endpoint.startswith("/"):
-        encoded_endpoint = "/" + encoded_endpoint
-    base_url = httpx.URL(base_target_url)
-    updated_url = BaseOpenAIPassThroughHandler._join_url_paths(
+    raw_path: Final = httpx.URL(endpoint).path
+    encoded_endpoint: Final = raw_path if raw_path.startswith("/") else f"/{raw_path}"
+    base_url: Final = httpx.URL(base_target_url)
+    updated_url: Final = BaseOpenAIPassThroughHandler._join_url_paths(
         base_url=base_url,
         path=encoded_endpoint,
         custom_llm_provider=litellm.LlmProviders.OPENAI,
     )
-    if updated_url.startswith("https://"):
-        wss_target = "wss://" + updated_url[len("https://") :]
-    elif updated_url.startswith("http://"):
-        wss_target = "ws://" + updated_url[len("http://") :]
-    else:
-        wss_target = updated_url
-
-    query_string = websocket.url.query
-    if query_string:
-        separator = "&" if "?" in wss_target else "?"
-        wss_target = f"{wss_target}{separator}{query_string}"
+    wss_base: Final = (
+        "wss://" + updated_url[len("https://") :]
+        if updated_url.startswith("https://")
+        else "ws://" + updated_url[len("http://") :]
+        if updated_url.startswith("http://")
+        else updated_url
+    )
+    query_string: Final = websocket.url.query
+    wss_target: Final = (
+        f"{wss_base}{'&' if '?' in wss_base else '?'}{query_string}" if query_string else wss_base
+    )
+    custom_headers: Final = {
+        "Authorization": f"Bearer {openai_api_key}"
+    }  # mutable-ok: websocket_passthrough_request requires a plain dict of upstream headers
 
     await websocket_passthrough_request(
         websocket=websocket,
         target=wss_target,
-        custom_headers={"Authorization": f"Bearer {openai_api_key}"},
+        custom_headers=custom_headers,
         user_api_key_dict=user_api_key_dict,
         forward_headers=False,
         endpoint=f"/openai/{endpoint}",
