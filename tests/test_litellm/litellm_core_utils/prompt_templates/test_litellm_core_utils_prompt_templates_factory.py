@@ -52,6 +52,33 @@ def test_ollama_pt_simple_messages():
     assert result["images"] == []
 
 
+def test_ollama_pt_assistant_tool_call_with_empty_arguments():
+    """A prior assistant tool call for a no-argument function carries
+    arguments="" (or None). ollama_pt must not abort the request with a
+    JSONDecodeError while rebuilding the prompt; empty arguments parse to {}."""
+    messages = [
+        {"role": "user", "content": "What time is it?"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_current_time", "arguments": ""},
+                }
+            ],
+        },
+        {"role": "tool", "content": "12:00", "tool_call_id": "call_1"},
+    ]
+
+    result = ollama_pt(model="llama2", messages=messages)  # must not raise
+
+    assert isinstance(result, dict)
+    assert "get_current_time" in result["prompt"]
+    assert '"arguments": {}' in result["prompt"]
+
+
 def test_ollama_pt_consecutive_user_messages():
     """Test handling consecutive user messages"""
     messages = [
