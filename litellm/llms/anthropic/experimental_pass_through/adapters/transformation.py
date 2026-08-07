@@ -762,9 +762,9 @@ class LiteLLMAnthropicMessagesAdapter:
                 name=truncated_name,
             )
             if "input_schema" in tool:
-                # Shallow-copy to avoid mutating the caller's original dict when
-                # extra kwargs are merged below (see #34510).
-                function_chunk["parameters"] = dict(tool["input_schema"])
+                # Deep-copy so extra kwargs merged below (see #34510) never mutate
+                # the caller's original `input_schema` dict.
+                function_chunk["parameters"] = copy.deepcopy(tool["input_schema"])
             if "description" in tool:
                 function_chunk["description"] = tool["description"]
 
