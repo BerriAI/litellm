@@ -237,7 +237,8 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     ) -> dict:
         if api_key:
             self.run_env_setup(api_key)
-        return self.headers
+        extra_headers = optional_params.get("extra_headers") or {}
+        return {**headers, **extra_headers, **self.headers}
 
     def get_complete_url(
         self,
@@ -316,6 +317,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     ) -> dict:
         optional_params = dict(optional_params)
         optional_params.pop("deployment_url", None)
+        optional_params.pop("extra_headers", None)
 
         template: Final = _messages_to_sap_template(messages)
 
