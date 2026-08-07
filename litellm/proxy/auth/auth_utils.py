@@ -1653,6 +1653,21 @@ def get_model_from_request(
         if vertex_match:
             model = vertex_match.group(1)
 
+    if route.lower().startswith("/bedrock"):
+        bedrock_endpoint = re.sub(r"^/bedrock/", "", route, flags=re.IGNORECASE)
+        is_bedrock_count_tokens_route = (
+            "count_tokens" in bedrock_endpoint.lower() or "count-tokens" in bedrock_endpoint.lower()
+        )
+        if not is_bedrock_count_tokens_route:
+            from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+                _extract_model_from_bedrock_endpoint,
+            )
+
+            try:
+                model = _extract_model_from_bedrock_endpoint(bedrock_endpoint)
+            except ValueError:
+                pass
+
     return model
 
 
