@@ -6,6 +6,8 @@ Calls done in OpenAI/openai.py as Vercel AI Gateway is openai-compatible.
 Docs: https://vercel.com/docs/ai-gateway
 """
 
+from typing import Final
+
 import httpx
 
 import litellm
@@ -23,7 +25,7 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         return "vercel_ai_gateway"
 
     def get_supported_openai_params(self, model: str) -> list:
-        base_params = super().get_supported_openai_params(model)
+        base_params: Final = super().get_supported_openai_params(model)
         if "extra_body" not in base_params:
             base_params.append("extra_body")
         return base_params
@@ -42,11 +44,11 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        mapped_openai_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        mapped_openai_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
         # Vercel AI Gateway-only parameters
-        extra_body = {}
-        provider_options = non_default_params.pop("providerOptions", None)
+        extra_body: Final = {}
+        provider_options: Final = non_default_params.pop("providerOptions", None)
 
         if provider_options is not None:
             extra_body["providerOptions"] = provider_options
@@ -83,11 +85,11 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         if api_base is None:
             api_base = "https://ai-gateway.vercel.sh/v1"
 
-        models_url = f"{api_base}/models"
-        response = litellm.module_level_client.get(url=models_url)
+        models_url: Final = f"{api_base}/models"
+        response: Final = litellm.module_level_client.get(url=models_url)
 
         if response.status_code != 200:
             raise Exception(f"Failed to get models: {response.text}")
 
-        models = response.json()["data"]
+        models: Final = response.json()["data"]
         return [model["id"] for model in models]

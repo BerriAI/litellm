@@ -2,7 +2,7 @@
 Handles Authentication Errors
 """
 
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import HTTPException, Request, status
 
@@ -23,12 +23,12 @@ from litellm.types.services import ServiceTypes
 # outage when allow_requests_on_db_unavailable is True. Downstream
 # enforcement can key off this value; it must never collide with a real
 # user_id.
-DB_UNAVAILABLE_FALLBACK_USER_ID = "__db_unavailable_fallback__"
+DB_UNAVAILABLE_FALLBACK_USER_ID: Final = "__db_unavailable_fallback__"
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
@@ -90,12 +90,14 @@ class UserAPIKeyAuthExceptionHandler:
             )
         else:
             # raise the exception to the caller
-            requester_ip = _get_request_ip_address(
+            requester_ip: Final = _get_request_ip_address(
                 request=request,
                 use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
             )
             verbose_proxy_logger.exception(
-                f"litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {e!s}\nRequester IP Address:{requester_ip}",
+                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s",
+                e,
+                requester_ip,
                 extra={"requester_ip": requester_ip},
             )
 
@@ -130,7 +132,7 @@ class UserAPIKeyAuthExceptionHandler:
                 _, e.llm_provider = resolve_llm_provider_for_rate_limit(request_data.get("model"))
 
             # Allow callbacks to transform the error response
-            transformed_exception = await proxy_logging_obj.post_call_failure_hook(
+            transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
                 request_data=request_data,
                 original_exception=e,
                 user_api_key_dict=user_api_key_dict,
@@ -150,7 +152,7 @@ class UserAPIKeyAuthExceptionHandler:
                 )
             if isinstance(e, HTTPException):
                 raise ProxyException(
-                    message=getattr(e, "detail", f"Authentication Error({e!s})"),
+                    message=getattr(e, "detail", f"Authentication Error({e})"),
                     type=ProxyErrorTypes.auth_error,
                     param=getattr(e, "param", "None"),
                     code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
