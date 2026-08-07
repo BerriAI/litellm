@@ -24,12 +24,9 @@ import {
   fetchToolPolicyOptions,
   getToolUsageLogs,
   keyListCall,
-  teamListCall,
   updateToolPolicy,
-  type ToolPolicyOption,
   type ToolPolicyOverrideRow,
 } from "@/components/networking";
-import type { Team } from "@/components/key_team_helpers/key_list";
 
 interface ToolDetailProps {
   toolName: string;
@@ -87,12 +84,6 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
     staleTime: 60_000,
   });
 
-  const { data: teamsData } = useQuery({
-    queryKey: ["teams-list-tool-detail"],
-    queryFn: () => teamListCall(accessToken!, null, null),
-    enabled: !!accessToken,
-  });
-
   const { data: keysData } = useQuery({
     queryKey: ["keys-list-tool-detail"],
     queryFn: () => keyListCall(accessToken!, null, null, null, null, null, 1, 100),
@@ -121,24 +112,6 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
       input_snippet: l.input_snippet ?? undefined,
     }));
   }, [logsData?.logs]);
-
-  const teams: Team[] = useMemo(() => {
-    const arr = Array.isArray(teamsData) ? teamsData : teamsData?.data ?? [];
-    return arr.map((t: { team_id?: string; id?: string; team_alias?: string }) => ({
-      team_id: t.team_id ?? t.id ?? "",
-      team_alias: t.team_alias ?? t.team_id ?? "",
-      models: [],
-      max_budget: null,
-      budget_duration: null,
-      tpm_limit: null,
-      rpm_limit: null,
-      organization_id: "",
-      created_at: "",
-      keys: [],
-      members_with_roles: [],
-      spend: 0,
-    }));
-  }, [teamsData]);
 
   const keys: KeyOption[] = useMemo(() => {
     const keysRes = keysData?.keys ?? keysData?.data ?? [];
@@ -430,7 +403,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
         <section className="rounded-lg border border-border bg-card p-5 shadow-xs">
           <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold">
             <History className="size-4" />
-            Recent logs
+            Recent invocations
           </h2>
           <LogViewer
             guardrailName={tool.tool_name}
