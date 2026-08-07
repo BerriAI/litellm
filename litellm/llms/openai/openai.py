@@ -340,6 +340,39 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     def __init__(self) -> None:
         super().__init__()
 
+    @staticmethod
+    def _strip_internal_request_fields(data: Any) -> Any:
+        """
+        Keep LiteLLM bookkeeping fields off the upstream OpenAI payload.
+
+        Proxy hooks may stash `_litellm_*` values on the request dict for
+        post-call reconciliation. They are not part of the OpenAI API schema
+        and should never be forwarded upstream.
+        """
+        if isinstance(data, dict):
+            sanitized = {}
+            for key, value in data.items():
+                if isinstance(key, str) and key.startswith("_litellm_"):
+                    continue
+                sanitized[key] = OpenAIChatCompletion._strip_internal_request_fields(
+                    value
+                )
+            return sanitized
+
+        if isinstance(data, list):
+            return [
+                OpenAIChatCompletion._strip_internal_request_fields(item)
+                for item in data
+            ]
+
+        if isinstance(data, tuple):
+            return tuple(
+                OpenAIChatCompletion._strip_internal_request_fields(item)
+                for item in data
+            )
+
+        return data
+
     def _set_dynamic_params_on_client(
         self,
         client: Union[OpenAI, AsyncOpenAI],
@@ -432,11 +465,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
         - call chat.completions.create by default
         """
+        sanitized_data = self._strip_internal_request_fields(data)
         start_time = time.time()
         try:
             raw_response = (
                 await openai_aclient.chat.completions.with_raw_response.create(
-                    **data, timeout=timeout
+                    **sanitized_data, timeout=timeout
                 )
             )
             end_time = time.time()
@@ -473,10 +507,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
         - call chat.completions.create by default
         """
+        sanitized_data = self._strip_internal_request_fields(data)
         raw_response = None
         try:
             raw_response = openai_client.chat.completions.with_raw_response.create(
-                **data, timeout=timeout
+                **sanitized_data, timeout=timeout
             )
 
             if hasattr(raw_response, "headers"):

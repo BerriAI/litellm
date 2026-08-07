@@ -4,7 +4,7 @@ Test for issue #17209: Clearer error when LLM endpoint returns empty response
 
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -126,3 +126,124 @@ class TestEmptyResponseHandling:
 
         assert response == mock_stream
         assert headers == {"x-request-id": "123"}
+
+    def test_sync_request_drops_internal_litellm_fields(self):
+        openai_chat = OpenAIChatCompletion()
+
+        mock_response = MagicMock()
+        mock_response.model_dump.return_value = {"choices": []}
+
+        mock_raw_response = MagicMock()
+        mock_raw_response.headers = {}
+        mock_raw_response.parse.return_value = mock_response
+
+        mock_client = MagicMock()
+        create_mock = mock_client.chat.completions.with_raw_response.create
+        create_mock.return_value = mock_raw_response
+
+        data = {
+            "model": "gpt-4.1",
+            "messages": [{"role": "user", "content": "test"}],
+            "_litellm_rate_limit_descriptors": ["should-not-leave-litellm"],
+            "_litellm_tpm_reserved_tokens": 42,
+            "extra_body": {
+                "_litellm_tpm_reserved_model": "gpt-4.1",
+                "metadata": {
+                    "_litellm_tpm_reserved_scopes": [["api_key", "hash"]],
+                    "trace_id": "trace-123",
+                },
+                "items": [
+                    {
+                        "_litellm_tpm_reservation_released": True,
+                        "keep": "value",
+                    }
+                ],
+            },
+        }
+
+        openai_chat.make_sync_openai_chat_completion_request(
+            openai_client=mock_client,
+            data=data,
+            timeout=30,
+            logging_obj=MagicMock(),
+        )
+
+        _, kwargs = create_mock.call_args
+        assert "_litellm_rate_limit_descriptors" not in kwargs
+        assert "_litellm_tpm_reserved_tokens" not in kwargs
+        assert "_litellm_tpm_reserved_model" not in kwargs["extra_body"]
+        assert (
+            "_litellm_tpm_reserved_scopes"
+            not in kwargs["extra_body"]["metadata"]
+        )
+        assert (
+            "_litellm_tpm_reservation_released"
+            not in kwargs["extra_body"]["items"][0]
+        )
+        assert kwargs["extra_body"]["metadata"]["trace_id"] == "trace-123"
+        assert kwargs["extra_body"]["items"] == [{"keep": "value"}]
+        assert kwargs["model"] == "gpt-4.1"
+        assert kwargs["messages"] == [{"role": "user", "content": "test"}]
+        assert "_litellm_rate_limit_descriptors" in data
+        assert "_litellm_tpm_reserved_model" in data["extra_body"]
+
+    @pytest.mark.asyncio
+    async def test_async_request_drops_internal_litellm_fields(self):
+        openai_chat = OpenAIChatCompletion()
+
+        mock_response = MagicMock()
+        mock_response.model_dump.return_value = {"choices": []}
+
+        mock_raw_response = MagicMock()
+        mock_raw_response.headers = {}
+        mock_raw_response.parse.return_value = mock_response
+
+        mock_client = MagicMock()
+        create_mock = AsyncMock(return_value=mock_raw_response)
+        mock_client.chat.completions.with_raw_response.create = create_mock
+
+        data = {
+            "model": "gpt-4.1",
+            "messages": [{"role": "user", "content": "test"}],
+            "_litellm_rate_limit_descriptors": ["should-not-leave-litellm"],
+            "_litellm_tpm_reserved_tokens": 42,
+            "extra_body": {
+                "_litellm_tpm_reserved_model": "gpt-4.1",
+                "metadata": {
+                    "_litellm_tpm_reserved_scopes": [["api_key", "hash"]],
+                    "trace_id": "trace-123",
+                },
+                "items": [
+                    {
+                        "_litellm_tpm_reservation_released": True,
+                        "keep": "value",
+                    }
+                ],
+            },
+        }
+
+        await openai_chat.make_openai_chat_completion_request(
+            openai_aclient=mock_client,
+            data=data,
+            timeout=30,
+            logging_obj=MagicMock(),
+        )
+
+        _, kwargs = create_mock.call_args
+        assert "_litellm_rate_limit_descriptors" not in kwargs
+        assert "_litellm_tpm_reserved_tokens" not in kwargs
+        assert "_litellm_tpm_reserved_model" not in kwargs["extra_body"]
+        assert (
+            "_litellm_tpm_reserved_scopes"
+            not in kwargs["extra_body"]["metadata"]
+        )
+        assert (
+            "_litellm_tpm_reservation_released"
+            not in kwargs["extra_body"]["items"][0]
+        )
+        assert kwargs["extra_body"]["metadata"]["trace_id"] == "trace-123"
+        assert kwargs["extra_body"]["items"] == [{"keep": "value"}]
+        assert kwargs["model"] == "gpt-4.1"
+        assert kwargs["messages"] == [{"role": "user", "content": "test"}]
+        assert "_litellm_rate_limit_descriptors" in data
+        assert "_litellm_tpm_reserved_model" in data["extra_body"]
