@@ -8,6 +8,7 @@ rotation re-encrypts stored rows like the sibling per-user credential tables.
 """
 
 import json
+import os
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,6 +16,8 @@ import jwt as pyjwt
 import pytest
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+    AssertionStoreUnavailable,
+    DbSSOAssertionStore,
     assertion_from_sso_login,
     ema_assertion_retention_enabled,
     fetch_sso_identity_assertion,
@@ -341,3 +344,23 @@ async def test_rotation_skips_unreadable_rows_but_rotates_readable_ones():
     await rotate_sso_identity_assertions_master_key(prisma_client=prisma, new_master_key="another-new-salt-key-0000")
     assert stored["bad"] == "garbage-blob"
     assert stored["good"] != good_blob_before
+
+
+@pytest.mark.asyncio
+async def test_db_store_converts_a_driver_failure_into_assertion_store_unavailable():
+    """The live store must not let a raw driver error escape: the resolver distinguishes an outage
+    from an absent assertion, and only a typed failure lets it do that."""
+    prisma = MagicMock()
+    prisma.db.litellm_ssoidentityassertion.find_unique = AsyncMock(side_effect=RuntimeError("connection refused"))
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        with pytest.raises(AssertionStoreUnavailable):
+            await DbSSOAssertionStore().fetch("alice")
+
+
+@pytest.mark.asyncio
+async def test_db_store_returns_none_for_a_user_with_no_stored_assertion():
+    """An absent row stays an absence, not an outage, so a user who never signed in still gets the
+    412 that tells them to."""
+    with patch.dict(os.environ, {"LITELLM_SALT_KEY": SALT_KEY}):
+        with patch("litellm.proxy.proxy_server.prisma_client", _make_prisma({})):
+            assert await DbSSOAssertionStore().fetch("nobody") is None

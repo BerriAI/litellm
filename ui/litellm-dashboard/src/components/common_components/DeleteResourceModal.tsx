@@ -32,7 +32,7 @@ export default function DeleteResourceModal({
   confirmLoading,
   requiredConfirmation,
 }: DeleteResourceModalProps) {
-  const { Title, Text } = Typography;
+  const { Text } = Typography;
   const { token } = theme.useToken();
   const [requiredConfirmationInput, setRequiredConfirmationInput] = useState("");
 

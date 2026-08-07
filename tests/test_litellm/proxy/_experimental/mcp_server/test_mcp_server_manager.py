@@ -40,17 +40,21 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     _oauth_endpoints_unresolved,
     _deserialize_json_list,
     _normalize_mcp_server_cost_info,
+    _obo_retry_applies,
     _should_strip_caller_authorization,
     _without_authorization,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
+    LiteLLM_ObjectPermissionTable,
+    LitellmUserRoles,
     MCPApprovalStatus,
     MCPEnvVar,
     MCPEnvVarScope,
     MCPTransport,
+    UserAPIKeyAuth,
 )
-from litellm.types.mcp import MCPAuth
+from litellm.types.mcp import MCPAuth, MCPAuthType
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
 
 
@@ -8232,6 +8236,35 @@ def test_should_strip_caller_authorization_for_token_exchange():
     assert _should_strip_caller_authorization(mcp_server=server, raw_headers=None, user_api_key_auth=None) is True
 
 
+def _retry_gate_server(auth_type: MCPAuthType) -> MCPServer:
+    return MCPServer(
+        server_id="retry-gate",
+        name="retry-gate-server",
+        url="https://up.example.com",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+    )
+
+
+def test_obo_retry_applies_to_id_jag_without_an_inbound_subject_token():
+    """ID-JAG can source its subject from the user's stored SSO assertion, so the upstream-401
+    invalidate-and-retry path must engage even when the caller presented no token of its own;
+    otherwise a store-sourced bearer is replayed until its TTL after being rejected."""
+    assert _obo_retry_applies(_retry_gate_server(MCPAuth.oauth2_id_jag), None) is True
+    assert _obo_retry_applies(_retry_gate_server(MCPAuth.oauth2_id_jag), "inbound-id-token") is True
+
+
+def test_obo_retry_still_requires_a_subject_token_for_token_exchange():
+    """token_exchange can only mint from an inbound token, so with none there is nothing to re-mint."""
+    assert _obo_retry_applies(_retry_gate_server(MCPAuth.oauth2_token_exchange), None) is False
+    assert _obo_retry_applies(_retry_gate_server(MCPAuth.oauth2_token_exchange), "inbound-token") is True
+
+
+def test_obo_retry_does_not_apply_to_other_auth_modes():
+    for auth_type in (MCPAuth.none, MCPAuth.api_key, MCPAuth.oauth2, MCPAuth.true_passthrough):
+        assert _obo_retry_applies(_retry_gate_server(auth_type), "some-token") is False
+
+
 class _UpstreamAuthError(Exception):
     """Mimics a wrapped upstream 401 the way _extract_upstream_auth_failure detects it."""
 
@@ -9189,3 +9222,574 @@ class TestDiscoveryFailureLogging:
         assert "typo_row" in caplog.text
         assert "authorization_url, token_url" in caplog.text
         assert "unresolved" in caplog.text
+
+
+def _unrestricted_auth() -> MagicMock:
+    """A caller with no object_permission, so only server-level checks apply."""
+    user_api_key_auth = MagicMock()
+    user_api_key_auth.object_permission = None
+    user_api_key_auth.object_permission_id = None
+    return user_api_key_auth
+
+
+def _permissive_proxy_logging() -> MagicMock:
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
+    proxy_logging_obj._convert_mcp_to_llm_format = MagicMock(return_value={})
+    proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
+    return proxy_logging_obj
+
+
+ALIAS_LESS_SERVER_ID = "117c814c-1a2b-4c4d-8e8f-0a1b2c3d4e5f"
+
+
+class TestServerToolListsHonorThePrefixBoundary:
+    """The server-level allowed_tools / disallowed_tools / allowed_params checks
+    receive a BARE tool name. Every caller resolves the prefix boundary before
+    dispatch (``server.py``'s ``original_tool_name``, the Responses handler's
+    ``sanitized_tool_name``), and ``call_tool`` hands that same value to the
+    upstream client verbatim, which only works because it carries no prefix.
+
+    Stored entries may also carry a prefix, and routing accepts *every* prefix
+    from ``iter_known_server_prefixes`` (short ID, alias, server_name,
+    server_id), so enforcement derives that whole set via
+    ``iter_known_tool_name_spellings``. Rebuilding a single comparand as
+    ``f"{server.name}-{tool_name}"`` used a field the prefix chain never reads
+    (``get_server_prefix`` is short_prefix, then alias, then server_name, then
+    server_id) and hardcoded the separator; deriving only ``get_server_prefix``
+    covers just the currently published spelling. Either way the check answers
+    for fewer spellings than are reachable, and on the blocklist arm that is a
+    fail-open.
+    """
+
+    async def _run_check(self, server: MCPServer, name: str, arguments: dict[str, Any] | None = None) -> None:
+        await MCPServerManager().pre_call_tool_check(
+            name=name,
+            arguments=arguments if arguments is not None else {},
+            server_name=server.name,
+            user_api_key_auth=_unrestricted_auth(),
+            proxy_logging_obj=_permissive_proxy_logging(),
+            server=server,
+        )
+
+    @staticmethod
+    def _aliased_server(**overrides: Any) -> MCPServer:
+        return MCPServer(
+            server_id="dd7f2b9e-2c4a-4f1b-9e0a-8d3c6b5a4f21",
+            name="petstore_prod",
+            alias="petstore",
+            server_name="petstore_prod",
+            url="https://petstore.example.com/mcp",
+            transport=MCPTransport.http,
+            **overrides,
+        )
+
+    @staticmethod
+    def _alias_less_server(**overrides: Any) -> MCPServer:
+        # No alias and no server_name, so the published prefix is the UUID
+        # server_id, which itself contains the prefix separator.
+        return MCPServer(
+            server_id=ALIAS_LESS_SERVER_ID,
+            name=ALIAS_LESS_SERVER_ID,
+            url="https://wiki.example.com/mcp",
+            transport=MCPTransport.http,
+            **overrides,
+        )
+
+    @pytest.mark.asyncio
+    async def test_allowlist_entry_prefixed_with_the_alias_matches_a_bare_call(self):
+        # The dashboard shows tools under the published prefix, so admins store
+        # "petstore-getpetbyid"; the display name "petstore_prod" is not it.
+        server = self._aliased_server(allowed_tools=["petstore-getpetbyid"])
+
+        await self._run_check(server, "getpetbyid")
+
+    @pytest.mark.asyncio
+    async def test_bare_allowlist_entry_matches_on_an_alias_less_server(self):
+        server = self._alias_less_server(allowed_tools=["read_wiki_contents"])
+
+        await self._run_check(server, "read_wiki_contents")
+
+    @pytest.mark.asyncio
+    async def test_wire_form_allowlist_entry_matches_on_an_alias_less_server(self):
+        # The published prefix is the UUID server_id, so it contains the
+        # separator; the derived wire form has to reproduce it whole.
+        server = self._alias_less_server(allowed_tools=[f"{ALIAS_LESS_SERVER_ID}-read_wiki_contents"])
+
+        await self._run_check(server, "read_wiki_contents")
+
+    @pytest.mark.asyncio
+    async def test_wire_form_entry_matches_a_native_name_that_opens_with_the_prefix(self):
+        # "petstore-getpetbyid" is a real upstream tool name here, so its wire
+        # form is "petstore-petstore-getpetbyid". Stripping the stored entry
+        # instead of deriving the wire form cut a boundary the caller had already
+        # consumed, leaving asymmetric operands that denied a permitted call.
+        server = self._aliased_server(allowed_tools=["petstore-petstore-getpetbyid"])
+
+        await self._run_check(server, "petstore-getpetbyid")
+
+    @pytest.mark.asyncio
+    async def test_wire_form_blocklist_entry_blocks_a_native_name_that_opens_with_the_prefix(self):
+        server = self._aliased_server(disallowed_tools=["petstore-petstore-getpetbyid"])
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run_check(server, "petstore-getpetbyid")
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_wire_form_blocklist_entry_blocks_under_the_short_prefix_mode(self, monkeypatch):
+        # short_prefix wins in get_server_prefix but is never server.name, so the
+        # hand-built comparand could not match a stored wire-form entry and the
+        # blocklisted tool stayed callable.
+        monkeypatch.setenv("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "true")
+        server = self._aliased_server(short_prefix="F3X", disallowed_tools=["F3X-deletepet"])
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run_check(server, "deletepet")
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_alias_form_blocklist_entry_still_blocks_under_the_short_prefix_mode(self, monkeypatch):
+        # Turning short prefixes on republishes every tool under the short ID,
+        # but routing still resolves the alias form, so an entry an admin stored
+        # before the flip stays reachable and has to stay enforced. Deriving only
+        # the published spelling silently stops honoring it: a fail-open on a
+        # config nobody edited.
+        monkeypatch.setenv("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "true")
+        server = self._aliased_server(short_prefix="F3X", disallowed_tools=["petstore-deletepet"])
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run_check(server, "deletepet")
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_alias_form_allowlist_entry_still_matches_under_the_short_prefix_mode(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "true")
+        server = self._aliased_server(short_prefix="F3X", allowed_tools=["petstore-getpetbyid"])
+
+        await self._run_check(server, "getpetbyid")
+
+    @pytest.mark.asyncio
+    async def test_server_name_form_blocklist_entry_still_blocks_under_the_short_prefix_mode(self, monkeypatch):
+        # server_name sits third in the prefix chain, so it is published only
+        # when alias and short_prefix are both absent, yet routing accepts it
+        # regardless.
+        monkeypatch.setenv("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "true")
+        server = self._aliased_server(short_prefix="F3X", disallowed_tools=["petstore_prod-deletepet"])
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run_check(server, "deletepet")
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_raw_server_id_form_blocklist_entry_still_blocks_under_the_short_prefix_mode(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "true")
+        server = self._alias_less_server(disallowed_tools=[f"{ALIAS_LESS_SERVER_ID}-read_wiki_contents"])
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run_check(server, "read_wiki_contents")
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_allowed_params_keyed_by_the_alias_form_are_enforced_under_the_short_prefix_mode(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "true")
+        server = self._aliased_server(short_prefix="F3X", allowed_params={"petstore-getpetbyid": ["petid"]})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run_check(
+                server,
+                "getpetbyid",
+                arguments={"petid": "7", "include_internal": "true"},
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "include_internal" in exc_info.value.detail["error"]
+
+    @pytest.mark.asyncio
+    async def test_foreign_prefix_entry_does_not_match_under_the_short_prefix_mode(self, monkeypatch):
+        # Honoring every known prefix must not become "honor any prefix": the
+        # widened set is this server's spellings only.
+        monkeypatch.setenv("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "true")
+        server = self._aliased_server(short_prefix="F3X", allowed_tools=["other_server-getpetbyid"])
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run_check(server, "getpetbyid")
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.parametrize("short_prefix_mode", [False, True])
+    @pytest.mark.asyncio
+    async def test_every_spelling_routing_registers_is_also_enforced(self, monkeypatch, short_prefix_mode):
+        """The invariant, driven through production code on both sides.
+
+        ``_create_prefixed_tools`` decides which spellings reach dispatch, so
+        every key it registers has to be a spelling the blocklist can refuse.
+        Any key routing accepts but enforcement misses is a callable blocked
+        tool.
+        """
+        monkeypatch.setenv("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "true" if short_prefix_mode else "false")
+        shape = self._aliased_server(short_prefix="F3X")
+
+        manager = MCPServerManager()
+        manager._create_prefixed_tools([MCPTool(name="deletepet", description="", inputSchema={})], shape)
+        registered = sorted(manager.tool_name_to_mcp_server_name_mapping)
+        assert len(registered) > 1
+
+        for spelling in registered:
+            server = self._aliased_server(short_prefix="F3X", disallowed_tools=[spelling])
+            with pytest.raises(HTTPException) as exc_info:
+                await self._run_check(server, "deletepet")
+            assert exc_info.value.status_code == 403, spelling
+
+    @pytest.mark.asyncio
+    async def test_wire_form_allowlist_entry_follows_a_non_default_separator(self):
+        from litellm.proxy._experimental.mcp_server import utils as mcp_utils
+
+        server = self._aliased_server(allowed_tools=["petstore__getpetbyid"])
+
+        with patch.object(mcp_utils, "MCP_TOOL_PREFIX_SEPARATOR", "__"):
+            await self._run_check(server, "getpetbyid")
+
+    @pytest.mark.asyncio
+    async def test_tool_outside_the_allowlist_is_still_denied(self):
+        server = self._aliased_server(allowed_tools=["petstore-getpetbyid"])
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run_check(server, "deletepet")
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_allowlist_entry_prefixed_for_another_server_does_not_match(self):
+        # Reducing both sides must not widen the allowlist across servers: a
+        # foreign prefix is not one of this server's known prefixes, so the
+        # entry keeps it and never collapses onto a bare name.
+        server = self._aliased_server(allowed_tools=["other_server-getpetbyid"])
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run_check(server, "getpetbyid")
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_prefixed_disallowed_entry_blocks_a_bare_call(self):
+        # Fail-open regression: the blocklist arm answered "not banned" whenever
+        # the stored entry carried a prefix it failed to reconstruct.
+        server = self._aliased_server(disallowed_tools=["petstore-deletepet"])
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run_check(server, "deletepet")
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_tool_outside_the_blocklist_is_still_allowed(self):
+        server = self._aliased_server(disallowed_tools=["petstore-deletepet"])
+
+        await self._run_check(server, "getpetbyid")
+
+    @pytest.mark.asyncio
+    async def test_allowed_params_are_enforced_for_a_bare_key(self):
+        server = self._alias_less_server(allowed_params={"read_wiki_contents": ["repo"]})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run_check(
+                server,
+                "read_wiki_contents",
+                arguments={"repo": "acme/wiki", "internal_only": "true"},
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "internal_only" in exc_info.value.detail["error"]
+
+    @pytest.mark.asyncio
+    async def test_allowed_params_are_enforced_for_a_wire_form_key(self):
+        # A key stored under the published prefix matched nothing, so the lookup
+        # returned None and the check silently allowed every parameter instead of
+        # enforcing the configured list.
+        server = self._alias_less_server(allowed_params={f"{ALIAS_LESS_SERVER_ID}-read_wiki_contents": ["repo"]})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run_check(
+                server,
+                "read_wiki_contents",
+                arguments={"repo": "acme/wiki", "internal_only": "true"},
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "internal_only" in exc_info.value.detail["error"]
+
+    @pytest.mark.asyncio
+    async def test_allowed_params_still_accept_the_configured_parameters(self):
+        server = self._alias_less_server(allowed_params={f"{ALIAS_LESS_SERVER_ID}-read_wiki_contents": ["repo"]})
+
+        await self._run_check(server, "read_wiki_contents", arguments={"repo": "acme/wiki"})
+
+    @pytest.mark.asyncio
+    async def test_allowed_params_are_enforced_for_a_native_name_that_opens_with_the_prefix(self):
+        server = self._aliased_server(allowed_params={"petstore-petstore-getpetbyid": ["petid"]})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run_check(
+                server,
+                "petstore-getpetbyid",
+                arguments={"petid": "7", "include_internal": "true"},
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "include_internal" in exc_info.value.detail["error"]
+
+    @pytest.mark.asyncio
+    async def test_an_entry_does_not_decide_an_operation_id_registration_keeps_separate(self):
+        server = self._aliased_server(disallowed_tools=["foo/bar"], spec_path="/specs/petstore.yaml")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run_check(server, "foo/bar")
+
+        assert exc_info.value.status_code == 403
+        await self._run_check(server, "foo.bar")
+
+    @pytest.mark.asyncio
+    async def test_a_blocklist_entry_does_not_reach_a_case_variant_sibling_tool(self):
+        server = self._aliased_server(disallowed_tools=["petstore-getPet"])
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run_check(server, "getPet")
+
+        assert exc_info.value.status_code == 403
+        await self._run_check(server, "getpet")
+
+    @pytest.mark.asyncio
+    async def test_an_allowlist_entry_does_not_grant_a_case_variant_sibling_tool(self):
+        server = self._aliased_server(allowed_tools=["petstore-getPet"])
+
+        await self._run_check(server, "getPet")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run_check(server, "getpet")
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_an_explicitly_empty_allowed_params_list_refuses_every_parameter(self):
+        server = self._alias_less_server(allowed_params={"read_wiki_contents": []})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run_check(server, "read_wiki_contents", arguments={"repo": "acme/wiki"})
+
+        assert exc_info.value.status_code == 403
+        assert "repo" in exc_info.value.detail["error"]
+
+    @pytest.mark.asyncio
+    async def test_an_explicitly_empty_allowed_params_list_still_permits_an_argument_free_call(self):
+        server = self._alias_less_server(allowed_params={"read_wiki_contents": []})
+
+        await self._run_check(server, "read_wiki_contents", arguments={})
+
+
+class TestOpenAPIRegistryKeyMatchesRegistration:
+    """OpenAPI tools are registered under ``add_server_prefix_to_name(base, get_server_prefix(server))``,
+    so the dispatch lookup has to build its key the same way from the bare name ``call_tool``
+    hands it. Rebuilding it as ``f"{server.name}-{bare_name}"`` used a field the prefix chain
+    never reads and hardcoded the separator, so every call on a server whose published prefix
+    differs from its display name failed with "not found in registry" instead of dispatching.
+    """
+
+    @staticmethod
+    def _register(server: MCPServer, base_tool_name: str) -> str:
+        from litellm.proxy._experimental.mcp_server.utils import (
+            add_server_prefix_to_name,
+            get_server_prefix,
+        )
+
+        return add_server_prefix_to_name(base_tool_name, get_server_prefix(server))
+
+    async def _call(self, server: MCPServer, registered_key: str, bare_tool_name: str) -> CallToolResult:
+        from litellm.proxy._experimental.mcp_server.tool_registry import (
+            global_mcp_tool_registry,
+        )
+
+        async def handler(**kwargs: Any) -> str:
+            return "dispatched"
+
+        tool = MagicMock()
+        tool.handler = handler
+
+        with patch.dict(global_mcp_tool_registry.tools, {registered_key: tool}, clear=True):
+            return await MCPServerManager()._call_openapi_tool_handler(server, bare_tool_name, {})
+
+    @pytest.mark.asyncio
+    async def test_aliased_server_dispatches_when_name_differs_from_published_prefix(self):
+        server = MCPServer(
+            server_id="dd7f2b9e-2c4a-4f1b-9e0a-8d3c6b5a4f21",
+            name="petstore_prod",
+            alias="petstore",
+            server_name="petstore_prod",
+            url=None,
+            transport=MCPTransport.http,
+            spec_path="https://example.com/petstore.yaml",
+        )
+        registered_key = self._register(server, "list_pets")
+        assert registered_key == "petstore-list_pets"
+
+        result = await self._call(server, registered_key, "list_pets")
+
+        assert result.isError is False
+        assert result.content[0].text == "dispatched"
+
+    @pytest.mark.asyncio
+    async def test_alias_less_server_dispatches_when_the_prefix_contains_the_separator(self):
+        server = MCPServer(
+            server_id=ALIAS_LESS_SERVER_ID,
+            name=ALIAS_LESS_SERVER_ID,
+            url=None,
+            transport=MCPTransport.http,
+            spec_path="https://example.com/wiki.yaml",
+        )
+        registered_key = self._register(server, "read_wiki_contents")
+        assert registered_key == f"{ALIAS_LESS_SERVER_ID}-read_wiki_contents"
+
+        result = await self._call(server, registered_key, "read_wiki_contents")
+
+        assert result.isError is False
+        assert result.content[0].text == "dispatched"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_keeps_a_native_name_that_opens_with_the_prefix(self):
+        # Registration prefixes the upstream name whatever it looks like, so
+        # "petstore-list_pets" is registered as "petstore-petstore-list_pets".
+        # Stripping the bare name again before rebuilding the key cut that
+        # leading segment back off and the lookup missed.
+        server = MCPServer(
+            server_id="dd7f2b9e-2c4a-4f1b-9e0a-8d3c6b5a4f21",
+            name="petstore_prod",
+            alias="petstore",
+            server_name="petstore_prod",
+            url=None,
+            transport=MCPTransport.http,
+            spec_path="https://example.com/petstore.yaml",
+        )
+        registered_key = self._register(server, "petstore-list_pets")
+        assert registered_key == "petstore-petstore-list_pets"
+
+        result = await self._call(server, registered_key, "petstore-list_pets")
+
+        assert result.isError is False
+        assert result.content[0].text == "dispatched"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_follows_a_non_default_prefix_separator(self):
+        from litellm.proxy._experimental.mcp_server import utils as mcp_utils
+
+        server = MCPServer(
+            server_id="dd7f2b9e-2c4a-4f1b-9e0a-8d3c6b5a4f21",
+            name="petstore_prod",
+            alias="petstore",
+            server_name="petstore_prod",
+            url=None,
+            transport=MCPTransport.http,
+            spec_path="https://example.com/petstore.yaml",
+        )
+
+        with patch.object(mcp_utils, "MCP_TOOL_PREFIX_SEPARATOR", "__"):
+            registered_key = self._register(server, "list_pets")
+            assert registered_key == "petstore__list_pets"
+
+            result = await self._call(server, registered_key, "list_pets")
+
+        assert result.isError is False
+        assert result.content[0].text == "dispatched"
+
+    @pytest.mark.asyncio
+    async def test_unregistered_tool_is_still_reported_missing(self):
+        server = MCPServer(
+            server_id="dd7f2b9e-2c4a-4f1b-9e0a-8d3c6b5a4f21",
+            name="petstore_prod",
+            alias="petstore",
+            server_name="petstore_prod",
+            url=None,
+            transport=MCPTransport.http,
+            spec_path="https://example.com/petstore.yaml",
+        )
+
+        result = await self._call(server, "petstore-list_pets", "delete_pet")
+
+        assert result.isError is True
+        assert "not found in registry" in result.content[0].text
+
+
+class TestToolAuthorizationIsNotConditionalOnLogging:
+    """`call_tool` used to run `pre_call_tool_check` — the only place tool-level
+    MCP entitlements are enforced — inside `if proxy_logging_obj:`, so a caller
+    reached with no logging object got no authorization decision at all. Both
+    production call sites pass the module-level `ProxyLogging` singleton, which
+    is never None, so this was not a live hole; the invariant being restored is
+    that an authorization decision cannot be skipped by an absent logger.
+    """
+
+    @staticmethod
+    def _manager_with_scoped_server() -> tuple[MCPServerManager, UserAPIKeyAuth]:
+        manager = MCPServerManager()
+        manager.registry["srv-gated"] = MCPServer(
+            server_id="srv-gated",
+            name="gated_server",
+            server_name="gated_server",
+            alias="gated_server",
+            url="http://127.0.0.1:1/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+        for tool_name in ("read_only_tool", "delete_everything"):
+            manager.tool_name_to_mcp_server_name_mapping[tool_name] = "gated_server"
+        user = UserAPIKeyAuth(
+            api_key="sk-caller",
+            user_id="alice",
+            user_role=LitellmUserRoles.INTERNAL_USER.value,
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-gated",
+                mcp_servers=["srv-gated"],
+                mcp_tool_permissions={"srv-gated": ["read_only_tool"]},
+            ),
+        )
+        return manager, user
+
+    @pytest.mark.asyncio
+    async def test_unentitled_tool_refused_without_proxy_logging_obj(self):
+        manager, user = self._manager_with_scoped_server()
+        upstream = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+
+        with patch.object(manager, "_call_regular_mcp_tool", new=upstream):
+            with pytest.raises(HTTPException) as exc:
+                await manager.call_tool(
+                    server_name="gated_server",
+                    name="delete_everything",
+                    arguments={},
+                    user_api_key_auth=user,
+                    proxy_logging_obj=None,
+                )
+
+        assert exc.value.status_code == 403
+        upstream.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_entitled_tool_still_dispatches_without_proxy_logging_obj(self):
+        """The gate must refuse only what the entitlement excludes; an allowed
+        tool still reaches the upstream when there is no logging object."""
+        manager, user = self._manager_with_scoped_server()
+        upstream = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+
+        with patch.object(manager, "_call_regular_mcp_tool", new=upstream):
+            await manager.call_tool(
+                server_name="gated_server",
+                name="read_only_tool",
+                arguments={},
+                user_api_key_auth=user,
+                proxy_logging_obj=None,
+            )
+
+        upstream.assert_awaited_once()

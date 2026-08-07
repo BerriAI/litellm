@@ -2,10 +2,15 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ChatUI from "./ChatUI";
 import * as fetchModelsModule from "@/components/llm_calls/fetch_models";
+import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_completion";
 
 // Mock the fetchAvailableModels function
 vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn(),
+}));
+
+vi.mock("@/components/llm_calls/chat_completion", () => ({
+  makeOpenAIChatCompletionRequest: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Mock other networking functions that cause errors
@@ -20,6 +25,9 @@ vi.mock("@/components/networking", () => ({
 beforeEach(() => {
   Element.prototype.scrollIntoView = () => {};
 });
+
+const CHAT_REQUEST_ARG_COUNT = 26;
+const STREAMING_ENABLED_ARG_INDEX = 25;
 
 describe("ChatUI", () => {
   beforeEach(() => {
@@ -52,7 +60,7 @@ describe("ChatUI", () => {
   });
 
   it("should show the voice selector when the endpoint type is audio_speech", async () => {
-    const { getByText, container } = render(
+    const { getByText } = render(
       <ChatUI
         accessToken="1234567890"
         token="1234567890"
@@ -102,7 +110,7 @@ describe("ChatUI", () => {
   });
 
   it("should allow the user to select a model", async () => {
-    const { getByText, container } = render(
+    const { getByText } = render(
       <ChatUI
         accessToken="1234567890"
         token="1234567890"
@@ -140,7 +148,7 @@ describe("ChatUI", () => {
       { model_group: "ResponsesModel", mode: "responses" },
     ]);
 
-    const { getByText, baseElement } = render(
+    const { getByText } = render(
       <ChatUI
         accessToken="1234567890"
         token="1234567890"
@@ -332,6 +340,165 @@ describe("ChatUI", () => {
     await waitFor(() => {
       expect(screen.getByRole("checkbox", { name: /Simulate failure to test fallbacks/i })).toBeChecked();
     });
+  });
+
+  it("should send the chat request non-streaming after Stream responses is unchecked", async () => {
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    const selectModelLabel = screen.getByText("Select Model");
+    const modelSelect = selectModelLabel.closest("div")?.querySelector(".ant-select-selector");
+    await act(async () => {
+      fireEvent.mouseDown(modelSelect!);
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Model 1").length).toBeGreaterThan(0);
+    });
+
+    const model1Options = screen.getAllByText("Model 1");
+    await act(async () => {
+      fireEvent.click(model1Options[model1Options.length - 1]);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-settings-button")).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("model-settings-button"));
+    });
+
+    const streamingCheckbox = await screen.findByRole("checkbox", { name: /Stream responses/i });
+    expect(streamingCheckbox).toBeChecked();
+
+    await act(async () => {
+      fireEvent.click(streamingCheckbox);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("checkbox", { name: /Stream responses/i })).not.toBeChecked();
+    });
+
+    const messageInput = screen.getByPlaceholderText("Type your message... (Shift+Enter for new line)");
+    await act(async () => {
+      fireEvent.change(messageInput, { target: { value: "hello" } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(messageInput, { key: "Enter", code: "Enter" });
+    });
+
+    await waitFor(() => {
+      expect(makeOpenAIChatCompletionRequest).toHaveBeenCalledTimes(1);
+    });
+
+    const requestArgs = vi.mocked(makeOpenAIChatCompletionRequest).mock.calls[0];
+    expect(requestArgs).toHaveLength(CHAT_REQUEST_ARG_COUNT);
+    expect(requestArgs[STREAMING_ENABLED_ARG_INDEX]).toBe(false);
+  });
+
+  it("should force streaming in simplified mode even when the playground setting is off", async () => {
+    sessionStorage.setItem("streamingEnabled", "false");
+
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+        simplified
+        fixedModel="Model 1"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Chat")).toBeInTheDocument();
+    });
+
+    const messageInput = screen.getByPlaceholderText("Type your message... (Shift+Enter for new line)");
+    await act(async () => {
+      fireEvent.change(messageInput, { target: { value: "hello" } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(messageInput, { key: "Enter", code: "Enter" });
+    });
+
+    await waitFor(() => {
+      expect(makeOpenAIChatCompletionRequest).toHaveBeenCalledTimes(1);
+    });
+
+    const requestArgs = vi.mocked(makeOpenAIChatCompletionRequest).mock.calls[0];
+    expect(requestArgs).toHaveLength(CHAT_REQUEST_ARG_COUNT);
+    expect(requestArgs[STREAMING_ENABLED_ARG_INDEX]).toBe(true);
+    expect(sessionStorage.getItem("streamingEnabled")).toBe("false");
+  });
+
+  it("should offer the streaming toggle for a responses-only model without advanced params", async () => {
+    (fetchModelsModule.fetchAvailableModels as any).mockResolvedValue([
+      { model_group: "ResponsesModel", mode: "responses" },
+    ]);
+
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    const endpointTypeText = screen.getByText("Endpoint Type");
+    const endpointSelect = endpointTypeText.parentElement?.querySelector(".ant-select-selector");
+    await act(async () => {
+      fireEvent.mouseDown(endpointSelect!);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText("/v1/responses"));
+    });
+
+    const selectModelLabel = screen.getByText("Select Model");
+    const modelSelect = selectModelLabel.closest("div")?.querySelector(".ant-select-selector");
+    await act(async () => {
+      fireEvent.mouseDown(modelSelect!);
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("ResponsesModel").length).toBeGreaterThan(0);
+    });
+
+    const modelOptions = screen.getAllByText("ResponsesModel");
+    await act(async () => {
+      fireEvent.click(modelOptions[modelOptions.length - 1]);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-settings-button")).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("model-settings-button"));
+    });
+
+    expect(await screen.findByRole("checkbox", { name: /Stream responses/i })).toBeChecked();
+    expect(screen.queryByText("Temperature")).not.toBeInTheDocument();
+    expect(screen.queryByText("Use Advanced Parameters")).not.toBeInTheDocument();
   });
 
   it("should show Fill button and populate customProxyBaseUrl when proxySettings.LITELLM_UI_API_DOC_BASE_URL is provided", async () => {
