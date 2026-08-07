@@ -3435,9 +3435,8 @@ class BedrockImageProcessor:
         # Extract MIME type using regular expression
         mime_type_match: Final = re.match(r"data:(.*?);base64", image_metadata)
 
-        if mime_type_match:
-            mime_type = mime_type_match.group(1)
-            mime_type = mime_type.split(";")[0]
+        mime_type = mime_type_match.group(1).split(";")[0] if mime_type_match else ""
+        if "/" in mime_type:
             image_format = mime_type.split("/")[1]
         else:
             mime_type = "image/jpeg"

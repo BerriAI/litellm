@@ -324,6 +324,21 @@ def test_bedrock_validate_format_image_or_video():
         assert result == expected, f"Expected {expected}, got {result}"
 
 
+def test_bedrock_parse_base64_image_missing_mime_subtype():
+    """A base64 data URI without a mime subtype must fall back to jpeg instead of raising IndexError."""
+
+    data = base64.b64encode(b"fake").decode()
+
+    for prefix in ["data:", "data:application"]:
+        _, mime_type, image_format = BedrockImageProcessor._parse_base64_image(f"{prefix};base64,{data}")
+        assert mime_type == "image/jpeg", f"Expected image/jpeg fallback, got {mime_type}"
+        assert image_format == "jpeg", f"Expected jpeg fallback, got {image_format}"
+
+    _, mime_type, image_format = BedrockImageProcessor._parse_base64_image(f"data:image/png;base64,{data}")
+    assert mime_type == "image/png"
+    assert image_format == "png"
+
+
 def test_bedrock_get_document_format_fallback_mimes():
     """
     Test the _get_document_format method with fallback MIME types for DOCX and XLSX.
