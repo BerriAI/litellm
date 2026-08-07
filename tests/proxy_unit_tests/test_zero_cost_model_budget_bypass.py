@@ -108,6 +108,26 @@ class TestIsModelCostZero:
         )
         assert result is True
 
+    @pytest.mark.parametrize(
+        "alias_target",
+        [
+            "on-prem-model",
+            {"model": "on-prem-model", "hidden": False},
+        ],
+    )
+    def test_zero_cost_model_group_alias(
+        self, mock_router_with_zero_cost_model, alias_target
+    ):
+        mock_router_with_zero_cost_model.model_group_alias = {
+            "free-alias": alias_target
+        }
+
+        result = _is_model_cost_zero(
+            model="free-alias", llm_router=mock_router_with_zero_cost_model
+        )
+
+        assert result is True
+
     def test_paid_model_in_router(self, mock_router_with_zero_cost_model):
         """Test that a paid model is correctly identified as non-zero cost."""
         with patch("litellm.get_model_info") as mock_get_model_info:

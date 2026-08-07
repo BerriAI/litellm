@@ -268,8 +268,9 @@ def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
     fields. _get_model_info_helper() then defaults missing costs to 0.
     This function detects that scenario by checking the raw model_cost entry.
     """
+    resolved_model = llm_router._get_model_from_alias(model) or model
     for deployment in llm_router.model_list:
-        if deployment.get("model_name") != model:
+        if deployment.get("model_name") != resolved_model:
             continue
         model_id = deployment.get("model_info", {}).get("id")
         if model_id is None:
