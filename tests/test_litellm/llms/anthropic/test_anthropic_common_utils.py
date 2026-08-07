@@ -10,6 +10,7 @@ Verifies that:
 - ANTHROPIC_API_KEY / ANTHROPIC_API_BASE take precedence over their aliases.
 """
 
+import json
 import os
 import sys
 from types import SimpleNamespace
@@ -1544,6 +1545,42 @@ class TestAnthropicThinkingSignatureSelfHeal:
 
         assert [b["type"] for b in out[0]["content"]] == ["text", "text"]
         assert out[0]["content"][0]["text"] == ("Web search results for 'who won':\n\nNo results were returned.")
+
+    @pytest.mark.parametrize("results", [[SimpleNamespace(title="Rome", url="u", snippet="s", date=None)], []])
+    def test_flatten_unencrypted_web_search_results_is_idempotent(self, results):
+        """Flattening twice must equal flattening once.
+
+        The agentic loop re-enters the same entry point for its follow-up call and
+        hands it the original history, so this runs again on already-flattened
+        messages once per iteration. A pass that appended instead of replacing
+        would duplicate the evidence on every loop.
+        """
+        from litellm.integrations.websearch_interception.transformation import (
+            WebSearchTransformation,
+        )
+        from litellm.llms.anthropic.common_utils import (
+            flatten_unencrypted_web_search_results_in_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {"query": "when"}},
+                    WebSearchTransformation.build_web_search_tool_result_block(
+                        tool_use_id="srvtoolu_1",
+                        search_response=SimpleNamespace(results=results),
+                    ),
+                    {"type": "text", "text": "753 BC."},
+                ],
+            }
+        ]
+
+        once = flatten_unencrypted_web_search_results_in_anthropic_messages(msgs)
+        twice = flatten_unencrypted_web_search_results_in_anthropic_messages(once)
+
+        assert [b["type"] for b in once[0]["content"]] == ["text", "text"]
+        assert json.dumps(twice) == json.dumps(once)
 
     def test_flatten_unencrypted_web_search_results_preserves_real_anthropic_blocks(self):
         from litellm.llms.anthropic.common_utils import (
