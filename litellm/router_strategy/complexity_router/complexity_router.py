@@ -1730,6 +1730,13 @@ class ComplexityRouter(CustomLogger):
                         routing_decision=self._build_routing_decision(
                             routed_model=routed_model,
                             cause=cause,
+                            # No classification ran, but the model this session is pinned to still
+                            # belongs to a tier, and that tier is what actually served the turn. It
+                            # is resolved against the config live at this turn (not the one that set
+                            # the pin) so the record matches the pools the request was served from.
+                            # None when the pin no longer maps to any configured tier, i.e. the
+                            # operator removed the model from every pool while the session was live.
+                            tier=self._tier_for_model(routed_model),
                             escalation_keyword=pin_escalation_keyword,
                             escalated=escalated,
                             conversation_continuing=conversation_continuing,
@@ -1797,6 +1804,7 @@ class ComplexityRouter(CustomLogger):
 
         if user_message is None:
             verbose_router_logger.debug("ComplexityRouter: No user message found, routing to default model")
+            fallback_tier: ComplexityTier | None = None
             if not self.config.plugins and self.config.default_model:
                 # No plugins configured: preserve the pre-existing default_model-first
                 # priority exactly (changing it would be a silent behavior change for
@@ -1809,12 +1817,22 @@ class ComplexityRouter(CustomLogger):
                 routed_model = await self._pick_model_for_tier(
                     ComplexityTier.MEDIUM, messages, resolved_messages, request_kwargs
                 )
+                # This branch asked the MEDIUM pool for the model, so MEDIUM is the tier that
+                # served the turn -- but only when a MEDIUM pool is actually configured.
+                # get_model_for_tier's own branch order (tier pool, then default_model) falls
+                # back to default_model when MEDIUM has no pool, and that fallback is not a
+                # MEDIUM-tier serve; mirroring the same condition here (rather than resolving
+                # the returned model back through _tier_for_model) avoids miscounting a
+                # default_model that happens to also sit in some other tier's pool.
+                if ComplexityTier.MEDIUM.value in self.config.tiers:
+                    fallback_tier = ComplexityTier.MEDIUM
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
                 routing_decision=self._build_routing_decision(
                     routed_model=routed_model,
                     cause="default_fallback",
+                    tier=fallback_tier,
                     conversation_continuing=conversation_continuing,
                 ),
             )

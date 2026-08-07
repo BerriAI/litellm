@@ -120,6 +120,14 @@ class AutoRouterBenchmarkGroup(AutoRouterBenchmarkTotals):
 
     router_name: str = Field(description="The auto-router alias requests were sent to")
     router_type: str = Field(description="complexity, adaptive or quality")
+    tier_turns: dict[str, int] = Field(
+        default_factory=dict,
+        description="Turns per complexity tier, keyed by the tier name the routing decision "
+        "recorded at request time (never re-derived from the routed model). Only complexity "
+        "routers produce tiers; turns that no tier served (classifier fell back to "
+        "default_model) are absent, so the values may sum to less than turns. Per-group only: "
+        "tier names are router-scoped, so a cross-router union would mix taxonomies",
+    )
 
 
 class AutoRouterBenchmarksResponse(BaseModel):

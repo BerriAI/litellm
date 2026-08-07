@@ -4,11 +4,12 @@ AUTO ROUTER MANAGEMENT ENDPOINTS
 POST /auto_router/test_routing - Route one prompt through an unsaved complexity-router config
 """
 
+import json
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Annotated, Final
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter, field_validator
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BudgetExceededError
@@ -284,6 +285,23 @@ class _SessionAggRow(BaseModel):
 _SESSION_AGG_ROWS: Final = TypeAdapter(list[_SessionAggRow])
 
 _BENCHMARKS_SQL: Final = """
+WITH windowed AS (
+    SELECT * FROM "LiteLLM_AutoRouterSession"
+    WHERE last_turn_at >= $1::timestamp AND first_turn_at < $2::timestamp
+),
+tier_maps AS (
+    SELECT router_name, router_type, jsonb_object_agg(tier, tier_turns) AS tier_turns
+    FROM (
+        SELECT router_name, router_type, kv.key AS tier, SUM((kv.value)::int)::int AS tier_turns
+        FROM windowed, LATERAL jsonb_each_text(tier_turns) AS kv
+        GROUP BY router_name, router_type, kv.key
+    ) per_tier
+    GROUP BY router_name, router_type
+)
+SELECT
+    agg.*,
+    COALESCE(tier_maps.tier_turns, '{}'::jsonb)::text AS tier_turns
+FROM (
 SELECT
     router_name,
     router_type,
@@ -306,10 +324,11 @@ SELECT
     COALESCE(SUM(spend), 0)::float8 AS spend,
     COALESCE(SUM(saved_spend), 0)::float8 AS saved_spend,
     COALESCE(SUM(EXTRACT(EPOCH FROM (last_turn_at - first_turn_at))), 0)::float8 AS session_seconds
-FROM "LiteLLM_AutoRouterSession"
-WHERE last_turn_at >= $1::timestamp AND first_turn_at < $2::timestamp
+FROM windowed
 GROUP BY router_name, router_type
-ORDER BY SUM(spend) DESC
+) agg
+LEFT JOIN tier_maps USING (router_name, router_type)
+ORDER BY agg.spend DESC
 """
 
 
@@ -443,6 +462,7 @@ async def get_auto_router_benchmarks(
         AutoRouterBenchmarkGroup(
             router_name=row.router_name,
             router_type=row.router_type,
+            tier_turns=row.tier_turns,
             **_benchmark_totals(row).model_dump(),
         )
         for row in rows
