@@ -8,7 +8,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Any, Final, NoReturn, Optional
 
 import certifi
 import httpx
@@ -422,7 +422,7 @@ def _safe_read_response(response: httpx.Response, timeout: float | None = None) 
         return b""
 
 
-def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> None:
+def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> NoReturn:
     """Raise a MaskedHTTPStatusError for sync HTTP handlers."""
     if stream:
         try:
@@ -442,7 +442,7 @@ def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> None:
     raise MaskedHTTPStatusError(e, message=_text, text=_text) from None
 
 
-async def _raise_masked_async_error(e: httpx.HTTPStatusError, stream: bool) -> None:
+async def _raise_masked_async_error(e: httpx.HTTPStatusError, stream: bool) -> NoReturn:
     """Raise a MaskedHTTPStatusError for async HTTP handlers."""
     if stream:
         try:

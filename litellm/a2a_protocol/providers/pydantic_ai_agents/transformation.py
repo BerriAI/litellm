@@ -6,15 +6,36 @@ This module provides fake streaming by converting non-streaming responses into s
 """
 
 import asyncio
-from collections.abc import AsyncIterator
-from typing import Any, Final, cast
+from collections.abc import AsyncIterator, Mapping
+from typing import Any, Final, TypeAlias, cast
 from uuid import uuid4
+
+from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
+
+JsonObject: TypeAlias = dict[str, JsonValue]
+
+_JSON_OBJECT_ADAPTER: Final = TypeAdapter(JsonObject)
+
+
+def _object_field(data: Mapping[str, JsonValue], key: str) -> JsonObject:
+    value: Final = data.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _array_field(data: Mapping[str, JsonValue], key: str) -> list[JsonValue]:
+    value: Final = data.get(key)
+    return value if isinstance(value, list) else []
+
+
+def _string_field(data: Mapping[str, JsonValue], key: str, default: str = "") -> str:
+    value: Final = data.get(key)
+    return value if isinstance(value, str) else default
 
 
 class PydanticAITransformation:
@@ -28,7 +49,7 @@ class PydanticAITransformation:
     """
 
     @staticmethod
-    def _remove_none_values(obj: Any) -> Any:
+    def _remove_none_values(obj: JsonValue) -> JsonValue:
         """
         Recursively remove None values from a dict/list structure.
 
@@ -49,7 +70,7 @@ class PydanticAITransformation:
             return obj
 
     @staticmethod
-    def _params_to_dict(params: Any) -> dict[str, Any]:
+    def _params_to_dict(params: object) -> JsonObject:
         """
         Convert params to a dict, handling Pydantic models.
 
@@ -59,17 +80,9 @@ class PydanticAITransformation:
         Returns:
             Dict representation of params
         """
-        if hasattr(params, "model_dump"):
-            # Pydantic v2 model
-            return params.model_dump(mode="python", exclude_none=True)
-        elif hasattr(params, "dict"):
-            # Pydantic v1 model
-            return params.dict(exclude_none=True)
-        elif isinstance(params, dict):
-            return params
-        else:
-            # Try to convert to dict
-            return dict(params)
+        if isinstance(params, BaseModel):
+            return _JSON_OBJECT_ADAPTER.validate_python(params.model_dump(mode="python", exclude_none=True))
+        return _JSON_OBJECT_ADAPTER.validate_python(params)
 
     @staticmethod
     async def _poll_for_completion(
@@ -80,7 +93,7 @@ class PydanticAITransformation:
         max_attempts: int = 30,
         poll_interval: float = 0.5,
         agent_extra_headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> JsonObject:
         """
         Poll for task completion using tasks/get method.
 
@@ -112,11 +125,11 @@ class PydanticAITransformation:
                 },
             )
             response.raise_for_status()
-            poll_data = response.json()
+            poll_data = _JSON_OBJECT_ADAPTER.validate_json(response.text)
 
-            result = poll_data.get("result", {})
-            status = result.get("status", {})
-            state = status.get("state", "")
+            result = _object_field(poll_data, "result")
+            status = _object_field(result, "status")
+            state = _string_field(status, "state")
 
             verbose_logger.debug("Pydantic AI: Poll attempt %s/%s, state=%s", attempt + 1, max_attempts, state)
 
@@ -133,10 +146,10 @@ class PydanticAITransformation:
     async def _send_and_poll_raw(
         api_base: str,
         request_id: str,
-        params: Any,
+        params: object,
         timeout: float = 60.0,
         agent_extra_headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> JsonObject:
         """
         Send a request to Pydantic AI agent and return the raw task response.
 
@@ -156,18 +169,21 @@ class PydanticAITransformation:
         params_dict = PydanticAITransformation._params_to_dict(params)
 
         # Remove None values - FastA2A doesn't accept null for optional fields
-        params_dict = PydanticAITransformation._remove_none_values(params_dict)
+        cleaned_params: Final = _JSON_OBJECT_ADAPTER.validate_python(
+            PydanticAITransformation._remove_none_values(params_dict)
+        )
 
         # Ensure the message has 'kind': 'message' as required by FastA2A/Pydantic AI
-        if "message" in params_dict:
-            params_dict["message"]["kind"] = "message"
+        message_param: Final = cleaned_params.get("message")
+        if isinstance(message_param, dict):
+            message_param["kind"] = "message"
 
         # Build A2A JSON-RPC request using message/send method for FastA2A compatibility
         a2a_request: Final = {
             "jsonrpc": "2.0",
             "id": request_id,
             "method": "message/send",
-            "params": params_dict,
+            "params": cleaned_params,
         }
 
         # FastA2A uses root endpoint (/) not /messages
@@ -189,25 +205,29 @@ class PydanticAITransformation:
             },
         )
         response.raise_for_status()
-        response_data = response.json()
+        initial_data: Final = _JSON_OBJECT_ADAPTER.validate_json(response.text)
 
         # Check if task is already completed
-        result: Final = response_data.get("result", {})
-        status: Final = result.get("status", {})
-        state: Final = status.get("state", "")
+        result: Final = _object_field(initial_data, "result")
+        status: Final = _object_field(result, "status")
+        state: Final = _string_field(status, "state")
+        task_id: Final = _string_field(result, "id")
 
-        if state != "completed":
-            # Need to poll for completion
-            task_id: Final = result.get("id")
-            if task_id:
-                verbose_logger.info("Pydantic AI: Task %s submitted, polling for completion...", task_id)
-                response_data = await PydanticAITransformation._poll_for_completion(
-                    client=client,
-                    endpoint=endpoint,
-                    task_id=task_id,
-                    request_id=request_id,
-                    agent_extra_headers=agent_extra_headers,
-                )
+        should_poll: Final = state != "completed" and bool(task_id)
+        if should_poll:
+            verbose_logger.info("Pydantic AI: Task %s submitted, polling for completion...", task_id)
+
+        response_data: Final = (
+            await PydanticAITransformation._poll_for_completion(
+                client=client,
+                endpoint=endpoint,
+                task_id=task_id,
+                request_id=request_id,
+                agent_extra_headers=agent_extra_headers,
+            )
+            if should_poll
+            else initial_data
+        )
 
         verbose_logger.info("Pydantic AI: Received completed response for request_id=%s", request_id)
 
@@ -217,10 +237,10 @@ class PydanticAITransformation:
     async def send_non_streaming_request(
         api_base: str,
         request_id: str,
-        params: Any,
+        params: object,
         timeout: float = 60.0,
         agent_extra_headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> JsonObject:
         """
         Send a non-streaming A2A request to Pydantic AI agent and wait for completion.
 
@@ -253,10 +273,10 @@ class PydanticAITransformation:
     async def send_and_get_raw_response(
         api_base: str,
         request_id: str,
-        params: Any,
+        params: object,
         timeout: float = 60.0,
         agent_extra_headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> JsonObject:
         """
         Send a request to Pydantic AI agent and return the raw task response.
 
@@ -282,9 +302,9 @@ class PydanticAITransformation:
 
     @staticmethod
     def _transform_to_a2a_response(
-        response_data: dict[str, Any],
+        response_data: JsonObject,
         request_id: str,
-    ) -> dict[str, Any]:
+    ) -> JsonObject:
         """
         Transform Pydantic AI task response to standard A2A non-streaming format.
 
@@ -313,7 +333,7 @@ class PydanticAITransformation:
         full_text, message_id, parts = PydanticAITransformation._extract_response_text(response_data)
 
         # Build standard A2A message
-        a2a_message: Final = {
+        a2a_message: Final[JsonObject] = {
             "kind": "message",
             "role": "agent",
             "parts": parts if parts else [{"kind": "text", "text": full_text}],
@@ -328,7 +348,7 @@ class PydanticAITransformation:
         }
 
     @staticmethod
-    def _extract_response_text(response_data: dict[str, Any]) -> tuple[str, str, list]:
+    def _extract_response_text(response_data: JsonObject) -> tuple[str, str, list[JsonValue]]:
         """
         Extract response text from completed task response.
 
@@ -342,52 +362,55 @@ class PydanticAITransformation:
         Returns:
             Tuple of (full_text, message_id, parts)
         """
-        result: Final = response_data.get("result", {})
+        result: Final = _object_field(response_data, "result")
 
         # Try to extract from artifacts first (preferred for results)
-        artifacts: Final = result.get("artifacts", [])
-        if artifacts:
-            for artifact in artifacts:
-                parts = artifact.get("parts", [])
-                for part in parts:
-                    if part.get("kind") == "text":
-                        text = part.get("text", "")
-                        if text:
-                            return text, str(uuid4()), parts
+        artifacts: Final = _array_field(result, "artifacts")
+        for artifact in artifacts:
+            if not isinstance(artifact, dict):
+                continue
+            parts = _array_field(artifact, "parts")
+            for part in parts:
+                if isinstance(part, dict) and part.get("kind") == "text":
+                    text = _string_field(part, "text")
+                    if text:
+                        return text, str(uuid4()), parts
 
         # Fall back to history - get the last agent message
-        history: Final = result.get("history", [])
+        history: Final = _array_field(result, "history")
         for msg in reversed(history):
-            if msg.get("role") == "agent":
-                parts = msg.get("parts", [])
-                message_id = msg.get("messageId", str(uuid4()))
-                full_text = ""
-                for part in parts:
-                    if part.get("kind") == "text":
-                        full_text += part.get("text", "")
+            if isinstance(msg, dict) and msg.get("role") == "agent":
+                parts = _array_field(msg, "parts")
+                message_id = _string_field(msg, "messageId", str(uuid4()))
+                full_text = "".join(
+                    _string_field(part, "text")
+                    for part in parts
+                    if isinstance(part, dict) and part.get("kind") == "text"
+                )
                 if full_text:
                     return full_text, message_id, parts
 
         # Fall back to message field (original format)
-        message: Final = result.get("message", {})
+        message: Final = _object_field(result, "message")
         if message:
-            parts = message.get("parts", [])
-            message_id = message.get("messageId", str(uuid4()))
-            full_text = ""
-            for part in parts:
-                if part.get("kind") == "text":
-                    full_text += part.get("text", "")
-            return full_text, message_id, parts
+            message_parts: Final = _array_field(message, "parts")
+            fallback_message_id: Final = _string_field(message, "messageId", str(uuid4()))
+            fallback_text: Final = "".join(
+                _string_field(part, "text")
+                for part in message_parts
+                if isinstance(part, dict) and part.get("kind") == "text"
+            )
+            return fallback_text, fallback_message_id, message_parts
 
         return "", str(uuid4()), []
 
     @staticmethod
     async def fake_streaming_from_response(
-        response_data: dict[str, Any],
+        response_data: JsonObject,
         request_id: str,
         chunk_size: int = 50,
         delay_ms: int = 10,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncIterator[JsonObject]:
         """
         Convert a non-streaming A2A response into fake streaming chunks.
 
@@ -410,23 +433,20 @@ class PydanticAITransformation:
         full_text, message_id, parts = PydanticAITransformation._extract_response_text(response_data)
 
         # Extract input message from raw response for history
-        result: Final = response_data.get("result", {})
-        history: Final = result.get("history", [])
-        input_message = {}
-        for msg in history:
-            if msg.get("role") == "user":
-                input_message = msg
-                break
+        result: Final = _object_field(response_data, "result")
+        history: Final = _array_field(result, "history")
+        user_messages: Final = [msg for msg in history if isinstance(msg, dict) and msg.get("role") == "user"]
+        input_message: Final[JsonObject] = user_messages[0] if user_messages else {}
 
         # Generate IDs for streaming events
         task_id: Final = str(uuid4())
         context_id: Final = str(uuid4())
         artifact_id: Final = str(uuid4())
-        input_message_id: Final = input_message.get("messageId", str(uuid4()))
+        input_message_id: Final = _string_field(input_message, "messageId", str(uuid4()))
 
         # 1. Emit initial task event (kind: "task", status: "submitted")
         # Format matches A2ACompletionBridgeTransformation.create_task_event
-        task_event: Final = {
+        task_event: Final[JsonObject] = {
             "jsonrpc": "2.0",
             "id": request_id,
             "result": {
@@ -436,7 +456,7 @@ class PydanticAITransformation:
                         "contextId": context_id,
                         "kind": "message",
                         "messageId": input_message_id,
-                        "parts": input_message.get("parts", [{"kind": "text", "text": ""}]),
+                        "parts": _array_field(input_message, "parts") or [{"kind": "text", "text": ""}],
                         "role": "user",
                         "taskId": task_id,
                     }
@@ -452,7 +472,7 @@ class PydanticAITransformation:
 
         # 2. Emit status update (kind: "status-update", status: "working")
         # Format matches A2ACompletionBridgeTransformation.create_status_update_event
-        working_event: Final = {
+        working_event: Final[JsonObject] = {
             "jsonrpc": "2.0",
             "id": request_id,
             "result": {
@@ -478,7 +498,7 @@ class PydanticAITransformation:
                 chunk_text = full_text[i : i + chunk_size]
                 is_last_chunk = (i + chunk_size) >= len(full_text)
 
-                artifact_event = {
+                artifact_event: JsonObject = {
                     "jsonrpc": "2.0",
                     "id": request_id,
                     "result": {
@@ -503,7 +523,7 @@ class PydanticAITransformation:
                     await asyncio.sleep(delay_ms / 1000.0)
 
         # 4. Emit final status update (kind: "status-update", status: "completed", final: true)
-        completed_event: Final = {
+        completed_event: Final[JsonObject] = {
             "jsonrpc": "2.0",
             "id": request_id,
             "result": {

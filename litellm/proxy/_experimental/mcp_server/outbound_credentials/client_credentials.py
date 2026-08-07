@@ -113,8 +113,6 @@ async def post_client_credentials_grant(
         return TokenEndpointDenied(status_code=status_code, detail=f"token endpoint returned HTTP {status_code}")
     except Exception as exc:  # noqa: BLE001  # any transport failure is the same outcome: unreachable
         return TokenEndpointUnreachable(detail=str(exc))
-    if not isinstance(response, httpx.Response):
-        return TokenEndpointUnreachable(detail="token endpoint returned no response")
     try:
         body: Final = _TOKEN_BODY_ADAPTER.validate_json(response.content)
     except ValidationError:

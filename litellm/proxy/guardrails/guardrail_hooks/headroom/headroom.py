@@ -432,16 +432,6 @@ class HeadroomGuardrail(CustomGuardrail):
                 False,
                 {},
             )
-        if raw_response is None:
-            return (
-                self._handle_compress_failure(
-                    messages,
-                    "Headroom compression service returned no response",
-                    {},
-                ),
-                False,
-                {},
-            )
         response: Final[HttpxResponse] = raw_response
 
         if response.status_code != 200:
@@ -563,7 +553,7 @@ class HeadroomGuardrail(CustomGuardrail):
             verbose_proxy_logger.warning("Headroom: retrieve failed for hash=%s: %s", hash_value, e)
             return f"[Headroom: retrieval failed for hash={hash_value}]"
 
-        if raw_response is None or raw_response.status_code == 404:
+        if raw_response.status_code == 404:
             return f"[Headroom: hash={hash_value} not found or expired]"
 
         if raw_response.status_code != 200:

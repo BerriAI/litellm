@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final, TypeAlias
+
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -29,12 +31,19 @@ from litellm.constants import (
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 
+JsonObject: TypeAlias = dict[str, JsonValue]
+
+_JSON_OBJECT_ADAPTER: Final = TypeAdapter(JsonObject)
+
 if TYPE_CHECKING:
+    import httpx
+
     from litellm import Router
     from litellm.types.rag import RAGIngestOptions
 
@@ -66,10 +75,10 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         BaseAWSLLM.__init__(self)
 
         # Extract config
-        self.vector_bucket_name = self.vector_store_config["vector_bucket_name"]
-        self.index_name = self.vector_store_config.get("index_name")
-        self.distance_metric = self.vector_store_config.get("distance_metric", S3_VECTORS_DEFAULT_DISTANCE_METRIC)
-        self.non_filterable_metadata_keys = self.vector_store_config.get(
+        self.vector_bucket_name: str = self.vector_store_config["vector_bucket_name"]
+        self.index_name: str | None = self.vector_store_config.get("index_name")
+        self.distance_metric: str = self.vector_store_config.get("distance_metric", S3_VECTORS_DEFAULT_DISTANCE_METRIC)
+        self.non_filterable_metadata_keys: list[str] = self.vector_store_config.get(
             "non_filterable_metadata_keys",
             S3_VECTORS_DEFAULT_NON_FILTERABLE_METADATA_KEYS,
         )
@@ -85,7 +94,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         # Create httpx client (similar to s3_v2.py)
         ssl_verify: Final = self._get_ssl_verify(ssl_verify=self.vector_store_config.get("ssl_verify"))
-        self.async_httpx_client = get_async_httpx_client(
+        self.async_httpx_client: AsyncHTTPHandler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.RAG,
             params={"ssl_verify": ssl_verify} if ssl_verify is not None else None,
         )
@@ -166,7 +175,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         url: str,
         data: str | None = None,
         headers: dict[str, str] | None = None,
-    ) -> Any:
+    ) -> httpx.Response:
         """
         Helper to sign and execute AWS API requests using httpx + SigV4.
 
@@ -311,7 +320,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             )
 
             # Prepare index configuration per AWS API docs
-            index_config: Final = {
+            index_config: Final[dict[str, object]] = {
                 "vectorBucketName": self.vector_bucket_name,
                 "indexName": self.index_name,
                 "dataType": "float32",
@@ -336,7 +345,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             verbose_logger.exception("Error creating vector index: %s", e)
             raise
 
-    async def _put_vectors(self, vectors: list[dict[str, Any]]):
+    async def _put_vectors(self, vectors: list[JsonObject]):
         """
         Call PutVectors API to store vectors in S3 Vectors.
 
@@ -442,10 +451,10 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             raise ValueError(error_msg)
 
         # Prepare vectors for PutVectors API
-        vectors: Final = []
+        vectors: Final[list[JsonObject]] = []
         for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
             # Build metadata dict
-            metadata: dict[str, str] = {
+            metadata: JsonObject = {
                 "source_text": chunk,  # Non-filterable (for reference)
                 "chunk_index": str(i),  # Filterable
             }
@@ -453,9 +462,9 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             if filename:
                 metadata["filename"] = filename  # Filterable
 
-            vector_obj = {
+            vector_obj: JsonObject = {
                 "key": f"{filename}_{i}" if filename else f"chunk_{i}",
-                "data": {"float32": embedding},
+                "data": {"float32": list(embedding)},
                 "metadata": metadata,
             }
 
@@ -468,7 +477,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         vector_store_id: Final = f"{self.vector_bucket_name}:{self.index_name}"
         return vector_store_id, filename
 
-    async def query_vector_store(self, vector_store_id: str, query: str, top_k: int = 5) -> dict[str, Any] | None:
+    async def query_vector_store(self, vector_store_id: str, query: str, top_k: int = 5) -> JsonObject | None:
         """
         Query S3 Vectors using QueryVectors API.
 
@@ -507,18 +516,19 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             response = await self._sign_and_execute_request("POST", url, data=safe_dumps(request_body))
 
             if response.status_code == 200:
-                results: Final = response.json()
-                verbose_logger.debug("Query returned %s results", len(results.get("vectors", [])))
+                results: Final = _JSON_OBJECT_ADAPTER.validate_json(response.text)
+                vectors: Final = results.get("vectors")
+                vector_list: Final = vectors if isinstance(vectors, list) else []
+                verbose_logger.debug("Query returned %s results", len(vector_list))
 
-                # Check if query terms appear in results
-                if results.get("vectors"):
-                    for result in results["vectors"]:
-                        metadata = result.get("metadata", {})
-                        source_text = metadata.get("source_text", "")
-                        if query.lower() in source_text.lower():
-                            return results
+                for result in vector_list:
+                    if not isinstance(result, dict):
+                        continue
+                    metadata = result.get("metadata")
+                    source_text = metadata.get("source_text") if isinstance(metadata, dict) else None
+                    if isinstance(source_text, str) and query.lower() in source_text.lower():
+                        return results
 
-                # Return results even if exact match not found
                 return results
             else:
                 verbose_logger.error("QueryVectors failed with status %s: %s", response.status_code, response.text)

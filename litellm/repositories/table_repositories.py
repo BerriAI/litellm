@@ -7,9 +7,13 @@ These are thin wrappers for tables that do not (yet) need domain-specific query
 methods; richer repositories live in their own modules.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
+from litellm.repositories.prisma_protocols import TableActions
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_db_models
 
 
 class PrismaTableRepository:
@@ -108,6 +112,10 @@ class ManagedFileRepository(PrismaTableRepository):
 
 class MemoryRepository(PrismaTableRepository):
     table_name = "litellm_memorytable"
+
+    @property
+    def table(self) -> "TableActions[prisma_db_models.LiteLLM_MemoryTable]":
+        return super().table  # any-ok: the untyped client wrapper is narrowed to this table's row type
 
 
 class SearchToolsRepository(PrismaTableRepository):

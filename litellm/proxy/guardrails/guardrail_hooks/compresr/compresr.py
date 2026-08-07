@@ -778,7 +778,7 @@ class CompresrGuardrail(CustomGuardrail):
                 {"detail": str(e)},
             )
             return None
-        if raw_response is None or not 200 <= raw_response.status_code < 300:
+        if not 200 <= raw_response.status_code < 300:
             self._handle_compress_failure(
                 "Compresr compression service returned an error",
                 {
