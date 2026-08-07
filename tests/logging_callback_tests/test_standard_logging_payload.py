@@ -164,6 +164,56 @@ def test_get_usage_from_rerank_response_no_meta():
     assert usage.total_tokens == 0
 
 
+def test_get_usage_as_dict_from_rerank_response():
+    """
+    get_usage_as_dict() is the function actually called by
+    get_standard_logging_object_payload() (the hot path used to build spend
+    logs / /ui/usage). It must handle the rerank `meta.billed_units`/`meta.tokens`
+    shape the same way get_usage_from_response_obj() does, or /ui/usage keeps
+    showing 0 tokens for rerank calls even after fixing the other function.
+    """
+    response_obj = {
+        "id": "rerank-d618748e0f5543e8ba09ee7dd131ac59",
+        "results": [],
+        "meta": {
+            "billed_units": {"total_tokens": 42},
+            "tokens": {"input_tokens": 42},
+        },
+    }
+
+    usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj)
+
+    assert usage_dict["prompt_tokens"] == 42
+    assert usage_dict["completion_tokens"] == 0
+    assert usage_dict["total_tokens"] == 42
+
+
+def test_get_usage_as_dict_from_rerank_response_no_meta():
+    response_obj = {"id": "rerank-abc", "results": [], "meta": None}
+
+    usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj)
+
+    assert usage_dict["prompt_tokens"] == 0
+    assert usage_dict["completion_tokens"] == 0
+    assert usage_dict["total_tokens"] == 0
+
+
+def test_get_usage_as_dict_from_chat_response():
+    response_obj = {
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "total_tokens": 30,
+        }
+    }
+
+    usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj)
+
+    assert usage_dict["prompt_tokens"] == 10
+    assert usage_dict["completion_tokens"] == 20
+    assert usage_dict["total_tokens"] == 30
+
+
 def test_get_additional_headers():
     additional_headers = {
         "x-ratelimit-limit-requests": "2000",

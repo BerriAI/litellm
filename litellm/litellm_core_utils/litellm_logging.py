@@ -4765,7 +4765,20 @@ class StandardLoggingPayloadSetup:
         if not response_obj:
             return _empty
         _raw: Final = response_obj.get("usage", None)
-        if _raw is None:
+        if not _raw:
+            # RerankResponse has no top-level `usage` field - token usage lives
+            # under `meta.billed_units`/`meta.tokens` instead (Cohere-style API).
+            meta = response_obj.get("meta")
+            if isinstance(meta, dict) and ("billed_units" in meta or "tokens" in meta):
+                billed_units = meta.get("billed_units") or {}
+                tokens = meta.get("tokens") or {}
+                total_tokens = billed_units.get("total_tokens", 0) or 0
+                prompt_tokens = tokens.get("input_tokens", total_tokens) or total_tokens
+                return {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": 0,
+                    "total_tokens": total_tokens,
+                }
             return _empty
         if isinstance(_raw, ResponseAPIUsage):
             return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(_raw).model_dump()
