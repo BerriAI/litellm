@@ -1,7 +1,15 @@
 import asyncio
 import json
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, Final
+from typing import (  # noqa: TID251  # cast narrows a json str to the Literal
+    TYPE_CHECKING,
+    Final,
+    Literal,
+    TypeAlias,
+    cast,
+    get_args,
+)
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.config_sync_pubsub import (
@@ -11,8 +19,13 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
 )
 
 if TYPE_CHECKING:
+    from litellm.caching.in_memory_cache import InMemoryCache
     from litellm.caching.redis_cache import RedisCache
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+InvalidationTarget: TypeAlias = Literal["user_api_key", "config_param"]
+
+DEFAULT_INVALIDATION_TARGET: Final[InvalidationTarget] = "user_api_key"
+_INVALIDATION_TARGETS: Final[frozenset[str]] = frozenset(get_args(InvalidationTarget))
 
 AUTH_CACHE_INVALIDATION_CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
 _POLL_TIMEOUT_SECONDS: Final = 1.0
@@ -29,32 +42,41 @@ def auth_cache_invalidation_channel(redis_cache: "RedisCache") -> str:
 @dataclass(frozen=True, slots=True)
 class _CacheInvalidationMessage:
     cache_key: str
+    cache: InvalidationTarget
 
 
-def _cache_invalidation_message_json(cache_key: str) -> str:
-    return json.dumps(asdict(_CacheInvalidationMessage(cache_key=cache_key)))
+def _cache_invalidation_message_json(cache_key: str, target: InvalidationTarget) -> str:
+    return json.dumps(asdict(_CacheInvalidationMessage(cache_key=cache_key, cache=target)))
 
 
-def _cache_key_from_message_data(data: object) -> str | None:
-    if isinstance(data, bytes):
-        data = data.decode("utf-8", errors="replace")
-    if not isinstance(data, str):
+def _invalidation_from_message_data(data: object) -> _CacheInvalidationMessage | None:
+    decoded: Final = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data
+    if not isinstance(decoded, str):
         return None
     try:
-        parsed: Final = json.loads(data)
+        parsed: Final = json.loads(decoded)
     except json.JSONDecodeError:
         return None
     if not isinstance(parsed, dict):
         return None
     cache_key: Final = parsed.get("cache_key")
-    return cache_key if isinstance(cache_key, str) else None
+    if not isinstance(cache_key, str):
+        return None
+    raw_target: Final = parsed.get("cache", DEFAULT_INVALIDATION_TARGET)
+    if raw_target not in _INVALIDATION_TARGETS:
+        return None
+    target: Final = cast(InvalidationTarget, raw_target)  # cast-ok: membership checked against the Literal's args
+    return _CacheInvalidationMessage(cache_key=cache_key, cache=target)
 
 
-async def publish_auth_cache_invalidation(cache_key: str) -> None:
+async def publish_auth_cache_invalidation(
+    cache_key: str,
+    target: InvalidationTarget = DEFAULT_INVALIDATION_TARGET,
+) -> None:
     """
     Best-effort broadcast so every worker drops its local in-memory copy of a
-    mutated management object; without this, only the handling worker and Redis
-    are evicted and other workers keep serving the stale object until its TTL.
+    mutated object; without this, only the handling worker and Redis are
+    evicted and other workers keep serving the stale object until its TTL.
     """
     redis_cache: Final = coordination_redis_cache()
     if redis_cache is None:
@@ -67,21 +89,24 @@ async def publish_auth_cache_invalidation(cache_key: str) -> None:
                 cache_key,
             )
             return
-        await client.publish(auth_cache_invalidation_channel(redis_cache), _cache_invalidation_message_json(cache_key))
+        await client.publish(
+            auth_cache_invalidation_channel(redis_cache),
+            _cache_invalidation_message_json(cache_key=cache_key, target=target),
+        )
     except Exception as e:  # noqa: BLE001  # best-effort publish; mutations must never fail on redis errors
         verbose_proxy_logger.warning("auth cache invalidation publish for %s failed: %s", cache_key, e)
 
 
 class AuthCacheInvalidationSubscriber:
-    __slots__ = ("_redis_cache", "_task", "_user_api_key_cache")
+    __slots__ = ("_in_memory_caches", "_redis_cache", "_task")
 
     def __init__(
         self,
         redis_cache: "RedisCache",
-        user_api_key_cache: "UserApiKeyCache",
+        in_memory_caches: Mapping[InvalidationTarget, "InMemoryCache"],
     ) -> None:
         self._redis_cache = redis_cache
-        self._user_api_key_cache = user_api_key_cache
+        self._in_memory_caches = in_memory_caches
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
@@ -138,12 +163,12 @@ class AuthCacheInvalidationSubscriber:
 
     def _apply_message(self, message: object) -> None:
         data: Final = message.get("data") if isinstance(message, dict) else None
-        cache_key: Final = _cache_key_from_message_data(data)
-        if cache_key is None:
+        invalidation: Final = _invalidation_from_message_data(data)
+        if invalidation is None:
             return
-        in_memory_cache: Final = self._user_api_key_cache.in_memory_cache
+        in_memory_cache: Final = self._in_memory_caches.get(invalidation.cache)
         if in_memory_cache is not None:
-            in_memory_cache.delete_cache(cache_key)
+            in_memory_cache.delete_cache(invalidation.cache_key)
 
     @staticmethod
     async def _close_pubsub(pubsub: _ConfigSyncPubSub) -> None:
