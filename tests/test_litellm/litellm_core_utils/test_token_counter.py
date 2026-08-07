@@ -981,6 +981,38 @@ def test_token_counter_with_image_url():
         ), f"Expected detail validation error, got: {e}"
 
 
+def test_token_counter_image_url_none():
+    """
+    Regression test: token_counter must not raise ValueError when a content
+    block has {"type": "image_url", "image_url": None}.
+
+    Previously _count_image_tokens() reached its final else-branch and raised:
+        ValueError: Invalid image_url type: NoneType. Expected str or dict with 'url' field.
+
+    After the fix, None is treated as an unknown image and the default token
+    count (DEFAULT_IMAGE_TOKEN_COUNT = 250) is returned so callers are not
+    disrupted by a None value in an otherwise valid message list.
+    """
+    from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "hello"},
+                {"type": "image_url", "image_url": None},
+            ],
+        }
+    ]
+
+    tokens = token_counter(model="gpt-4-vision-preview", messages=messages)
+    assert tokens > 0, f"Expected positive token count, got {tokens}"
+    assert tokens >= DEFAULT_IMAGE_TOKEN_COUNT, (
+        f"Expected at least DEFAULT_IMAGE_TOKEN_COUNT={DEFAULT_IMAGE_TOKEN_COUNT} "
+        f"tokens due to the None image_url fallback, got {tokens}"
+    )
+
+
 def test_token_counter_with_thinking_content():
     """
     Test that _count_content_list() correctly handles Claude's extended thinking content blocks.
