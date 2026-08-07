@@ -15,7 +15,7 @@ role / access key / profile / web identity), signed via the shared
 BaseAWSLLM._sign_request after the request body is finalized.
 """
 
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -47,6 +47,8 @@ _BASE_SUFFIXES_TO_STRIP: Final = (
 _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES = frozenset({"function", "mcp", "custom", "namespace", "tool_search"})
 
 _BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS: Final = frozenset({"auto", "default"})
+
+_BEDROCK_MANTLE_RESERVED_TOOL_NAMESPACE: Final = "functions"
 
 _CODEX_ADDITIONAL_TOOLS_INPUT_ITEM_TYPE: Final = "additional_tools"
 
@@ -99,6 +101,41 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
 
     def supports_native_websocket(self) -> bool:
         return False
+
+    @staticmethod
+    def _reserved_namespace_nested_tools(tool: object) -> "tuple[object, ...] | None":
+        if not isinstance(tool, dict):
+            return None
+        entry: Final = cast("dict[str, object]", tool)
+        if entry.get("type") != "namespace" or entry.get("name") != _BEDROCK_MANTLE_RESERVED_TOOL_NAMESPACE:
+            return None
+        nested: Final = entry.get("tools")
+        return tuple(cast("list[object]", nested)) if isinstance(nested, list) else ()
+
+    @classmethod
+    def _flatten_reserved_namespace_tools(cls, tools: "list[object]") -> "list[object]":
+        """Codex CLI >= 0.147.0 groups its plain function/custom tools into an
+        explicit {"type": "namespace", "name": "functions", "tools": [...]} entry.
+        Mantle serves top-level function tools under that same namespace already,
+        so it rejects the request with "Invalid Value: 'tools.namespace'.
+        User-defined namespace 'functions' collides with an existing tool
+        namespace." Unwrapping the entry back to top-level tools is identity
+        preserving on both ends: Mantle addresses those tools by bare name, and
+        Codex normalizes a missing namespace to "functions" when it routes the
+        resulting tool calls.
+        """
+        unwrapped: Final = tuple((tool, cls._reserved_namespace_nested_tools(tool)) for tool in tools)
+        if all(nested is None for _, nested in unwrapped):
+            return tools
+        verbose_logger.debug(
+            "Bedrock Mantle Responses API: unwrapping the reserved %r tool namespace into top-level tools.",
+            _BEDROCK_MANTLE_RESERVED_TOOL_NAMESPACE,
+        )
+        return [tool for original, nested in unwrapped for tool in ((original,) if nested is None else nested)]
+
+    @classmethod
+    def _normalize_tools(cls, tools: "list[object]") -> "list[object]":
+        return cls._filter_unsupported_tools(cls._flatten_reserved_namespace_tools(tools))
 
     @staticmethod
     def _filter_unsupported_tools(tools: list[Any]) -> list[Any]:
@@ -208,7 +245,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             len(hoisted_tools),
             len(additional_tools_items),
         )
-        return remaining_input, cls._filter_unsupported_tools(hoisted_tools)
+        return remaining_input, cls._normalize_tools(hoisted_tools)
 
     def map_openai_params(
         self,
@@ -230,7 +267,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             return params
 
         tools_list: Final = tools if isinstance(tools, list) else [tools]
-        filtered: Final = self._filter_unsupported_tools(tools_list)
+        filtered: Final = self._normalize_tools(tools_list)
         if filtered:
             params["tools"] = filtered
         else:
