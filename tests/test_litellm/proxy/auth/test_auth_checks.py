@@ -5464,6 +5464,63 @@ async def test_get_project_object_db_fetch_returns_cached_obj():
     assert result.project_alias == "proj"
 
 
+@pytest.mark.asyncio
+async def test_project_allowlist_enforced_when_key_models_empty():
+    """
+    LIT-3803: a project-bound key with models=[] has no key-level restriction,
+    but the project allowlist must still 403 team models outside it.
+    """
+    from litellm.proxy._types import (
+        LiteLLM_ProjectTableCachedObj,
+        ProxyErrorTypes,
+        ProxyException,
+    )
+    from litellm.proxy.auth.auth_checks import _run_project_checks, can_key_call_model
+
+    valid_token = UserAPIKeyAuth(
+        api_key="hashed-key",
+        project_id="p-1",
+        team_id="t-1",
+        models=[],
+    )
+    project = LiteLLM_ProjectTableCachedObj(
+        project_id="p-1",
+        team_id="t-1",
+        models=["gemini-2.5-flash-image", "gemini-3.1-flash-lite-preview"],
+    )
+
+    assert (
+        await can_key_call_model(
+            model="gemini-2.5-flash",
+            llm_model_list=None,
+            valid_token=valid_token,
+            llm_router=None,
+        )
+        is True
+    )
+
+    await _run_project_checks(
+        project_object=project,
+        _model="gemini-2.5-flash-image",
+        llm_router=None,
+        skip_budget_checks=True,
+        valid_token=valid_token,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_project_checks(
+            project_object=project,
+            _model="gemini-2.5-flash",
+            llm_router=None,
+            skip_budget_checks=True,
+            valid_token=valid_token,
+            proxy_logging_obj=MagicMock(),
+        )
+    assert exc_info.value.type == ProxyErrorTypes.project_model_access_denied
+    assert exc_info.value.code == "403"
+
+
 def test_is_user_proxy_admin_rejects_view_only_admin():
     """This predicate skips `non_proxy_admin_allowed_routes_check` entirely, so an
     Admin Viewer answering True here would gain every write route. Read parity for

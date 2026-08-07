@@ -297,6 +297,9 @@ from litellm.proxy.common_request_processing import (
     _should_return_raw_model_name,
     create_response,
 )
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    AuthCacheInvalidationSubscriber,
+)
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
@@ -1192,6 +1195,8 @@ async def proxy_startup_event(app: FastAPI):
             verbose_proxy_logger.error("Error stopping DB health watchdog task: %s", e)
 
     await proxy_config.stop_config_sync_subscriber()
+
+    await proxy_config.stop_auth_cache_invalidation_subscriber()
 
     await proxy_shutdown_event()
 
@@ -3904,6 +3909,7 @@ class ProxyConfig:
         self._last_hashicorp_vault_config: dict[str, Any] | None = None
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
+        self.auth_cache_invalidation_subscriber: AuthCacheInvalidationSubscriber | None = None
         from litellm.litellm_core_utils.get_model_cost_map import (
             get_model_cost_map_loaded_at,
         )
@@ -6391,6 +6397,30 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.error("Error stopping config sync subscriber: %s", e)
 
+    def start_auth_cache_invalidation_subscriber(
+        self,
+        redis_cache: RedisCache | None,
+        user_api_key_cache: UserApiKeyCache,
+    ) -> None:
+        if redis_cache is None or self.auth_cache_invalidation_subscriber is not None:
+            return
+        subscriber: Final = AuthCacheInvalidationSubscriber(
+            redis_cache=redis_cache,
+            user_api_key_cache=user_api_key_cache,
+        )
+        self.auth_cache_invalidation_subscriber = subscriber
+        subscriber.start()
+
+    async def stop_auth_cache_invalidation_subscriber(self) -> None:
+        subscriber: Final = self.auth_cache_invalidation_subscriber
+        if subscriber is None:
+            return
+        self.auth_cache_invalidation_subscriber = None
+        try:
+            await subscriber.stop()
+        except Exception as e:  # noqa: BLE001  # best-effort: a failing stop must not break proxy shutdown
+            verbose_proxy_logger.error("Error stopping auth cache invalidation subscriber: %s", e)
+
     async def _init_non_llm_objects_in_db(self, prisma_client: PrismaClient):
         """
         Use this to read non-llm objects from the db and initialize them
@@ -8328,6 +8358,11 @@ class ProxyStartupEvent:
             id="periodic_reload_job",
             replace_existing=True,
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+
+        proxy_config.start_auth_cache_invalidation_subscriber(
+            redis_cache=redis_usage_cache,
+            user_api_key_cache=user_api_key_cache,
         )
 
         if store_model_in_db is True:
