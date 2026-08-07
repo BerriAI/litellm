@@ -816,6 +816,7 @@ class PreRoutingHookResponse(BaseModel):
     model: str
     messages: list[dict[str, Any]] | None
     routing_decision: StandardLoggingRoutingDecision | None = None
+    session_affinity_ttl_seconds: int | None = None
 
 
 _PreRoutingStrategyT_co = TypeVar("_PreRoutingStrategyT_co", covariant=True)
