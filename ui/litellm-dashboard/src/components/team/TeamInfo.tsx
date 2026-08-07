@@ -1208,6 +1208,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <RouterSettingsAccordion
                         ref={routerSettingsRef}
                         accessToken={accessToken || ""}
+                        teamId={teamId}
                         value={info.router_settings ? { router_settings: info.router_settings } : undefined}
                       />
                     </Form.Item>
