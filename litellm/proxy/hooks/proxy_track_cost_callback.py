@@ -9,6 +9,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
+    get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.proxy._types import UserAPIKeyAuth
@@ -114,14 +115,19 @@ class _ProxyDBLogger(CustomLogger):
             metadata=_metadata,
         )
 
-        existing_metadata: Final[dict] = request_data.get("metadata", None) or {}
+        # Routes that carry proxy state in ``litellm_metadata`` (/v1/messages, batches,
+        # files, every passthrough that goes through _ageneric_api_call_with_fallbacks)
+        # are where the Router records the selected deployment, so read the bucket this
+        # request actually uses instead of assuming ``metadata``.
+        metadata_key: Final = get_metadata_variable_name_from_kwargs(request_data)
+        existing_metadata: Final[dict] = request_data.get(metadata_key, None) or {}
         existing_metadata.update(_metadata)
 
         if "litellm_params" not in request_data:
             request_data["litellm_params"] = {}
 
         existing_litellm_params: Final = request_data.get("litellm_params", {})
-        existing_litellm_metadata: Final = existing_litellm_params.get("metadata", {}) or {}
+        existing_litellm_metadata: Final = existing_litellm_params.get(metadata_key, {}) or {}
 
         # Preserve tags from existing metadata
         if existing_litellm_metadata.get("tags"):
@@ -130,7 +136,7 @@ class _ProxyDBLogger(CustomLogger):
         request_data["litellm_params"]["proxy_server_request"] = (
             request_data.get("proxy_server_request") or existing_litellm_params.get("proxy_server_request") or {}
         )
-        request_data["litellm_params"]["metadata"] = existing_metadata
+        request_data["litellm_params"][metadata_key] = existing_metadata
 
         # Preserve model name and custom_llm_provider
         if "model" not in request_data:
@@ -153,6 +159,18 @@ class _ProxyDBLogger(CustomLogger):
                 )
             if request_data.get("litellm_trace_id") is None:
                 request_data["litellm_trace_id"] = getattr(_litellm_logging_obj, "litellm_trace_id", None)
+
+        # The spend log reads api_base off litellm_params, which only the success path
+        # populates. Recover the attempted deployment's base from the logging object
+        # (already masked there, same value a success row gets), falling back to the raw
+        # value the Router stamped on the metadata bucket.
+        if not request_data["litellm_params"].get("api_base"):
+            _logged_litellm_params: Final = (getattr(_litellm_logging_obj, "model_call_details", None) or {}).get(
+                "litellm_params"
+            ) or {}
+            api_base: Final = _logged_litellm_params.get("api_base") or existing_metadata.get("api_base")
+            if api_base:
+                request_data["litellm_params"]["api_base"] = api_base
 
         # Use the actual request start time from the logging object so that
         # failed requests record the real duration instead of 0.
