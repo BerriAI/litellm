@@ -2,8 +2,11 @@
 Unit tests for AgentRequestHandler - Agent permission management for keys and teams.
 """
 
+import hashlib
+import json
 import os
 import sys
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -11,6 +14,7 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
     AgentRequestHandler,
 )
@@ -212,3 +216,79 @@ class TestAgentRequestHandler:
                 user_api_key_auth=mock_user_auth
             )
             assert sorted(result) == ["agent-from-ag", "native-agent-1"]
+
+    async def test_is_agent_allowed_accepts_legacy_config_agent_id_grants(self):
+        """LIT-5144: object_permission grants stored under the pre-fix full-entry hash
+        must keep authorizing the agent after its id became name-based."""
+        entry: Final = {
+            "agent_name": "granted-agent",
+            "agent_card_params": {
+                "name": "Granted Agent",
+                "url": "http://localhost",
+                "version": "1.0.0",
+            },
+            "static_headers": {"x-upstream-token": "token-v1"},
+        }
+        registry: Final = AgentRegistry()
+        registry.load_agents_from_config([entry])
+        agent: Final = registry.get_agent_by_name("granted-agent")
+        assert agent is not None
+        legacy_id: Final = hashlib.sha256(json.dumps(entry, sort_keys=True).encode()).hexdigest()
+        assert legacy_id != agent.agent_id
+        mock_user_auth: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+
+        with patch(
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            registry,
+        ):
+            with patch.object(AgentRequestHandler, "get_allowed_agents") as mock_get_allowed:
+                for grant, expected in (
+                    ([legacy_id], True),
+                    ([agent.agent_id], True),
+                    (["unrelated-agent-id"], False),
+                    ([], True),
+                ):
+                    mock_get_allowed.return_value = grant
+                    assert (
+                        await AgentRequestHandler.is_agent_allowed(
+                            agent_id=agent.agent_id,
+                            user_api_key_auth=mock_user_auth,
+                        )
+                        is expected
+                    ), grant
+
+    async def test_get_allowed_agents_intersects_legacy_team_grant_with_stable_key_grant(self):
+        """LIT-5144: a team grant stored under the pre-fix full-entry hash and a key grant
+        stored under the name-based id name the same agent; the intersection must resolve
+        to that agent instead of collapsing to the allow-all empty list."""
+        entry: Final = {
+            "agent_name": "shared-agent",
+            "agent_card_params": {
+                "name": "Shared Agent",
+                "url": "http://localhost",
+                "version": "1.0.0",
+            },
+        }
+        registry: Final = AgentRegistry()
+        registry.load_agents_from_config([entry])
+        agent: Final = registry.get_agent_by_name("shared-agent")
+        assert agent is not None
+        legacy_id: Final = hashlib.sha256(json.dumps(entry, sort_keys=True).encode()).hexdigest()
+        mock_user_auth: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="test-team")
+
+        with patch(
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            registry,
+        ):
+            with patch.object(AgentRequestHandler, "_get_allowed_agents_for_key") as mock_key:
+                with patch.object(AgentRequestHandler, "_get_allowed_agents_for_team") as mock_team:
+                    for key_grant, team_grant in (
+                        ([agent.agent_id], [legacy_id]),
+                        ([legacy_id], [agent.agent_id]),
+                        ([legacy_id], []),
+                    ):
+                        mock_key.return_value = key_grant
+                        mock_team.return_value = team_grant
+                        assert await AgentRequestHandler.get_allowed_agents(user_api_key_auth=mock_user_auth) == [
+                            agent.agent_id
+                        ], (key_grant, team_grant)

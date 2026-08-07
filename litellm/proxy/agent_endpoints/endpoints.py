@@ -101,7 +101,11 @@ async def _attach_keys_to_agents(agents: Sequence[AgentResponse], prisma_client)
     foreign key. Mirrors how spend is joined into the agent response so the UI
     never has to cross-reference a full key dump client-side. Only non-secret
     fields are exposed (alias, masked key_name, hashed token)."""
-    agent_ids: Final = [agent.agent_id for agent in agents]
+    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
+    agent_ids: Final = tuple(
+        alias_id for agent in agents for alias_id in global_agent_registry.ids_for_agent(agent.agent_id)
+    )
     if not agent_ids:
         return
     key_rows: Final = await prisma_client.db.litellm_verificationtoken.find_many(
@@ -117,7 +121,12 @@ async def _attach_keys_to_agents(agents: Sequence[AgentResponse], prisma_client)
             )
         )
     for agent in agents:
-        agent.keys = keys_by_agent.get(agent.agent_id)
+        matched_keys = [
+            key_summary
+            for alias_id in global_agent_registry.ids_for_agent(agent.agent_id)
+            for key_summary in keys_by_agent.get(alias_id) or ()
+        ]
+        agent.keys = matched_keys or None
 
 
 def _redact_sensitive_agent_fields(
@@ -266,23 +275,32 @@ async def get_agents(
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is not None:
-            agent_ids: Final = [agent.agent_id for agent in returned_agents]
+            agent_ids: Final = tuple(
+                alias_id
+                for agent in returned_agents
+                for alias_id in global_agent_registry.ids_for_agent(agent.agent_id)
+            )
             if agent_ids:
                 db_agents: Final = await agents_table(prisma_client).find_many(
                     where={"agent_id": {"in": agent_ids}},
                 )
                 spend_map: Final = {a.agent_id: a.spend for a in db_agents}
                 for agent in returned_agents:
-                    if agent.agent_id in spend_map:
-                        agent.spend = spend_map[agent.agent_id]
+                    matched_spends = tuple(
+                        spend_map[alias_id]
+                        for alias_id in global_agent_registry.ids_for_agent(agent.agent_id)
+                        if alias_id in spend_map
+                    )
+                    if matched_spends:
+                        agent.spend = sum(matched_spends)
                 await _attach_keys_to_agents(returned_agents, prisma_client)
 
         # add is_public field to each agent - we do it this way, to allow setting config agents as public
         for agent in returned_agents:
             if agent.litellm_params is None:
                 agent.litellm_params = {}
-            agent.litellm_params["is_public"] = litellm.public_agent_groups is not None and (
-                agent.agent_id in litellm.public_agent_groups
+            agent.litellm_params["is_public"] = litellm.public_agent_groups is not None and not (
+                global_agent_registry.ids_for_agent(agent.agent_id).isdisjoint(litellm.public_agent_groups)
             )
 
         # Redact sensitive fields for non-admin users
@@ -863,7 +881,7 @@ async def make_agent_public(
         if litellm.public_agent_groups is None:
             litellm.public_agent_groups = []
         # handle duplicates
-        if agent.agent_id in litellm.public_agent_groups:
+        if not AGENT_REGISTRY.ids_for_agent(agent.agent_id).isdisjoint(litellm.public_agent_groups):
             raise HTTPException(
                 status_code=400,
                 detail=f"Agent with name {agent.agent_name} already in public agent groups",

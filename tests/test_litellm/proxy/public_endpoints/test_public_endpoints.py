@@ -582,6 +582,7 @@ def test_public_agent_hub_rewrites_upstream_url_to_proxy():
 
     mock_registry = MagicMock()
     mock_registry.get_public_agent_list.return_value = [agent]
+    mock_registry.ids_for_agent = MagicMock(side_effect=lambda agent_id: frozenset({agent_id}))
 
     with (
         patch("litellm.public_agent_groups", ["agent-123"]),
@@ -631,6 +632,7 @@ def test_public_agent_hub_serializes_http_security_scheme_without_bearer_format(
 
     mock_registry = MagicMock()
     mock_registry.get_public_agent_list.return_value = [agent]
+    mock_registry.ids_for_agent = MagicMock(side_effect=lambda agent_id: frozenset({agent_id}))
 
     with (
         patch("litellm.public_agent_groups", ["agent-123"]),
