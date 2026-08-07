@@ -1303,14 +1303,14 @@ def test_chain_allows_fail_open_true_when_any_member_sets_flag():
         {"model_info": {}, "litellm_params": {"tags": ["provider:anthropic"]}},
         {"model_info": {"allow_fail_open": True}, "litellm_params": {"tags": ["provider:openai"]}},
     ]
-    assert _chain_allows_fail_open(deployments, frozenset(), frozenset({"provider:anthropic"})) is True
+    assert _chain_allows_fail_open(deployments, frozenset(), frozenset({"provider:anthropic"}), frozenset()) is True
 
 
 def test_chain_allows_fail_open_false_by_default():
     from litellm.router_strategy.tag_based_routing import _chain_allows_fail_open
 
     deployments = [{"model_info": {}}, {}]
-    assert _chain_allows_fail_open(deployments, frozenset(), frozenset()) is False
+    assert _chain_allows_fail_open(deployments, frozenset(), frozenset(), frozenset()) is False
 
 
 def test_chain_allows_fail_open_true_when_no_required_tag_is_known_at_all():
@@ -1322,7 +1322,7 @@ def test_chain_allows_fail_open_true_when_no_required_tag_is_known_at_all():
     deployments = [
         {"model_info": {"allow_fail_open": True}, "litellm_params": {"tags": ["default", "reasoning_type:low"]}},
     ]
-    assert _chain_allows_fail_open(deployments, frozenset(), frozenset({"reasoning_type:high"})) is True
+    assert _chain_allows_fail_open(deployments, frozenset(), frozenset({"reasoning_type:high"}), frozenset()) is True
 
 
 def test_unknown_required_tag_hides_an_answer_denies_fail_open():
@@ -1343,7 +1343,7 @@ def test_unknown_required_tag_hides_an_answer_denies_fail_open():
     # fail-open must be denied even though the flag is set on the group.
     assert (
         _chain_allows_fail_open(
-            deployments, frozenset(), frozenset({"region:us-east", "totally-invented-tag-nobody-has"})
+            deployments, frozenset(), frozenset({"region:us-east", "totally-invented-tag-nobody-has"}), frozenset()
         )
         is False
     )
@@ -1369,7 +1369,71 @@ def test_unknown_required_tag_allows_fail_open_when_no_answer_is_hidden():
     # region:us-east and region:eu are both real, known tags; no single deployment
     # carries both, so this is a genuinely unsatisfiable combination, not an invented
     # tag masking a narrower answer. Fail-open must proceed normally.
-    assert _chain_allows_fail_open(deployments, frozenset(), frozenset({"region:us-east", "region:eu"})) is True
+    assert (
+        _chain_allows_fail_open(deployments, frozenset(), frozenset({"region:us-east", "region:eu"}), frozenset())
+        is True
+    )
+
+
+# --- _strip_routing_prefix / _bare_tag_value unit tests ---
+
+
+def test_strip_routing_prefix_empty_prefix_is_noop():
+    from litellm.router_strategy.tag_based_routing import _strip_routing_prefix
+
+    tags = ["provider:anthropic", "&region:eu", "!region:us"]
+    rewritten, confirmed = _strip_routing_prefix(tags, "")
+    assert rewritten == tuple(tags)
+    assert confirmed == frozenset()
+
+
+def test_strip_routing_prefix_splits_routed_from_other():
+    from litellm.router_strategy.tag_based_routing import _strip_routing_prefix
+
+    rewritten, confirmed = _strip_routing_prefix(["feature:demo", "route:!provider:openai"], "route:")
+    assert rewritten == ("feature:demo", "!provider:openai")
+    assert confirmed == frozenset({"provider:openai"})
+
+
+def test_strip_routing_prefix_confirmed_matches_bare_required_and_excluded_values():
+    # Regression: confirmed must carry the same bare (marker-stripped) form that
+    # _split_tags produces for required_set/excluded_set downstream. A prior bug
+    # left the "&"/"!" marker in `confirmed`, so `required_set & routing_confirmed`
+    # never intersected for any prefixed "&"/"!" tag -- the entire "trusted,
+    # caller-declared required/excluded tag" mechanism silently no-opped.
+    from litellm.router_strategy.tag_based_routing import _strip_routing_prefix
+
+    _, confirmed = _strip_routing_prefix(["route:&provider:anthropic", "route:!region:eu"], "route:")
+    assert confirmed == frozenset({"provider:anthropic", "region:eu"})
+
+
+def test_strip_routing_prefix_lone_marker_confirms_nothing():
+    from litellm.router_strategy.tag_based_routing import _strip_routing_prefix
+
+    # A lone "&"/"!" with nothing after it parses to nothing in required_set,
+    # excluded_set, or positive_tags (see test_split_tags_bare_bang_and_amp_skipped);
+    # confirmed must not invent a value for it either.
+    _, confirmed = _strip_routing_prefix(["route:&", "route:!"], "route:")
+    assert confirmed == frozenset()
+
+
+def test_chain_allows_fail_open_true_when_prefixed_unknown_required_tag_is_confirmed():
+    # Regression for the same bug: a required tag no deployment carries is normally
+    # treated as invented noise that can hide a narrower answer (see
+    # test_unknown_required_tag_hides_an_answer_denies_fail_open) -- but once the
+    # caller has explicitly marked it via the routing prefix, it counts as a known,
+    # honest ask, and fail-open must proceed rather than get denied.
+    from litellm.router_strategy.tag_based_routing import _chain_allows_fail_open
+
+    deployments = [
+        {
+            "model_info": {"allow_fail_open": True},
+            "litellm_params": {"tags": ["default", "provider:anthropic"]},
+        },
+    ]
+    required_set = frozenset({"provider:anthropic", "typo-tag"})
+    assert _chain_allows_fail_open(deployments, frozenset(), required_set, frozenset()) is False
+    assert _chain_allows_fail_open(deployments, frozenset(), required_set, required_set) is True
 
 
 # --- get_deployments_for_tag required-AND ("&") integration tests ---
@@ -2417,26 +2481,26 @@ def test_tag_known_to_group_true_for_real_tag():
     from litellm.router_strategy.tag_based_routing import _tag_known_to_group
 
     router = _quality_high_cost_low_router()
-    assert _tag_known_to_group(router, "gpt-4", ["quality:high"]) is True
+    assert _tag_known_to_group(router, "gpt-4", ["quality:high"], frozenset()) is True
 
 
 def test_tag_known_to_group_false_for_foreign_tag():
     from litellm.router_strategy.tag_based_routing import _tag_known_to_group
 
     router = _quality_high_cost_low_router()
-    assert _tag_known_to_group(router, "gpt-4", ["llm-preference-include:unrelated"]) is False
+    assert _tag_known_to_group(router, "gpt-4", ["llm-preference-include:unrelated"], frozenset()) is False
 
 
 def test_caller_constraint_sets_none_when_caller_tags_absent():
     from litellm.router_strategy.tag_based_routing import _caller_constraint_sets
 
-    assert _caller_constraint_sets(None) == (None, None)
+    assert _caller_constraint_sets(None, "") == (None, None)
 
 
 def test_caller_constraint_sets_splits_required_and_excluded():
     from litellm.router_strategy.tag_based_routing import _caller_constraint_sets
 
-    caller_required_set, caller_excluded_set = _caller_constraint_sets(["&region:eu", "!region:us", "plain"])
+    caller_required_set, caller_excluded_set = _caller_constraint_sets(["&region:eu", "!region:us", "plain"], "")
     assert caller_required_set == frozenset({"region:eu"})
     assert caller_excluded_set == frozenset({"region:us"})
 
@@ -2447,7 +2511,7 @@ def test_caller_constraint_sets_none_for_non_sequence_value():
     # A malformed/unexpected caller_tags value (anything but a list/tuple) must be
     # treated the same as "no origin information", never as "caller supplied
     # nothing" -- the two are not interchangeable, see _trusted_only_pool.
-    assert _caller_constraint_sets("not-a-sequence") == (None, None)
+    assert _caller_constraint_sets("not-a-sequence", "") == (None, None)
 
 
 def test_trusted_only_pool_discards_everything_when_caller_sets_are_none():

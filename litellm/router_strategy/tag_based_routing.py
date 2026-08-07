@@ -117,6 +117,41 @@ def _match_deployment(
     return None
 
 
+def _bare_tag_value(tag: str) -> str | None:
+    # Mirrors _split_tags' own stripping rule exactly, so a confirmed value
+    # compares equal to whatever required_set/excluded_set/positive_tags end up
+    # holding for the same tag: a "&"/"!" marker is stripped only when something
+    # follows it; a lone marker with nothing after it parses to nothing in any
+    # of the three sets, so it must not become a confirmed value either.
+    if tag.startswith(("&", "!")):
+        return tag[1:] if len(tag) > 1 else None
+    return tag
+
+
+def _strip_routing_prefix(tags: Sequence[str], prefix: str) -> tuple[tuple[str, ...], frozenset[str]]:
+    # Strips the configured routing-prefix marker from any tag carrying it, used
+    # exactly as configured with no delimiter auto-appended, and separately
+    # tracks the post-strip, post-marker-strip values that arrived prefixed: tags
+    # whose routing intent the caller declared explicitly, exempt from the "maybe
+    # foreign to this group" heuristics in _unknown_required_tag_hides_an_answer
+    # and _tag_known_to_group below. Confirmed values are compared against
+    # required_set/excluded_set downstream, which are themselves already stripped
+    # of their "&"/"!" marker by _split_tags -- confirmed must match that same
+    # bare form, not the raw post-prefix-strip value that still carries the
+    # marker character. An empty prefix must return every tag unconfirmed, not
+    # run every tag through str.startswith(""), which is trivially True for
+    # every string and would mark everything confirmed.
+    if not prefix:
+        return tuple(tags), frozenset()
+    rewritten: Final = tuple(t.removeprefix(prefix) for t in tags)
+    confirmed: Final = frozenset(
+        bare
+        for bare in (_bare_tag_value(t.removeprefix(prefix)) for t in tags if t.startswith(prefix))
+        if bare is not None
+    )
+    return rewritten, confirmed
+
+
 def _split_tags(tags: Sequence[str]) -> tuple[tuple[str, ...], list[str], tuple[str, ...]]:
     required: Final = tuple(tag[1:] for tag in tags if tag.startswith("&") and len(tag) > 1)
     positive: Final = [
@@ -161,6 +196,7 @@ def _unknown_required_tag_hides_an_answer(
     healthy_deployments: Sequence[Any] | Mapping[Any, Any],
     excluded_set: frozenset[str],
     required_set: frozenset[str],
+    routing_confirmed: frozenset[str],
 ) -> bool:
     # A caller-invented "&" tag (one no deployment in this group has ever carried)
     # guarantees an empty required-AND result on its own, regardless of whether the
@@ -170,8 +206,10 @@ def _unknown_required_tag_hides_an_answer(
     # it. If every required tag is known, or none are, there's nothing hidden to
     # protect: either the caller made a real, honestly-unsatisfiable ask (fail-open
     # proceeds normally), or the whole required set is unrecognized noise with no
-    # narrower answer to hide behind it.
-    known_required: Final = required_set & _known_tag_values(healthy_deployments)
+    # narrower answer to hide behind it. routing_confirmed (tag_routing_prefix)
+    # counts as known too: the caller explicitly declared it a routing directive,
+    # so it is never treated as invented noise regardless of deployment vocabulary.
+    known_required: Final = required_set & (_known_tag_values(healthy_deployments) | routing_confirmed)
     if not known_required or known_required == required_set:
         return False
     allowed: Final = _exclude_deployments(healthy_deployments, excluded_set)
@@ -182,8 +220,9 @@ def _chain_allows_fail_open(
     healthy_deployments: Sequence[Any] | Mapping[Any, Any],
     excluded_set: frozenset[str],
     required_set: frozenset[str],
+    routing_confirmed: frozenset[str],
 ) -> bool:
-    if _unknown_required_tag_hides_an_answer(healthy_deployments, excluded_set, required_set):
+    if _unknown_required_tag_hides_an_answer(healthy_deployments, excluded_set, required_set, routing_confirmed):
         return False
     return any((d.get("model_info") or {}).get("allow_fail_open") is True for d in healthy_deployments)
 
@@ -214,12 +253,13 @@ def _resolve_or_fail_open(
     required_set: frozenset[str],
     caller_excluded_set: frozenset[str] | None,
     caller_required_set: frozenset[str] | None,
+    routing_confirmed: frozenset[str],
     model: str,
     request_tags: object,
 ) -> tuple[Any, ...]:
     if pool:
         return tuple(pool)
-    if _chain_allows_fail_open(healthy_deployments, excluded_set, required_set):
+    if _chain_allows_fail_open(healthy_deployments, excluded_set, required_set, routing_confirmed):
         # Fall open only within whatever still satisfies the constraints this
         # request's caller did not itself supply. A constraint entirely
         # attributable to the caller (or, when caller_tags is unavailable, any
@@ -242,6 +282,7 @@ def _resolve_constraint_only_pool(
     required_set: frozenset[str],
     caller_excluded_set: frozenset[str] | None,
     caller_required_set: frozenset[str] | None,
+    routing_confirmed: frozenset[str],
     model: str,
     request_tags: object,
 ) -> tuple[Any, ...]:
@@ -257,6 +298,7 @@ def _resolve_constraint_only_pool(
         required_set,
         caller_excluded_set,
         caller_required_set,
+        routing_confirmed,
         model,
         request_tags,
     )
@@ -270,23 +312,36 @@ def _chain_tag_filtering_override(deployments: Sequence[Any] | Mapping[Any, Any]
     return None
 
 
-def _caller_constraint_sets(caller_tags: object) -> tuple[frozenset[str] | None, frozenset[str] | None]:
+def _caller_constraint_sets(
+    caller_tags: object, routing_prefix: str
+) -> tuple[frozenset[str] | None, frozenset[str] | None]:
     # None means no origin information is available at all (e.g. this request
     # bypassed the proxy layer that populates metadata.caller_tags, as direct SDK
     # Router usage does) -- callers of this must treat that as "every constraint is
-    # trusted," not "the caller supplied none," see _trusted_only_pool.
+    # trusted," not "the caller supplied none," see _trusted_only_pool. caller_tags
+    # is stripped through the same routing_prefix as the main request tags so a
+    # caller who used the prefix on their own tag still matches correctly against
+    # the (already-stripped) required_set/excluded_set computed from request_tags.
     if not isinstance(caller_tags, (list, tuple)):
         return None, None
-    caller_required, _caller_positive, caller_excluded = _split_tags(caller_tags)
+    rewritten_caller_tags: Final = _strip_routing_prefix(caller_tags, routing_prefix)[0]
+    caller_required, _caller_positive, caller_excluded = _split_tags(rewritten_caller_tags)
     return frozenset(caller_required), frozenset(caller_excluded)
 
 
-def _tag_known_to_group(llm_router_instance: LitellmRouter, model: str, positive_tags: Sequence[str]) -> bool:
+def _tag_known_to_group(
+    llm_router_instance: LitellmRouter,
+    model: str,
+    positive_tags: Sequence[str],
+    routing_confirmed: frozenset[str],
+) -> bool:
+    tag_set: Final = frozenset(positive_tags)
+    if tag_set & routing_confirmed:
+        return True
     try:
         all_deployments: Final = llm_router_instance._get_all_deployments(model_name=model)
     except Exception:  # noqa: BLE001  # fail safe toward "unrecognized" so lookup errors preserve the existing silent-fallback behavior
         return False
-    tag_set: Final = frozenset(positive_tags)
     return any(
         tag_set.intersection(d.get("litellm_params", MappingProxyType({})).get("tags") or ()) for d in all_deployments
     )
@@ -334,14 +389,22 @@ async def get_deployments_for_tag(
         metadata: Final = request_kwargs[metadata_variable_name]
         request_tags: Final = metadata.get("tags")
         match_any: Final = llm_router_instance.tag_filtering_match_any
+        routing_prefix: Final = llm_router_instance.tag_routing_prefix or ""
 
         # Build header strings for regex matching from what the proxy already stores.
         # Currently we match against User-Agent; format matches "^User-Agent: claude-code/..."
         user_agent: Final = metadata.get("user_agent", "")
         header_strings: Final[list[str]] = [f"User-Agent: {user_agent}"] if user_agent else []
 
-        required_tags, positive_tags, excluded_patterns = _split_tags(request_tags or [])
-        caller_required_set, caller_excluded_set = _caller_constraint_sets(metadata.get("caller_tags"))
+        # A tag_routing_prefix-marked tag is stripped before matching -- everything
+        # downstream (_split_tags, deployment matching) works off the unprefixed
+        # value, exactly as if the caller had sent it unprefixed -- and its
+        # post-strip value is remembered in routing_confirmed as an explicit,
+        # caller-declared routing directive, exempt from the "maybe foreign to this
+        # group" heuristics that unprefixed tags still go through unchanged below.
+        rewritten_tags, routing_confirmed = _strip_routing_prefix(request_tags or [], routing_prefix)
+        required_tags, positive_tags, excluded_patterns = _split_tags(rewritten_tags)
+        caller_required_set, caller_excluded_set = _caller_constraint_sets(metadata.get("caller_tags"), routing_prefix)
 
         excluded_set: Final = frozenset(excluded_patterns)
         required_set: Final = frozenset(required_tags)
@@ -361,6 +424,7 @@ async def get_deployments_for_tag(
                 required_set,
                 caller_excluded_set,
                 caller_required_set,
+                routing_confirmed,
                 model,
                 request_tags,
             )
@@ -412,6 +476,7 @@ async def get_deployments_for_tag(
                     required_set,
                     caller_excluded_set,
                     caller_required_set,
+                    routing_confirmed,
                     model,
                     request_tags,
                 )
@@ -419,7 +484,7 @@ async def get_deployments_for_tag(
             if (
                 len(new_healthy_deployments) == 0
                 and positive_tags
-                and _tag_known_to_group(llm_router_instance, model, positive_tags)
+                and _tag_known_to_group(llm_router_instance, model, positive_tags, routing_confirmed)
             ):
                 return _resolve_or_fail_open(
                     (),
@@ -428,6 +493,7 @@ async def get_deployments_for_tag(
                     required_set,
                     caller_excluded_set,
                     caller_required_set,
+                    routing_confirmed,
                     model,
                     request_tags,
                 )
