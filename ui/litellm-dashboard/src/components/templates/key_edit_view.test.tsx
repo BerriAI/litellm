@@ -631,6 +631,40 @@ describe("KeyEditView", () => {
     });
   });
 
+  it("should keep mcp_toolsets when saving an edit that does not touch the MCP selector", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithToolset = {
+      ...MOCK_KEY_DATA,
+      object_permission: {
+        ...MOCK_KEY_DATA.object_permission!,
+        mcp_toolsets: ["ts-1"],
+      },
+    };
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithToolset}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken="test-token"
+        userID="test-user"
+        userRole="admin"
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Save Changes")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+    });
+    expect(onSubmitMock.mock.calls[0][0].mcp_servers_and_groups.toolsets).toEqual(["ts-1"]);
+  });
+
   it("should submit budget_limits: [] when the last budget window is deleted", async () => {
     const onSubmitMock = vi.fn().mockResolvedValue(undefined);
     const keyDataWithWindow = {
@@ -741,6 +775,65 @@ describe("KeyEditView", () => {
       const callArgs = onSubmitMock.mock.calls[0][0];
       expect(callArgs.budget_duration).toBe("30d");
     });
+  });
+
+  it("should send an explicit null budget_duration when a previously-set Reset Budget is cleared", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const resetBudgetItem = (await screen.findByText("Reset Budget")).closest(".ant-form-item") as HTMLElement;
+    const clearIcon = resetBudgetItem.querySelector(".ant-select-clear");
+    expect(clearIcon).not.toBeNull();
+    fireEvent.mouseDown(clearIcon as Element);
+
+    await waitFor(() => {
+      expect(within(resetBudgetItem).getByText("Never resets")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+    });
+    const callArgs = onSubmitMock.mock.calls[0][0];
+    expect(callArgs.budget_duration).toBeNull();
+    expect(JSON.stringify({ ...callArgs })).toContain('"budget_duration":null');
+  });
+
+  it("should send an explicit null budget_duration when a legacy word-form Reset Budget is cleared", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const legacyKeyData = { ...MOCK_KEY_DATA, budget_duration: "monthly" };
+    renderWithProviders(
+      <KeyEditView
+        keyData={legacyKeyData}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const resetBudgetItem = (await screen.findByText("Reset Budget")).closest(".ant-form-item") as HTMLElement;
+    fireEvent.mouseDown(resetBudgetItem.querySelector(".ant-select-clear") as Element);
+
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+    });
+    expect(onSubmitMock.mock.calls[0][0].budget_duration).toBeNull();
   });
 
   it("should omit budget_limits when existing windows are left untouched (issue #33246)", async () => {
@@ -973,7 +1066,7 @@ describe("KeyEditView", () => {
     });
 
     it("should disable the organization dropdown for non-admin users", async () => {
-      const { container } = renderWithProviders(
+      renderWithProviders(
         <KeyEditView
           keyData={MOCK_KEY_DATA}
           onCancel={() => {}}
@@ -995,7 +1088,7 @@ describe("KeyEditView", () => {
     });
 
     it("should not disable the organization dropdown for admin users", async () => {
-      const { container } = renderWithProviders(
+      renderWithProviders(
         <KeyEditView
           keyData={MOCK_KEY_DATA}
           onCancel={() => {}}

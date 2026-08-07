@@ -175,3 +175,75 @@ def test_get_openai_client_cache_key(client_type):
     )
     assert isinstance(key, str)
     assert "api_key=sk-test" in key
+
+
+def test_evicting_a_client_built_on_the_callers_session_leaves_that_session_open(monkeypatch):
+    """`litellm.aclient_session` belongs to the caller, who goes on using it.
+
+    `_get_async_http_client` hands that session straight back, so the SDK client
+    litellm builds around it is only a wrapper. The SDK's `close()` closes
+    whatever http client it was given, so treating the wrapper as litellm's to
+    close would close the caller's shared session out from under them.
+    """
+    import httpx
+
+    from litellm.caching.evicted_client_closer import EvictedClientCloser
+    from litellm.caching.llm_caching_handler import LLMClientCache
+    from litellm.llms.openai.openai import OpenAIChatCompletion
+
+    shared_session = httpx.AsyncClient()
+    closer = EvictedClientCloser(grace_seconds=0.0)
+    monkeypatch.setattr(litellm, "aclient_session", shared_session)
+    monkeypatch.setattr(
+        litellm,
+        "in_memory_llm_clients_cache",
+        LLMClientCache(evicted_client_closer=closer),
+    )
+
+    wrapper = OpenAIChatCompletion()._get_openai_client(
+        is_async=True,
+        api_key="sk-not-a-real-key",
+        api_base="https://api.openai.com/v1",
+        max_retries=2,
+    )
+
+    assert wrapper is not None
+    assert wrapper._client is shared_session, "the wrapper should be built on the caller's session"
+
+    closer.schedule(wrapper)
+    closer.reap()
+
+    assert closer.pending_count == 0, "a wrapper around the caller's session must never be queued"
+    assert shared_session.is_closed is False, "closed the session the caller configured"
+
+
+def test_a_client_litellm_built_its_own_http_client_for_is_still_closed(monkeypatch):
+    """The ownership check must not turn the reclaim off for the ordinary case."""
+    from litellm.caching.evicted_client_closer import EvictedClientCloser
+    from litellm.caching.llm_caching_handler import LLMClientCache
+    from litellm.llms.openai.openai import OpenAIChatCompletion
+
+    closer = EvictedClientCloser(grace_seconds=0.0)
+    monkeypatch.setattr(litellm, "aclient_session", None)
+    monkeypatch.setattr(litellm, "client_session", None)
+    monkeypatch.setattr(
+        litellm,
+        "in_memory_llm_clients_cache",
+        LLMClientCache(evicted_client_closer=closer),
+    )
+
+    wrapper = OpenAIChatCompletion()._get_openai_client(
+        is_async=False,
+        api_key="sk-not-a-real-key",
+        api_base="https://api.openai.com/v1",
+        max_retries=2,
+    )
+
+    assert wrapper is not None
+    closer.schedule(wrapper)
+
+    assert closer.pending_count == 1, "litellm built this client's http client, so it owns it"
+
+    closer.reap()
+
+    assert wrapper.is_closed() is True

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from e2e_config import require_env, unique_marker
+from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from endpoints_client import EndpointsClient, RerankResult
 from lifecycle import ResourceManager
@@ -56,12 +56,11 @@ class TestRerank:
     def test_bedrock_rerank_scores_top_n(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
-        require_env("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION")
         model = f"e2e-bedrock-rerank-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
             LiteLLMParamsBody(
-                model="bedrock/amazon.rerank-v1:0",
+                model="bedrock/arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0",
                 aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
                 aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
                 aws_region_name="os.environ/AWS_REGION",
