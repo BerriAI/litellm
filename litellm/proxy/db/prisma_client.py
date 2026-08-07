@@ -241,6 +241,14 @@ class PrismaWrapper:
         self._engine_generation: int = 0
         self.on_engine_replaced: Callable[[], None] | None = None
 
+    @property
+    def engine_generation(self) -> int:
+        return self._engine_generation
+
+    @property
+    def recreate_in_flight(self) -> bool:
+        return self._reconnection_lock.locked()
+
     @staticmethod
     def _read_engine(prisma_client: _PrismaClient) -> _PrismaEngine:
         return prisma_client._engine
