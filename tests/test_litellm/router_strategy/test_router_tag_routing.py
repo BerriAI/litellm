@@ -2288,3 +2288,140 @@ async def test_required_and_only_finds_compliant_non_default_deployment_over_non
             mock_response="hi",
         )
         assert response._hidden_params["model_id"] == "anthropic-us-east"
+
+
+# --- plain positive-tag exhaustion must not be masked by a universally-applied
+# "default" tag; allow_fail_open must still be consulted (or hard-fail without it) ---
+
+
+def _quality_high_cost_low_router():
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["default", "quality:high"],
+                },
+                "model_info": {"id": "quality-high-1"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["default", "quality:high"],
+                },
+                "model_info": {"id": "quality-high-2"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["default", "cost:low"],
+                },
+                "model_info": {"id": "cost-low-1"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["default", "cost:low"],
+                },
+                "model_info": {"id": "cost-low-2"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+
+@pytest.mark.asyncio()
+async def test_plain_tag_exhaustion_with_universal_default_tag_raises_by_default():
+    # Every deployment in the group is tagged "default" (a legitimate cross-cutting
+    # safety-net pattern), so default_deployments is never empty on its own. With
+    # the quality:high deployments unhealthy, a request asking for quality:high
+    # must still hard-fail, not silently get served by a cost:low deployment just
+    # because it happens to also carry "default".
+    from unittest.mock import AsyncMock, patch
+
+    router = _quality_high_cost_low_router()
+
+    with patch(
+        "litellm.router._async_get_cooldown_deployments",
+        new=AsyncMock(return_value=["quality-high-1", "quality-high-2"]),
+    ):
+        with pytest.raises(Exception) as exc_info:
+            await router.acompletion(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "hi"}],
+                metadata={"tags": ["quality:high"]},
+                mock_response="hi",
+            )
+
+    from litellm.types.router import RouterErrors
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
+
+
+@pytest.mark.asyncio()
+async def test_plain_tag_exhaustion_with_universal_default_tag_falls_open_when_allowed():
+    router = _quality_high_cost_low_router()
+    for deployment in router.model_list:
+        deployment["model_info"]["allow_fail_open"] = True
+
+    from unittest.mock import AsyncMock, patch
+
+    with patch(
+        "litellm.router._async_get_cooldown_deployments",
+        new=AsyncMock(return_value=["quality-high-1", "quality-high-2"]),
+    ):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["quality:high"]},
+            mock_response="hi",
+        )
+
+    assert response._hidden_params["model_id"] in ("cost-low-1", "cost-low-2")
+
+
+@pytest.mark.asyncio()
+async def test_plain_tag_unknown_to_group_still_falls_back_silently_unconditionally():
+    # A tag that no deployment in this group has ever carried (foreign to this
+    # group entirely, e.g. an attribution tag meant for an unrelated mechanism
+    # sharing the same request-tags list) must keep falling back to the
+    # "default"-tagged pool unconditionally, exactly like today, regardless of
+    # allow_fail_open. Only a tag that IS part of this group's real vocabulary
+    # triggers the new hard-fail/fail-open gate.
+    router = _quality_high_cost_low_router()
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["llm-preference-include:some-unrelated-mechanism"]},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] in (
+            "quality-high-1",
+            "quality-high-2",
+            "cost-low-1",
+            "cost-low-2",
+        )
+
+
+def test_tag_known_to_group_true_for_real_tag():
+    from litellm.router_strategy.tag_based_routing import _tag_known_to_group
+
+    router = _quality_high_cost_low_router()
+    assert _tag_known_to_group(router, "gpt-4", ["quality:high"]) is True
+
+
+def test_tag_known_to_group_false_for_foreign_tag():
+    from litellm.router_strategy.tag_based_routing import _tag_known_to_group
+
+    router = _quality_high_cost_low_router()
+    assert _tag_known_to_group(router, "gpt-4", ["llm-preference-include:unrelated"]) is False
