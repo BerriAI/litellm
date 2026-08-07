@@ -223,7 +223,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
 
         return RerankResponse(
             id=response_json.get("id") or str(uuid.uuid4()),
-            results=transformed_results,  # type: ignore
+            results=transformed_results,
             meta=meta,
         )
 

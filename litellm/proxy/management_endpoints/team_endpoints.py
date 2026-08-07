@@ -1311,9 +1311,7 @@ async def new_team(
                 created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
                 updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
             )
-            model_dict: Final = await _model_db(prisma_client).create(
-                {**litellm_modeltable.json(exclude_none=True)}  # type: ignore
-            )  # type: ignore
+            model_dict: Final = await _model_db(prisma_client).create({**litellm_modeltable.json(exclude_none=True)})
 
             _model_id = model_dict.id
 
@@ -1387,7 +1385,7 @@ async def new_team(
                 w = window if isinstance(window, dict) else window.model_dump()
                 w["reset_at"] = get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat()
                 initialized_windows.append(w)
-            complete_team_data.budget_limits = initialized_windows  # type: ignore[assignment]
+            complete_team_data.budget_limits = initialized_windows
 
         ## Add Team Member Budget Table
         members_with_roles: list[Member] = []
@@ -1411,7 +1409,7 @@ async def new_team(
 
         team_row: Final[LiteLLM_TeamTable] = await TeamRepository(prisma_client).table.create(
             data=complete_team_data_dict,
-            include={"litellm_model_table": True},  # type: ignore
+            include={"litellm_model_table": True},
         )
 
         ## ADD TEAM ID TO USER TABLE ##
@@ -1529,17 +1527,15 @@ async def _update_model_table(
             updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
         )
         if model_id is None:
-            model_dict = await _model_db(prisma_client).create(
-                data={**litellm_modeltable.json(exclude_none=True)}  # type: ignore
-            )
+            model_dict = await _model_db(prisma_client).create(data={**litellm_modeltable.json(exclude_none=True)})
         else:
             model_dict = await _model_db(prisma_client).upsert(
                 where={"id": model_id},
                 data={
-                    "update": {**litellm_modeltable.json(exclude_none=True)},  # type: ignore
-                    "create": {**litellm_modeltable.json(exclude_none=True)},  # type: ignore
+                    "update": {**litellm_modeltable.json(exclude_none=True)},
+                    "create": {**litellm_modeltable.json(exclude_none=True)},
                 },
-            )  # type: ignore
+            )
 
         _model_id = model_dict.id
 
@@ -2091,7 +2087,7 @@ async def update_team(
             include={
                 "litellm_model_table": True,
                 "object_permission": True,
-            },  # type: ignore
+            },
         )
 
         if team_row is None or team_row.team_id is None:
@@ -3089,7 +3085,7 @@ async def team_member_delete(
         where={
             "team_id": data.team_id,
         },
-        data={"members_with_roles": json.dumps(_db_new_team_members)},  # type: ignore
+        data={"members_with_roles": json.dumps(_db_new_team_members)},
     )
 
     _emit_team_members_metric(existing_team_row)
@@ -3101,9 +3097,7 @@ async def team_member_delete(
         key_val["user_id"] = data.user_id
     elif data.user_email is not None:
         key_val["user_email"] = data.user_email
-    existing_user_rows: Final = await UserRepository(prisma_client).table.find_many(
-        where=key_val  # type: ignore
-    )
+    existing_user_rows: Final = await UserRepository(prisma_client).table.find_many(where=key_val)
 
     if existing_user_rows is not None and (isinstance(existing_user_rows, list) and len(existing_user_rows) > 0):
         for existing_user in existing_user_rows:
@@ -3347,7 +3341,7 @@ async def team_member_update(
         _db_team_members: Final[list[dict]] = [m.model_dump() for m in team_members]
         await _team_db(prisma_client).update(
             where={"team_id": data.team_id},
-            data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
+            data={"members_with_roles": json.dumps(_db_team_members)},
         )
 
     return TeamMemberUpdateResponse(
@@ -3622,7 +3616,7 @@ async def delete_team(
     if litellm.store_audit_logs is True:
         # make an audit log for each team deleted
         for team_id in data.team_ids:
-            team_row: LiteLLM_TeamTable | None = await prisma_client.get_data(  # type: ignore
+            team_row: LiteLLM_TeamTable | None = await prisma_client.get_data(
                 team_id=team_id, table_name="team", query_type="find_unique"
             )
 
@@ -4160,7 +4154,7 @@ async def block_team(
 
     record: Final = await _team_db(prisma_client).update(
         where={"team_id": data.team_id},
-        data={"blocked": True},  # type: ignore
+        data={"blocked": True},
     )
 
     return record
@@ -4209,7 +4203,7 @@ async def unblock_team(
 
     record: Final = await _team_db(prisma_client).update(
         where={"team_id": data.team_id},
-        data={"blocked": False},  # type: ignore
+        data={"blocked": False},
     )
 
     return record
@@ -4357,7 +4351,7 @@ async def _build_team_list_where_conditions(
             user_object_correct_type: Final = await get_user_object(
                 user_id=user_id,
                 prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,  # type: ignore[arg-type]
+                user_api_key_cache=user_api_key_cache,
                 user_id_upsert=False,
                 proxy_logging_obj=proxy_logging_obj,
             )
@@ -5093,7 +5087,7 @@ async def team_model_add(
     updated_team: Final = await _team_db(prisma_client).update(
         where={"team_id": data.team_id},
         data={"updated_at": datetime.now(timezone.utc)},
-        include={"object_permission": True},  # type: ignore
+        include={"object_permission": True},
     )
 
     await _refresh_cached_team(
@@ -5175,7 +5169,7 @@ async def team_model_delete(
     updated_team: Final = await TeamRepository(prisma_client).table.update(
         where={"team_id": data.team_id},
         data={"models": updated_models},
-        include={"object_permission": True},  # type: ignore
+        include={"object_permission": True},
     )
 
     await _refresh_cached_team(

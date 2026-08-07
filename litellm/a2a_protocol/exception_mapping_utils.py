@@ -29,9 +29,9 @@ try:
     A2A_SDK_AVAILABLE = True
 except ImportError:
     A2A_SDK_AVAILABLE = False
-    Client = None  # type: ignore[misc, assignment]
-    ClientConfig = None  # type: ignore[misc, assignment]
-    create_client = None  # type: ignore[misc, assignment]
+    Client = None
+    ClientConfig = None
+    create_client = None
 
 
 class A2AExceptionCheckers:
@@ -202,9 +202,9 @@ async def handle_a2a_localhost_retry(
     # Fix the agent card URL
     set_agent_card_url(agent_card, error.base_url)
 
-    # Reuse the httpx client LiteLLM attached at creation. It carries this agent's
-    # trace-id and auth headers, so a fresh client would drop them. Only clients built
-    # by ``create_a2a_client`` have it; an externally-supplied client cannot be retried.
+    # Reuse the httpx client and call context LiteLLM attached at creation, since the
+    # context carries this agent's trace-id/auth headers. Only clients built by
+    # ``create_a2a_client`` have them; an externally-supplied client cannot be retried.
     httpx_client: Final = getattr(a2a_client, "_litellm_httpx_client", None)
     if httpx_client is None:
         raise RuntimeError(
@@ -219,6 +219,9 @@ async def handle_a2a_localhost_retry(
             streaming=is_streaming,
         ),
     )
-    new_client._litellm_httpx_client = httpx_client  # type: ignore[attr-defined]
-    new_client._litellm_agent_card = agent_card  # type: ignore[attr-defined]
+    new_client._litellm_httpx_client = httpx_client
+    new_client._litellm_call_context = getattr(  # pyright: ignore[reportAttributeAccessIssue]  # LiteLLM-owned stash
+        a2a_client, "_litellm_call_context", None
+    )
+    new_client._litellm_agent_card = agent_card
     return new_client

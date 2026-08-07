@@ -22,6 +22,9 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_scan_only_tool_results_for_guardrail,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -330,7 +333,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             payload["ai_profile"] = ai_profile
 
         if is_response and tool_event is None:
-            payload["metadata"]["is_response"] = True  # type: ignore[call-overload, index]
+            payload["metadata"]["is_response"] = True
 
         headers: Final = {
             "Content-Type": "application/json",
@@ -343,7 +346,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
             # Bypass wrapper to access follow_redirects parameter
-            response: Final = await async_client.client.post(  # type: ignore[attr-defined]
+            response: Final = await async_client.client.post(
                 f"{self.api_base}/v1/scan/sync/request",
                 headers=headers,
                 json=payload,
@@ -606,9 +609,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     if isinstance(content, str):
                         choice.message.content = masked_text
                     elif isinstance(content, list):
-                        choice.message.content = self._mask_content_list(  # type: ignore
-                            content, masked_text
-                        )
+                        choice.message.content = self._mask_content_list(content, masked_text)
 
                 # Mask tool call arguments
                 if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
@@ -1366,7 +1367,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             # returns a proper JSON error response with the correct status code.
             # (Raising from a generator hits create_response's generic except → 500.)
             detail: Final = e.detail if isinstance(e.detail, dict) else {"message": str(e.detail)}
-            error_obj: Final[dict[str, Any]] = dict(detail.get("error", detail))  # type: ignore[arg-type]
+            error_obj: Final[dict[str, Any]] = dict(detail.get("error", detail))
             error_obj["code"] = e.status_code
             yield f"data: {json.dumps({'error': error_obj})}\n\n"
         except Exception as e:
@@ -1563,6 +1564,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         return scannable
 
+    def supports_scan_only_tool_results(self) -> bool:
+        return False
+
     @staticmethod
     def _get_scannable_text_indices(
         texts: list[str],
@@ -1718,6 +1722,15 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 # - latest-user extraction returned None (no user / count mismatch)
                 if scannable_indices is None:
                     scannable_indices = self._get_scannable_text_indices(texts, structured_messages)
+                if (
+                    scannable_indices is not None
+                    and not scannable_indices
+                    and effective_scan_only_tool_results_for_guardrail(self)
+                ):
+                    verbose_proxy_logger.warning(
+                        "PANW Prisma AIRS scans only user, system, and developer messages, "
+                        "so scan_only_tool_results leaves nothing to scan for this request"
+                    )
 
         for i, text in enumerate(texts):
             if not text or not text.strip():

@@ -209,9 +209,9 @@ describe("UsageTab", () => {
   it("says what the line means and over what range", async () => {
     const { getByText, getByRole } = renderWith(twoDays());
 
-    expect(getByText("Running total saved · Jul 1 – Jul 14")).toBeInTheDocument();
+    expect(getByText("Running total saved · Jul 1 – Jul 14 (UTC)")).toBeInTheDocument();
     await userEvent.click(getByRole("tab", { name: "Per day" }));
-    expect(getByText("Saved per day · Jul 1 – Jul 14")).toBeInTheDocument();
+    expect(getByText("Saved per day · Jul 1 – Jul 14 (UTC)")).toBeInTheDocument();
   });
 
   it("builds the per-driver donut from the range totals, not the running total", () => {

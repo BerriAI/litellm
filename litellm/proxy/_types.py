@@ -3,7 +3,7 @@ import json
 import os
 from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Union
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from pydantic import (
@@ -67,7 +67,7 @@ from .types_utils.utils import get_instance_fn, validate_custom_validate_return_
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
@@ -622,6 +622,8 @@ class LiteLLMRoutes(enum.Enum):
             "/team/permissions_update",
             "/team/permissions_bulk_update",
             "/team/daily/activity",
+            # gateway request counts (SGR); deployment-wide, admin-only
+            "/gateway/daily/activity",
             # model
             "/model/new",
             "/model/update",
@@ -715,6 +717,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/tags",
         "/global/predict/spend/logs",
         "/global/activity",
+        "/gateway/daily/activity",
         "/health/services",
     ] + info_routes
 
@@ -778,6 +781,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/update",
         "/model/delete",
         "/user/daily/activity",
+        "/user/daily/activity/aggregated",
         "/user/available_roles",  # read-only role metadata; any authenticated user may read
         "/user/list",  # org admins checked in endpoint; non-admins get 403
         "/model/{model_id}/update",
@@ -1144,7 +1148,7 @@ class GenerateKeyRequest(KeyRequestBase):
 
 
 class GenerateKeyResponse(KeyRequestBase):
-    key: str  # type: ignore
+    key: str
     key_name: str | None = None
     key_type: str | None = None
     expires: datetime | None = None
@@ -2429,6 +2433,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
     )
+    maximum_autorouter_session_retention_period: str | None = Field(
+        None,
+        description="Maximum retention period for auto-router benchmark session rollup rows (e.g., '365d'). Rows whose last turn is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rollup rows are never deleted.",
+    )
     use_spend_logs_partitioning: bool | None = Field(
         None,
         description="If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.",
@@ -2869,7 +2877,7 @@ class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
 
 
 class NewOrganizationResponse(LiteLLM_OrganizationTable):
-    organization_id: str  # type: ignore
+    organization_id: str
     created_at: datetime
     updated_at: datetime
 
@@ -4010,7 +4018,7 @@ class JWTKeyItem(TypedDict, total=False):
     kid: str
 
 
-JWKKeyValue = Union[list[JWTKeyItem], JWTKeyItem]
+JWKKeyValue = list[JWTKeyItem] | JWTKeyItem
 
 
 class JWKUrlResponse(TypedDict, total=False):
@@ -4053,15 +4061,15 @@ class UserManagementEndpointParamDocStringEnums(str, enum.Enum):
     duration_doc_str = """Optional[str] - Duration for the key auto-created on `/user/new`. Default is None."""
 
 
-PassThroughEndpointLoggingResultValues = Union[
-    ModelResponse,
-    TextCompletionResponse,
-    ImageResponse,
-    EmbeddingResponse,
-    VideoObject,
-    StandardPassThroughResponseObject,
-    ResponsesAPIResponse,
-]
+PassThroughEndpointLoggingResultValues = (
+    ModelResponse
+    | TextCompletionResponse
+    | ImageResponse
+    | EmbeddingResponse
+    | VideoObject
+    | StandardPassThroughResponseObject
+    | ResponsesAPIResponse
+)
 
 
 class PassThroughEndpointLoggingTypedDict(TypedDict):
@@ -4162,7 +4170,7 @@ class ClientSideFallbackModel(TypedDict, total=False):
     messages: list[AllMessageValues]
 
 
-ALL_FALLBACK_MODEL_VALUES = Union[str, ClientSideFallbackModel]
+ALL_FALLBACK_MODEL_VALUES = str | ClientSideFallbackModel
 
 
 RBAC_ROLES = Literal[

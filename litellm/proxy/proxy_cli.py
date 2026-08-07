@@ -175,13 +175,13 @@ def append_query_params(url: str | None, params: dict) -> str:
     parsed_query.update(params)
     encoded_query: Final = urlparse.urlencode(parsed_query, doseq=True)
     modified_url: Final = urlparse.urlunparse(parsed_url._replace(query=encoded_query))
-    return modified_url  # type: ignore
+    return modified_url
 
 
 class ProxyInitializationHelpers:
     @staticmethod
     def _echo_litellm_version():
-        pkg_version: Final = importlib.metadata.version("litellm")  # type: ignore
+        pkg_version: Final = importlib.metadata.version("litellm")
         click.echo(f"\nLiteLLM: Current Version = {pkg_version}\n")
 
     @staticmethod
@@ -360,14 +360,14 @@ class ProxyInitializationHelpers:
             original_iter: Final = StatReload.iter_py_files
             patched_paths = set()
 
-            def _iter_with_extra(self):  # type: ignore[no-untyped-def]
+            def _iter_with_extra(self):
                 yield from original_iter(self)
                 for path in StatReload._litellm_patched_config_paths:
                     if path.exists():
                         yield path
 
-            StatReload.iter_py_files = _iter_with_extra  # type: ignore[assignment]
-            StatReload._litellm_patched_config_paths = patched_paths  # type: ignore[attr-defined]
+            StatReload.iter_py_files = _iter_with_extra
+            StatReload._litellm_patched_config_paths = patched_paths
 
         patched_paths.update(resolved)
         return True
@@ -421,7 +421,7 @@ class ProxyInitializationHelpers:
                 config.ciphers = ciphers
 
         # hypercorn serve raises a type warning when passing a fast api app - even though fast API is a valid type
-        asyncio.run(serve(app, config))  # type: ignore
+        asyncio.run(serve(app, config))
 
     @staticmethod
     def _init_granian_server(
@@ -1338,7 +1338,7 @@ def run_server(
         # Auto-create PROMETHEUS_MULTIPROC_DIR for multi-worker setups
         ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
             num_workers=num_workers,
-            litellm_settings=litellm_settings if config else None,  # type: ignore[possibly-unbound]
+            litellm_settings=litellm_settings if config else None,
         )
 
         # Skip server startup if requested (after all setup is done)

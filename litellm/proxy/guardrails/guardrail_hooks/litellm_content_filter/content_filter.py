@@ -24,6 +24,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import (
     CallTypes,
+    Function,
     GenericGuardrailAPIInputs,
     GuardrailStatus,
     GuardrailTracingDetail,
@@ -1681,7 +1682,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             end_time=datetime.now().timestamp(),
             duration=(datetime.now() - start_time).total_seconds(),
             masked_entity_count=masked_entity_count,
-            tracing_detail=GuardrailTracingDetail(**tracing_kw),  # type: ignore[typeddict-item]
+            tracing_detail=GuardrailTracingDetail(**tracing_kw),
         )
 
     @staticmethod
@@ -1691,35 +1692,46 @@ class ContentFilterGuardrail(CustomGuardrail):
             return raw_name
         return None
 
-    def _assert_mcp_argument_label_clean(self, text: str, detections: list[ContentFilterDetection]) -> None:
+    def _assert_argument_label_clean(
+        self, text: str, detections: list[ContentFilterDetection], context_label: str
+    ) -> None:
         if self._filter_single_text(text, detections=detections) != text:
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": "Content blocked: MCP tool call argument matched a masking rule on a non-rewritable field"
+                    "error": (
+                        f"Content blocked: {context_label} argument matched a masking rule on a non-rewritable field"
+                    )
                 },
             )
 
-    def _filter_mcp_argument_value(
-        self, value: object, detections: list[ContentFilterDetection], depth: int = 0
+    def _filter_argument_value(
+        self,
+        value: object,
+        detections: list[ContentFilterDetection],
+        context_label: str,
+        depth: int = 0,
     ) -> object:
         if depth > DEFAULT_MAX_RECURSE_DEPTH:
             raise HTTPException(
                 status_code=400,
-                detail={"error": "Content blocked: MCP tool call arguments exceed the maximum nesting depth"},
+                detail={"error": f"Content blocked: {context_label} arguments exceed the maximum nesting depth"},
             )
         if isinstance(value, str):
             return self._filter_single_text(value, detections=detections)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
-            self._assert_mcp_argument_label_clean(str(value), detections)
+            self._assert_argument_label_clean(str(value), detections, context_label)
             return value
         if isinstance(value, dict):
             for key in value:
                 if isinstance(key, str):
-                    self._assert_mcp_argument_label_clean(key, detections)
-            return {key: self._filter_mcp_argument_value(item, detections, depth + 1) for key, item in value.items()}
+                    self._assert_argument_label_clean(key, detections, context_label)
+            return {
+                key: self._filter_argument_value(item, detections, context_label, depth + 1)
+                for key, item in value.items()
+            }
         if isinstance(value, list):
-            return [self._filter_mcp_argument_value(item, detections, depth + 1) for item in value]
+            return [self._filter_argument_value(item, detections, context_label, depth + 1) for item in value]
         return value
 
     def _scan_mcp_tool_call_arguments(
@@ -1738,11 +1750,58 @@ class ContentFilterGuardrail(CustomGuardrail):
         raw_arguments: Final[object] = request_data.get("mcp_arguments")
         if not isinstance(raw_arguments, dict) or not raw_arguments:
             return
-        filtered_arguments: Final = self._filter_mcp_argument_value(raw_arguments, detections)
+        filtered_arguments: Final = self._filter_argument_value(raw_arguments, detections, "MCP tool call")
         if filtered_arguments == raw_arguments:
             return
         request_data["mcp_arguments"] = filtered_arguments
         request_data["modified_arguments"] = filtered_arguments
+
+    @staticmethod
+    def _get_tool_call_arguments(tool_call: object) -> str | None:
+        function: Final[object] = (
+            tool_call.get("function") if isinstance(tool_call, dict) else getattr(tool_call, "function", None)
+        )
+        arguments: Final[object] = (
+            function.get("arguments") if isinstance(function, dict) else getattr(function, "arguments", None)
+        )
+        return arguments if isinstance(arguments, str) and arguments.strip() else None
+
+    @staticmethod
+    def _set_tool_call_arguments(tool_call: object, arguments: str) -> None:
+        function: Final[object] = (
+            tool_call.get("function") if isinstance(tool_call, dict) else getattr(tool_call, "function", None)
+        )
+        if isinstance(function, dict):
+            function["arguments"] = arguments
+        elif isinstance(function, Function):
+            function.arguments = arguments
+
+    def _filter_tool_call_arguments(
+        self,
+        arguments: str,
+        detections: list[ContentFilterDetection],  # mutable-ok: _filter_single_text appends into a caller-owned list
+    ) -> str:
+        try:
+            parsed: Final[object] = json.loads(arguments)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return self._filter_single_text(arguments, detections=detections)
+        if not isinstance(parsed, (dict, list)):
+            return self._filter_single_text(arguments, detections=detections)
+        filtered: Final = self._filter_argument_value(parsed, detections, "tool call")
+        return arguments if filtered == parsed else json.dumps(filtered)
+
+    def _scan_tool_call_arguments(
+        self,
+        inputs: "GenericGuardrailAPIInputs",
+        detections: list[ContentFilterDetection],  # mutable-ok: _filter_single_text appends into a caller-owned list
+    ) -> None:
+        for tool_call in inputs.get("tool_calls") or ():
+            arguments = self._get_tool_call_arguments(tool_call)
+            if arguments is None:
+                continue
+            filtered_arguments = self._filter_tool_call_arguments(arguments, detections)
+            if filtered_arguments != arguments:
+                self._set_tool_call_arguments(tool_call, filtered_arguments)
 
     async def apply_guardrail(
         self,
@@ -1797,6 +1856,8 @@ class ContentFilterGuardrail(CustomGuardrail):
 
             verbose_proxy_logger.debug("ContentFilterGuardrail: Guardrail applied successfully")
             inputs["texts"] = processed_texts
+
+            self._scan_tool_call_arguments(inputs=inputs, detections=detections)
 
             if input_type == "request":
                 self._scan_mcp_tool_call_arguments(
@@ -1970,4 +2031,5 @@ class ContentFilterGuardrail(CustomGuardrail):
             GuardrailEventHooks.during_call,
             GuardrailEventHooks.realtime_input_transcription,
             GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.post_mcp_call,
         ]

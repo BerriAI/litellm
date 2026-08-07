@@ -831,7 +831,7 @@ async def project_info(
             )
 
         # Check if user has access to this project (admin or team member)
-        is_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        is_admin = user_api_key_has_admin_view(user_api_key_dict)
         is_team_member = False
 
         if project.team_id and user_api_key_dict.user_id:
@@ -886,7 +886,7 @@ async def list_projects(
             )
 
         # If proxy admin, get all projects
-        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        if user_api_key_has_admin_view(user_api_key_dict):
             projects: Sequence[
                 prisma_models.LiteLLM_ProjectTable
             ] = await prisma_client.db.litellm_projecttable.find_many(

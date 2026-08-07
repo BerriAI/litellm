@@ -198,9 +198,7 @@ class AnthropicTextConfig(BaseConfig):
             )
         else:
             if len(completion_response["completion"]) > 0:
-                model_response.choices[0].message.content = completion_response[  # type: ignore
-                    "completion"
-                ]
+                model_response.choices[0].message.content = completion_response["completion"]
             model_response.choices[0].finish_reason = completion_response["stop_reason"]
 
         ## CALCULATING USAGE

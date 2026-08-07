@@ -170,7 +170,7 @@ class SkillsInjectionHook(CustomLogger):
             skill_files = self.prompt_handler.extract_all_files(skill)
             if skill_files:
                 all_skill_files[skill.skill_id] = skill_files
-                for path in skill_files.keys():
+                for path in skill_files:
                     if path.endswith(".py"):
                         all_module_paths.append(path)
 
@@ -238,7 +238,7 @@ class SkillsInjectionHook(CustomLogger):
             if skill_files:
                 all_skill_files[skill.skill_id] = skill_files
                 # Collect Python module paths
-                for path in skill_files.keys():
+                for path in skill_files:
                     if path.endswith(".py"):
                         all_module_paths.append(path)
 
@@ -422,8 +422,8 @@ class SkillsInjectionHook(CustomLogger):
                     )
 
         # OpenAI format: response has choices[0].message.tool_calls
-        if not tool_calls and hasattr(response, "choices") and response.choices:  # type: ignore[union-attr]
-            msg: Final = response.choices[0].message  # type: ignore[union-attr]
+        if not tool_calls and hasattr(response, "choices") and response.choices:
+            msg: Final = response.choices[0].message
             if hasattr(msg, "tool_calls") and msg.tool_calls:
                 for tc in msg.tool_calls:
                     tool_calls.append(
@@ -709,8 +709,8 @@ print('No executable skill module found')
 
         for iteration in range(self.max_iterations):
             # OpenAI format response has choices[0].message
-            assistant_message = current_response.choices[0].message  # type: ignore[union-attr]
-            stop_reason = current_response.choices[0].finish_reason  # type: ignore[union-attr]
+            assistant_message = current_response.choices[0].message
+            stop_reason = current_response.choices[0].finish_reason
 
             # Build assistant message for conversation history
             assistant_msg_dict: dict[str, Any] = {

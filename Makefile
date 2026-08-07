@@ -75,7 +75,7 @@ install-dev:
 bootstrap:
 	$(UV) sync --inexact --frozen --extra proxy --group proxy-dev --group e2e-dev
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
-	cd ui/litellm-dashboard && npm install --no-audit --no-fund
+	cd ui/litellm-dashboard && ../../scripts/with_dashboard_node.sh npm install --no-audit --no-fund
 	@main_root=$$(git worktree list --porcelain | head -1 | sed 's/^worktree //'); \
 	if [ "$$main_root" != "$$(git rev-parse --show-toplevel)" ] && [ -f "$$main_root/.env" ] && [ ! -f .env ]; then \
 		cp "$$main_root/.env" .env && echo "bootstrap: copied .env from $$main_root"; \
@@ -99,7 +99,10 @@ install-test-deps: install-proxy-dev
 	$(UV_RUN) prisma generate --schema litellm/proxy/schema.prisma
 
 install-helm-unittest:
-	helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.4.4 || echo "ignore error if plugin exists"
+	@helm plugin list | grep -qE '^unittest[[:space:]]+0\.8\.2([[:space:]]|$$)' || { \
+		helm plugin uninstall unittest >/dev/null 2>&1 || true; \
+		helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.8.2; \
+	}
 
 # Install git hooks that enforce Conventional Commits and Conventional Branches.
 # Opt-in: not chained into install-dev.
@@ -121,10 +124,10 @@ lint-fetch-base:
 	git fetch origin litellm_internal_staging
 
 # Mirror test-linting.yml's lint job environment: the proxy-dev group plus a generated
-# Prisma client, so basedpyright resolves the same modules CI does (without the generated
-# client the DB wrappers typed against it degrade to Unknown, drifting the budget from
-# CI's). --inexact tops up the venv instead of pruning the proxy extras gen:api and the
-# running proxy need.
+# Prisma client, so `basedpyright tests/e2e` resolves the same modules CI does. The
+# budget gate itself no longer measures here (scripts/type_check_gate.py provisions its
+# own .venv-typecheck). --inexact tops up the venv instead of pruning the proxy extras
+# gen:api and the running proxy need.
 lint-install:
 	$(UV) sync --inexact --frozen --group proxy-dev --group e2e-dev
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
