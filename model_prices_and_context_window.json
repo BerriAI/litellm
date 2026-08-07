@@ -42864,17 +42864,6 @@
         "supports_reasoning": true,
         "supports_vision": true
     },
-    "scaleway/google/gemma-3-27b-it": {
-        "input_cost_per_token": 2.5e-07,
-        "litellm_provider": "scaleway",
-        "max_input_tokens": 40000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
-        "mode": "chat",
-        "output_cost_per_token": 5e-07,
-        "supports_function_calling": true,
-        "supports_vision": true
-    },
     "scaleway/hcompany/holo2-30b-a3b": {
         "input_cost_per_token": 3e-07,
         "litellm_provider": "scaleway",
@@ -42898,27 +42887,6 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_tool_choice": true
-    },
-    "scaleway/mistralai/devstral-2-123b-instruct-2512": {
-        "input_cost_per_token": 4e-07,
-        "litellm_provider": "scaleway",
-        "max_input_tokens": 200000,
-        "max_output_tokens": 16384,
-        "max_tokens": 16384,
-        "mode": "chat",
-        "output_cost_per_token": 2e-06,
-        "supports_function_calling": true
-    },
-    "scaleway/mistralai/voxtral-small-24b-2507": {
-        "input_cost_per_audio_token": 1.5e-07,
-        "input_cost_per_token": 1.5e-07,
-        "litellm_provider": "scaleway",
-        "max_input_tokens": 32000,
-        "max_output_tokens": 16384,
-        "max_tokens": 16384,
-        "mode": "chat",
-        "output_cost_per_token": 3.5e-07,
-        "supports_audio_input": true
     },
     "scaleway/mistralai/mistral-small-3.2-24b-instruct-2506": {
         "input_cost_per_token": 1.5e-07,
