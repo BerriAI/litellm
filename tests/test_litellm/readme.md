@@ -1,6 +1,6 @@
 # Testing for `litellm/` 
 
-This directory 1:1 maps the the `litellm/` directory, and can only contain mocked tests. 
+This directory 1:1 maps to the `litellm/` directory, and can only contain mocked tests. 
 
 The point of this is to:
 1. Increase test coverage of `litellm/`
