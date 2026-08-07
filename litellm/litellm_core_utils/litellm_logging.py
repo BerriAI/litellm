@@ -4722,12 +4722,16 @@ class StandardLoggingPayloadSetup:
         if not usage:
             # RerankResponse has no top-level `usage` field - token usage lives
             # under `meta.billed_units`/`meta.tokens` instead (Cohere-style API).
-            meta = response_obj.get("meta")
+            meta: Final = response_obj.get("meta")
             if isinstance(meta, dict) and ("billed_units" in meta or "tokens" in meta):
-                billed_units = meta.get("billed_units") or {}
-                tokens = meta.get("tokens") or {}
-                total_tokens = billed_units.get("total_tokens", 0) or 0
-                prompt_tokens = tokens.get("input_tokens", total_tokens) or total_tokens
+                billed_units: Final = meta.get("billed_units")
+                tokens: Final = meta.get("tokens")
+                total_tokens: Final = (
+                    billed_units.get("total_tokens", 0) if isinstance(billed_units, dict) else 0
+                ) or 0
+                prompt_tokens: Final = (
+                    tokens.get("input_tokens", total_tokens) if isinstance(tokens, dict) else total_tokens
+                ) or total_tokens
                 return Usage(
                     prompt_tokens=prompt_tokens,
                     completion_tokens=0,
@@ -4768,13 +4772,17 @@ class StandardLoggingPayloadSetup:
         if not _raw:
             # RerankResponse has no top-level `usage` field - token usage lives
             # under `meta.billed_units`/`meta.tokens` instead (Cohere-style API).
-            meta = response_obj.get("meta")
+            meta: Final = response_obj.get("meta")
             if isinstance(meta, dict) and ("billed_units" in meta or "tokens" in meta):
-                billed_units = meta.get("billed_units") or {}
-                tokens = meta.get("tokens") or {}
-                total_tokens = billed_units.get("total_tokens", 0) or 0
-                prompt_tokens = tokens.get("input_tokens", total_tokens) or total_tokens
-                return {
+                billed_units: Final = meta.get("billed_units")
+                tokens: Final = meta.get("tokens")
+                total_tokens: Final = (
+                    billed_units.get("total_tokens", 0) if isinstance(billed_units, dict) else 0
+                ) or 0
+                prompt_tokens: Final = (
+                    tokens.get("input_tokens", total_tokens) if isinstance(tokens, dict) else total_tokens
+                ) or total_tokens
+                return {  # mutable-ok: hot-path return type is a plain dict by design, matching `_empty` above
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": 0,
                     "total_tokens": total_tokens,

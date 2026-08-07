@@ -175,10 +175,17 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         # Extract usage information - some servers (vLLM/Cohere-style) return a
         # top-level `meta` object; others (OpenAI/TEI-style) return `usage`.
         # Check both so either shape is picked up.
-        raw_meta: Final = response.get("meta") or {}
-        usage_data: Final = response.get("usage", {})
-        total_tokens: Final = raw_meta.get("billed_units", {}).get("total_tokens") or usage_data.get("total_tokens", 0)
-        input_tokens: Final = raw_meta.get("tokens", {}).get("input_tokens") or usage_data.get("total_tokens", 0)
+        raw_meta: Final = response.get("meta")
+        usage_data: Final = response.get("usage")
+        meta_billed_units: Final = raw_meta.get("billed_units") if isinstance(raw_meta, dict) else None
+        meta_tokens: Final = raw_meta.get("tokens") if isinstance(raw_meta, dict) else None
+        usage_total_tokens: Final = usage_data.get("total_tokens", 0) if isinstance(usage_data, dict) else 0
+        total_tokens: Final = (
+            meta_billed_units.get("total_tokens") if isinstance(meta_billed_units, dict) else None
+        ) or usage_total_tokens
+        input_tokens: Final = (
+            meta_tokens.get("input_tokens") if isinstance(meta_tokens, dict) else None
+        ) or usage_total_tokens
         _billed_units: Final = RerankBilledUnits(total_tokens=total_tokens)
         _tokens: Final = RerankTokens(input_tokens=input_tokens)
         rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
