@@ -7,7 +7,30 @@ updates:
     cooldown:
       default-days: 7
       semver-major-days: 14
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "github-actions"
     groups:
       github-actions:
         patterns:
           - "*"
+  - package-ecosystem: "cargo"
+    directory: "litellm-rust"
+    schedule:
+      interval: "daily"
+    cooldown:
+      default-days: 7
+      semver-minor-days: 10
+      semver-major-days: 14
+    # Only direct workspace dependencies get update PRs. Transitive deps
+    # (aws-sdk-*, hyper, rustls, ...) update through lockfile bumps when a
+    # direct dep moves, cutting PR spam and review surface.
+    allow:
+      - dependency-type: "direct"
+    rebase-strategy: "auto"
+    labels:
+      - "dependencies"
+      - "rust"
+    commit-message:
+      prefix: "chore(deps)"
