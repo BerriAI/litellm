@@ -6,6 +6,10 @@ from fastapi.testclient import TestClient
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints import endpoints as agent_endpoints
+from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+    RestrictedAgentAccess,
+    UnrestrictedAgentAccess,
+)
 from litellm.proxy.agent_endpoints.endpoints import (
     _attach_keys_to_agents,
     _check_agent_management_permission,
@@ -506,9 +510,11 @@ class TestAgentRBACProxyAdminViewOnly:
         self.mock_registry.ids_for_agent = MagicMock(side_effect=lambda agent_id: frozenset({agent_id}))
         monkeypatch.setattr(ar_mod, "global_agent_registry", self.mock_registry)
 
-        self.allowed_agents_spy = AsyncMock(return_value=["someone-elses-agent"])
+        self.allowed_agents_spy = AsyncMock(
+            return_value=RestrictedAgentAccess(frozenset({"someone-elses-agent"}))
+        )
         monkeypatch.setattr(
-            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.resolve_agent_access",
             self.allowed_agents_spy,
         )
 
@@ -537,9 +543,9 @@ class TestAgentRBACProxyAdminViewOnly:
         self.allowed_agents_spy.assert_awaited_once()
 
     def test_should_still_redact_secrets_for_view_only_admin(self):
-        """An unrestricted viewer (empty allowlist means no restrictions) sees the
-        same agents as an admin but with keys stripped and litellm_params masked."""
-        self.allowed_agents_spy.return_value = []
+        """An unrestricted viewer sees the same agents as an admin but with keys
+        stripped and litellm_params masked."""
+        self.allowed_agents_spy.return_value = UnrestrictedAgentAccess()
         viewer_resp = self._list_agents(self.viewer_client)
         admin_resp = self._list_agents(self.admin_client)
 
