@@ -3000,6 +3000,13 @@ class PrismaClient:
     ] = []  # mutable-ok: drained queue, mirrors tool_usage_transactions
     _autorouter_turn_transactions_lock = asyncio.Lock()
 
+    # How long a health probe failure waits for an in-flight planned engine
+    # replacement to settle before deciding whether to report itself. Generous
+    # against a replacement that takes well under a second, and far short of the
+    # reconnect budget an outage-hung `connect()` runs under, so a real outage
+    # is never waited out.
+    PLANNED_ENGINE_REPLACEMENT_SETTLE_SECONDS: ClassVar[float] = 5.0
+
     def __init__(
         self,
         database_url: str,
@@ -4970,6 +4977,101 @@ class PrismaClient:
                 else:
                     verbose_proxy_logger.debug("Prisma DB health watchdog observed non-DB error: %s", e)
 
+    def _probe_target_wrapper(self) -> PrismaWrapper:
+        """The Prisma wrapper a `SELECT 1` health probe actually reaches.
+
+        `health_check()` issues `query_raw`, which `RoutingPrismaWrapper` sends
+        to the reader unless the reader is degraded. The writer's engine state
+        therefore says nothing about a probe that failed against the reader, so
+        the gate has to follow the same routing rule the probe did.
+        """
+        if isinstance(self.db, RoutingPrismaWrapper):
+            return self.db.writer if self.db.reader_unavailable else self.db.reader
+        return self.db
+
+    async def _run_health_probe(self, wrapper: PrismaWrapper) -> object:
+        """Issue the `SELECT 1` a health check is made of, against `wrapper`.
+
+        Takes the wrapper rather than re-reading `self.db`, because routing is
+        re-resolved on every attribute access: a reader that recovers between
+        the caller picking its target and the query going out would send the
+        probe to a different engine than the one whose generation the caller is
+        about to check, and attribute the failure to the wrong replacement.
+        """
+        sql_query: Final = "SELECT 1"
+        response: Final = await wrapper.query_raw(sql_query)
+        return response
+
+    async def _probe_answers_now(self, wrapper: PrismaWrapper) -> bool:
+        try:
+            await self._run_health_probe(wrapper)
+        except Exception as probe_error:  # noqa: BLE001  # any failure means the database is not answering
+            verbose_proxy_logger.debug("Prisma health_check() confirmation probe failed: %s", probe_error)
+            return False
+        return True
+
+    async def _planned_engine_replacement_absorbed(
+        self,
+        e: Exception,
+        wrapper: PrismaWrapper,
+        generation_before: int,
+    ) -> bool:
+        """True iff `e` is a connection-class probe failure that a completed
+        planned query-engine replacement explains.
+
+        Planned replacements (RDS IAM token refresh, guarded reconnect) kill the
+        running query engine and spawn a new one. A `SELECT 1` probe that races
+        that sub-second window fails with a transport error against the engine's
+        local HTTP port even though nothing is wrong with the database, and
+        reporting it drives a false-positive `db_exceptions` alert on every
+        replacement.
+
+        Two things must both hold, because neither is sufficient alone. The
+        engine generation must have moved, which says a replacement completed
+        rather than merely being attempted: reconnect attempts during a real
+        outage hold the same lock for tens of seconds, so gating on an in-flight
+        replacement would swallow most of an outage's alerts. And a fresh probe
+        must succeed, because `Prisma.connect()` polls the query engine's own
+        `/status` endpoint rather than round-tripping to the database, so a
+        future engine that binds before it validates its connection pool would
+        let the generation advance with the database still unreachable.
+
+        Waiting for an in-flight replacement to settle is what makes the
+        generation check meaningful, since the generation has not moved yet at
+        the instant the probe fails. The wait is generous against a replacement
+        that takes well under a second and short enough that an outage-hung
+        reconnect is not waited out; a replacement that has not settled by then
+        reports rather than stays silent.
+        """
+        if not PrismaDBExceptionHandler.is_database_connection_error(e):
+            return False
+        await wrapper.wait_for_planned_engine_replacement(self.PLANNED_ENGINE_REPLACEMENT_SETTLE_SECONDS)
+        if wrapper.engine_generation == generation_before:
+            return False
+        return await self._probe_answers_now(wrapper)
+
+    async def _report_health_check_failure(
+        self,
+        e: Exception,
+        duration: float,
+        traceback_str: str,
+        wrapper: PrismaWrapper,
+        generation_before: int,
+    ) -> None:
+        if await self._planned_engine_replacement_absorbed(e, wrapper, generation_before):
+            verbose_proxy_logger.info(
+                "Prisma health_check() connection error raced a planned query-engine replacement; "
+                "not reporting it as a DB exception: %s",
+                e,
+            )
+            return
+        await self.proxy_logging_obj.failure_handler(
+            original_exception=e,
+            duration=duration,
+            call_type="health_check",
+            traceback_str=traceback_str,
+        )
+
     @backoff.on_exception(
         backoff.expo,
         Exception,
@@ -4982,13 +5084,10 @@ class PrismaClient:
         Health check endpoint for the prisma client
         """
         start_time: Final = time.time()
+        probe_wrapper: Final = self._probe_target_wrapper()
+        generation_before: Final = probe_wrapper.engine_generation
         try:
-            sql_query: Final = "SELECT 1"
-
-            # Execute the raw query
-            # The asterisk before `user_id_list` unpacks the list into separate arguments
-            response: Final = await self.db.query_raw(sql_query)
-            return response
+            return await self._run_health_probe(probe_wrapper)
         except Exception as e:
             import traceback
 
@@ -4998,11 +5097,12 @@ class PrismaClient:
             end_time: Final = time.time()
             _duration: Final = end_time - start_time
             asyncio.create_task(
-                self.proxy_logging_obj.failure_handler(
-                    original_exception=e,
+                self._report_health_check_failure(
+                    e=e,
                     duration=_duration,
-                    call_type="health_check",
                     traceback_str=error_traceback,
+                    wrapper=probe_wrapper,
+                    generation_before=generation_before,
                 )
             )
             raise e
