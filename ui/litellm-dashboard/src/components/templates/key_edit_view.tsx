@@ -498,7 +498,7 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="Reset Budget" name="budget_duration">
-        <BudgetDurationDropdown />
+        <BudgetDurationDropdown placeholder="Never resets" />
       </Form.Item>
 
       <Form.Item

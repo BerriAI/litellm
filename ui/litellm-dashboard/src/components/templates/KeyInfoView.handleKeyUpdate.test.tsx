@@ -524,7 +524,7 @@ describe("KeyInfoView handleKeyUpdate budget_duration", () => {
 
     const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
     expect(sentPayload.budget_duration).toBeNull();
-    expect(JSON.parse(JSON.stringify(sentPayload))).toHaveProperty("budget_duration", null);
+    expect(JSON.stringify({ ...sentPayload })).toContain('"budget_duration":null');
   });
 
   it("should render the cleared budget as never resetting instead of snapping back to the old interval", async () => {

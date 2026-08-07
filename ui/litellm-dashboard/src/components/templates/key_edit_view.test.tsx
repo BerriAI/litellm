@@ -807,7 +807,7 @@ describe("KeyEditView", () => {
     });
     const callArgs = onSubmitMock.mock.calls[0][0];
     expect(callArgs.budget_duration).toBeNull();
-    expect(JSON.parse(JSON.stringify(callArgs))).toHaveProperty("budget_duration", null);
+    expect(JSON.stringify({ ...callArgs })).toContain('"budget_duration":null');
   });
 
   it("should send an explicit null budget_duration when a legacy word-form Reset Budget is cleared", async () => {
