@@ -1194,11 +1194,11 @@ class Router:
             )
         return valid[0] if valid else None
 
-    def _build_model_group_selector(self, strategy: str, args: Mapping[str, object]) -> object | None:
+    def _build_model_group_selector(self, strategy: str, args: Mapping[str, object]) -> object | TypeError | ValueError:
         try:
             return self._build_strategy_selector(strategy=strategy, routing_strategy_args=args)
-        except (TypeError, ValueError):
-            return None
+        except (TypeError, ValueError) as exc:
+            return exc
 
     def _live_model_group_selector_keys(self) -> frozenset[str]:
         """
@@ -1246,15 +1246,14 @@ class Router:
         if cached is not None:
             verbose_router_logger.debug("routing_group=model-info model=%s strategy=%s", model, strategy)
             return strategy, cached
-        self._evict_stale_model_group_selectors()
         built: Final = self._build_model_group_selector(strategy, args)
-        if built is None:
+        if built is None or isinstance(built, Exception):
             _warn_model_group_strategy_once(
                 model,
                 "args",
                 selector_key,
                 f"model_info.routing_strategy_args for model_group '{model}' cannot initialize strategy "
-                f"'{strategy}'; falling back to the routing-group / top-level strategy.",
+                f"'{strategy}' ({built}); falling back to the routing-group / top-level strategy.",
             )
             return None
         with self._override_selectors_lock:

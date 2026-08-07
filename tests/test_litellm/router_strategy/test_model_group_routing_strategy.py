@@ -19,6 +19,7 @@ from litellm import Router
 from litellm.router import _warn_model_group_strategy_once
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
+from litellm.types.router import Deployment
 
 
 @pytest.fixture(autouse=True)
@@ -184,7 +185,17 @@ def test_conflict_winner_is_stable_across_model_list_order():
     assert reversed_router._get_routing_context("quality")[0] == "cost-based-routing"
 
 
-def test_invalid_args_evict_previously_cached_selector():
+def _upsert(router, model_name, model, deployment_id, model_info):
+    router.upsert_deployment(
+        Deployment(
+            model_name=model_name,
+            litellm_params={"model": model, "api_key": "sk-test", "api_base": "https://example.invalid"},
+            model_info={"id": deployment_id, **model_info},
+        )
+    )
+
+
+def test_invalid_args_evict_previously_cached_selector(caplog):
     router = _build_router(
         [
             _deployment(
@@ -198,13 +209,20 @@ def test_invalid_args_evict_previously_cached_selector():
     _, old_selector = router._get_routing_context("quality")
     assert any("|" in k for k in router._override_selectors)
 
-    for idx in router.model_name_to_deployment_indices["quality"]:
-        router.model_list[idx]["model_info"]["routing_strategy_args"] = {"ttl": "bogus"}
+    _upsert(
+        router,
+        "quality",
+        "openai/gpt-4o",
+        "d1",
+        {"routing_strategy": "latency-based-routing", "routing_strategy_args": {"ttl": "bogus"}},
+    )
 
-    strategy, _ = router._get_routing_context("quality")
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        strategy, _ = router._get_routing_context("quality")
     assert strategy == "simple-shuffle"
     assert not any("|" in k for k in router._override_selectors)
     assert all(c is not old_selector for c in litellm.callbacks)
+    assert any("ttl" in r.getMessage() for r in caplog.records if "cannot initialize strategy" in r.getMessage())
 
 
 def test_deleting_deployment_evicts_its_selector():
@@ -309,8 +327,13 @@ def test_stale_selector_evicted_when_args_change():
     old_keys = {k for k in router._override_selectors if "|" in k}
     assert len(old_keys) == 2
 
-    for idx in router.model_name_to_deployment_indices["quality"]:
-        router.model_list[idx]["model_info"]["routing_strategy_args"] = {"ttl": 240}
+    _upsert(
+        router,
+        "quality",
+        "openai/gpt-4o",
+        "d1",
+        {"routing_strategy": "latency-based-routing", "routing_strategy_args": {"ttl": 240}},
+    )
 
     _, new_selector = router._get_routing_context("quality")
     assert new_selector is not old_selector

@@ -771,6 +771,41 @@ class TestDeleteModelClearsRouterRegistry:
         assert mock_router.complexity_routers.get("shared-name") is config_router
 
 
+class TestUpdateDbModelMergesModelInfo:
+    def test_patch_omitting_routing_strategy_preserves_stored_value(self):
+        """
+        The UI's edit form and any partial PATCH rely on update_db_model merging
+        model_info non-destructively: keys absent from the patch keep their
+        stored value instead of being wiped.
+        """
+        import json as json_lib
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import Deployment, ModelInfo, updateDeployment
+
+        db_model = Deployment(
+            model_name="quality",
+            litellm_params={"model": "openai/gpt-4o-mini"},
+            model_info={
+                "id": "mid-1",
+                "routing_strategy": "cost-based-routing",
+                "routing_strategy_args": {"ttl": 60},
+            },
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_info=ModelInfo(id="mid-1", mode="chat")),
+        )
+
+        stored = json_lib.loads(result["model_info"])
+        assert stored["routing_strategy"] == "cost-based-routing"
+        assert stored["routing_strategy_args"] == {"ttl": 60}
+        assert stored["mode"] == "chat"
+
+
 class TestUpdateModel:
     """
     Tests for the update_model (POST /model/update) handler.

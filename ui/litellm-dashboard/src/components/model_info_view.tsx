@@ -433,24 +433,12 @@ export default function ModelInfoView({
             health_check_model: values.health_check_model,
           };
         }
-        const formRoutingStrategy = values.routing_strategy ?? "";
-        if (formRoutingStrategy !== (localModelData.model_info?.routing_strategy ?? "")) {
+        if (values.routing_strategy !== undefined || values.routing_strategy_args !== undefined) {
           updatedModelInfo = {
             ...updatedModelInfo,
-            routing_strategy: formRoutingStrategy,
+            routing_strategy: values.routing_strategy ?? "",
+            routing_strategy_args: values.routing_strategy_args ? JSON.parse(values.routing_strategy_args) : {},
           };
-        }
-        if (values.routing_strategy_args !== undefined) {
-          const parsedArgs = values.routing_strategy_args ? JSON.parse(values.routing_strategy_args) : {};
-          if (
-            hasRoutingStrategyArgs(parsedArgs) ||
-            hasRoutingStrategyArgs(localModelData.model_info?.routing_strategy_args)
-          ) {
-            updatedModelInfo = {
-              ...updatedModelInfo,
-              routing_strategy_args: parsedArgs,
-            };
-          }
         }
       } catch (e) {
         NotificationsManager.fromBackend("Invalid JSON in Model Info");
