@@ -1388,6 +1388,7 @@ export const userDailyActivityCall = async (
   endTime: Date,
   page: number = 1,
   userId: string | null = null,
+  includeCurrentUtcDay: boolean = false,
 ) => {
   /**
    * Get daily user activity on proxy
@@ -1400,6 +1401,7 @@ export const userDailyActivityCall = async (
     page,
     extraQueryParams: {
       user_id: userId,
+      include_current_utc_day: includeCurrentUtcDay ? "true" : undefined,
     },
   });
 };

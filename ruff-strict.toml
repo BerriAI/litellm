@@ -15,7 +15,7 @@ max-args = 5
 "typing.Any".msg = "Use a concrete type. Frozen slots=True dataclass (preferred) / NamedTuple / ReadOnly TypedDict for payloads."
 "typing_extensions.Any".msg = "Same as typing.Any."
 "typing.List".msg = "tuple[X, ...] for state, Sequence[X] for params."
-"typing.Dict".msg = "Frozen dataclass / NamedTuple / ReadOnly TypedDict; create a Mapping alias with concrete value types if truly dynamic."
+"typing.Dict".msg = "Frozen dataclass / NamedTuple / ReadOnly TypedDict; if truly dynamic, use MappingProxyType."
 "typing.Set".msg = "frozenset[X] or AbstractSet[X]."
 "typing.MutableSequence".msg = "Sequence[X]."
 "typing.MutableMapping".msg = "See typing.Dict."

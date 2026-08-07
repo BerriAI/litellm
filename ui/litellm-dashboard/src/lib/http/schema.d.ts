@@ -26716,6 +26716,8 @@ export interface components {
             auto_router_max_input_chars?: number | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
+            /** Aws Batch Role Arn */
+            aws_batch_role_arn?: string | null;
             /** Aws Bedrock Project Id */
             aws_bedrock_project_id?: string | null;
             /** Aws Bedrock Runtime Endpoint */
@@ -26895,6 +26897,10 @@ export interface components {
             output_cost_per_pixel?: number | null;
             /** Output Cost Per Reasoning Token */
             output_cost_per_reasoning_token?: number | null;
+            /** Output Cost Per Reasoning Token Flex */
+            output_cost_per_reasoning_token_flex?: number | null;
+            /** Output Cost Per Reasoning Token Priority */
+            output_cost_per_reasoning_token_priority?: number | null;
             /** Output Cost Per Second */
             output_cost_per_second?: number | null;
             /** Output Cost Per Second 1080P */
@@ -26945,6 +26951,8 @@ export interface components {
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
+            /** S3 Region Name */
+            s3_region_name?: string | null;
             /** Search Context Cost Per Query */
             search_context_cost_per_query?: {
                 [key: string]: unknown;
@@ -31561,6 +31569,26 @@ export interface components {
             review_notes?: string | null;
         };
         /**
+         * ReminderMarkerPair
+         * @description One open/close delimiter pair a harness wraps injected context in.
+         *
+         *     Normalizing here rather than at the scan is what makes matching case-insensitive: markers reach
+         *     the scan already lowered, so it lowercases only the haystack and never the needles. Stripping
+         *     keeps YAML indentation whitespace from becoming part of the delimiter.
+         */
+        ReminderMarkerPair: {
+            /**
+             * Close
+             * @description Closing delimiter, e.g. '</system-reminder>'
+             */
+            close: string;
+            /**
+             * Open
+             * @description Opening delimiter, e.g. '<system-reminder>'
+             */
+            open: string;
+        };
+        /**
          * RequestComplexityRouterConfig
          * @description The part of a complexity-router config a request can carry.
          *
@@ -31672,12 +31700,9 @@ export interface components {
             reasoning_keywords?: string[] | null;
             /**
              * Reminder Markers
-             * @description Override the (open, close) marker pair used to recognize and strip harness-injected reminder blocks before classification. Defaults to Claude Code's convention, ('<system-reminder>', '</system-reminder>'), when unset. Matching is case-insensitive.
+             * @description Override the delimiter pairs used to recognize and strip harness-injected reminder blocks before classification. A harness that wraps injected context differently per agent type (main, subagent, cron) lists every pair it emits. Replaces, rather than adds to, the built-in default of ('<system-reminder>', '</system-reminder>'), so a harness that also emits that pair lists it too. Matching is case-insensitive.
              */
-            reminder_markers?: [
-                string,
-                string
-            ] | null;
+            reminder_markers?: components["schemas"]["ReminderMarkerPair"][] | null;
             /**
              * Return Raw Model Name
              * @description Return the resolved raw model name in the response model field instead of the client-requested complexity-router alias
@@ -35295,6 +35320,8 @@ export interface components {
             auto_router_max_input_chars?: number | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
+            /** Aws Batch Role Arn */
+            aws_batch_role_arn?: string | null;
             /** Aws Bedrock Project Id */
             aws_bedrock_project_id?: string | null;
             /** Aws Bedrock Runtime Endpoint */
@@ -35474,6 +35501,10 @@ export interface components {
             output_cost_per_pixel?: number | null;
             /** Output Cost Per Reasoning Token */
             output_cost_per_reasoning_token?: number | null;
+            /** Output Cost Per Reasoning Token Flex */
+            output_cost_per_reasoning_token_flex?: number | null;
+            /** Output Cost Per Reasoning Token Priority */
+            output_cost_per_reasoning_token_priority?: number | null;
             /** Output Cost Per Second */
             output_cost_per_second?: number | null;
             /** Output Cost Per Second 1080P */
@@ -35524,6 +35555,8 @@ export interface components {
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
+            /** S3 Region Name */
+            s3_region_name?: string | null;
             /** Search Context Cost Per Query */
             search_context_cost_per_query?: {
                 [key: string]: unknown;
@@ -53858,6 +53891,8 @@ export interface operations {
                 page_size?: number;
                 /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */
                 timezone?: number | null;
+                /** @description When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended. */
+                include_current_utc_day?: boolean;
             };
             header?: never;
             path?: never;
