@@ -84,7 +84,7 @@
     "limit": 56
   },
   "reportPrivateUsage": {
-    "limit": 1825
+    "limit": 1824
   },
   "reportRedeclaration": {
     "limit": 8
