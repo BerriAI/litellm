@@ -1,0 +1,17 @@
+{
+  "metrics": {"latencyMs": 430},
+  "output": {
+    "message": {
+      "role": "assistant",
+      "content": [{"text": "Paris."}]
+    }
+  },
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 6,
+    "outputTokens": 4,
+    "totalTokens": 3082,
+    "cacheReadInputTokens": 2048,
+    "cacheWriteInputTokens": 1024
+  }
+}

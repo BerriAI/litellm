@@ -1,0 +1,18 @@
+{
+  "content": [
+    {
+      "text": "Paris is the capital of France.",
+      "type": "text"
+    }
+  ],
+  "id": "chatcmpl-char-adapter-text-0001",
+  "model": "gpt-4o-2024-08-06",
+  "role": "assistant",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "type": "message",
+  "usage": {
+    "input_tokens": 12,
+    "output_tokens": 9
+  }
+}

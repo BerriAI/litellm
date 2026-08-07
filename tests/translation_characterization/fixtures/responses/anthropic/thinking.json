@@ -1,0 +1,13 @@
+{
+  "id": "msg_01CharThinking00000001",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-4-20250514",
+  "content": [
+    {"type": "thinking", "thinking": "The user asks for the capital of France. That is Paris.", "signature": "EuYBCkQYAiJAchar-signature-bytes"},
+    {"type": "text", "text": "Paris."}
+  ],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {"input_tokens": 40, "output_tokens": 31}
+}

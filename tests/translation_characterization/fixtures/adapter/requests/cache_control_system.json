@@ -1,0 +1,9 @@
+{
+  "model": "gpt-4o",
+  "max_tokens": 512,
+  "system": [
+    {"type": "text", "text": "You are a terse geographer.", "cache_control": {"type": "ephemeral"}}
+  ],
+  "messages": [{"role": "user", "content": "What is the capital of France?"}],
+  "metadata": {"user_id": "char-user-1234"}
+}

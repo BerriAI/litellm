@@ -1,0 +1,53 @@
+{
+  "max_tokens": 256,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "What is the capital of France?",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "model": "claude-sonnet-4-20250514",
+  "tool_choice": {
+    "disable_parallel_tool_use": false,
+    "type": "auto"
+  },
+  "tools": [
+    {
+      "description": "Get current weather for a city.",
+      "input_schema": {
+        "properties": {
+          "city": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "city"
+        ],
+        "type": "object"
+      },
+      "name": "get_weather",
+      "type": "custom"
+    },
+    {
+      "description": "Get current time for a timezone.",
+      "input_schema": {
+        "properties": {
+          "tz": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tz"
+        ],
+        "type": "object"
+      },
+      "name": "get_time",
+      "type": "custom"
+    }
+  ]
+}

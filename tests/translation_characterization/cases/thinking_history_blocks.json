@@ -1,0 +1,32 @@
+{
+  "id": "thinking_history_blocks",
+  "messages": [
+    {
+      "content": "What is the capital of France?",
+      "role": "user"
+    },
+    {
+      "content": "Paris.",
+      "role": "assistant",
+      "thinking_blocks": [
+        {
+          "signature": "sig-char-deadbeef",
+          "thinking": "The user asks about France; the capital is Paris.",
+          "type": "thinking"
+        }
+      ]
+    },
+    {
+      "content": "And of Italy?",
+      "role": "user"
+    }
+  ],
+  "params": {
+    "max_tokens": 2048,
+    "thinking": {
+      "budget_tokens": 1024,
+      "type": "enabled"
+    }
+  },
+  "skip": {}
+}

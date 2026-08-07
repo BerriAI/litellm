@@ -1,0 +1,31 @@
+{
+  "model": "gpt-4o",
+  "max_tokens": 512,
+  "messages": [
+    {"role": "user", "content": "Weather in Paris?"},
+    {
+      "role": "assistant",
+      "content": [
+        {"type": "text", "text": "I'll check the weather."},
+        {"type": "tool_use", "id": "toolu_01CharAdapter01", "name": "get_weather", "input": {"city": "Paris"}}
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_01CharAdapter01", "content": "18C, clear"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "get_weather",
+      "description": "Get current weather for a city.",
+      "input_schema": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"]
+      }
+    }
+  ]
+}

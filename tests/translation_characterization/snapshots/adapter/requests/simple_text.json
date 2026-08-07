@@ -1,0 +1,13 @@
+{
+  "openai_request": {
+    "max_tokens": 512,
+    "messages": [
+      {
+        "content": "What is the capital of France?",
+        "role": "user"
+      }
+    ],
+    "model": "gpt-4o"
+  },
+  "tool_name_mapping": {}
+}

@@ -1,0 +1,58 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "Paris.",
+        "function_call": null,
+        "provider_specific_fields": {
+          "citations": null,
+          "thinking_blocks": [
+            {
+              "signature": "char-invoke-signature",
+              "thinking": "The user asks for the capital of France. That is Paris.",
+              "type": "thinking"
+            }
+          ]
+        },
+        "reasoning_content": "The user asks for the capital of France. That is Paris.",
+        "role": "assistant",
+        "thinking_blocks": [
+          {
+            "signature": "char-invoke-signature",
+            "thinking": "The user asks for the capital of France. That is Paris.",
+            "type": "thinking"
+          }
+        ],
+        "tool_calls": null
+      }
+    }
+  ],
+  "created": 1718064000,
+  "id": "chatcmpl-00000000-0000-0000-0000-000000000001",
+  "model": "claude-3-7-sonnet-20250219",
+  "object": "chat.completion",
+  "system_fingerprint": null,
+  "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "completion_tokens": 31,
+    "completion_tokens_details": {
+      "reasoning_tokens": 13,
+      "text_tokens": 18
+    },
+    "inference_geo": null,
+    "prompt_tokens": 40,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_creation_tokens": 0,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": 40,
+      "video_tokens": null
+    },
+    "speed": null,
+    "total_tokens": 71
+  }
+}

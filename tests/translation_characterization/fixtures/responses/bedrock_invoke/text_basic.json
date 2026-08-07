@@ -1,0 +1,10 @@
+{
+  "id": "msg_bdrk_01CharInvokeText01",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-3-5-sonnet-20240620",
+  "content": [{"type": "text", "text": "Paris is the capital of France."}],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {"input_tokens": 12, "output_tokens": 9}
+}

@@ -1,0 +1,14 @@
+{
+  "id": "reasoning_effort_low",
+  "messages": [
+    {
+      "content": "What is the capital of France?",
+      "role": "user"
+    }
+  ],
+  "params": {
+    "max_tokens": 2048,
+    "reasoning_effort": "low"
+  },
+  "skip": {}
+}

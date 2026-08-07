@@ -1,0 +1,96 @@
+[
+  {
+    "choices": [
+      {
+        "delta": {
+          "audio": null,
+          "content": "",
+          "function_call": null,
+          "provider_specific_fields": null,
+          "role": "assistant",
+          "tool_calls": null
+        },
+        "finish_reason": null,
+        "index": 0,
+        "logprobs": null
+      }
+    ],
+    "citations": null,
+    "created": 1718064000,
+    "id": "chatcmpl-00000000-0000-0000-0000-000000000002",
+    "model": "anthropic.claude-sonnet-4-20250514-v1:0",
+    "object": "chat.completion.chunk",
+    "provider_specific_fields": {},
+    "system_fingerprint": null
+  },
+  {
+    "choices": [
+      {
+        "delta": {
+          "audio": null,
+          "content": "Paris is the",
+          "function_call": null,
+          "provider_specific_fields": null,
+          "role": null,
+          "tool_calls": null
+        },
+        "finish_reason": null,
+        "index": 0,
+        "logprobs": null
+      }
+    ],
+    "citations": null,
+    "created": 1718064000,
+    "id": "chatcmpl-00000000-0000-0000-0000-000000000002",
+    "model": "anthropic.claude-sonnet-4-20250514-v1:0",
+    "object": "chat.completion.chunk",
+    "provider_specific_fields": {},
+    "system_fingerprint": null
+  },
+  {
+    "choices": [
+      {
+        "delta": {
+          "audio": null,
+          "content": " capital of France.",
+          "function_call": null,
+          "provider_specific_fields": null,
+          "role": null,
+          "tool_calls": null
+        },
+        "finish_reason": null,
+        "index": 0,
+        "logprobs": null
+      }
+    ],
+    "citations": null,
+    "created": 1718064000,
+    "id": "chatcmpl-00000000-0000-0000-0000-000000000002",
+    "model": "anthropic.claude-sonnet-4-20250514-v1:0",
+    "object": "chat.completion.chunk",
+    "provider_specific_fields": {},
+    "system_fingerprint": null
+  },
+  {
+    "choices": [
+      {
+        "delta": {
+          "audio": null,
+          "content": null,
+          "function_call": null,
+          "role": null,
+          "tool_calls": null
+        },
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null
+      }
+    ],
+    "created": 1718064000,
+    "id": "chatcmpl-00000000-0000-0000-0000-000000000002",
+    "model": "anthropic.claude-sonnet-4-20250514-v1:0",
+    "object": "chat.completion.chunk",
+    "provider_specific_fields": {},
+    "system_fingerprint": null
+  }
+]

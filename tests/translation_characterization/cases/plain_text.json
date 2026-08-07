@@ -1,0 +1,13 @@
+{
+  "id": "plain_text",
+  "messages": [
+    {
+      "content": "What is the capital of France?",
+      "role": "user"
+    }
+  ],
+  "params": {
+    "max_tokens": 256
+  },
+  "skip": {}
+}

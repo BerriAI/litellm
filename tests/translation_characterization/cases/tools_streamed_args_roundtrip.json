@@ -1,0 +1,83 @@
+{
+  "id": "tools_streamed_args_roundtrip",
+  "messages": [
+    {
+      "content": "Weather and time in Paris?",
+      "role": "user"
+    },
+    {
+      "content": null,
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "function": {
+            "arguments": "{\"city\": \"Paris\"}",
+            "name": "get_weather"
+          },
+          "id": "call_char_001",
+          "type": "function"
+        },
+        {
+          "function": {
+            "arguments": "{\"tz\": \"Europe/Paris\"}",
+            "name": "get_time"
+          },
+          "id": "call_char_002",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "content": "18C, clear",
+      "role": "tool",
+      "tool_call_id": "call_char_001"
+    },
+    {
+      "content": "14:05",
+      "role": "tool",
+      "tool_call_id": "call_char_002"
+    }
+  ],
+  "params": {
+    "max_tokens": 256,
+    "tools": [
+      {
+        "function": {
+          "description": "Get current weather for a city.",
+          "name": "get_weather",
+          "parameters": {
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "function"
+      },
+      {
+        "function": {
+          "description": "Get current time for a timezone.",
+          "name": "get_time",
+          "parameters": {
+            "properties": {
+              "tz": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tz"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "skip": {}
+}

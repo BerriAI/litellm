@@ -1,0 +1,27 @@
+{
+  "id": "image_url",
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Describe this image.",
+          "type": "text"
+        },
+        {
+          "image_url": {
+            "url": "https://example.com/cat.png"
+          },
+          "type": "image_url"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "params": {
+    "max_tokens": 256
+  },
+  "skip": {
+    "bedrock_converse": "v1 downloads URL media for bedrock transforms (network)",
+    "bedrock_invoke": "v1 downloads URL media for bedrock transforms (network)"
+  }
+}

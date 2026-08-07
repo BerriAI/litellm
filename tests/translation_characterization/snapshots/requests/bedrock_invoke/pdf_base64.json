@@ -1,0 +1,23 @@
+{
+  "anthropic_version": "bedrock-2023-05-31",
+  "max_tokens": 256,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Summarize this document.",
+          "type": "text"
+        },
+        {
+          "source": {
+            "data": "JVBERi0xLjQKMSAwIG9iajw8L1R5cGUvQ2F0YWxvZy9QYWdlcyAyIDAgUj4+ZW5kb2JqCjIgMCBvYmo8PC9UeXBlL1BhZ2VzL0tpZHNbXS9Db3VudCAwPj5lbmRvYmoKdHJhaWxlcjw8L1Jvb3QgMSAwIFI+PgolJUVPRgo=",
+            "media_type": "application/pdf",
+            "type": "base64"
+          },
+          "type": "document"
+        }
+      ],
+      "role": "user"
+    }
+  ]
+}

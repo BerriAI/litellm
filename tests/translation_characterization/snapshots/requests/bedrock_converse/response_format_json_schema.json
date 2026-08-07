@@ -1,0 +1,47 @@
+{
+  "additionalModelRequestFields": {
+    "stream": false
+  },
+  "inferenceConfig": {
+    "maxTokens": 256
+  },
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "What is the capital of France?"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "toolConfig": {
+    "toolChoice": {
+      "tool": {
+        "name": "json_tool_call"
+      }
+    },
+    "tools": [
+      {
+        "toolSpec": {
+          "description": "json_tool_call",
+          "inputSchema": {
+            "json": {
+              "additionalProperties": false,
+              "properties": {
+                "capital": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "capital"
+              ],
+              "type": "object"
+            }
+          },
+          "name": "json_tool_call"
+        }
+      }
+    ]
+  }
+}

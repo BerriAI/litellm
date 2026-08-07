@@ -1,0 +1,24 @@
+{
+  "id": "chatcmpl-char-adapter-cache-0001",
+  "object": "chat.completion",
+  "created": 1718064000,
+  "model": "gpt-oss-120b",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "Paris.",
+        "reasoning_content": "The user asks for the capital of France. That is Paris."
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 3078,
+    "completion_tokens": 35,
+    "total_tokens": 3113,
+    "prompt_tokens_details": {"cached_tokens": 2048},
+    "completion_tokens_details": {"reasoning_tokens": 24}
+  }
+}

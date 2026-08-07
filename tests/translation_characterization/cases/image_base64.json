@@ -1,0 +1,24 @@
+{
+  "id": "image_base64",
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Describe this image.",
+          "type": "text"
+        },
+        {
+          "image_url": {
+            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+          },
+          "type": "image_url"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "params": {
+    "max_tokens": 256
+  },
+  "skip": {}
+}

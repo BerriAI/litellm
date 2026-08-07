@@ -1,0 +1,27 @@
+{
+  "additionalModelRequestFields": {
+    "stream": false
+  },
+  "inferenceConfig": {
+    "maxTokens": 256
+  },
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Summarize this document."
+        },
+        {
+          "document": {
+            "format": "pdf",
+            "name": "DocumentPDFmessages_4b20ba3afdf62e5d_pdf",
+            "source": {
+              "bytes": "JVBERi0xLjQKMSAwIG9iajw8L1R5cGUvQ2F0YWxvZy9QYWdlcyAyIDAgUj4+ZW5kb2JqCjIgMCBvYmo8PC9UeXBlL1BhZ2VzL0tpZHNbXS9Db3VudCAwPj5lbmRvYmoKdHJhaWxlcjw8L1Jvb3QgMSAwIFI+PgolJUVPRgo="
+            }
+          }
+        }
+      ],
+      "role": "user"
+    }
+  ]
+}

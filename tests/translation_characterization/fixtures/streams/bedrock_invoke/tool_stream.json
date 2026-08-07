@@ -1,0 +1,10 @@
+[
+  {"type": "message_start", "message": {"id": "msg_bdrk_01CharInvStream02", "type": "message", "role": "assistant", "model": "claude-3-5-sonnet-20240620", "content": [], "stop_reason": null, "stop_sequence": null, "usage": {"input_tokens": 412, "output_tokens": 2}}},
+  {"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "toolu_bdrk_01CharStream", "name": "get_weather", "input": {}}},
+  {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": "{\"ci"}},
+  {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": "ty\": \"Par"}},
+  {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": "is\"}"}},
+  {"type": "content_block_stop", "index": 0},
+  {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": null}, "usage": {"output_tokens": 87}, "amazon-bedrock-invocationMetrics": {"inputTokenCount": 412, "outputTokenCount": 87, "invocationLatency": 702, "firstByteLatency": 95}},
+  {"type": "message_stop"}
+]
