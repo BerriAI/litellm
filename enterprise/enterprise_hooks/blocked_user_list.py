@@ -44,6 +44,22 @@ class _ENTERPRISE_BlockedUserList(CustomLogger):
                     f"An error occurred: {str(e)}, blocked_user_list={blocked_user_list}"
                 )
 
+    def _resolve_prisma_client(self) -> Optional[PrismaClient]:
+        """Use the live proxy Prisma client when init ran before DB setup."""
+        if self.prisma_client is not None:
+            return self.prisma_client
+
+        try:
+            from litellm.proxy.proxy_server import prisma_client as global_prisma_client
+
+            return global_prisma_client
+        except Exception:
+            verbose_proxy_logger.debug(
+                "blocked_user_list: could not resolve global prisma_client",
+                exc_info=True,
+            )
+            return None
+
     def print_verbose(self, print_statement, level: Literal["INFO", "DEBUG"] = "DEBUG"):
         if level == "INFO":
             verbose_proxy_logger.info(print_statement)
@@ -86,10 +102,11 @@ class _ENTERPRISE_BlockedUserList(CustomLogger):
                 end_user_cache_obj: Optional[LiteLLM_EndUserTable] = cache.get_cache(  # type: ignore
                     key=cache_key
                 )
-                if end_user_cache_obj is None and self.prisma_client is not None:
+                prisma_client = self._resolve_prisma_client()
+                if end_user_cache_obj is None and prisma_client is not None:
                     # check db
                     end_user_obj = (
-                        await self.prisma_client.db.litellm_endusertable.find_unique(
+                        await prisma_client.db.litellm_endusertable.find_unique(
                             where={"user_id": user}
                         )
                     )
