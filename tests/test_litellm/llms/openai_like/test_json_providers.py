@@ -574,9 +574,9 @@ class TestCoralBricksPricing:
     the four pricing records and the zero-cost cached-input behavior."""
 
     EXPECTED = {
-        "coralbricks/glm-5.2-fp4": (1.4e-06, 4.4e-06),
+        "coralbricks/glm-5.2-fp4": (1.12e-06, 4.4e-06),
         "coralbricks/kimi-k3": (3e-06, 1.5e-05),
-        "coralbricks/gpt-oss-120b": (1.5e-07, 6e-07),
+        "coralbricks/gpt-oss-120b": (1.2e-07, 6e-07),
     }
 
     def test_pricing_records_present(self):
