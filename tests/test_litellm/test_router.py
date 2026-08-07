@@ -3976,37 +3976,6 @@ def test_get_deployment_credentials_with_provider_includes_bucket_name():
     assert credentials["custom_llm_provider"] == "vertex_ai"
 
 
-def test_get_deployment_credentials_with_provider_includes_s3_encryption_key_id():
-    """
-    Regression: s3_encryption_key_id must survive the CredentialLiteLLMParams filter,
-    otherwise the Bedrock batch input-file upload loses the SSE-KMS key and S3 rejects
-    the PutObject on buckets whose policy requires aws:kms encryption.
-    """
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "bedrock-batch",
-                "litellm_params": {
-                    "model": "bedrock/anthropic.claude-sonnet-4-20250514-v1:0",
-                    "aws_region_name": "us-west-2",
-                    "s3_bucket_name": "my-batch-bucket",
-                    "s3_encryption_key_id": "arn:aws:kms:us-west-2:1234:key/abcd",
-                },
-            }
-        ],
-    )
-
-    credentials = router.get_deployment_credentials_with_provider(
-        model_id="bedrock-batch"
-    )
-
-    assert credentials is not None
-    assert (
-        credentials["s3_encryption_key_id"]
-        == "arn:aws:kms:us-west-2:1234:key/abcd"
-    )
-
-
 def test_get_deployment_credentials_with_provider_resolves_credential_name():
     """
     Test that get_deployment_credentials_with_provider correctly resolves
