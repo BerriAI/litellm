@@ -1060,7 +1060,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     name="budget_duration"
                     help={`Team Reset Budget: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : "None"}`}
                   >
-                    <BudgetDurationDropdown onChange={(value) => form.setFieldValue("budget_duration", value)} />
+                    <BudgetDurationDropdown
+                      placeholder="Never resets"
+                      onChange={(value) => form.setFieldValue("budget_duration", value)}
+                    />
                   </Form.Item>
                   <Form.Item
                     className="mt-4"
