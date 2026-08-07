@@ -1970,9 +1970,9 @@ async def openai_websocket_proxy_route(
     wss_target: Final = (
         f"{wss_base}{'&' if '?' in wss_base else '?'}{query_string}" if query_string else wss_base
     )
-    custom_headers: Final = {
+    custom_headers: Final = {  # mutable-ok: websocket_passthrough_request requires a plain dict of upstream headers
         "Authorization": f"Bearer {openai_api_key}"
-    }  # mutable-ok: websocket_passthrough_request requires a plain dict of upstream headers
+    }
 
     await websocket_passthrough_request(
         websocket=websocket,
