@@ -27,7 +27,7 @@ from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, user_api_key_auth_websocket
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -1931,6 +1931,51 @@ async def openai_proxy_route(
         base_target_url=base_target_url,
         api_key=openai_api_key,
         custom_llm_provider=litellm.LlmProviders.OPENAI,
+    )
+
+
+@router.websocket("/openai_passthrough/{endpoint:path}")
+@router.websocket("/openai/{endpoint:path}")
+async def openai_websocket_proxy_route(
+    websocket: WebSocket,
+    endpoint: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
+):
+    """WebSocket passthrough for OpenAI prefixes (realtime / responses.connect)."""
+    base_target_url = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
+    openai_api_key = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider=litellm.LlmProviders.OPENAI.value,
+        region_name=None,
+    )
+    if openai_api_key is None:
+        await websocket.close(code=1011)
+        raise Exception("Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.")
+
+    encoded_endpoint = httpx.URL(endpoint).path
+    if not encoded_endpoint.startswith("/"):
+        encoded_endpoint = "/" + encoded_endpoint
+    base_url = httpx.URL(base_target_url)
+    updated_url = BaseOpenAIPassThroughHandler._join_url_paths(
+        base_url=base_url,
+        path=encoded_endpoint,
+        custom_llm_provider=litellm.LlmProviders.OPENAI,
+    )
+    # HTTP(S) base -> WS(S) target for the upgrade.
+    if updated_url.startswith("https://"):
+        wss_target = "wss://" + updated_url[len("https://") :]
+    elif updated_url.startswith("http://"):
+        wss_target = "ws://" + updated_url[len("http://") :]
+    else:
+        wss_target = updated_url
+
+    return await websocket_passthrough_request(
+        websocket=websocket,
+        target=wss_target,
+        custom_headers={"Authorization": f"Bearer {openai_api_key}"},
+        user_api_key_dict=user_api_key_dict,
+        forward_headers=True,
+        endpoint=f"/openai/{endpoint}",
+        accept_websocket=True,
     )
 
 
