@@ -4145,11 +4145,8 @@ async def delete_verification_tokens(
         raise e
 
     for key in tokens:
-        user_api_key_cache.delete_cache(key)
-        # remove hash token from cache
-        hashed_token = hash_token(cast(str, key))
         await _delete_cache_key_object(
-            hashed_token=hashed_token,
+            hashed_token=cast(str, key),
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
