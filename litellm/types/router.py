@@ -429,7 +429,7 @@ class DeploymentTypedDict(TypedDict, total=False):
     model_info: dict
 
 
-SPECIAL_MODEL_INFO_PARAMS: Final = tuple(MirroredPricingParams.model_fields)
+SPECIAL_MODEL_INFO_PARAMS = tuple(MirroredPricingParams.model_fields)
 
 
 class Deployment(BaseModel):
