@@ -3,6 +3,7 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { Copy, Info, Loader2, Pencil, RefreshCw, Trash2 } from "lucide-react";
 
+import { ModelLogo } from "@/components/molecules/models/ModelLogo";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { ModelData } from "@/components/model_dashboard/types";
 import { DataTableSortHeader } from "@/components/shared/DataTable";
@@ -52,7 +53,7 @@ function ModelInformationCell({ model, displayName }: { model: ModelData; displa
         }
       >
         {model.provider ? (
-          <ProviderLogo provider={model.provider} className="size-6 shrink-0" />
+          <ModelLogo model={model.litellm_model_name} provider={model.provider} className="size-6 shrink-0" />
         ) : (
           <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-xs text-muted-foreground">
             -
