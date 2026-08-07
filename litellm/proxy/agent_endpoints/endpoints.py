@@ -253,7 +253,7 @@ async def get_agents(
     )
 
     try:
-        returned_agents: list[AgentResponse] = []
+        returned_agents: Sequence[AgentResponse] = ()
 
         # Admin users get all agents
         if (
