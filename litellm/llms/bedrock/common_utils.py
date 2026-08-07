@@ -36,6 +36,44 @@ class BedrockError(BaseLLMException):
     pass
 
 
+_BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "aws_region_name",
+    "aws_session_name",
+    "aws_profile_name",
+    "aws_role_name",
+    "aws_web_identity_token",
+    "aws_sts_endpoint",
+    "aws_external_id",
+)
+
+
+def merge_bedrock_aws_request_params(
+    litellm_params: Mapping[str, Any],
+    optional_params: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Merge deployment and request parameters without allowing auth escalation.
+
+    Deployment configuration is authoritative for AWS authentication. When a
+    deployment supplies static credentials, caller-supplied profile/role/token
+    selectors must not redirect signing to another identity available on the
+    server. Requests may still provide AWS credentials when the deployment has
+    no static credentials configured.
+    """
+    request_params: Final = {**optional_params, **litellm_params}  # mutable-ok: AWS helpers require a plain dict
+    has_static_deployment_credentials = all(
+        isinstance(litellm_params.get(key), str) and bool(litellm_params.get(key))
+        for key in ("aws_access_key_id", "aws_secret_access_key", "aws_region_name")
+    )
+    if has_static_deployment_credentials:
+        for key in _BEDROCK_AWS_AUTH_PARAMETER_KEYS:
+            if key not in litellm_params:
+                request_params.pop(key, None)
+    return request_params
+
+
 # Lazy import cache to avoid circular imports and performance impact
 _get_model_info = None
 
