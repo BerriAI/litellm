@@ -2425,3 +2425,139 @@ def test_tag_known_to_group_false_for_foreign_tag():
 
     router = _quality_high_cost_low_router()
     assert _tag_known_to_group(router, "gpt-4", ["llm-preference-include:unrelated"]) is False
+
+
+def test_caller_constraint_sets_none_when_caller_tags_absent():
+    from litellm.router_strategy.tag_based_routing import _caller_constraint_sets
+
+    assert _caller_constraint_sets(None) == (None, None)
+
+
+def test_caller_constraint_sets_splits_required_and_excluded():
+    from litellm.router_strategy.tag_based_routing import _caller_constraint_sets
+
+    caller_required_set, caller_excluded_set = _caller_constraint_sets(["&region:eu", "!region:us", "plain"])
+    assert caller_required_set == frozenset({"region:eu"})
+    assert caller_excluded_set == frozenset({"region:us"})
+
+
+def test_caller_constraint_sets_none_for_non_sequence_value():
+    from litellm.router_strategy.tag_based_routing import _caller_constraint_sets
+
+    # A malformed/unexpected caller_tags value (anything but a list/tuple) must be
+    # treated the same as "no origin information", never as "caller supplied
+    # nothing" -- the two are not interchangeable, see _trusted_only_pool.
+    assert _caller_constraint_sets("not-a-sequence") == (None, None)
+
+
+def test_trusted_only_pool_discards_everything_when_caller_sets_are_none():
+    from litellm.router_strategy.tag_based_routing import _trusted_only_pool
+
+    deployments = ({"litellm_params": {"tags": ["region:us"]}},)
+    # No origin info at all -> reproduce the pre-caller_tags unconditional
+    # fall-open: the trusted-only pool ignores excluded_set/required_set entirely.
+    assert _trusted_only_pool(deployments, frozenset({"region:eu"}), frozenset({"region:apac"}), None, None) == deployments
+
+
+def test_trusted_only_pool_keeps_constraint_not_attributable_to_caller():
+    from litellm.router_strategy.tag_based_routing import _trusted_only_pool
+
+    eu = {"litellm_params": {"tags": ["region:eu"]}}
+    us = {"litellm_params": {"tags": ["region:us"]}}
+    # required_set={"region:eu"} is NOT in caller_required_set -> trusted, kept.
+    result = _trusted_only_pool(
+        (eu, us), frozenset(), frozenset({"region:eu"}), frozenset(), frozenset()
+    )
+    assert result == (eu,)
+
+
+def _eu_region_router():
+    # eu-1 deliberately carries no "default" tag, and us-default is the only
+    # "default"-tagged deployment -- this keeps _default_tagged_pool's outcome a
+    # single, deterministic deployment id in every scenario below, regardless of
+    # which of the two candidate pools (trusted-only vs fully-unconstrained) a
+    # given code path resolves to.
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "chat",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["region:eu"],
+                },
+                "model_info": {"id": "eu-1", "allow_fail_open": True},
+            },
+            {
+                "model_name": "chat",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["region:us", "default"],
+                },
+                "model_info": {"id": "us-default", "allow_fail_open": True},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+
+@pytest.mark.asyncio()
+async def test_allow_fail_open_preserves_inherited_constraint_when_caller_tag_causes_exhaustion():
+    # &region:eu simulates a key/team-inherited hard requirement (never in
+    # caller_tags); !region:eu simulates the caller's own tag, which the caller
+    # controls and which is present in caller_tags. Combined they exhaust the
+    # pool (nothing can both carry and not carry region:eu), but allow_fail_open
+    # must fall back to what still satisfies the inherited requirement, not the
+    # fully-unconstrained default pool (us-default), and not raise either.
+    router = _eu_region_router()
+
+    response = await router.acompletion(
+        model="chat",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"tags": ["&region:eu", "!region:eu"], "caller_tags": ["!region:eu"]},
+        mock_response="hi",
+    )
+
+    assert response._hidden_params["model_id"] == "eu-1"
+
+
+@pytest.mark.asyncio()
+async def test_allow_fail_open_raises_when_inherited_constraint_alone_is_unsatisfiable():
+    # Both region:eu and region:us are known to the group (so the unknown-tag
+    # masking guard does not apply), but no single deployment carries both, and
+    # caller_tags=[] positively confirms the caller contributed nothing -- the
+    # entire required-AND set is inherited. allow_fail_open must not paper over
+    # an inherited requirement that is unsatisfiable on its own; it should raise
+    # exactly as it would with allow_fail_open unset.
+    router = _eu_region_router()
+
+    with pytest.raises(Exception) as exc_info:
+        await router.acompletion(
+            model="chat",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["&region:eu", "&region:us"], "caller_tags": []},
+            mock_response="hi",
+        )
+
+    from litellm.types.router import RouterErrors
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
+
+
+@pytest.mark.asyncio()
+async def test_allow_fail_open_unconditional_discard_when_caller_tags_key_absent():
+    # No "caller_tags" key at all (e.g. a direct SDK Router call that never went
+    # through the proxy's litellm_pre_call_utils.py) must reproduce the exact
+    # pre-caller_tags behavior: unconditional fall-open to the default pool, even
+    # though region:eu here would otherwise look like an inherited requirement.
+    router = _eu_region_router()
+
+    response = await router.acompletion(
+        model="chat",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"tags": ["&region:eu", "!region:eu"]},
+        mock_response="hi",
+    )
+
+    assert response._hidden_params["model_id"] == "us-default"

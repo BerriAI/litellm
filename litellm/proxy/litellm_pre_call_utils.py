@@ -1941,15 +1941,24 @@ async def add_litellm_data_to_request(
             tags_to_add=tags,
         )
 
-    if _metadata_variable_name != "metadata":
-        _user_metadata = data.get("metadata")
-        if isinstance(_user_metadata, dict):
-            _user_tags: Final = _user_metadata.get("tags")
-            if isinstance(_user_tags, list) and _user_tags:
-                data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
-                    request_tags=data[_metadata_variable_name].get("tags"),
-                    tags_to_add=_user_tags,
-                )
+    _caller_body_metadata: Final = data.get("metadata") if _metadata_variable_name != "metadata" else None
+    _caller_body_tags: Final = (
+        _caller_body_metadata.get("tags")
+        if isinstance(_caller_body_metadata, dict) and isinstance(_caller_body_metadata.get("tags"), list)
+        else None
+    )
+    if _caller_body_tags:
+        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+            request_tags=data[_metadata_variable_name].get("tags"),
+            tags_to_add=_caller_body_tags,
+        )
+
+    # caller_tags: exactly what this request itself supplied (x-litellm-tags header,
+    # body "tags", or body "metadata.tags" on litellm_metadata routes), never
+    # anything from key/team metadata. tag_based_routing.py's allow_fail_open uses
+    # this to tell a caller-supplied "!"/"&" constraint apart from one inherited
+    # from key/team policy, both merged into "tags" above.
+    data[_metadata_variable_name]["caller_tags"] = tuple(dict.fromkeys((*(tags or ()), *(_caller_body_tags or ()))))
 
     # Team Callbacks controls
     callback_settings_obj: Final = _get_dynamic_logging_metadata(

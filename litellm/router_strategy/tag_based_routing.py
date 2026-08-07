@@ -117,7 +117,7 @@ def _match_deployment(
     return None
 
 
-def _split_tags(tags: list[str]) -> tuple[tuple[str, ...], list[str], tuple[str, ...]]:
+def _split_tags(tags: Sequence[str]) -> tuple[tuple[str, ...], list[str], tuple[str, ...]]:
     required: Final = tuple(tag[1:] for tag in tags if tag.startswith("&") and len(tag) > 1)
     positive: Final = [
         t for t in tags if not t.startswith("!") and not t.startswith("&")
@@ -188,18 +188,49 @@ def _chain_allows_fail_open(
     return any((d.get("model_info") or {}).get("allow_fail_open") is True for d in healthy_deployments)
 
 
+def _trusted_only_pool(
+    healthy_deployments: Sequence[Any] | Mapping[Any, Any],
+    excluded_set: frozenset[str],
+    required_set: frozenset[str],
+    caller_excluded_set: frozenset[str] | None,
+    caller_required_set: frozenset[str] | None,
+) -> tuple[Any, ...]:
+    # caller_*_set is None only when this request carries no origin information at
+    # all (e.g. direct SDK Router usage, bypassing the proxy layer that populates
+    # metadata.caller_tags) -- treat every constraint as caller-supplied in that
+    # case (trusted == empty), reproducing this function's pre-caller_tags
+    # behavior exactly: an unconditional fall-open to the full default-tagged pool,
+    # constraints discarded entirely. Only a positively-known caller_*_set narrows
+    # what gets discarded to just what the caller actually supplied.
+    trusted_excluded: Final = frozenset[str]() if caller_excluded_set is None else excluded_set - caller_excluded_set
+    trusted_required: Final = frozenset[str]() if caller_required_set is None else required_set - caller_required_set
+    return _require_all_tags(_exclude_deployments(healthy_deployments, trusted_excluded), trusted_required)
+
+
 def _resolve_or_fail_open(
     pool: Sequence[Any],
     healthy_deployments: Sequence[Any] | Mapping[Any, Any],
     excluded_set: frozenset[str],
     required_set: frozenset[str],
+    caller_excluded_set: frozenset[str] | None,
+    caller_required_set: frozenset[str] | None,
     model: str,
     request_tags: object,
 ) -> tuple[Any, ...]:
     if pool:
         return tuple(pool)
     if _chain_allows_fail_open(healthy_deployments, excluded_set, required_set):
-        return _default_tagged_pool(healthy_deployments)
+        # Fall open only within whatever still satisfies the constraints this
+        # request's caller did not itself supply. A constraint entirely
+        # attributable to the caller (or, when caller_tags is unavailable, any
+        # constraint at all) can be discarded; one inherited from key/team policy
+        # cannot -- if that alone is unsatisfiable, raise instead of silently
+        # routing around it.
+        trusted_pool: Final = _trusted_only_pool(
+            healthy_deployments, excluded_set, required_set, caller_excluded_set, caller_required_set
+        )
+        if trusted_pool:
+            return _default_tagged_pool(trusted_pool)
     raise ValueError(
         f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
     )
@@ -209,6 +240,8 @@ def _resolve_constraint_only_pool(
     healthy_deployments: Sequence[Any] | Mapping[Any, Any],
     excluded_set: frozenset[str],
     required_set: frozenset[str],
+    caller_excluded_set: frozenset[str] | None,
+    caller_required_set: frozenset[str] | None,
     model: str,
     request_tags: object,
 ) -> tuple[Any, ...]:
@@ -217,7 +250,16 @@ def _resolve_constraint_only_pool(
         if required_set
         else _exclude_deployments(_default_tagged_pool(healthy_deployments), excluded_set)
     )
-    return _resolve_or_fail_open(pool, healthy_deployments, excluded_set, required_set, model, request_tags)
+    return _resolve_or_fail_open(
+        pool,
+        healthy_deployments,
+        excluded_set,
+        required_set,
+        caller_excluded_set,
+        caller_required_set,
+        model,
+        request_tags,
+    )
 
 
 def _chain_tag_filtering_override(deployments: Sequence[Any] | Mapping[Any, Any]) -> bool | None:
@@ -226,6 +268,17 @@ def _chain_tag_filtering_override(deployments: Sequence[Any] | Mapping[Any, Any]
         if value is not None:
             return value
     return None
+
+
+def _caller_constraint_sets(caller_tags: object) -> tuple[frozenset[str] | None, frozenset[str] | None]:
+    # None means no origin information is available at all (e.g. this request
+    # bypassed the proxy layer that populates metadata.caller_tags, as direct SDK
+    # Router usage does) -- callers of this must treat that as "every constraint is
+    # trusted," not "the caller supplied none," see _trusted_only_pool.
+    if not isinstance(caller_tags, (list, tuple)):
+        return None, None
+    caller_required, _caller_positive, caller_excluded = _split_tags(caller_tags)
+    return frozenset(caller_required), frozenset(caller_excluded)
 
 
 def _tag_known_to_group(llm_router_instance: LitellmRouter, model: str, positive_tags: Sequence[str]) -> bool:
@@ -288,6 +341,7 @@ async def get_deployments_for_tag(
         header_strings: Final[list[str]] = [f"User-Agent: {user_agent}"] if user_agent else []
 
         required_tags, positive_tags, excluded_patterns = _split_tags(request_tags or [])
+        caller_required_set, caller_excluded_set = _caller_constraint_sets(metadata.get("caller_tags"))
 
         excluded_set: Final = frozenset(excluded_patterns)
         required_set: Final = frozenset(required_tags)
@@ -301,7 +355,15 @@ async def get_deployments_for_tag(
         constraint_only: Final = (bool(excluded_set) or bool(required_set)) and not has_positive_filter
 
         if constraint_only:
-            return _resolve_constraint_only_pool(healthy_deployments, excluded_set, required_set, model, request_tags)
+            return _resolve_constraint_only_pool(
+                healthy_deployments,
+                excluded_set,
+                required_set,
+                caller_excluded_set,
+                caller_required_set,
+                model,
+                request_tags,
+            )
 
         new_healthy_deployments: Final[list[Any]] = []
         default_deployments: Final[list[Any]] = []
@@ -343,14 +405,32 @@ async def get_deployments_for_tag(
                     default_deployments.append(deployment)
 
             if len(new_healthy_deployments) == 0 and len(default_deployments) == 0:
-                return _resolve_or_fail_open((), healthy_deployments, excluded_set, required_set, model, request_tags)
+                return _resolve_or_fail_open(
+                    (),
+                    healthy_deployments,
+                    excluded_set,
+                    required_set,
+                    caller_excluded_set,
+                    caller_required_set,
+                    model,
+                    request_tags,
+                )
 
             if (
                 len(new_healthy_deployments) == 0
                 and positive_tags
                 and _tag_known_to_group(llm_router_instance, model, positive_tags)
             ):
-                return _resolve_or_fail_open((), healthy_deployments, excluded_set, required_set, model, request_tags)
+                return _resolve_or_fail_open(
+                    (),
+                    healthy_deployments,
+                    excluded_set,
+                    required_set,
+                    caller_excluded_set,
+                    caller_required_set,
+                    model,
+                    request_tags,
+                )
 
             return new_healthy_deployments if len(new_healthy_deployments) > 0 else default_deployments
 
