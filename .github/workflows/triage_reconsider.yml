@@ -1,12 +1,18 @@
 name: Agent Shin — reconsider
 
 # Comment-trigger workflow: when the PR/issue author (or an internal
-# collaborator) comments `@agent-shin reconsider` on a CLOSED PR/issue,
-# Agent Shin re-runs LLM-judge triage on the current title+body and:
+# collaborator) comments `@agent-shin reconsider`, Agent Shin re-evaluates:
 #
-#   - on PASS:  posts a "re-evaluated and reopened" comment + reopens.
+# CLOSED PR/issue — re-runs LLM-judge triage on the current title+body:
+#   - on PASS:  posts a "re-evaluated and reopened" comment + reopens (for
+#               PRs this additionally requires a Greptile confidence score
+#               of at least 4/5, and swaps the label to `ready for review`).
 #   - on FAIL:  posts a "still missing X" comment and leaves it closed,
 #               so the contributor can iterate again.
+#
+# OPEN PR — runs the review gate for that PR instead, so a contributor who
+# just fixed their description gets the `ready for review` / `not ready`
+# label pair flipped immediately rather than waiting for the daily sweep.
 #
 # This exists because GitHub does NOT let an external (non-write-access)
 # OSS contributor reopen a PR/issue closed by a bot or maintainer. Without
@@ -120,14 +126,24 @@ jobs:
           OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
           TRIAGE_MODEL: ${{ vars.TRIAGE_MODEL }}
           AGENT_SHIN_ENABLED: ${{ vars.AGENT_SHIN_ENABLED }}
+          AGENT_SHIN_MODE: ${{ vars.AGENT_SHIN_MODE }}
+          AGENT_SHIN_POLICY_URL: ${{ vars.AGENT_SHIN_POLICY_URL }}
           # `issue_comment` events fire for both issues and PR comments.
           # `issue.pull_request` is set iff this is a PR comment, so we use
           # its presence to decide whether to invoke `--pr N` or `--issue N`.
           IS_PR: ${{ github.event.issue.pull_request != null }}
+          STATE: ${{ github.event.issue.state }}
           NUMBER: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
-          if [ "${IS_PR}" = "true" ]; then
+          if [ "${IS_PR}" = "true" ] && [ "${STATE}" = "open" ]; then
+            # Reconsider on an OPEN PR re-runs the review gate so the label
+            # pair flips right away instead of on the next daily sweep.
+            ARGS=(--repo "${{ github.repository }}" --pr "${NUMBER}" --review-gate)
+            if [ "${AGENT_SHIN_MODE:-}" = "lite" ]; then
+              ARGS+=(--notice-only)
+            fi
+          elif [ "${IS_PR}" = "true" ]; then
             ARGS=(--repo "${{ github.repository }}" --pr "${NUMBER}" --reconsider)
           else
             ARGS=(--repo "${{ github.repository }}" --issue "${NUMBER}" --reconsider)

@@ -24,7 +24,8 @@ Environment:
     GH_TOKEN / GITHUB_TOKEN  - for `gh` CLI auth (auto-set in Actions)
     OPENAI_API_KEY           - required when --close is passed
     OPENAI_BASE_URL          - optional (route to any OpenAI-compatible API)
-    TRIAGE_MODEL             - optional model override (default: gpt-5.4-mini)
+    TRIAGE_MODEL             - optional model override (default: gpt-5.6-luna)
+    AGENT_SHIN_POLICY_URL    - optional blog-post URL linked from lite-mode notices
 """
 
 from __future__ import annotations
@@ -61,7 +62,7 @@ from agent_shin_shared import (  # noqa: E402  -- sys.path adjusted above
     seconds_since_latest_marker_comment,
 )
 
-DEFAULT_MODEL = "gpt-5.4-mini"
+DEFAULT_MODEL = "gpt-5.6-luna"
 
 INTERNAL_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
@@ -97,8 +98,10 @@ RECONSIDER_RATE_LIMIT_SECONDS = 600
 # clears BOTH quality bars: the LLM rubric (clear problem + expected/actual +
 # QA proof, or a linked issue) AND Greptile's most recent confidence score.
 READY_FOR_REVIEW_LABEL = "ready for review"
+NOT_READY_LABEL = "not ready"
 DEFAULT_GRACE_DAYS = 1  # 24h before an un-passing, un-tagged PR is auto-closed
 DEFAULT_MIN_GREPTILE_SCORE = 4  # Greptile < 4/5 counts as "not passing"
+LITE_NOTICE_DAYS = 7
 
 # Hidden HTML-comment markers stamped into review-gate comments. They never
 # render in the GitHub UI but let the gate detect its own prior actions so it
@@ -108,6 +111,7 @@ DEFAULT_MIN_GREPTILE_SCORE = 4  # Greptile < 4/5 counts as "not passing"
 READY_MARKER = "<!-- agent-shin:ready -->"
 REGRESSED_MARKER = "<!-- agent-shin:regressed -->"
 WITHIN_GRACE_MARKER = "<!-- agent-shin:within-grace -->"
+LITE_NOTICE_MARKER = "<!-- agent-shin:lite-notice -->"
 
 # `GREPTILE_BOT_LOGINS` (Greptile's GitHub App login variants —
 # `greptile-apps[bot]` in REST API comments, `greptile-apps` in
@@ -513,7 +517,18 @@ def build_pr_prompt(*, title: str, body: str) -> str:
                   output, demonstrating the change works end-to-end against
                   the real system. Commands whose external dependencies
                   (LLM provider, DB, network) are mocked or stubbed do NOT
-                  satisfy (2c); they are not end-to-end.
+                  satisfy (2c); they are not end-to-end. When the commands
+                  come from a custom script, the script's source must be
+                  visible — pasted in the body (a collapsible section is
+                  fine) or in a linked gist. Output from a script whose
+                  source is not shown does NOT satisfy (2c).
+
+              For a BUG FIX the proof (whichever form) must cover BOTH
+              sides: evidence of the failure BEFORE the change and
+              evidence it works AFTER. An after-only demonstration is
+              acceptable only for a brand-new feature, where no
+              meaningful "before" exists — there the proof must show the
+              feature working end-to-end.
 
               `has_qa_proof` must be set to `true` only when (2a), (2b),
               or a non-mocked (2c) is actually present in the body. If the
@@ -1028,6 +1043,44 @@ def format_reconsider_still_failing_comment(kind: str, verdict: dict) -> str:
     )
 
 
+def format_reconsider_needs_greptile_comment(
+    score: int | None, min_score: int
+) -> str:
+    """Posted when a closed PR's reconsider is blocked by the Greptile bar.
+
+    Reopening a closed PR requires a fresh Greptile confidence score of at
+    least ``min_score``/5 in addition to the LLM rubric, so this comment
+    walks the contributor through the exact recovery loop. Carries
+    ``RECONSIDER_COMMENT_MARKER`` so repeated triggers stay rate-limited.
+    """
+    current = (
+        f"Greptile's most recent review scored this PR **{score}/5**"
+        if score is not None
+        else "This PR has no Greptile review with a confidence score yet"
+    )
+    return (
+        "⏸️ **Not reopening yet — a passing Greptile review is required first.**\n"
+        "\n"
+        f"{current}; reopening a closed PR requires at least "
+        f"**{min_score}/5**.\n"
+        "\n"
+        "To get this PR reopened:\n"
+        "\n"
+        "1. Push your fixes, then comment `@greptileai` for a re-review, "
+        f"until the Confidence Score is at least {min_score}/5.\n"
+        "2. Add end-to-end QA evidence to the PR description: for a bug "
+        "fix, evidence it was broken before AND works now; for a feature, "
+        "evidence of it working end-to-end. A video or screenshots are "
+        "ideal; otherwise paste the exact commands with their real output "
+        "(real providers, no mocks — `pytest` runs don't count). If you "
+        "used a script, include its source in the description (a "
+        "collapsible section is fine) or a linked gist.\n"
+        "3. Comment `@agent-shin reconsider` again.\n"
+        "\n"
+        f"{RECONSIDER_COMMENT_MARKER}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Review gate — "ready for review" label lifecycle
 
@@ -1156,6 +1209,43 @@ def format_regression_comment(
     )
 
 
+def format_lite_notice_comment(
+    missing: list[str], explanation: str, policy_url: str | None
+) -> str:
+    """Posted at most once per PR while the gate runs in lite (notice-only) mode.
+
+    Lite mode never closes: this is the launch-week heads-up that auto-closes
+    start in ``LITE_NOTICE_DAYS``, with a pointer to the policy blog post when
+    ``policy_url`` is configured. Deduped via ``LITE_NOTICE_MARKER``.
+    """
+    policy_paragraph = (
+        f"This is part of a policy change explained in "
+        f"[this post]({policy_url}) — it links a GitHub discussion where "
+        "you can share feedback.\n"
+        "\n"
+        if policy_url
+        else ""
+    )
+    return (
+        "🚅 Hi, thanks for the PR! This is **Agent Shin**, the automated "
+        "triage bot. One-time heads-up: this PR doesn't currently meet the "
+        "contribution bar:\n"
+        "\n"
+        f"{_format_missing(missing)}\n"
+        "\n"
+        f"> {explanation}\n"
+        "\n"
+        f"Nothing is being closed today, but starting in {LITE_NOTICE_DAYS} "
+        "days PRs that don't meet the bar will be auto-closed. Update the "
+        "description with the missing pieces and I'll re-check on the next "
+        "sweep and tag the PR `ready for review` once it passes — or comment "
+        "`@agent-shin reconsider` after updating for an immediate re-check.\n"
+        "\n"
+        f"{policy_paragraph}"
+        f"{LITE_NOTICE_MARKER}"
+    )
+
+
 def format_within_grace_comment(
     missing: list[str], explanation: str, grace_days: int
 ) -> str:
@@ -1191,22 +1281,34 @@ def review_gate(
     grace_days: int = DEFAULT_GRACE_DAYS,
     min_greptile_score: int = DEFAULT_MIN_GREPTILE_SCORE,
     label: str = READY_FOR_REVIEW_LABEL,
+    not_ready_label: str = NOT_READY_LABEL,
+    notice_only: bool = False,
+    policy_url: str | None = None,
     allowlist: frozenset[str] = ALLOWLIST_LOGINS,
 ) -> dict:
-    """Reconcile the `ready for review` label with a PR's current quality.
+    """Reconcile the `ready for review` / `not ready` labels with a PR's quality.
 
     A PR is *passing* when it clears BOTH gates: the LLM rubric (linked issue,
     or problem description + expected/actual + QA proof) AND Greptile's most
     recent confidence score (>= ``min_greptile_score``; absence of a score is
     not held against the PR). The gate then drives a small state machine, using
-    the label itself as the persisted state so comments fire only on
-    transitions (never on every scheduled run):
+    the `ready for review` label itself as the persisted state so comments fire
+    only on transitions (never on every scheduled run):
 
       passing, untagged           -> add label + "ready for review" / "all clear"
       passing, tagged             -> noop-passing
       not passing, tagged         -> remove label + regression comment (stays open)
       not passing, untagged, old  -> close + comment (past the grace window)
       not passing, untagged, new  -> one-time "what's missing" notice (within grace)
+
+    The red `not ready` label mirrors the green one: it is added whenever the
+    PR is not passing and removed whenever it passes, so the pair always shows
+    the current verdict at a glance.
+
+    ``notice_only`` (lite mode) disables the close path entirely: an untagged,
+    not-passing PR instead gets a one-time "closes start in 7 days" notice
+    linking ``policy_url``, and regression comments quote the lite window
+    rather than ``grace_days``.
 
     ``close`` gates every destructive side effect: with ``close=False`` the
     function returns a ``would-*`` preview and touches nothing, mirroring the
@@ -1315,6 +1417,13 @@ def review_gate(
         "age_days": age_days,
     }
 
+    not_ready_present = not_ready_label.lower() in labels_now
+    if close:
+        if passing and not_ready_present:
+            remove_label(repo, number, not_ready_label)
+        elif not passing and not not_ready_present:
+            add_label(repo, number, not_ready_label)
+
     if passing:
         if label_present:
             return {**base_result, "action": "noop-passing"}
@@ -1335,12 +1444,22 @@ def review_gate(
     missing = _combine_missing(verdict, greptile_score, min_greptile_score)
 
     if label_present:
-        comment = format_regression_comment(missing, explanation, grace_days)
+        window_days = LITE_NOTICE_DAYS if notice_only else grace_days
+        comment = format_regression_comment(missing, explanation, window_days)
         if not close:
             return {**base_result, "action": "would-remove-label", "comment": comment}
         remove_label(repo, number, label)
         post_comment(repo, number, comment)
         return {**base_result, "action": "label-removed-regressed", "comment": comment}
+
+    if notice_only:
+        if _has_marker(comments, LITE_NOTICE_MARKER):
+            return {**base_result, "action": "lite-already-notified"}
+        comment = format_lite_notice_comment(missing, explanation, policy_url)
+        if not close:
+            return {**base_result, "action": "would-notify-lite", "comment": comment}
+        post_comment(repo, number, comment)
+        return {**base_result, "action": "lite-notified", "comment": comment}
 
     # Not passing and not tagged. If the PR was previously tagged and then
     # regressed (we removed the label and posted REGRESSED_MARKER), honor the
@@ -1393,6 +1512,8 @@ def triage(
     judge: Any = None,
     print_prompt: bool = False,
     reconsider: bool = False,
+    min_greptile_score: int = DEFAULT_MIN_GREPTILE_SCORE,
+    comments: Any = _UNSET,
     allowlist: frozenset[str] = ALLOWLIST_LOGINS,
 ) -> dict:
     """Triage a single PR or issue. Returns a result dict for logging/tests.
@@ -1420,6 +1541,17 @@ def triage(
          verdict on this PR/issue within `RECONSIDER_RATE_LIMIT_SECONDS`,
          skip — repeated triggers from the same contributor shouldn't burn
          CI minutes or LLM budget.
+
+    Reopening a closed PR is held to a stricter bar than regular triage:
+    the PR must carry a Greptile confidence score of at least
+    ``min_greptile_score`` (no score at all fails — the contributor is told
+    to comment `@greptileai`), and the linked-issue short-circuit is
+    bypassed so the LLM rubric's end-to-end QA-evidence requirement always
+    applies. On a reconsider pass the PR is reopened AND tagged
+    `ready for review` (the `not ready` label is removed), since the pass
+    is by construction the same verdict the review gate would reach.
+    ``comments`` is injectable for tests; in production the live comment
+    list is fetched for the Greptile-score check.
     """
     fetcher = {"pr": fetch_pr, "issue": fetch_issue}[kind]
     item = fetcher(repo, number)
@@ -1470,10 +1602,37 @@ def triage(
                 "rate_limit_window_seconds": RECONSIDER_RATE_LIMIT_SECONDS,
             }
 
+    if reconsider and kind == "pr":
+        if comments is _UNSET:
+            comments = list(
+                _iter_paginated_json(f"repos/{repo}/issues/{number}/comments")
+            )
+        extraction = extract_greptile_score(comments)
+        greptile_score = extraction[0] if extraction else None
+        base_result = {**base_result, "greptile_score": greptile_score}
+        if greptile_score is None or greptile_score < min_greptile_score:
+            comment = format_reconsider_needs_greptile_comment(
+                greptile_score, min_greptile_score
+            )
+            if not close:
+                return {
+                    **base_result,
+                    "action": "would-reconsider-needs-greptile",
+                    "comment": comment,
+                }
+            post_comment(repo, number, comment)
+            return {
+                **base_result,
+                "action": "reconsider-needs-greptile",
+                "comment": comment,
+            }
+
     if kind == "pr":
         # Short-circuit: if body very clearly links a related issue, just pass.
-        if has_linked_issue(body):
-            base = {
+        # Never in reconsider mode — reopening always requires the LLM rubric's
+        # QA-evidence check, which a linked issue alone does not satisfy.
+        if has_linked_issue(body) and not reconsider:
+            return {
                 **base_result,
                 "action": "pass-linked-issue",
                 "verdict": {
@@ -1482,23 +1641,6 @@ def triage(
                     "explanation": "Linked-issue regex matched; LLM was not called.",
                 },
             }
-            if reconsider:
-                # Pass-on-reconsider -> reopen the PR with a friendly comment.
-                reopen_body = format_reopen_comment(kind)
-                if not close:
-                    return {
-                        **base,
-                        "action": "would-reopen",
-                        "comment": reopen_body,
-                    }
-                post_comment(repo, number, reopen_body)
-                reopen_pr(repo, number)
-                return {
-                    **base,
-                    "action": "reopened",
-                    "comment": reopen_body,
-                }
-            return base
         prompt = build_pr_prompt(title=title, body=body)
     else:
         prompt = build_issue_prompt(title=title, body=body)
@@ -1551,6 +1693,8 @@ def triage(
             post_comment(repo, number, reopen_body)
             if kind == "pr":
                 reopen_pr(repo, number)
+                add_label(repo, number, READY_FOR_REVIEW_LABEL)
+                remove_label(repo, number, NOT_READY_LABEL)
             else:
                 reopen_issue(repo, number)
             return {
@@ -1733,8 +1877,26 @@ def main() -> int:
         default=DEFAULT_MIN_GREPTILE_SCORE,
         choices=range(1, 6),
         help=(
-            "Review-gate only: Greptile score below which a PR counts as not "
-            f"passing (default: {DEFAULT_MIN_GREPTILE_SCORE} -> <4/5 regresses)."
+            "Greptile score below which a PR counts as not passing, for both "
+            "the review gate and PR reconsiders "
+            f"(default: {DEFAULT_MIN_GREPTILE_SCORE} -> <4/5 fails)."
+        ),
+    )
+    parser.add_argument(
+        "--notice-only",
+        action="store_true",
+        help=(
+            "Review-gate only (lite mode): never close; post a one-time "
+            f'"closes start in {LITE_NOTICE_DAYS} days" notice on failing, '
+            "untagged PRs instead. Labels still reconcile."
+        ),
+    )
+    parser.add_argument(
+        "--policy-url",
+        default=os.environ.get("AGENT_SHIN_POLICY_URL") or None,
+        help=(
+            "Blog-post URL linked from the lite-mode notice "
+            "(default: $AGENT_SHIN_POLICY_URL)."
         ),
     )
     args = parser.parse_args()
@@ -1752,6 +1914,8 @@ def main() -> int:
             model=args.model,
             grace_days=args.grace_days,
             min_greptile_score=args.min_greptile_score,
+            notice_only=args.notice_only,
+            policy_url=args.policy_url,
         )
     else:
         result = triage(
@@ -1762,6 +1926,7 @@ def main() -> int:
             model=args.model,
             print_prompt=args.print_prompt,
             reconsider=args.reconsider,
+            min_greptile_score=args.min_greptile_score,
         )
 
     if result.get("action") == "print-prompt":

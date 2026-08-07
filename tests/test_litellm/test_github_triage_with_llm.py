@@ -726,6 +726,14 @@ class TestBuildPrompts:
 class TestMainModelDefault:
     """`--model` falls back to DEFAULT_MODEL even when TRIAGE_MODEL is empty."""
 
+    def test_default_model_is_gpt_5_6_luna(self, triage_module):
+        # Pinned deliberately: the judge should track the latest model in the
+        # family, and the gpt-5 prefix check below relies on the family name.
+        assert triage_module.DEFAULT_MODEL == "gpt-5.6-luna"
+        assert triage_module.DEFAULT_MODEL.startswith(
+            triage_module.GPT5_FAMILY_PREFIX
+        ), "reasoning-effort handling in call_llm_judge keys off the gpt-5 prefix"
+
     def _stub_triage(self, triage_module, monkeypatch):
         captured: dict = {}
 
@@ -1105,6 +1113,38 @@ class TestTriageOrchestration:
         )
 
     @staticmethod
+    def _greptile_comments(score: int) -> list:
+        """A comment list whose most recent Greptile review carries `score`/5.
+
+        PR reconsiders are gated on this score, so tests exercising the
+        judge/reopen paths must inject a passing one (or explicitly a failing
+        one to exercise the gate itself).
+        """
+        return [
+            {
+                "user": {"login": "greptile-apps[bot]"},
+                "body": f"Confidence Score: {score}/5",
+                "created_at": "2026-05-24T10:00:00Z",
+            }
+        ]
+
+    @staticmethod
+    def _stub_labels(triage_module, monkeypatch) -> dict:
+        """Capture add_label/remove_label calls (reconsider reopen flips labels)."""
+        labels: dict = {"added": [], "removed": []}
+        monkeypatch.setattr(
+            triage_module,
+            "add_label",
+            lambda repo, n, label: labels["added"].append(label),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "remove_label",
+            lambda repo, n, label: labels["removed"].append(label),
+        )
+        return labels
+
+    @staticmethod
     def _stub_grace_aged_out(triage_module, monkeypatch):
         """Pretend the grace warning has aged out.
 
@@ -1129,14 +1169,17 @@ class TestTriageOrchestration:
         )
 
     def test_should_reopen_on_reconsider_pass(self, triage_module, monkeypatch):
-        # Reconsider on a closed PR with a passing verdict -> reopen + post a
-        # friendly "re-evaluated" comment. close=True is the production path
-        # (the workflow only adds --close when AGENT_SHIN_ENABLED=true).
+        # Reconsider on a closed PR with a passing verdict AND a passing
+        # Greptile score -> reopen + post a friendly "re-evaluated" comment
+        # + swap the label pair to `ready for review`. close=True is the
+        # production path (the workflow only adds --close when
+        # AGENT_SHIN_ENABLED=true).
         pr = self._make_pr(
             state="closed", body="Updated body with QA proof + screenshots."
         )
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
         self._stub_reconsider_guards(triage_module, monkeypatch)
+        labels = self._stub_labels(triage_module, monkeypatch)
         posted = {}
         reopened = {}
         monkeypatch.setattr(
@@ -1166,11 +1209,14 @@ class TestTriageOrchestration:
                 {"verdict": "pass", "missing": [], "explanation": "ok now"}
             ),
             reconsider=True,
+            comments=self._greptile_comments(5),
         )
         assert result["action"] == "reopened"
         assert reopened["n"] == 42
         assert posted["n"] == 42
         assert "reopened" in posted["body"].lower()
+        assert labels["added"] == [triage_module.READY_FOR_REVIEW_LABEL]
+        assert labels["removed"] == [triage_module.NOT_READY_LABEL]
 
     def test_should_dry_run_reconsider_pass_when_close_false(
         self, triage_module, monkeypatch
@@ -1206,6 +1252,7 @@ class TestTriageOrchestration:
                 {"verdict": "pass", "missing": [], "explanation": "ok now"}
             ),
             reconsider=True,
+            comments=self._greptile_comments(5),
         )
         assert result["action"] == "would-reopen"
         # The previewed comment body is still returned so a step-summary
@@ -1249,6 +1296,7 @@ class TestTriageOrchestration:
             model="m",
             judge=lambda p: json.dumps(verdict),
             reconsider=True,
+            comments=self._greptile_comments(5),
         )
         assert result["action"] == "reconsider-still-failing"
         assert posted["n"] == 42
@@ -1288,6 +1336,7 @@ class TestTriageOrchestration:
                     {"verdict": v, "missing": [], "explanation": "weird"}
                 ),
                 reconsider=True,
+                comments=self._greptile_comments(5),
             )
             assert result["action"] == "reconsider-still-failing", ambiguous
             assert "body" in posted, ambiguous
@@ -1321,19 +1370,72 @@ class TestTriageOrchestration:
             model="m",
             judge=lambda p: json.dumps(verdict),
             reconsider=True,
+            comments=self._greptile_comments(5),
         )
         assert result["action"] == "would-reconsider-still-failing"
         assert "QA proof" in result["comment"]
 
-    def test_should_reopen_on_reconsider_with_linked_issue_short_circuit(
+    def test_linked_issue_alone_must_not_reopen_on_reconsider(
         self, triage_module, monkeypatch
     ):
-        # The linked-issue short-circuit also has to honor reconsider mode:
-        # if the contributor edited the body to add `Fixes #1234`, the regex
-        # path should reopen the PR without calling the LLM.
+        # Reopening a closed PR requires end-to-end QA evidence, so the
+        # linked-issue short-circuit is bypassed in reconsider mode: the LLM
+        # judge MUST run, and a body that only links an issue (no QA proof)
+        # stays closed. Without this bypass, `Fixes #1234` alone would reopen
+        # any bot-closed PR.
         pr = self._make_pr(state="closed", body="Fixes #1234\n\nAddresses the bug.")
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
         self._stub_reconsider_guards(triage_module, monkeypatch)
+        judged = {}
+        posted = {}
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda repo, n, body: posted.update({"body": body}),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "reopen_pr",
+            lambda *a, **kw: pytest.fail("must not reopen without QA evidence"),
+        )
+
+        def judge(prompt):
+            judged["prompt"] = prompt
+            return json.dumps(
+                {
+                    "verdict": "fail",
+                    "missing": ["end-to-end QA proof"],
+                    "explanation": "Linked issue but no QA evidence.",
+                }
+            )
+
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=55,
+            close=True,
+            model="m",
+            judge=judge,
+            reconsider=True,
+            comments=self._greptile_comments(5),
+        )
+        assert result["action"] == "reconsider-still-failing"
+        assert "prompt" in judged, "the LLM judge must run despite the linked issue"
+        assert "QA proof" in posted["body"]
+
+    def test_linked_issue_with_qa_evidence_reopens_on_reconsider(
+        self, triage_module, monkeypatch
+    ):
+        # The judge (not the regex) decides reconsider reopens: when the body
+        # carries both the linked issue and real QA evidence, the pass verdict
+        # reopens as before.
+        pr = self._make_pr(
+            state="closed",
+            body="Fixes #1234\n\nBefore/after curl output:\n```\n$ curl ...\n```",
+        )
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        self._stub_reconsider_guards(triage_module, monkeypatch)
+        self._stub_labels(triage_module, monkeypatch)
         posted = {}
         reopened = {}
         monkeypatch.setattr(
@@ -1353,41 +1455,15 @@ class TestTriageOrchestration:
             number=55,
             close=True,
             model="m",
-            judge=lambda p: pytest.fail("LLM must not run when linked-issue matches"),
+            judge=lambda p: json.dumps(
+                {"verdict": "pass", "missing": [], "explanation": "proof present"}
+            ),
             reconsider=True,
+            comments=self._greptile_comments(5),
         )
         assert result["action"] == "reopened"
         assert reopened["n"] == 55
         assert "reopened" in posted["body"].lower()
-
-    def test_should_dry_run_reconsider_with_linked_issue_when_close_false(
-        self, triage_module, monkeypatch
-    ):
-        # Linked-issue short-circuit must ALSO honor dry-run.
-        pr = self._make_pr(state="closed", body="Fixes #1234\n\nAddresses the bug.")
-        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
-        self._stub_reconsider_guards(triage_module, monkeypatch)
-        monkeypatch.setattr(
-            triage_module,
-            "post_comment",
-            lambda *a, **kw: pytest.fail("must not post in dry-run"),
-        )
-        monkeypatch.setattr(
-            triage_module,
-            "reopen_pr",
-            lambda *a, **kw: pytest.fail("must not reopen in dry-run"),
-        )
-
-        result = triage_module.triage(
-            repo="o/r",
-            kind="pr",
-            number=55,
-            close=False,
-            model="m",
-            judge=lambda p: pytest.fail("LLM must not run when linked-issue matches"),
-            reconsider=True,
-        )
-        assert result["action"] == "would-reopen"
 
     def test_should_skip_internal_in_reconsider_mode(self, triage_module, monkeypatch):
         # Internal authors are exempt from triage in both regular and
@@ -1534,6 +1610,7 @@ class TestTriageOrchestration:
             lambda repo, n: reopened.update({"n": n}),
         )
 
+        self._stub_labels(triage_module, monkeypatch)
         result = triage_module.triage(
             repo="o/r",
             kind="pr",
@@ -1544,9 +1621,149 @@ class TestTriageOrchestration:
                 {"verdict": "pass", "missing": [], "explanation": "ok"}
             ),
             reconsider=True,
+            comments=self._greptile_comments(5),
         )
         assert result["action"] == "reopened"
         assert reopened["n"] == 1
+
+    def test_reconsider_without_greptile_score_stays_closed_without_llm(
+        self, triage_module, monkeypatch
+    ):
+        # A closed PR with no Greptile confidence score cannot be reopened —
+        # the contributor must comment `@greptileai` first. The gate runs
+        # BEFORE the judge so refused reconsiders never burn LLM budget.
+        pr = self._make_pr(state="closed", body="Now with screenshots.")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        self._stub_reconsider_guards(triage_module, monkeypatch)
+        posted = {}
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda repo, n, body: posted.update({"n": n, "body": body}),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "reopen_pr",
+            lambda *a, **kw: pytest.fail("must not reopen without a Greptile score"),
+        )
+
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=42,
+            close=True,
+            model="m",
+            judge=lambda p: pytest.fail("LLM must not run before the Greptile gate"),
+            reconsider=True,
+            comments=[],
+        )
+        assert result["action"] == "reconsider-needs-greptile"
+        assert result["greptile_score"] is None
+        assert "@greptileai" in posted["body"]
+        assert "4/5" in posted["body"]
+        # Must carry the rate-limit marker so spamming reconsider while the
+        # score is missing still hits the cooldown.
+        assert triage_module.RECONSIDER_COMMENT_MARKER in posted["body"]
+
+    def test_reconsider_with_low_greptile_score_stays_closed_without_llm(
+        self, triage_module, monkeypatch
+    ):
+        pr = self._make_pr(state="closed", body="Now with screenshots.")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        self._stub_reconsider_guards(triage_module, monkeypatch)
+        posted = {}
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda repo, n, body: posted.update({"body": body}),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "reopen_pr",
+            lambda *a, **kw: pytest.fail("must not reopen below the Greptile bar"),
+        )
+
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=42,
+            close=True,
+            model="m",
+            judge=lambda p: pytest.fail("LLM must not run below the Greptile bar"),
+            reconsider=True,
+            comments=self._greptile_comments(3),
+        )
+        assert result["action"] == "reconsider-needs-greptile"
+        assert result["greptile_score"] == 3
+        assert "3/5" in posted["body"]
+
+    def test_reconsider_greptile_gate_honors_dry_run(
+        self, triage_module, monkeypatch
+    ):
+        pr = self._make_pr(state="closed", body="Now with screenshots.")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        self._stub_reconsider_guards(triage_module, monkeypatch)
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda *a, **kw: pytest.fail("must not post in dry-run"),
+        )
+
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=42,
+            close=False,
+            model="m",
+            judge=lambda p: pytest.fail("LLM must not run before the Greptile gate"),
+            reconsider=True,
+            comments=[],
+        )
+        assert result["action"] == "would-reconsider-needs-greptile"
+        assert "@greptileai" in result["comment"]
+
+    def test_reconsider_greptile_gate_does_not_apply_to_issues(
+        self, triage_module, monkeypatch
+    ):
+        # Issues have no Greptile reviews; the score gate is PR-only. An
+        # issue reconsider with a passing verdict must reopen even though no
+        # comment list or score exists.
+        issue = {
+            "number": 9,
+            "title": "Bug: with repro now",
+            "body": "```\n$ curl ...\ntraceback\n```\nExpected X, got Y.",
+            "state": "closed",
+            "author_association": "NONE",
+            "user": {"login": "mateo-berri"},
+        }
+        monkeypatch.setattr(triage_module, "fetch_issue", lambda repo, n: issue)
+        self._stub_reconsider_guards(triage_module, monkeypatch)
+        reopened = {}
+        monkeypatch.setattr(triage_module, "post_comment", lambda repo, n, body: None)
+        monkeypatch.setattr(
+            triage_module,
+            "reopen_issue",
+            lambda repo, n: reopened.update({"n": n}),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "_iter_paginated_json",
+            lambda *a, **kw: pytest.fail("issue reconsider must not fetch comments"),
+        )
+
+        result = triage_module.triage(
+            repo="o/r",
+            kind="issue",
+            number=9,
+            close=True,
+            model="m",
+            judge=lambda p: json.dumps(
+                {"verdict": "pass", "missing": [], "explanation": "repro present"}
+            ),
+            reconsider=True,
+        )
+        assert result["action"] == "reopened"
+        assert reopened["n"] == 9
 
     def test_should_reopen_issue_on_reconsider_pass(self, triage_module, monkeypatch):
         issue = {
