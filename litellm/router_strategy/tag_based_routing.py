@@ -239,9 +239,6 @@ async def get_deployments_for_tag(
         if constraint_only:
             return _resolve_constraint_only_pool(healthy_deployments, excluded_set, required_set, model, request_tags)
 
-        if (excluded_set or required_set) and not candidates:
-            return _resolve_or_fail_open((), healthy_deployments, model, request_tags)
-
         new_healthy_deployments: Final[list[Any]] = []
         default_deployments: Final[list[Any]] = []
 
@@ -282,10 +279,7 @@ async def get_deployments_for_tag(
                     default_deployments.append(deployment)
 
             if len(new_healthy_deployments) == 0 and len(default_deployments) == 0:
-                raise ValueError(
-                    f"{RouterErrors.no_deployments_with_tag_routing.value}."
-                    f" Passed model={model} and tags={request_tags}"
-                )
+                return _resolve_or_fail_open((), healthy_deployments, model, request_tags)
 
             return new_healthy_deployments if len(new_healthy_deployments) > 0 else default_deployments
 
