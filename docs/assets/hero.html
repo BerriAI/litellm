@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>LiteLLM Relay + AI Gateway</title>
+<link rel="icon" href="data:,">
+<style>
+  :root{
+    --blue-50:#f2f8ff; --blue-200:#c3ddf7;
+    --blue-500:#1e88e5; --blue-600:#1565c0; --blue-700:#0d47a1;
+    --ink:#0b1f33; --muted:#5b7387; --line:#dce9f5;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+       background:#eef3f8;display:flex;justify-content:center;padding:24px}
+  .canvas{width:1240px;height:790px;background:#fff;padding:40px 50px;position:relative}
+
+  .eyebrow{text-align:center;font:600 12px ui-monospace,Menlo,monospace;letter-spacing:.22em;color:var(--blue-500)}
+  h1{text-align:center;font-size:35px;line-height:1.25;font-weight:600;color:var(--ink);margin-top:14px;letter-spacing:-.01em}
+  h1 .accent{color:var(--blue-600)}
+  .sub{text-align:center;max-width:680px;margin:14px auto 0;font-size:15px;line-height:1.6;color:var(--muted)}
+
+  .stage{margin-top:36px;display:flex;align-items:center;justify-content:center}
+
+  .laptop{width:430px;border:1.5px solid var(--blue-200);border-radius:16px;
+    background:linear-gradient(180deg,#fafcff,#f2f8ff);padding:18px 16px;position:relative}
+  .zone-tag{position:absolute;top:-9px;left:18px;background:#fff;padding:0 9px;
+    font:600 9.5px ui-monospace,monospace;letter-spacing:.18em;color:var(--blue-600)}
+  .apps{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px}
+  .app{display:flex;align-items:center;gap:9px;background:#fff;border:1px solid var(--line);
+    border-radius:9px;padding:8px 10px}
+  .app .slot{flex:0 0 22px}
+  .app span.nm{font-size:12.5px;color:#2c4257;font-weight:500;white-space:nowrap}
+
+  /* logo slot: img if it loads, monogram if it doesn't */
+  .slot{width:22px;height:22px;display:flex;align-items:center;justify-content:center}
+  .slot img{width:20px;height:20px;object-fit:contain;display:block}
+  .mono{width:22px;height:22px;border-radius:6px;display:flex;align-items:center;
+    justify-content:center;font:700 9.5px system-ui;color:#fff;letter-spacing:-.02em;
+    overflow:hidden;line-height:1}
+  .mono.emoji{background:none!important;font-size:16px}
+
+  .funnel{display:block;margin:4px auto -4px}
+
+  .relay{background:linear-gradient(135deg,var(--blue-600),var(--blue-700));border-radius:12px;
+    padding:13px 15px;color:#fff;box-shadow:0 10px 26px -10px rgba(13,71,161,.6);
+    display:flex;align-items:center;gap:12px}
+  .relay .em{font-size:22px;line-height:1}
+  .relay .txt{flex:1}
+  .relay .t1{font-size:15.5px;font-weight:650;letter-spacing:-.01em}
+  .relay .t2{font-size:10.5px;opacity:.82;margin-top:2px}
+  .relay .badge{font:600 8.5px ui-monospace,monospace;letter-spacing:.12em;
+    background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.25);
+    padding:5px 8px;border-radius:5px;white-space:nowrap}
+  .chokenote{text-align:center;margin-top:10px;font:500 9.5px ui-monospace,monospace;
+    letter-spacing:.06em;color:var(--blue-600)}
+
+  .pipe{width:186px;padding:0 4px}
+  .pipe-lbl{text-align:center;font:600 9.5px ui-monospace,monospace;letter-spacing:.13em;
+    color:#9db2c4;margin-bottom:8px;line-height:1.7}
+  .pipe-lbl b{color:var(--blue-600);font-weight:600}
+
+  .gw{width:296px;border:1.5px solid var(--blue-200);border-radius:16px;background:#fff;
+    box-shadow:0 16px 40px -22px rgba(21,101,192,.35);padding:22px 20px 18px;position:relative}
+  .gw-head{display:flex;align-items:center;justify-content:center;gap:9px}
+  .gw-em{font-size:25px;line-height:1}
+  .gw-word{font-size:22px;font-weight:650;color:var(--ink);letter-spacing:-.02em}
+  .gw-sub{text-align:center;margin-top:5px;font-size:11.5px;color:var(--blue-600);font-weight:500}
+  .pillars{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:18px}
+  .pillar{background:var(--blue-50);border:1px solid #e6f1fb;border-radius:9px;padding:13px 4px 10px;text-align:center}
+  .pillar svg{width:18px;height:18px;stroke:var(--blue-600);fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+  .pillar span{display:block;margin-top:8px;font:600 8.5px ui-monospace,monospace;letter-spacing:.13em;color:var(--blue-600)}
+  .meta{margin-top:15px;padding-top:12px;border-top:1px dashed var(--line);text-align:center;font-size:10.5px;color:var(--muted);line-height:1.6}
+
+  .provs{width:196px;padding-left:26px}
+  .ptag{font:600 9.5px ui-monospace,monospace;letter-spacing:.18em;color:#9db2c4;margin-bottom:12px}
+  .prov{display:flex;align-items:center;gap:10px;height:38px}
+  .pchip{width:32px;height:32px;border-radius:8px;border:1px solid var(--line);
+    display:flex;align-items:center;justify-content:center;flex:0 0 32px;background:#fff}
+  .pchip .slot{width:18px;height:18px}
+  .pchip .slot img{width:18px;height:18px}
+  .pchip .mono{width:20px;height:20px;font-size:8.5px}
+  .prov span.nm{font-size:12.5px;color:#2c4257;font-weight:500}
+
+  .footline{position:absolute;left:0;right:0;bottom:30px;text-align:center;font-size:14.5px;color:#3d566c}
+  .footline b{color:var(--blue-600);font-weight:600}
+
+  /* export button, hidden when printing/capturing */
+  #export{position:fixed;left:12px;bottom:12px;background:#1565c0;color:#fff;border:0;
+    font:600 12px system-ui;padding:10px 16px;border-radius:8px;cursor:pointer;
+    box-shadow:0 6px 18px rgba(21,101,192,.35)}
+  #export:hover{background:#0d47a1}
+  #export:disabled{opacity:.6;cursor:default}
+  @media print{#export,#diag{display:none!important}}
+
+  /* diagnostics panel */
+  #diag{position:fixed;right:12px;bottom:12px;background:#0b1f33;color:#cfe4f7;
+    font:11px ui-monospace,monospace;padding:12px 14px;border-radius:8px;max-width:330px;
+    line-height:1.6;box-shadow:0 8px 24px rgba(0,0,0,.3);display:none}
+  #diag b{color:#fff}
+  #diag .ok{color:#5fd08a}
+  #diag .bad{color:#ff8f7a}
+</style>
+</head>
+<body>
+<div class="canvas">
+
+  <div class="eyebrow">[ ONE PLATFORM ]</div>
+  <h1><span class="accent">LiteLLM Relay</span> + LiteLLM AI Gateway.<br>Coverage for every AI your company uses.</h1>
+  <p class="sub">Install LiteLLM Relay on employee machines to detect AI usage and route it to LiteLLM AI Gateway, making Gateway your single pane of glass for AI usage across the company.</p>
+
+  <div class="stage">
+
+    <div class="laptop">
+      <div class="zone-tag">ON THE LAPTOP</div>
+      <div class="apps">
+        <div class="app"><span class="slot" data-name="Claude Desktop" data-src="./logos/claude.svg" data-mono="A" data-bg="#d97757"></span><span class="nm">Claude Desktop</span></div>
+        <div class="app"><span class="slot" data-name="ChatGPT (browser)" data-src="./logos/openai.svg" data-mono="◎" data-bg="#0f0f0f"></span><span class="nm">ChatGPT (browser)</span></div>
+        <div class="app"><span class="slot" data-name="Cursor" data-src="./logos/cursor.svg" data-mono="▶" data-bg="#1c1c1c"></span><span class="nm">Cursor</span></div>
+        <div class="app"><span class="slot" data-name="Notion AI" data-src="./logos/notion.svg" data-mono="N" data-bg="#0f0f0f"></span><span class="nm">Notion AI</span></div>
+        <div class="app"><span class="slot" data-name="Codex" data-src="./logos/openai.svg" data-mono="&lt;&gt;" data-bg="#3f3f46"></span><span class="nm">Codex</span></div>
+        <div class="app"><span class="slot" data-name="OpenClaw" data-mono="🦞" data-bg="#e0532c"></span><span class="nm">OpenClaw</span></div>
+      </div>
+
+      <svg class="funnel" width="398" height="46" viewBox="0 0 398 46">
+        <defs><linearGradient id="fg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#4da3ff" stop-opacity=".2"/>
+          <stop offset="1" stop-color="#1565c0" stop-opacity=".6"/>
+        </linearGradient></defs>
+        <g fill="none" stroke="url(#fg)" stroke-width="1.4">
+          <path d="M20 0 C 20 28, 170 22, 178 46"/>
+          <path d="M120 0 C 120 28, 186 24, 190 46"/>
+          <path d="M199 0 L 199 46"/>
+          <path d="M278 0 C 278 28, 212 24, 208 46"/>
+          <path d="M378 0 C 378 28, 228 22, 220 46"/>
+        </g>
+      </svg>
+
+      <div class="relay">
+        <div class="em">🚅</div>
+        <div class="txt">
+          <div class="t1">LiteLLM Relay</div>
+          <div class="t2">installed on every device · routes AI usage</div>
+        </div>
+        <div class="badge">CHOKE&nbsp;POINT</div>
+      </div>
+
+      <div class="chokenote">↑ ONE LOCAL EXIT. NOTHING BYPASSES IT.</div>
+    </div>
+
+    <div class="pipe">
+      <div class="pipe-lbl">FORWARDS TO<br><b>ONE SET OF RULES</b></div>
+      <svg width="178" height="62" viewBox="0 0 178 62">
+        <defs>
+          <linearGradient id="pg" x1="0" x2="1">
+            <stop offset="0" stop-color="#0d47a1"/><stop offset="1" stop-color="#4da3ff"/>
+          </linearGradient>
+          <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+            <path d="M0 0 L7 3 L0 6 z" fill="#4da3ff"/>
+          </marker>
+        </defs>
+        <path d="M2 26 H166" stroke="url(#pg)" stroke-width="8" stroke-linecap="round" opacity=".12"/>
+        <path d="M2 26 H162" stroke="url(#pg)" stroke-width="1.8" marker-end="url(#ar)"/>
+        <circle cx="46" cy="26" r="2.6" fill="#1e88e5"/>
+        <circle cx="86" cy="26" r="2.6" fill="#1e88e5" opacity=".55"/>
+        <circle cx="126" cy="26" r="2.6" fill="#1e88e5" opacity=".28"/>
+        <text x="84" y="50" text-anchor="middle" font-family="ui-monospace,monospace" font-size="8.5" fill="#9db2c4" letter-spacing="1">virtual key · tagged</text>
+      </svg>
+    </div>
+
+    <div class="gw">
+      <div class="zone-tag">CENTRAL</div>
+      <div class="gw-head">
+        <div class="gw-em">🚅</div>
+        <div class="gw-word">LiteLLM</div>
+      </div>
+      <div class="gw-sub">AI Gateway</div>
+      <div class="pillars">
+        <div class="pillar">
+          <svg viewBox="0 0 24 24"><path d="M3 7h6M15 7h6M3 17h6M15 17h6"/><circle cx="12" cy="7" r="2.6"/><circle cx="12" cy="17" r="2.6"/></svg>
+          <span>ROUTE</span>
+        </div>
+        <div class="pillar">
+          <svg viewBox="0 0 24 24"><path d="M12 3l7 3v5.5c0 4.4-3 8-7 9.5-4-1.5-7-5.1-7-9.5V6z"/><path d="M9.2 12.2l2 2 3.6-4"/></svg>
+          <span>GOVERN</span>
+        </div>
+        <div class="pillar">
+          <svg viewBox="0 0 24 24"><rect x="4.5" y="10.5" width="15" height="10" rx="2.4"/><path d="M8 10.5V7.6a4 4 0 018 0v2.9"/></svg>
+          <span>SECURE</span>
+        </div>
+      </div>
+      <div class="meta">Virtual keys · Budgets · Guardrails<br>Audit logs · SSO</div>
+    </div>
+
+    <div class="provs">
+      <div class="ptag">100+ PROVIDERS</div>
+      <div class="prov"><div class="pchip"><span class="slot" data-name="Anthropic" data-src="./logos/anthropic.svg" data-mono="A" data-bg="#d97757"></span></div><span class="nm">Anthropic</span></div>
+      <div class="prov"><div class="pchip"><span class="slot" data-name="OpenAI" data-src="./logos/openai.svg" data-mono="◎" data-bg="#0f0f0f"></span></div><span class="nm">OpenAI</span></div>
+      <div class="prov"><div class="pchip"><span class="slot" data-name="Google Vertex" data-src="./logos/vertexai.svg" data-mono="G" data-bg="#4285f4"></span></div><span class="nm">Google Vertex</span></div>
+      <div class="prov"><div class="pchip"><span class="slot" data-name="Azure OpenAI" data-src="./logos/azure.svg" data-mono="Az" data-bg="#0078d4"></span></div><span class="nm">Azure OpenAI</span></div>
+      <div class="prov"><div class="pchip"><span class="slot" data-name="AWS Bedrock" data-src="./logos/bedrock.svg" data-mono="aws" data-bg="#ff9900"></span></div><span class="nm">AWS Bedrock</span></div>
+      <div class="prov"><div class="pchip"><span class="slot" data-name="Mistral, +95 more" data-src="./logos/mistral.svg" data-mono="M" data-bg="#fa520f"></span></div><span class="nm">Mistral, +95 more</span></div>
+    </div>
+
+  </div>
+
+  <div class="footline">Every AI tool your team loves, now in one place. <b>No more shadow AI.</b></div>
+
+</div>
+
+<div id="diag"></div>
+<button id="export">Download PNG (2x)</button>
+
+<script>
+// Each slot tries its local vendored logo. If the image is missing,
+// it silently swaps to an inline monogram. Nothing ever renders broken.
+(function () {
+  var slots = document.querySelectorAll('.slot');
+  var report = [];
+  var pending = 0;
+
+  function mono(slot) {
+    var txt = slot.dataset.mono || '?';
+    var d = document.createElement('div');
+    // emoji marks (like the OpenClaw lobster) render bare, not in a colored tile
+    var isEmoji = /\p{Extended_Pictographic}/u.test(txt);
+    d.className = isEmoji ? 'mono emoji' : 'mono';
+    if (!isEmoji) d.style.background = slot.dataset.bg;
+    d.textContent = txt;
+    slot.innerHTML = '';
+    slot.appendChild(d);
+  }
+
+  function done() {
+    if (--pending > 0) return;
+    var bad = report.filter(function (r) { return !r.ok; });
+    if (!bad.length) return;
+    var el = document.getElementById('diag');
+    el.style.display = 'block';
+    el.innerHTML = '<b>Logo slugs that failed</b><br>' +
+      bad.map(function (r) { return '<span class="bad">✗ ' + r.slug + '</span>'; }).join('<br>') +
+      '<br><br>Using monogram fallback for these.<br>Check real names at lobehub.com/icons';
+  }
+
+  slots.forEach(function (slot) {
+    if (!slot.dataset.src) { mono(slot); return; }
+
+    var urls = slot.dataset.src.split('|');
+    var label = slot.dataset.name || 'icon';
+
+    pending++;
+    var i = 0;
+
+    function attempt() {
+      if (i >= urls.length) {
+        mono(slot);
+        report.push({ slug: label, ok: false });
+        done();
+        return;
+      }
+      // fetch as text -> data URI, so <canvas> never taints on export
+      fetch(urls[i], { mode: 'cors' })
+        .then(function (r) {
+          if (!r.ok) throw new Error(r.status);
+          return r.text();
+        })
+        .then(function (svg) {
+          if (svg.indexOf('<svg') === -1) throw new Error('not svg');
+          var img = new Image();
+          img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
+          slot.innerHTML = '';
+          slot.appendChild(img);
+          report.push({ slug: label, ok: true });
+          done();
+        })
+        .catch(function () { i++; attempt(); });
+    }
+    attempt();
+  });
+
+  if (pending === 0) done();
+})();
+
+// --- PNG export -------------------------------------------------------
+// Serializes .canvas into an SVG <foreignObject> and rasterizes at 2x.
+// Requires icons to be inlined as data URIs (the loader above does this).
+document.getElementById('export').addEventListener('click', function () {
+  var btn = this;
+  var node = document.querySelector('.canvas');
+  var W = node.offsetWidth, H = node.offsetHeight, SCALE = 2;
+
+  btn.disabled = true;
+  btn.textContent = 'Rendering...';
+
+  // pull every stylesheet rule into an inline <style>
+  var css = '';
+  for (var i = 0; i < document.styleSheets.length; i++) {
+    try {
+      var rules = document.styleSheets[i].cssRules;
+      for (var j = 0; j < rules.length; j++) css += rules[j].cssText + '\n';
+    } catch (e) { /* cross-origin sheet, skip */ }
+  }
+
+  var clone = node.cloneNode(true);
+  clone.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+
+  var svg =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '">' +
+      '<foreignObject width="100%" height="100%">' +
+        '<div xmlns="http://www.w3.org/1999/xhtml">' +
+          '<style>' + css + '</style>' +
+          clone.outerHTML +
+        '</div>' +
+      '</foreignObject>' +
+    '</svg>';
+
+  var img = new Image();
+  img.onload = function () {
+    var c = document.createElement('canvas');
+    c.width = W * SCALE; c.height = H * SCALE;
+    var ctx = c.getContext('2d');
+    ctx.scale(SCALE, SCALE);
+    ctx.drawImage(img, 0, 0);
+    try {
+      var a = document.createElement('a');
+      a.download = 'relay-hero.png';
+      a.href = c.toDataURL('image/png');
+      a.click();
+      btn.textContent = 'Download PNG (2x)';
+    } catch (e) {
+      btn.textContent = 'Canvas tainted - screenshot instead';
+    }
+    btn.disabled = false;
+  };
+  img.onerror = function () {
+    btn.textContent = 'Export failed - screenshot instead';
+    btn.disabled = false;
+  };
+  img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
+});
+
+// file:// blocks fetch(), so warn early rather than silently show monograms
+if (location.protocol === 'file:') {
+  var w = document.getElementById('diag');
+  w.style.display = 'block';
+  w.innerHTML = '<b>Opened via file://</b><br>' +
+    'Browsers block <span class="bad">fetch()</span> on local files, so local ' +
+    'logos cannot load and you will see monograms.<br><br>' +
+    'Serve it instead:<br><span class="ok">python3 -m http.server 8000</span><br>' +
+    'then open <span class="ok">localhost:8000/hero.html</span>';
+}
+</script>
+</body>
+</html>

@@ -37,7 +37,9 @@
     </a>
 </h4>
 
-<img alt="LiteLLM AI Gateway" src="https://github.com/user-attachments/assets/c5ee0412-6fb5-4fb6-ab5b-bafae4209ca6" />
+<p align="center">
+  <img src="./docs/assets/relay-hero.png" alt="LiteLLM Relay + LiteLLM AI Gateway" width="100%">
+</p>
 
 ---
 
