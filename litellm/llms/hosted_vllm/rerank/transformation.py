@@ -172,10 +172,17 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         return HostedVLLMRerankError(message=error_message, status_code=status_code, headers=headers)
 
     def _transform_response(self, response: dict) -> RerankResponse:
-        # Extract usage information
+        # Extract usage information - some servers (vLLM/Cohere-style) return a
+        # top-level `meta` object; others (OpenAI/TEI-style) return `usage`.
+        # Check both so either shape is picked up.
+        raw_meta: Final = response.get("meta") or {}
         usage_data: Final = response.get("usage", {})
-        _billed_units: Final = RerankBilledUnits(total_tokens=usage_data.get("total_tokens", 0))
-        _tokens: Final = RerankTokens(input_tokens=usage_data.get("total_tokens", 0))
+        total_tokens: Final = raw_meta.get("billed_units", {}).get("total_tokens") or usage_data.get(
+            "total_tokens", 0
+        )
+        input_tokens: Final = raw_meta.get("tokens", {}).get("input_tokens") or usage_data.get("total_tokens", 0)
+        _billed_units: Final = RerankBilledUnits(total_tokens=total_tokens)
+        _tokens: Final = RerankTokens(input_tokens=input_tokens)
         rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
         # Extract results
