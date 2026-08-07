@@ -4,8 +4,9 @@ AUTO ROUTER MANAGEMENT ENDPOINTS
 POST /auto_router/test_routing - Route one prompt through an unsaved complexity-router config
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final
 
 from pydantic import BaseModel, TypeAdapter
@@ -260,7 +261,7 @@ async def preview_auto_router_routing(
 class _SessionAggRow(BaseModel):
     router_name: str
     router_type: str
-    tier_turns: dict[str, int]
+    tier_turns: Mapping[str, int]
     sessions: int
     turns: int
     unordered_turns: int
@@ -385,7 +386,7 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
     return _SessionAggRow(
         router_name="",
         router_type="",
-        tier_turns={},
+        tier_turns=MappingProxyType({}),
         sessions=sum(row.sessions for row in rows),
         turns=sum(row.turns for row in rows),
         unordered_turns=sum(row.unordered_turns for row in rows),

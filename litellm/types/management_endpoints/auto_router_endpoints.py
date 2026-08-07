@@ -2,6 +2,7 @@
 Types for auto-router management endpoints
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 from pydantic import BaseModel, Field, field_validator
@@ -120,7 +121,7 @@ class AutoRouterBenchmarkGroup(AutoRouterBenchmarkTotals):
 
     router_name: str = Field(description="The auto-router alias requests were sent to")
     router_type: str = Field(description="complexity, adaptive or quality")
-    tier_turns: dict[str, int] = Field(
+    tier_turns: Mapping[str, int] = Field(
         default_factory=dict,
         description="Turns per tier, keyed by the tier name the routing decision recorded at "
         "request time (never re-derived at read time, since the tier-to-model mapping is "
