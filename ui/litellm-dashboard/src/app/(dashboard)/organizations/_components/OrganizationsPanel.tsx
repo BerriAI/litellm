@@ -2,6 +2,7 @@ import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/orga
 import { useUserModels } from "@/app/(dashboard)/hooks/models/useModels";
 import OrganizationFilters, { FilterState } from "@/app/(dashboard)/organizations/OrganizationFilters";
 import { useQueryClient } from "@tanstack/react-query";
+import { parseAsString, useQueryState } from "nuqs";
 import React, { useState } from "react";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import NotificationsManager from "@/components/molecules/notifications_manager";
@@ -19,7 +20,7 @@ interface OrganizationsPanelProps {
 }
 
 const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, accessToken, premiumUser }) => {
-  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
+  const [selectedOrgId, setSelectedOrgId] = useQueryState("org", parseAsString.withOptions({ history: "push" }));
   const [editOrg, setEditOrg] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [orgToDelete, setOrgToDelete] = useState<string | null>(null);
@@ -108,7 +109,7 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
         <OrganizationInfoView
           organizationId={selectedOrgId}
           onClose={() => {
-            setSelectedOrgId(null);
+            void setSelectedOrgId(null);
             setEditOrg(false);
           }}
           accessToken={accessToken}
@@ -132,9 +133,12 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
             isLoading={isLoading}
             userRole={userRole}
             searchActive={searchActive}
-            onOrganizationClick={setSelectedOrgId}
+            onOrganizationClick={(organizationId) => {
+              setEditOrg(false);
+              void setSelectedOrgId(organizationId);
+            }}
             onEditClick={(organizationId) => {
-              setSelectedOrgId(organizationId);
+              void setSelectedOrgId(organizationId);
               setEditOrg(true);
             }}
             onDeleteClick={handleDelete}

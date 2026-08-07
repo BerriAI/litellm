@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -31,7 +33,7 @@ def get_vertex_ai_image_generation_config(model: str) -> BaseImageGenerationConf
         BaseImageGenerationConfig: The appropriate configuration class
     """
     # Determine the model route
-    model_route = get_vertex_ai_model_route(model)
+    model_route: Final = get_vertex_ai_model_route(model)
 
     if model_route == VertexAIModelRoute.GEMINI:
         # Gemini models use generateContent API
