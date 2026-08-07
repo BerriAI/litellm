@@ -9,6 +9,7 @@ Use this to route requests between Teams
 
 import re
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from litellm._logging import verbose_logger
@@ -150,19 +151,54 @@ def _default_tagged_pool(
     return defaults if defaults else tuple(deployments)
 
 
-def _chain_allows_fail_open(deployments: Sequence[Any] | Mapping[Any, Any]) -> bool:
-    return any((d.get("model_info") or {}).get("allow_fail_open") is True for d in deployments)
+def _known_tag_values(deployments: Sequence[Any] | Mapping[Any, Any]) -> frozenset[str]:
+    return frozenset(
+        tag for d in deployments for tag in (d.get("litellm_params", MappingProxyType({})).get("tags") or ())
+    )
+
+
+def _unknown_required_tag_hides_an_answer(
+    healthy_deployments: Sequence[Any] | Mapping[Any, Any],
+    excluded_set: frozenset[str],
+    required_set: frozenset[str],
+) -> bool:
+    # A caller-invented "&" tag (one no deployment in this group has ever carried)
+    # guarantees an empty required-AND result on its own, regardless of whether the
+    # rest of the request's required tags were satisfiable. Dropping the unknown
+    # tags and recomputing: if that reveals a specific, non-empty answer, the invented
+    # tag was the actual cause of the exhaustion, and fail-open must not paper over
+    # it. If every required tag is known, or none are, there's nothing hidden to
+    # protect: either the caller made a real, honestly-unsatisfiable ask (fail-open
+    # proceeds normally), or the whole required set is unrecognized noise with no
+    # narrower answer to hide behind it.
+    known_required: Final = required_set & _known_tag_values(healthy_deployments)
+    if not known_required or known_required == required_set:
+        return False
+    allowed: Final = _exclude_deployments(healthy_deployments, excluded_set)
+    return bool(_require_all_tags(allowed, known_required))
+
+
+def _chain_allows_fail_open(
+    healthy_deployments: Sequence[Any] | Mapping[Any, Any],
+    excluded_set: frozenset[str],
+    required_set: frozenset[str],
+) -> bool:
+    if _unknown_required_tag_hides_an_answer(healthy_deployments, excluded_set, required_set):
+        return False
+    return any((d.get("model_info") or {}).get("allow_fail_open") is True for d in healthy_deployments)
 
 
 def _resolve_or_fail_open(
     pool: Sequence[Any],
     healthy_deployments: Sequence[Any] | Mapping[Any, Any],
+    excluded_set: frozenset[str],
+    required_set: frozenset[str],
     model: str,
     request_tags: object,
 ) -> tuple[Any, ...]:
     if pool:
         return tuple(pool)
-    if _chain_allows_fail_open(healthy_deployments):
+    if _chain_allows_fail_open(healthy_deployments, excluded_set, required_set):
         return _default_tagged_pool(healthy_deployments)
     raise ValueError(
         f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
@@ -180,7 +216,7 @@ def _resolve_constraint_only_pool(
         _exclude_deployments(_default_tagged_pool(healthy_deployments), excluded_set),
         required_set,
     )
-    return _resolve_or_fail_open(pool, healthy_deployments, model, request_tags)
+    return _resolve_or_fail_open(pool, healthy_deployments, excluded_set, required_set, model, request_tags)
 
 
 async def get_deployments_for_tag(
@@ -279,7 +315,7 @@ async def get_deployments_for_tag(
                     default_deployments.append(deployment)
 
             if len(new_healthy_deployments) == 0 and len(default_deployments) == 0:
-                return _resolve_or_fail_open((), healthy_deployments, model, request_tags)
+                return _resolve_or_fail_open((), healthy_deployments, excluded_set, required_set, model, request_tags)
 
             return new_healthy_deployments if len(new_healthy_deployments) > 0 else default_deployments
 
