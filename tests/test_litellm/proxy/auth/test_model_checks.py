@@ -737,7 +737,6 @@ def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
     assert fake_model not in litellm.models_by_provider["vertex_ai"]
 
 def test_get_complete_model_list_drops_no_default_models_sentinel():
-    """GH#31966: the 'no-default-models' sentinel leaked into /v1/models as if it were a model."""
     from litellm.proxy.auth.model_checks import get_complete_model_list
 
     result = get_complete_model_list(
@@ -751,7 +750,6 @@ def test_get_complete_model_list_drops_no_default_models_sentinel():
 
 
 def test_get_complete_model_list_sentinel_only_grants_nothing():
-    """A sentinel-only allowlist must stay empty, not fall back to every proxy model."""
     from litellm.proxy.auth.model_checks import get_complete_model_list
 
     result = get_complete_model_list(

@@ -410,8 +410,6 @@ async def test_get_available_models_for_user_error_path_complete_list_raises(
 async def test_get_available_models_for_user_resolves_team_access_group_models(
     monkeypatch,
 ):
-    """GH#31966: a team whose only grant is an entity access group listed
-    'no-default-models' instead of the models the access group grants."""
     from litellm.models.access_group import LiteLLM_AccessGroupTable
     from litellm.models.team import LiteLLM_TeamTableCachedObj
 
@@ -458,7 +456,6 @@ async def test_get_available_models_for_user_resolves_team_access_group_models(
 async def test_get_available_models_for_user_without_access_groups_grants_nothing(
     monkeypatch,
 ):
-    """Stripping the sentinel must not widen a team that has no access groups."""
     from litellm.models.team import LiteLLM_TeamTableCachedObj
 
     async def _get_team_object(**_kwargs):

@@ -6420,7 +6420,27 @@ def construct_database_url_from_env_vars() -> str | None:
     return None
 
 
-async def _get_team_object_for_model_listing(
+async def _get_validated_team_object(
+    user_api_key_dict: "UserAPIKeyAuth",
+    team_id: str,
+    prisma_client: "PrismaClient",
+    user_api_key_cache: "UserApiKeyCache",
+    proxy_logging_obj: "ProxyLogging",
+) -> "LiteLLM_TeamTableCachedObj":
+    from litellm.proxy.auth.auth_checks import get_team_object
+    from litellm.proxy.management_endpoints.team_endpoints import validate_membership
+
+    team_object: Final = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    await validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_object)
+    return team_object
+
+
+async def _get_team_object_for_access_groups(
     team_id: str | None,
     prisma_client: Optional["PrismaClient"],
     user_api_key_cache: Optional["UserApiKeyCache"],
@@ -6449,13 +6469,6 @@ async def _get_access_group_models(
     user_api_key_cache: Optional["UserApiKeyCache"],
     proxy_logging_obj: Optional["ProxyLogging"],
 ) -> tuple[str, ...]:
-    """
-    Models granted through entity access groups (`access_group_ids`) on the team or the key.
-
-    These grants are enforced by `can_team_access_model` / `can_key_call_model` at request
-    time, so the listing endpoints have to resolve them too, otherwise a caller can invoke
-    a model that never shows up in `/v1/models`.
-    """
     from litellm.proxy.auth.auth_checks import (
         _get_models_from_access_groups,
         get_authorized_resources_from_key_access_groups,
@@ -6506,13 +6519,11 @@ async def get_available_models_for_user(
     Returns:
         List of model names available to the user
     """
-    from litellm.proxy.auth.auth_checks import get_team_object
     from litellm.proxy.auth.model_checks import (
         get_complete_model_list,
         get_key_models,
         get_team_models,
     )
-    from litellm.proxy.management_endpoints.team_endpoints import validate_membership
 
     # Get proxy model list and access groups
     if llm_router is None:
@@ -6522,31 +6533,33 @@ async def get_available_models_for_user(
         proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()
 
-    # Get key models
-    key_models = get_key_models(
-        user_api_key_dict=user_api_key_dict,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-        include_model_access_groups=include_model_access_groups,
-    )
-
-    # Get team models
-    team_models: list[str] = user_api_key_dict.team_models
-
-    # If specific team_id is provided, validate and get team models
-    if team_id and prisma_client and proxy_logging_obj and user_api_key_cache:
-        key_models = []
-        team_object: Final = await get_team_object(
+    requested_team_object: Final = (
+        await _get_validated_team_object(
+            user_api_key_dict=user_api_key_dict,
             team_id=team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
-        await validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_object)
-        team_models = team_object.models
+        if team_id and prisma_client and proxy_logging_obj and user_api_key_cache
+        else None
+    )
 
-    team_models = get_team_models(
-        team_models=team_models,
+    key_models: Final[Sequence[str]] = (
+        ()
+        if requested_team_object is not None
+        else get_key_models(
+            user_api_key_dict=user_api_key_dict,
+            proxy_model_list=proxy_model_list,
+            model_access_groups=model_access_groups,
+            include_model_access_groups=include_model_access_groups,
+        )
+    )
+
+    team_models: Final = get_team_models(
+        team_models=(
+            requested_team_object.models if requested_team_object is not None else user_api_key_dict.team_models
+        ),
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
         include_model_access_groups=include_model_access_groups,
@@ -6554,17 +6567,22 @@ async def get_available_models_for_user(
 
     effective_team_id: Final = team_id or user_api_key_dict.team_id
 
-    access_group_models: Final = await _get_access_group_models(
-        user_api_key_dict=user_api_key_dict,
-        team_object=await _get_team_object_for_model_listing(
-            team_id=effective_team_id,
+    access_group_models: Final = (
+        await _get_access_group_models(
+            user_api_key_dict=user_api_key_dict,
+            team_object=requested_team_object
+            or await _get_team_object_for_access_groups(
+                team_id=effective_team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            ),
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
-        ),
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
+        )
+        if key_models or team_models
+        else ()
     )
 
     granted_key_models: Final = (*key_models, *access_group_models) if key_models else key_models
