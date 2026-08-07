@@ -17,7 +17,7 @@ import traceback
 import warnings
 from collections.abc import AsyncGenerator, Callable, Mapping
 from datetime import datetime, timedelta, timezone
-from types import UnionType
+from types import MappingProxyType, UnionType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -6095,6 +6095,15 @@ class ProxyConfig:
                 general_settings["disable_auto_add_proxy_admin_to_teams"] = value.lower() == "true"
             else:
                 general_settings["disable_auto_add_proxy_admin_to_teams"] = value if value is None else bool(value)
+
+        if "apply_user_budget_to_team_keys" in _general_settings and (
+            "apply_user_budget_to_team_keys" not in self._yaml_general_settings_keys
+        ):
+            db_value: Final = _general_settings["apply_user_budget_to_team_keys"]
+            if isinstance(db_value, str):
+                general_settings["apply_user_budget_to_team_keys"] = db_value.lower() == "true"
+            else:
+                general_settings["apply_user_budget_to_team_keys"] = db_value if db_value is None else bool(db_value)
 
         ## STORE MODEL IN DB ##
         if "store_model_in_db" in _general_settings:
@@ -14982,6 +14991,29 @@ Keep it more precise, to prevent overwrite other values unintentially
 
 _PLUGIN_KEY_REDACTED: Final = "***"
 
+_GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "max_parallel_requests": "Integer",
+        "global_max_parallel_requests": "Integer",
+        "max_request_size_mb": "Integer",
+        "max_response_size_mb": "Integer",
+        "proxy_config_reload_interval_seconds": "Integer",
+        "pass_through_endpoints": "PydanticModel",
+        "store_model_in_db": "Boolean",
+        "store_prompts_in_spend_logs": "Boolean",
+        "maximum_spend_logs_retention_period": "String",
+        "mcp_internal_ip_ranges": "List",
+        "mcp_trusted_proxy_ranges": "List",
+        "mcp_xff_num_trusted_hops": "Integer",
+        "always_include_stream_usage": "Boolean",
+        "forward_client_headers_to_llm_api": "Boolean",
+        "mcp_required_fields": "List",
+        "cancel_on_disconnect": "Boolean",
+        "disable_auto_add_proxy_admin_to_teams": "Boolean",
+        "apply_user_budget_to_team_keys": "Boolean",
+    }
+)
+
 
 def _preserve_redacted_plugin_keys(incoming: object, existing: object) -> object:
     """Restore real plugin_key values the client never sees.
@@ -15480,25 +15512,7 @@ async def get_config_list(
     else:
         db_general_settings_dict = {}
 
-    allowed_args: Final = {
-        "max_parallel_requests": {"type": "Integer"},
-        "global_max_parallel_requests": {"type": "Integer"},
-        "max_request_size_mb": {"type": "Integer"},
-        "max_response_size_mb": {"type": "Integer"},
-        "proxy_config_reload_interval_seconds": {"type": "Integer"},
-        "pass_through_endpoints": {"type": "PydanticModel"},
-        "store_model_in_db": {"type": "Boolean"},
-        "store_prompts_in_spend_logs": {"type": "Boolean"},
-        "maximum_spend_logs_retention_period": {"type": "String"},
-        "mcp_internal_ip_ranges": {"type": "List"},
-        "mcp_trusted_proxy_ranges": {"type": "List"},
-        "mcp_xff_num_trusted_hops": {"type": "Integer"},
-        "always_include_stream_usage": {"type": "Boolean"},
-        "forward_client_headers_to_llm_api": {"type": "Boolean"},
-        "mcp_required_fields": {"type": "List"},
-        "cancel_on_disconnect": {"type": "Boolean"},
-        "disable_auto_add_proxy_admin_to_teams": {"type": "Boolean"},
-    }
+    allowed_args: Final = _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES
 
     return_val: Final = []
 
@@ -15506,7 +15520,7 @@ async def get_config_list(
         if field_name in allowed_args:
             ## HANDLE TYPED DICT
 
-            typed_dict_type = allowed_args[field_name]["type"]
+            typed_dict_type = allowed_args[field_name]
 
             if typed_dict_type == "PydanticModel":
                 if field_name == "pass_through_endpoints":
@@ -15548,7 +15562,7 @@ async def get_config_list(
 
                     _response_obj = ConfigList(
                         field_name=field_name,
-                        field_type=allowed_args[field_name]["type"],
+                        field_type=allowed_args[field_name],
                         field_description=field_info.description or "",
                         field_value=_redact_general_setting_value(
                             field_name,
@@ -15576,7 +15590,7 @@ async def get_config_list(
 
                 _response_obj = ConfigList(
                     field_name=field_name,
-                    field_type=allowed_args[field_name]["type"],
+                    field_type=allowed_args[field_name],
                     field_description=field_info.description or "",
                     field_value=_redact_general_setting_value(field_name, _field_value, is_full_admin),
                     stored_in_db=_stored_in_db,

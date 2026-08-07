@@ -23390,6 +23390,11 @@ export interface components {
              */
             allowed_routes?: unknown[] | null;
             /**
+             * Apply User Budget To Team Keys
+             * @description If True, a user's personal max_budget is enforced on every request they make, including requests made with a team-scoped key. Defaults to False, where a team-scoped key is governed only by the team and team-member budgets and the key owner's personal max_budget does not apply (see GitHub issue #12905).
+             */
+            apply_user_budget_to_team_keys?: boolean | null;
+            /**
              * Background Health Checks
              * @description run health checks in background
              */
