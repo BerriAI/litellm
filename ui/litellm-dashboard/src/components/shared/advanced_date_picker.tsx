@@ -179,16 +179,21 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
       // First call with immediate value for UI responsiveness
       onValueChange(tempValue);
 
-      // Then do the same background adjustment logic as the original component
-      requestIdleCallback(
-        () => {
-          const adjustedValue = adjustDateRange(tempValue);
-          onValueChange(adjustedValue);
-        },
-        { timeout: 100 },
-      );
-
+      // Close immediately - Safari has no requestIdleCallback, and scheduling
+      // the close after it (as before) meant the thrown ReferenceError there
+      // silently skipped this line, leaving the dropdown stuck open.
       setIsOpen(false);
+
+      // Then do the same background adjustment logic as the original component.
+      // Safari doesn't implement requestIdleCallback, so fall back to setTimeout.
+      const scheduleIdle: (callback: () => void) => void =
+        typeof requestIdleCallback === "function"
+          ? (callback) => requestIdleCallback(callback, { timeout: 100 })
+          : (callback) => setTimeout(callback, 0);
+      scheduleIdle(() => {
+        const adjustedValue = adjustDateRange(tempValue);
+        onValueChange(adjustedValue);
+      });
     }
   };
 
