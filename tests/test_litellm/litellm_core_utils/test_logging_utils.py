@@ -6,7 +6,7 @@ import pytest
 
 from litellm.litellm_core_utils.logging_utils import (
     _format_base64_size,
-    _truncate_base64_in_string,
+    truncate_base64_data_uris,
     truncate_base64_in_messages,
 )
 
@@ -30,19 +30,19 @@ class TestFormatBase64Size:
 
 
 # ---------------------------------------------------------------------------
-# _truncate_base64_in_string
+# truncate_base64_data_uris
 # ---------------------------------------------------------------------------
 
 
 class TestTruncateBase64InString:
     def test_short_data_uri_not_truncated(self):
         uri = "data:image/png;base64,AAAA"
-        assert _truncate_base64_in_string(uri) == uri
+        assert truncate_base64_data_uris(uri) == uri
 
     def test_long_data_uri_truncated(self):
         payload = "A" * 200
         uri = f"data:application/pdf;base64,{payload}"
-        result = _truncate_base64_in_string(uri)
+        result = truncate_base64_data_uris(uri)
         assert "base64_data truncated" in result
         assert "application/pdf" in result
         assert payload not in result
@@ -50,12 +50,12 @@ class TestTruncateBase64InString:
     def test_multiple_data_uris(self):
         payload = "B" * 200
         text = f"first: data:image/png;base64,{payload} second: data:image/jpeg;base64,{payload}"
-        result = _truncate_base64_in_string(text)
+        result = truncate_base64_data_uris(text)
         assert result.count("base64_data truncated") == 2
 
     def test_no_data_uri(self):
         text = "hello world, no base64 here"
-        assert _truncate_base64_in_string(text) == text
+        assert truncate_base64_data_uris(text) == text
 
 
 # ---------------------------------------------------------------------------
