@@ -1114,9 +1114,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
         if httpx_response.status_code == 200:
-            if self._check_bedrock_response_for_exception(httpx_response):
-                _, exception_detail = self._parse_bedrock_guardrail_error_response(httpx_response)
-                raise HTTPException(status_code=500, detail=exception_detail)
             _json_response: Final = httpx_response.json()
             # check if the response was flagged
             verbose_proxy_logger.debug(
@@ -1179,13 +1176,22 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """Log one logical ApplyGuardrail call -- possibly several chunk calls
         under the hood -- using its final merged response, so a chunked
         request produces exactly one telemetry entry, the same as an
-        unchunked one would."""
+        unchunked one would.
+
+        AWS can report a failure inside an HTTP 200 body by tagging
+        ``Output.__type`` with an exception marker. That marker survives the merge,
+        so the status is derived from the merged response rather than assumed to be
+        a success, which is what the pre-chunking code reported for that shape."""
         tracing_detail: Final = self._build_tracing_detail(merged_response)
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
             guardrail_json_response=dict(merged_response),  # mutable-ok: logging helper requires a dict
             request_data=request_data or {},  # mutable-ok: logging helper requires a dict
-            guardrail_status="success",
+            guardrail_status=(
+                "guardrail_failed_to_respond"
+                if "Exception" in str((merged_response.get("Output") or {}).get("__type", ""))
+                else "success"
+            ),
             start_time=start_time.timestamp(),
             end_time=datetime.now(timezone.utc).timestamp(),
             duration=(datetime.now(timezone.utc) - start_time).total_seconds(),
@@ -1206,7 +1212,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         every failed attempt chunking made along the way."""
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
-            guardrail_json_response=str(detail),
+            guardrail_json_response={"error": str(detail)},  # mutable-ok: logging helper requires a dict
             request_data=request_data or {},  # mutable-ok: logging helper requires a dict
             guardrail_status="guardrail_failed_to_respond",
             start_time=start_time.timestamp(),

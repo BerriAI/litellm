@@ -4585,19 +4585,23 @@ def test_merge_bedrock_usage_sums_counters_not_on_the_known_list():
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_exception_inside_200_logs_failure_not_success():
-    """Regression: AWS can report a failure inside a 200 body via Output.__type, and
-    that must be logged as guardrail_failed_to_respond.
+async def test_apply_guardrail_exception_inside_200_logs_failure_and_proceeds():
+    """Regression: AWS can report a failure inside an HTTP 200 body via Output.__type,
+    and that must be logged as guardrail_failed_to_respond rather than success.
 
-    Consolidating telemetry replaced the derived status with a hardcoded "success", so
-    the only remaining caller of _get_bedrock_guardrail_response_status was the block
-    path, where the marker can never appear. The signal was reachable in production and
-    unreachable in code."""
+    Real AWS does this: an unrecognised operation path on bedrock-runtime answers
+    HTTP 200 with {"Output": {"__type": "com.amazon.coral.service#UnknownOperationException"}}.
+    Consolidating telemetry had replaced the derived status with a hardcoded "success",
+    which reported a failed scan as a clean one. The request itself still proceeds, which
+    is the behaviour of the code before chunking existed."""
     guardrail = _bedrock_guardrail_for_chunk_tests()
 
     exception_response = MagicMock()
     exception_response.status_code = 200
-    exception_response.json.return_value = {"Output": {"__type": "InternalServerException"}}
+    exception_response.json.return_value = {
+        "Output": {"__type": "com.amazon.coral.service#UnknownOperationException"},
+        "Version": "1.0",
+    }
     exception_response.text = json.dumps(exception_response.json.return_value)
 
     mock_credentials = MagicMock()
@@ -4609,20 +4613,52 @@ async def test_apply_guardrail_exception_inside_200_logs_failure_not_success():
         patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
         patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
         patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
-        patch.object(
-            guardrail,
-            "add_standard_logging_guardrail_information_to_request_data",
-        ) as mock_log,
+        patch.object(guardrail, "add_standard_logging_guardrail_information_to_request_data") as mock_log,
     ):
         mock_post.return_value = exception_response
 
-        with pytest.raises(HTTPException) as raised:
+        result = await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=[{"role": "user", "content": "hello"}],
+            request_data={"model": "bedrock-nova-micro"},
+        )
+
+    assert result is not None, "the request proceeds, as it did before chunking existed"
+    mock_log.assert_called_once()
+    assert mock_log.call_args.kwargs["guardrail_status"] == "guardrail_failed_to_respond"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_failure_logs_a_dict_not_a_bare_string():
+    """Regression: the consolidated failure logger must log guardrail_json_response as a
+    dict, the shape the pre-chunking code and the InvokeGuardrailChecks path both use.
+
+    Consolidating telemetry had changed it to a bare string on the ApplyGuardrail path
+    only, which breaks any consumer that reads it as a mapping and leaves the two paths
+    in this file inconsistent."""
+    guardrail = _bedrock_guardrail_for_chunk_tests()
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+        patch.object(guardrail, "add_standard_logging_guardrail_information_to_request_data") as mock_log,
+    ):
+        mock_post.side_effect = _raised_bedrock_error(400, "guardrailIdentifier is not valid")
+
+        with pytest.raises(HTTPException):
             await guardrail.make_bedrock_api_request(
                 source="INPUT",
                 messages=[{"role": "user", "content": "hello"}],
                 request_data={"model": "bedrock-nova-micro"},
             )
 
-    assert raised.value.status_code == 500
     mock_log.assert_called_once()
-    assert mock_log.call_args.kwargs["guardrail_status"] == "guardrail_failed_to_respond"
+    logged = mock_log.call_args.kwargs["guardrail_json_response"]
+    assert isinstance(logged, dict), f"expected a dict, got {type(logged).__name__}"
+    assert "error" in logged
