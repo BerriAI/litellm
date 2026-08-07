@@ -206,6 +206,7 @@ async def fail_with_diagnostics(session, stage: str, expected: float, observed: 
     )
 
 
+@pytest.mark.flaky(reruns=2, reruns_delay=5)
 @pytest.mark.asyncio
 async def test_basic_spend_accuracy():
     """

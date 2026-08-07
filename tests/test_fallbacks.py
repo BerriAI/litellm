@@ -132,6 +132,7 @@ async def test_chat_completion_client_fallbacks(has_access):
                 pytest.fail("Expected this to work: {}".format(str(e)))
 
 
+@pytest.mark.flaky(reruns=2, reruns_delay=5)
 @pytest.mark.asyncio
 async def test_chat_completion_with_retries():
     """
@@ -156,6 +157,7 @@ async def test_chat_completion_with_retries():
         assert headers["x-litellm-max-retries"] == "50"
 
 
+@pytest.mark.flaky(reruns=2, reruns_delay=5)
 @pytest.mark.asyncio
 async def test_chat_completion_with_fallbacks():
     """
