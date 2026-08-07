@@ -10,6 +10,7 @@ from litellm.llms.chatgpt.search.transformation import (
     ChatGPTSearchPassthroughConfig,
     ChatGPTSearchRequest,
 )
+from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.pass_through.guardrail_translation.handler import LlmPassthroughRouteHandler
 from litellm.passthrough.main import allm_passthrough_route
@@ -121,6 +122,44 @@ def test_search_passthrough_config_maps_device_login_failure() -> None:
             optional_params={},
             litellm_params={},
         )
+
+
+def test_search_passthrough_config_drops_malformed_proxy_headers() -> None:
+    config = ChatGPTSearchPassthroughConfig(authenticator=StubAuthenticator())
+
+    headers, body = config.sign_request(
+        headers={"Authorization": "Bearer oauth-token"},
+        litellm_params={"proxy_server_request": {"headers": {"originator": ["codex_vscode"]}}},
+        request_data=None,
+        api_base="https://chatgpt.test/backend-api/codex/alpha/search",
+    )
+
+    assert headers == {"Authorization": "Bearer oauth-token"}
+    assert "originator" not in headers
+    assert body is None
+
+
+def test_search_passthrough_config_maps_transport_errors() -> None:
+    config = ChatGPTSearchPassthroughConfig(authenticator=StubAuthenticator())
+
+    error = config.get_error_class(
+        error_message="upstream unavailable",
+        status_code=503,
+        headers={"retry-after": "5"},
+    )
+
+    assert isinstance(error, OpenAIError)
+    assert error.status_code == 503
+    assert error.message == "upstream unavailable"
+    assert error.headers == {"retry-after": "5"}
+
+
+def test_search_passthrough_config_model_info_contract() -> None:
+    config = ChatGPTSearchPassthroughConfig(authenticator=StubAuthenticator())
+
+    assert config.get_api_base("https://custom.chatgpt.test") == "https://custom.chatgpt.test"
+    assert config.get_base_model("gpt-5.6-sol") == "gpt-5.6-sol"
+    assert config.get_models() == []
 
 
 def test_provider_manager_returns_chatgpt_search_passthrough_config() -> None:

@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 import httpx
@@ -6,7 +6,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
+from litellm.proxy import proxy_server
+from litellm.proxy._types import LiteLLMRoutes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.chatgpt_endpoints.endpoints import router
 
@@ -93,3 +94,33 @@ def test_endpoint_rejects_invalid_payload_before_processing(payload: object) -> 
 
     assert response.status_code == 400
     route_request.assert_not_called()
+
+
+def test_endpoint_runs_shared_failure_lifecycle() -> None:
+    auth = UserAPIKeyAuth(api_key="sk-test")
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: auth
+    failure_hook = AsyncMock(return_value=None)
+    response_headers_hook = AsyncMock(return_value={"set-cookie": "private=upstream", "x-failure-hook": "called"})
+
+    async def route_request(**kwargs):
+        raise RuntimeError("search failed")
+
+    with (
+        patch("litellm.proxy.common_request_processing.route_request", new=route_request),
+        patch.object(proxy_server.proxy_logging_obj, "post_call_failure_hook", new=failure_hook),
+        patch.object(
+            proxy_server.proxy_logging_obj,
+            "post_call_response_headers_hook",
+            new=response_headers_hook,
+        ),
+        pytest.raises(ProxyException, match="search failed") as exc_info,
+    ):
+        TestClient(app).post("/v1/alpha/search", json={"model": "sol"})
+
+    failure_hook.assert_awaited_once()
+    response_headers_hook.assert_awaited_once()
+    assert exc_info.value.code == "500"
+    assert "set-cookie" not in exc_info.value.headers
+    assert exc_info.value.headers["x-failure-hook"] == "called"
