@@ -136,3 +136,38 @@ class TestGetLlmProviderRejectsAttackerSmuggledApiBase:
 
         assert provider == "groq"
         assert dynamic_api_key == "server-real-groq-key"
+
+
+class TestGondolaApiBaseResolution:
+    """
+    ``api_base`` pointing at Gondola's gateway resolves to the ``gondola``
+    provider, and a caller-supplied key wins over the stored env secret so
+    another provider's credential is never sent to Gondola.
+    """
+
+    def test_gondola_api_base_resolves_with_env_key(self):
+        with patch(
+            "litellm.litellm_core_utils.get_llm_provider_logic.get_secret_str",
+            return_value="server-gondola-key",
+        ):
+            _, provider, dynamic_api_key, _ = get_llm_provider(
+                model="some-model",
+                api_base="https://api.gondola-ai.com/v1",
+            )
+
+        assert provider == "gondola"
+        assert dynamic_api_key == "server-gondola-key"
+
+    def test_caller_supplied_key_is_not_replaced_by_env_secret(self):
+        with patch(
+            "litellm.litellm_core_utils.get_llm_provider_logic.get_secret_str",
+            return_value="some-other-provider-secret",
+        ):
+            _, provider, dynamic_api_key, _ = get_llm_provider(
+                model="some-model",
+                api_base="https://api.gondola-ai.com/v1",
+                api_key="gnd_caller-supplied",
+            )
+
+        assert provider == "gondola"
+        assert dynamic_api_key == "gnd_caller-supplied"
