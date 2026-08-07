@@ -984,7 +984,7 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   batch_processed Boolean @default(false) // set to true by CheckBatchCost after cost is computed
   created_at DateTime @default(now())
   created_by String?
-  created_by_api_key String? // Hashed API key that created this object; used for spend attribution
+  created_by_api_key String?
   team_id String?
   updated_at DateTime @updatedAt
   updated_by String?
