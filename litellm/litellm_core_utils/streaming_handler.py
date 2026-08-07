@@ -2122,7 +2122,7 @@ class CustomStreamWrapper:
             return
         try:
             try:
-                partial_response: Final = litellm.stream_chunk_builder(
+                selected_response = litellm.stream_chunk_builder(  # rebind-ok: set once from builder success or fallback path
                     chunks=self.chunks,
                     messages=self.messages,
                     logging_obj=self.logging_obj,
@@ -2136,10 +2136,11 @@ class CustomStreamWrapper:
                     "falling back to calculate_total_usage from chunks.",
                     builder_error,
                 )
-                partial_response = self.model_response_creator()
-                partial_response.usage = calculate_total_usage(chunks=self.chunks)
-            if partial_response is None:
+                selected_response = self.model_response_creator()  # rebind-ok: builder fallback path
+                selected_response.usage = calculate_total_usage(chunks=self.chunks)
+            if selected_response is None:
                 return
+            partial_response: Final = selected_response
             usage: Final = cast(Usage | None, getattr(partial_response, "usage", None))
             if usage is None:
                 return
