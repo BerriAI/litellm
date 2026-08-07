@@ -595,7 +595,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         no Bedrock batch model takes a bare `prompt`, so the wrapping that
         `litellm.text_completion` does in real time has to happen here too.
         """
-        prompt = openai_request_body.get("prompt")
+        prompt: Final = openai_request_body.get("prompt")
         if prompt is None:
             raise ValueError(
                 "Batch record for /v1/completions is missing required `prompt` field: "
@@ -624,13 +624,13 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             LiteLLMCompletionResponsesConfig,
         )
 
-        responses_input = openai_request_body.get("input")
+        responses_input: Final = openai_request_body.get("input")
         if responses_input is None:
             raise ValueError(
                 "Batch record for /v1/responses is missing required `input` field: "
                 f"model={openai_request_body.get('model', '')}"
             )
-        chat_body = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        chat_body: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
             model=openai_request_body.get("model", ""),
             input=_responses_input_adapter().validate_python(responses_input),
             responses_api_request=_responses_request_adapter().validate_python(
