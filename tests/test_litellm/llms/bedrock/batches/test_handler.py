@@ -8,8 +8,10 @@ the tests don't hit AWS.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+from decimal import Decimal
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
@@ -22,6 +24,7 @@ from litellm.llms.bedrock.batches.handler import (  # noqa: E402
     _extract_job_id_from_arn,
     _extract_region_from_bedrock_arn,
     _predict_output_file_uri,
+    _sanitize_response_for_logging,
     _to_epoch,
 )
 
@@ -102,6 +105,30 @@ _DT = datetime(2026, 4, 28, 12, 0, 0, tzinfo=timezone.utc)
 )
 def test_to_epoch_handles_supported_types(value, expected):
     assert _to_epoch(value) == expected
+
+
+def test_sanitize_response_for_logging_converts_nested_datetimes():
+    response = {
+        "submitTime": SUBMIT_TIME,
+        "nested": {
+            "endTimes": [END_TIME],
+            "tupleTimes": (SUBMIT_TIME,),
+            "cost": Decimal("1.25"),
+        },
+    }
+
+    sanitized_response = _sanitize_response_for_logging(response)
+
+    assert sanitized_response == {
+        "submitTime": SUBMIT_TIME.isoformat(),
+        "nested": {
+            "endTimes": [END_TIME.isoformat()],
+            "tupleTimes": [SUBMIT_TIME.isoformat()],
+            "cost": "1.25",
+        },
+    }
+    assert response["submitTime"] == SUBMIT_TIME
+    json.dumps(sanitized_response)
 
 
 def test_extract_job_id_from_arn():
@@ -301,6 +328,27 @@ def test_logging_obj_pre_and_post_call_invoked(patched_boto3):
     post_kwargs = logging_obj.post_call.call_args.kwargs
     assert post_kwargs["input"] == JOB_ARN
     assert post_kwargs["original_response"]["jobArn"] == JOB_ARN
+    assert post_kwargs["original_response"]["submitTime"] == SUBMIT_TIME.isoformat()
+
+
+def test_logging_obj_post_call_gets_json_serializable_response(patched_boto3):
+    class JsonSerializingLogger:
+        serialized_response: str
+
+        def pre_call(self, **kwargs):
+            pass
+
+        def post_call(self, **kwargs):
+            self.serialized_response = json.dumps(kwargs["original_response"])
+
+    logging_obj = JsonSerializingLogger()
+
+    BedrockBatchesHandler._handle_model_invocation_job_status(
+        batch_id=JOB_ARN, logging_obj=logging_obj
+    )
+    assert (
+        f'"submitTime": "{SUBMIT_TIME.isoformat()}"' in logging_obj.serialized_response
+    )
 
 
 def test_missing_boto3_raises_helpful_import_error():
