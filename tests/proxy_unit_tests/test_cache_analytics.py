@@ -12,9 +12,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.analytics_endpoints.analytics_endpoints import get_global_activity
 from litellm.proxy.analytics_endpoints.cache_activity import (
     GROUPS_SQL,
+    KEY_ALIAS_OPTIONS_SQL,
+    MODEL_OPTIONS_SQL,
     CacheActivityGroup,
     compute_totals,
 )
@@ -65,10 +68,18 @@ def mock_prisma(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     return prisma
 
 
+def auth_for_role(role: LitellmUserRoles, user_id: str | None = "proxy-admin") -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(user_id=user_id, user_role=role)
+
+
 @pytest.mark.asyncio
 async def test_returns_groups_totals_and_filter_options(mock_prisma: MagicMock):
     response = await get_global_activity(
-        start_date="2026-07-01", end_date="2026-07-27", key_aliases=[], models=[]
+        start_date="2026-07-01",
+        end_date="2026-07-27",
+        key_aliases=[],
+        models=[],
+        user_api_key_dict=auth_for_role(LitellmUserRoles.PROXY_ADMIN),
     )
 
     assert [group.call_type for group in response.groups] == ["acompletion", "Unknown"]
@@ -90,19 +101,86 @@ async def test_filters_are_passed_to_sql_as_json_arrays(mock_prisma: MagicMock):
         end_date="2026-07-27",
         key_aliases=["my-key"],
         models=["gpt-5.1", "claude-opus-4-8"],
+        user_api_key_dict=auth_for_role(LitellmUserRoles.PROXY_ADMIN),
     )
 
-    groups_call = next(
-        call for call in mock_prisma.db.query_raw.call_args_list if "GROUP BY" in call.args[0]
-    )
+    groups_call = next(call for call in mock_prisma.db.query_raw.call_args_list if "GROUP BY" in call.args[0])
     assert groups_call.args[3] == json.dumps(["my-key"])
     assert groups_call.args[4] == json.dumps(["gpt-5.1", "claude-opus-4-8"])
 
 
 @pytest.mark.asyncio
+async def test_admin_roles_do_not_scope_cache_activity_to_user(mock_prisma: MagicMock):
+    await get_global_activity(
+        start_date="2026-07-01",
+        end_date="2026-07-27",
+        key_aliases=[],
+        models=[],
+        user_api_key_dict=auth_for_role(LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    groups_call = next(call for call in mock_prisma.db.query_raw.call_args_list if "GROUP BY" in call.args[0])
+    assert 'sl."user" = $5' in groups_call.args[0]
+    assert groups_call.args[5] is None
+    assert all(call.args[-1] is None for call in mock_prisma.db.query_raw.call_args_list)
+
+
+@pytest.mark.parametrize(
+    "internal_role",
+    [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY],
+)
+@pytest.mark.asyncio
+async def test_cache_hits_activity_scopes_internal_roles_to_own_spend(
+    mock_prisma: MagicMock,
+    internal_role: LitellmUserRoles,
+):
+    response = await get_global_activity(
+        start_date="2026-07-01",
+        end_date="2026-07-27",
+        key_aliases=[],
+        models=[],
+        user_api_key_dict=auth_for_role(internal_role, user_id="internal-user"),
+    )
+
+    assert response.groups
+    groups_call = next(call for call in mock_prisma.db.query_raw.call_args_list if "GROUP BY" in call.args[0])
+    key_alias_call = next(
+        call for call in mock_prisma.db.query_raw.call_args_list if call.args[0] == KEY_ALIAS_OPTIONS_SQL
+    )
+    model_call = next(call for call in mock_prisma.db.query_raw.call_args_list if call.args[0] == MODEL_OPTIONS_SQL)
+    assert 'sl."user" = $5' in groups_call.args[0]
+    assert groups_call.args[5] == "internal-user"
+    assert 'sl."user" = $3' in key_alias_call.args[0]
+    assert key_alias_call.args[3] == "internal-user"
+    assert 'sl."user" = $3' in model_call.args[0]
+    assert model_call.args[3] == "internal-user"
+
+
+@pytest.mark.asyncio
+async def test_cache_hits_activity_rejects_internal_role_without_user_id(mock_prisma: MagicMock):
+    with pytest.raises(HTTPException, match="No user_id found") as exc_info:
+        await get_global_activity(
+            start_date="2026-07-01",
+            end_date="2026-07-27",
+            key_aliases=[],
+            models=[],
+            user_api_key_dict=auth_for_role(LitellmUserRoles.INTERNAL_USER, user_id=None),
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_prisma.db.query_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_rejects_malformed_dates_with_400(mock_prisma: MagicMock):
     with pytest.raises(HTTPException) as exc_info:
-        await get_global_activity(start_date="07/01/2026", end_date="2026-07-27", key_aliases=[], models=[])
+        await get_global_activity(
+            start_date="07/01/2026",
+            end_date="2026-07-27",
+            key_aliases=[],
+            models=[],
+            user_api_key_dict=auth_for_role(LitellmUserRoles.PROXY_ADMIN),
+        )
 
     assert exc_info.value.status_code == 400
     mock_prisma.db.query_raw.assert_not_called()
