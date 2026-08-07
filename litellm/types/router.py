@@ -134,6 +134,8 @@ class ModelInfo(BaseModel):
     base_model: str | None = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     tier: Literal["free", "paid"] | None = None
 
+    use_local_token_counter: Optional[bool] = None
+
     """
     Team Model Specific Fields
     """
