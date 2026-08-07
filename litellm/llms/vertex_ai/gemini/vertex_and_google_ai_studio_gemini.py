@@ -604,7 +604,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 openai_function_object = _openai_function_object
 
             elif "name" in tool:  # functions list
-                openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)
+                _named_function_object = ChatCompletionToolParamFunctionChunk(**tool)
+
+                if _named_function_object.get("parameters") is None:
+                    _input_schema = tool.get("input_schema")
+                    if isinstance(_input_schema, dict):
+                        _named_function_object["parameters"] = _build_vertex_schema(_input_schema)
+
+                openai_function_object = _named_function_object
 
             if "type" in tool and tool["type"] == "computer_use":
                 computer_use_config = {k: v for k, v in tool.items() if k != "type"}
