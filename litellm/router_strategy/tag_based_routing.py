@@ -146,16 +146,11 @@ def _require_all_tags(
 def _default_tagged_pool(
     deployments: Sequence[Any] | Mapping[Any, Any],
 ) -> tuple[Any, ...]:
-    # Mirrors untagged-request semantics: a "default"-tagged deployment is preferred;
-    # if none exists, every deployment in the group is reachable. Used both as the
-    # base pool for constraint-only requests and as the fail-open fallback.
     defaults: Final = tuple(d for d in deployments if "default" in (d.get("litellm_params", {}).get("tags") or []))
     return defaults if defaults else tuple(deployments)
 
 
 def _chain_allows_fail_open(deployments: Sequence[Any] | Mapping[Any, Any]) -> bool:
-    # allow_fail_open is set per model group in model_info, shared by every
-    # deployment in the chain, so checking any one member is sufficient.
     return any((d.get("model_info") or {}).get("allow_fail_open") is True for d in deployments)
 
 
@@ -181,8 +176,6 @@ def _resolve_constraint_only_pool(
     model: str,
     request_tags: object,
 ) -> tuple[Any, ...]:
-    """Resolve the pool for a request whose only tag constraints are "!"/"&"
-    (no plain positive tags or regex preference to further narrow the result)."""
     pool: Final = _require_all_tags(
         _exclude_deployments(_default_tagged_pool(healthy_deployments), excluded_set),
         required_set,
@@ -238,13 +231,15 @@ async def get_deployments_for_tag(
         candidates: Final = _require_all_tags(allowed_deployments, required_set)
 
         has_regex_deployments: Final = any(d.get("litellm_params", {}).get("tag_regex") for d in candidates)
-        has_positive_filter: Final = bool(positive_tags) or (bool(header_strings) and has_regex_deployments)
+        has_positive_filter: Final = bool(positive_tags) or (
+            bool(header_strings) and has_regex_deployments and not required_set
+        )
         constraint_only: Final = (bool(excluded_set) or bool(required_set)) and not has_positive_filter
 
         if constraint_only:
             return _resolve_constraint_only_pool(healthy_deployments, excluded_set, required_set, model, request_tags)
 
-        if required_set and not candidates:
+        if (excluded_set or required_set) and not candidates:
             return _resolve_or_fail_open((), healthy_deployments, model, request_tags)
 
         new_healthy_deployments: Final[list[Any]] = []
