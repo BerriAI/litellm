@@ -1733,6 +1733,8 @@ class MCPServerManager:
                 extra_headers=server_config.get("extra_headers", None),
                 allowed_tools=server_config.get("allowed_tools", None),
                 disallowed_tools=server_config.get("disallowed_tools", None),
+                tool_name_to_display_name=server_config.get("tool_name_to_display_name", None),
+                tool_name_to_description=server_config.get("tool_name_to_description", None),
                 allowed_params=server_config.get("allowed_params", None),
                 access_groups=server_config.get("access_groups", None),
                 static_headers=server_config.get("static_headers", None),

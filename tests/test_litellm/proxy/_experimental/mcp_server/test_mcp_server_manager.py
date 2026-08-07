@@ -416,6 +416,44 @@ class TestMCPServerManager:
         assert server.alias == "friendly_alias"
         assert server.server_name == "validserver"
 
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_preserves_tool_name_overrides(self):
+        """Display-name/description overrides declared in config.yaml must survive the yaml load
+        path, replace the prefixed name in tools/list, and reverse-map for tools/call routing."""
+        from litellm.proxy._experimental.mcp_server.server import (
+            _resolve_display_name_to_original,
+            apply_tool_overrides,
+        )
+        from litellm.proxy._experimental.mcp_server.utils import (
+            add_server_prefix_to_name,
+            get_server_prefix,
+        )
+
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(
+            {
+                "example_server": {
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                    "tool_name_to_display_name": {"example_tool": "renamed_tool"},
+                    "tool_name_to_description": {"example_tool": "overridden description"},
+                }
+            }
+        )
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.tool_name_to_display_name == {"example_tool": "renamed_tool"}
+        assert server.tool_name_to_description == {"example_tool": "overridden description"}
+
+        prefixed_name = add_server_prefix_to_name("example_tool", get_server_prefix(server))
+        (overridden,) = apply_tool_overrides(
+            [MCPTool(name=prefixed_name, description="upstream description", inputSchema={})],
+            server,
+        )
+        assert overridden.name == "renamed_tool"
+        assert overridden.description == "overridden description"
+        assert _resolve_display_name_to_original("renamed_tool", [server]) == prefixed_name
+
     def _oauth2_config(self, **overrides):
         base = {
             "url": "https://example.com/mcp",
