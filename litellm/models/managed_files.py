@@ -31,6 +31,7 @@ class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
     file_purpose: Literal["batch", "fine-tune", "response", "container"]
     file_object: LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse
     created_by: str | None = None
+    created_by_api_key: str | None = None
     team_id: str | None = None
 
 
