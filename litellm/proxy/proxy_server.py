@@ -12536,7 +12536,13 @@ async def model_info_v2(
 
         if user_model is not None:
             # if user does not use a config.yaml, https://github.com/BerriAI/litellm/issues/2061
-            all_models += [user_model]
+            try:
+                user_model_info = dict(litellm.get_model_info(model=user_model))
+            except Exception:  # noqa: BLE001  # unmapped CLI model name must not block model listing
+                user_model_info = {}
+            user_model_params = LiteLLM_Params(model=user_model)
+            deployment = Deployment(model_name="*", litellm_params=user_model_params, model_info=user_model_info)
+            all_models += [deployment.model_dump()]
 
         if model is not None:
             all_models = [m for m in all_models if m["model_name"] == model]
