@@ -121,7 +121,7 @@ async def _attach_keys_to_agents(agents: Sequence[AgentResponse], prisma_client)
             )
         )
     for agent in agents:
-        matched_keys: Final = [
+        matched_keys = [
             key_summary
             for alias_id in global_agent_registry.ids_for_agent(agent.agent_id)
             for key_summary in keys_by_agent.get(alias_id) or ()
@@ -286,7 +286,7 @@ async def get_agents(
                 )
                 spend_map: Final = {a.agent_id: a.spend for a in db_agents}
                 for agent in returned_agents:
-                    matched_spends: Final = tuple(
+                    matched_spends = tuple(
                         spend_map[alias_id]
                         for alias_id in global_agent_registry.ids_for_agent(agent.agent_id)
                         if alias_id in spend_map

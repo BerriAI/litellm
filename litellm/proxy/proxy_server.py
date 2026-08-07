@@ -1021,7 +1021,7 @@ async def proxy_startup_event(app: FastAPI):
 
             for attempt in range(3):
                 try:
-                    result: Final = await global_agent_registry.migrate_legacy_grant_ids(
+                    result = await global_agent_registry.migrate_legacy_grant_ids(
                         table=object_permission_table(prisma_client)
                     )
                     if result.rewritten:

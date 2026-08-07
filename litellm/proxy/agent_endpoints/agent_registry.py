@@ -165,21 +165,20 @@ class AgentRegistry:
         if agent_config is None:
             return
 
+        for agent_config_item in agent_config:
+            if not isinstance(agent_config_item, dict):
+                raise ValueError("agent_config must be a list of dictionaries")
+
         self.config_agents = tuple(agent_config)
         self.config_agent_legacy_ids = MappingProxyType(
             {
                 self._create_legacy_agent_id(agent_config_item): self._create_agent_id(agent_config_item)
                 for agent_config_item in agent_config
-                if isinstance(agent_config_item, dict)
-                and agent_config_item.get("agent_name")
-                and agent_config_item.get("agent_card_params")
+                if agent_config_item.get("agent_name") and agent_config_item.get("agent_card_params")
             }
         )
 
         for agent_config_item in agent_config:
-            if not isinstance(agent_config_item, dict):
-                raise ValueError("agent_config must be a list of dictionaries")
-
             agent_name = agent_config_item.get("agent_name")
             agent_card_params = agent_config_item.get("agent_card_params")
             if not all([agent_name, agent_card_params]):
