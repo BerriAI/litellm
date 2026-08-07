@@ -50,6 +50,17 @@ TRIGGER_TRAILING_SILENCE: Final = bytes(TRIGGER_AUDIO_BYTES_PER_SECOND * 3)
 TRIGGER_AUDIO_CHUNK_SIZE: Final = 1024
 
 
+def _parse_bedrock_tool_use_input(raw_input: object) -> object:
+    if not raw_input:
+        return {}
+    if not isinstance(raw_input, str):
+        return raw_input
+    try:
+        return json.loads(raw_input)
+    except json.JSONDecodeError:
+        return {}
+
+
 class BedrockRealtimeConfig(BaseRealtimeConfig):
     """Configuration for Bedrock Nova Sonic realtime transformations."""
 
@@ -1030,16 +1041,10 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         verbose_logger.debug("Handling toolUse")
         tool_use: Final = event["toolUse"]
 
-        response_id = current_response_id or f"resp_{uuid.uuid4()}"
-        item_id = current_output_item_id or f"item_{uuid.uuid4()}"
-
-        tool_input = {}
-        raw_input = tool_use["content"] if "content" in tool_use else tool_use.get("input")
-        if raw_input:
-            try:
-                tool_input = json.loads(raw_input) if isinstance(raw_input, str) else raw_input
-            except json.JSONDecodeError:
-                tool_input = {}
+        response_id: Final = current_response_id or f"resp_{uuid.uuid4()}"
+        item_id: Final = current_output_item_id or f"item_{uuid.uuid4()}"
+        raw_input: Final = tool_use["content"] if "content" in tool_use else tool_use.get("input")
+        tool_input: Final = _parse_bedrock_tool_use_input(raw_input)
 
         tool_call_id: Final = tool_use.get("toolUseId", "")
         tool_name: Final = tool_use.get("toolName", "")
@@ -1221,9 +1226,9 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             )
             returned_messages.extend(events)
             if content_end.get("type") == "TOOL":
-                current_output_item_id = None
-                current_response_id = None
-                current_delta_type = None
+                current_output_item_id = None  # rebind-ok: tool block ends so next ASSISTANT mints fresh ids
+                current_response_id = None  # rebind-ok: tool block ends so next ASSISTANT mints fresh ids
+                current_delta_type = None  # rebind-ok: tool block ends so next ASSISTANT mints fresh ids
             if BedrockContentEnd.model_validate(content_end).stopReason == "END_TURN":
                 (
                     done_events,
@@ -1238,11 +1243,12 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 events,
                 tool_call_id,
                 tool_name,
-                current_output_item_id,
-                current_response_id,
+                tool_output_item_id,
+                tool_response_id,
             ) = self.transform_tool_use_event(event, current_output_item_id, current_response_id)
             returned_messages.extend(events)
-            # Store tool call info for potential use
+            current_output_item_id = tool_output_item_id  # rebind-ok: persist minted tool item id into session
+            current_response_id = tool_response_id  # rebind-ok: persist minted tool response id into session
             verbose_logger.debug("Tool use event: %s (ID: %s)", tool_name, tool_call_id)
 
         elif "promptEnd" in event or "completionEnd" in event:
