@@ -74,18 +74,40 @@ def test_client_without_api_key(base_url):
     assert client.http._api_key is None
 
 
-def test_client_initialization():
-    """Test that the client is initialized correctly."""
+def test_client_falls_back_to_stored_cli_token(base_url, monkeypatch):
+    """Test that the client uses the `lite login` token issued for this server"""
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
+        lambda: {"key": "sk-cli-token", "base_url": base_url},
+    )
+
+    client = Client(base_url=base_url)
+
+    assert client._api_key == "sk-cli-token"
+    assert client.http._api_key == "sk-cli-token"
+
+
+def test_client_ignores_cli_token_issued_for_other_server(base_url, monkeypatch):
+    """Test that the client never sends a stored CLI token to a different server"""
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
+        lambda: {"key": "sk-cli-token", "base_url": "https://other-proxy.example"},
+    )
+
+    client = Client(base_url=base_url)
+
+    assert client._api_key is None
+    assert client.http._api_key is None
+
+
+def test_client_custom_timeout():
+    """Test that the client passes a custom timeout to the http client."""
     client = Client(
         base_url="http://localhost:4000",
         api_key="test-key",
         timeout=60,
     )
 
-    # Check that http client is initialized correctly
-    assert isinstance(client.http, HTTPClient)
-    assert client.http._base_url == "http://localhost:4000"
-    assert client.http._api_key == "test-key"
     assert client.http._timeout == 60
 
 
@@ -97,10 +119,3 @@ def test_client_default_timeout():
     )
 
     assert client.http._timeout == 30
-
-
-def test_client_without_api_key():
-    """Test that the client works without an API key."""
-    client = Client(base_url="http://localhost:4000")
-
-    assert client.http._api_key is None
