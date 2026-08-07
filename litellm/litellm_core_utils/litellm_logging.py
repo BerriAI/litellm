@@ -4720,8 +4720,6 @@ class StandardLoggingPayloadSetup:
 
         usage: Final = response_obj.get("usage", None) or {}
         if not usage:
-            # Rerank responses don't have a top-level "usage" key —
-            # token info lives under meta.billed_units / meta.tokens
             _meta: Final = response_obj.get("meta", None)
             if isinstance(_meta, dict):
                 _billed = _meta.get("billed_units", {}) or {}
@@ -4751,8 +4749,6 @@ class StandardLoggingPayloadSetup:
         raise ValueError(f"usage is required, got={usage} of type {type(usage)}")
 
     @staticmethod
-    #
-    @staticmethod
     def get_usage_as_dict(
         response_obj: dict | None,
         combined_usage_object: Usage | None = None,
@@ -4772,8 +4768,6 @@ class StandardLoggingPayloadSetup:
         _raw: Final = response_obj.get("usage", None)
 
         if _raw is None:
-            # Rerank responses don't have a top-level "usage" key —
-            # token info lives under meta.billed_units / meta.tokens
             _meta: Final = response_obj.get("meta", None)
             if isinstance(_meta, dict):
                 _billed = _meta.get("billed_units", {}) or {}
@@ -4799,8 +4793,7 @@ class StandardLoggingPayloadSetup:
             return _raw.model_dump()
 
         return _empty
-    #
-
+    
     @staticmethod
     def get_model_cost_information(
         base_model: str | None,
