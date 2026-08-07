@@ -4793,7 +4793,7 @@ class StandardLoggingPayloadSetup:
             return _raw.model_dump()
 
         return _empty
-    
+
     @staticmethod
     def get_model_cost_information(
         base_model: str | None,
