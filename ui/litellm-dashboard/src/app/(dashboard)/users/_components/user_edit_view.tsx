@@ -96,7 +96,7 @@ export function UserEditView({
   };
 
   return (
-    <Form form={form} onFinish={handleSubmit} layout="vertical">
+    <Form form={form} onFinish={handleSubmit} layout="vertical" noValidate>
       {!isBulkEdit && (
         <Form.Item label="User ID" name="user_id">
           <TextInput disabled />
@@ -191,7 +191,7 @@ export function UserEditView({
           },
         ]}
       >
-        <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} disabled={unlimitedBudget} />
+        <NumericalInput step="any" style={{ width: "100%" }} disabled={unlimitedBudget} />
       </Form.Item>
 
       <Form.Item label="Reset Budget" name="budget_duration">

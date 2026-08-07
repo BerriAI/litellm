@@ -389,6 +389,24 @@ describe("UserEditView", () => {
     expect(callArgs.metadata).toEqual(MOCK_USER_DATA.user_info.metadata);
   });
 
+  it("should submit a sub-cent max budget the browser would veto under a 0.01 step", async () => {
+    const onSubmitMock = vi.fn();
+    renderWithProviders(<UserEditView {...defaultProps} onSubmit={onSubmitMock} />);
+
+    const budget: HTMLInputElement = await screen.findByRole("spinbutton");
+    await userEvent.clear(budget);
+    await userEvent.type(budget, "0.001");
+
+    // jsdom never blocks the submit itself, so assert the constraint the real browser
+    // enforces before onFinish ever runs
+    expect(budget.checkValidity()).toBe(true);
+
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSubmitMock).toHaveBeenCalled());
+    expect(Number(onSubmitMock.mock.calls[0][0].max_budget)).toBe(0.001);
+  });
+
   it("should set max_budget to null when unlimited budget is checked on submit", async () => {
     const onSubmitMock = vi.fn();
     const userDataWithNullBudget = {
