@@ -700,9 +700,14 @@ class BaseLitellmParams(
         default=None,
         description="For /v1/realtime sessions: automatically close the session after this many guardrail violations.",
     )
-    on_violation: Optional[Literal["warn", "end_session"]] = Field(
+    on_violation: Optional[Literal["warn", "end_session", "block", "alert"]] = Field(
         default=None,
-        description="For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.",
+        description=(
+            "For /v1/realtime sessions: 'warn' speaks the violation message and "
+            "continues; 'end_session' speaks the message and closes the connection. "
+            "For MCP security guardrails: 'block' rejects the request; 'alert' "
+            "logs the violation and allows the request."
+        ),
     )
     realtime_violation_message: Optional[str] = Field(
         default=None,
@@ -800,6 +805,7 @@ class LitellmParams(
         "mode",
         "default_action",
         "on_disallowed_action",
+        "on_violation",
         "unreachable_fallback",
         mode="before",
         check_fields=False,
