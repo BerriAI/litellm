@@ -487,12 +487,13 @@ class TestHookHeaderMergePriority:
         )
 
     @pytest.mark.asyncio
-    async def test_hook_headers_override_static_headers(self):
-        """Hook headers should take precedence over static_headers."""
+    async def test_hook_non_auth_headers_merge_but_static_authorization_wins(self):
+        """Hook non-Authorization headers merge in, but an existing static
+        Authorization must survive the hook (JWT) merge (matches tools/list)."""
         manager = MCPServerManager()
         server = self._make_server(static_headers={"Authorization": "Bearer static-token", "X-Static": "yes"})
 
-        hook_headers = {"Authorization": "Bearer hook-signed-jwt"}
+        hook_headers = {"Authorization": "Bearer hook-signed-jwt", "X-Trace-Id": "t1"}
 
         captured_extra_headers: Dict[str, Any] = {}
 
@@ -521,8 +522,9 @@ class TestHookHeaderMergePriority:
                     pass
 
         headers = captured_extra_headers.get("value", {})
-        assert headers["Authorization"] == "Bearer hook-signed-jwt"
+        assert headers["Authorization"] == "Bearer static-token"
         assert headers["X-Static"] == "yes"
+        assert headers["X-Trace-Id"] == "t1"
 
     @pytest.mark.asyncio
     async def test_no_hook_headers_preserves_existing_behavior(self):
@@ -560,8 +562,18 @@ class TestHookHeaderMergePriority:
         assert headers == {"X-Static": "static-value"}
 
     @pytest.mark.asyncio
-    async def test_hook_headers_merge_with_oauth2(self):
-        """Hook headers merge on top of OAuth2 headers."""
+    async def test_hook_headers_do_not_overwrite_per_user_oauth_authorization(self):
+        """Regression for #31977: a per-user OAuth Authorization already resolved
+        into extra_headers must survive the MCP JWT signer (hook) merge on the
+        tools/call path, matching the precedence enforced on tools/list. The
+        hook's non-Authorization headers still merge in.
+
+        Uses delegate_auth_to_upstream so the server stays on the v1 path
+        (to_server_spec is None) where the caller's OAuth token is NOT stripped
+        and therefore legitimately lives in extra_headers at the hook-merge
+        point — the exact scenario the reporter hits (tools/list works because
+        that guard already skips the signer when Authorization exists; tools/call
+        was clobbering it)."""
         manager = MCPServerManager()
         server = MCPServer(
             server_id="test-id",
@@ -570,6 +582,7 @@ class TestHookHeaderMergePriority:
             url="https://example.com",
             transport=MCPTransport.http,
             auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
         )
 
         captured_extra_headers: Dict[str, Any] = {}
@@ -605,7 +618,7 @@ class TestHookHeaderMergePriority:
                     pass
 
         headers = captured_extra_headers.get("value", {})
-        assert headers["Authorization"] == "Bearer hook-jwt"
+        assert headers["Authorization"] == "Bearer oauth2-token"
         assert headers["X-OAuth"] == "yes"
         assert headers["X-Trace-Id"] == "trace-123"
 
