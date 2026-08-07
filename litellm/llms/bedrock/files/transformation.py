@@ -557,8 +557,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         resulting dict matches the InvokeModel body that Bedrock expects
         for batch inference.
         """
-        from litellm.types.utils import LlmProviders
         import litellm
+        from litellm.types.utils import LlmProviders
 
         _model: Final = openai_request_body.get("model", "")
         _model = litellm.model_alias_map.get(_model, _model)
