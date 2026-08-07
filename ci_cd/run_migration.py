@@ -4,6 +4,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -195,6 +196,25 @@ def _print_destructive_refusal(destructive_lines: list) -> None:
     print(banner, file=out)
 
 
+def _prepare_isolated_scratch(
+    schema_path: Path, migrations_dir: Path
+) -> tuple[Path, Path]:
+    """Copy schema.prisma and existing migrations into a fresh temp directory.
+
+    Prisma resolves the migrations directory as a "migrations" folder next to
+    the schema file, so both must be copied together. A unique ``mkdtemp`` root
+    is used (never ``schema_path.parent``) so the scratch copy can't collide
+    with the tracked repo-root ``migrations/`` folder and delete it on cleanup.
+
+    Returns ``(temp_root, temp_schema_path)``; the caller removes ``temp_root``.
+    """
+    temp_root = Path(tempfile.mkdtemp(prefix="litellm_migrations_"))
+    temp_schema_path = temp_root / schema_path.name
+    shutil.copy2(schema_path, temp_schema_path)
+    shutil.copytree(migrations_dir, temp_root / "migrations")
+    return temp_root, temp_schema_path
+
+
 def create_migration(
     migration_name: str = None,
     allow_destructive: bool = False,
@@ -235,19 +255,15 @@ def create_migration(
         with testing.postgresql.Postgresql() as postgresql:
             db_url = postgresql.url()
 
-            # Create temporary migrations directory next to schema.prisma
-            temp_migrations_dir = schema_path.parent / "migrations"
+            temp_root, temp_schema_path = _prepare_isolated_scratch(
+                schema_path, migrations_dir
+            )
 
             try:
-                # Copy existing migrations to temp directory
-                if temp_migrations_dir.exists():
-                    shutil.rmtree(temp_migrations_dir)
-                shutil.copytree(migrations_dir, temp_migrations_dir)
-
                 # Apply existing migrations to temp database
                 os.environ["DATABASE_URL"] = db_url
                 subprocess.run(
-                    ["prisma", "migrate", "deploy", "--schema", str(schema_path)],
+                    ["prisma", "migrate", "deploy", "--schema", str(temp_schema_path)],
                     check=True,
                 )
 
@@ -260,7 +276,7 @@ def create_migration(
                         "--from-url",
                         db_url,
                         "--to-schema-datamodel",
-                        str(schema_path),
+                        str(temp_schema_path),
                         "--script",
                     ],
                     capture_output=True,
@@ -306,9 +322,8 @@ def create_migration(
                     return False
 
             finally:
-                # Clean up: remove temporary migrations directory
-                if temp_migrations_dir.exists():
-                    shutil.rmtree(temp_migrations_dir)
+                # Clean up: remove temporary directory
+                shutil.rmtree(temp_root, ignore_errors=True)
 
     except subprocess.CalledProcessError as e:
         print(f"Error generating migration: {e.stderr}")
