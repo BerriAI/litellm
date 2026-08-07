@@ -192,7 +192,7 @@
       "max_completion_tokens": "max_tokens"
     },
     "constraints": {
-      "temperature_max": 1.0
+      "temperature_max": 1.99
     },
     "supported_endpoints": ["/v1/chat/completions"]
   }

@@ -23,7 +23,7 @@ class TestSCXAIProviderConfig:
         assert scx.base_url == "https://api.scx.ai/v1"
         assert scx.api_key_env == "SCX_API_KEY"
         assert scx.param_mappings.get("max_completion_tokens") == "max_tokens"
-        assert scx.constraints.get("temperature_max") == 1.0
+        assert scx.constraints.get("temperature_max") == 1.99
 
     def test_scx_ai_in_openai_compatible_providers(self):
         from litellm.constants import openai_compatible_providers
@@ -79,12 +79,20 @@ class TestSCXAIProviderConfig:
         config = create_config_class(provider)()
 
         optional_params = config.map_openai_params(
+            non_default_params={"temperature": 2.5},
+            optional_params={},
+            model="GLM-5.2",
+            drop_params=False,
+        )
+        assert optional_params["temperature"] == 1.99
+
+        optional_params = config.map_openai_params(
             non_default_params={"temperature": 1.7},
             optional_params={},
             model="GLM-5.2",
             drop_params=False,
         )
-        assert optional_params["temperature"] == 1.0
+        assert optional_params["temperature"] == 1.7
 
         optional_params = config.map_openai_params(
             non_default_params={"temperature": 0.4},
