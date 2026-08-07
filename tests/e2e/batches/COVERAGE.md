@@ -45,6 +45,19 @@ provider also fails create (the file id / model do not belong there), and the
 `provider_fallback` raw batch id is additionally checked against the provider's native
 shape (`raw_id_matches_provider`).
 
+## List pagination
+
+`TestBatchListPagination` walks the managed-batch listing the way a client does:
+it creates several batches under a key with a unique `user_id`, then pages
+`GET /v1/batches` with `limit=1`, following each page's last id as the `after`
+cursor until the proxy reports no more. The unique `user_id` scopes the
+owner-filtered listing to exactly this test's batches, so the expected page order
+is deterministic. It asserts every created id is returned exactly once, in
+reverse-chronological (newest-first) order, and that the walk terminates rather
+than looping. Covered for OpenAI and Vertex, both routed through the managed
+listing path. This is the paginate-until-all-ids-found workflow, and it guards
+against a cursor that repeats a page (loop) or drops batches (missing ids).
+
 ## Key model restriction
 
 `test_batch_key_model_access_denied` mints a key restricted to one model
@@ -71,7 +84,7 @@ File delete asserts `object=="file"` and `deleted==True`.
 | `batch_client.py` | typed file upload/download + batch create/retrieve/cancel/list/delete over the shared ProxyClient; runtime batch model registration via /model/new; denial helpers |
 | `capabilities.py` | the provider x scenario matrix + per-provider /model/new params + id-shape classifiers + per-provider raw-id assertion |
 | `conftest.py` | session-scoped batch deployment registration and teardown |
-| `test_batches_e2e.py` | parametrized lifecycle with per-endpoint output assertions, file upload/delete outputs, key-model-access denial |
+| `test_batches_e2e.py` | parametrized lifecycle with per-endpoint output assertions, file upload/delete outputs, key-model-access denial, list pagination (openai + vertex) |
 
 ## Out of scope (intentionally)
 
