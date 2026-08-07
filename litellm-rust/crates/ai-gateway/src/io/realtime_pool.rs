@@ -519,7 +519,9 @@ mod tests {
         // Unprompted session.created, exactly like OpenAI.
         let _ = ws
             .send(Message::Text(
-                r#"{"type":"session.created","session":{"id":"sess_fake"}}"#.to_string(),
+                r#"{"type":"session.created","session":{"id":"sess_fake"}}"#
+                    .to_string()
+                    .into(),
             ))
             .await;
         while let Some(Ok(msg)) = ws.next().await {
@@ -531,7 +533,7 @@ mod tests {
                     r#"{"type":"response.output_audio.delta","delta":"AAAA"}"#,
                     r#"{"type":"response.done"}"#,
                 ] {
-                    let _ = ws.send(Message::Text(frame.to_string())).await;
+                    let _ = ws.send(Message::Text(frame.to_string().into())).await;
                 }
             }
         }

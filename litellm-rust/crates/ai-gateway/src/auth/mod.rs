@@ -42,7 +42,6 @@ pub fn hash_token(token: &str) -> String {
 /// token. The comparison is constant-time.
 pub struct RequireMasterKey;
 
-#[axum::async_trait]
 impl FromRequestParts<AppState> for RequireMasterKey {
     type Rejection = (StatusCode, String);
 

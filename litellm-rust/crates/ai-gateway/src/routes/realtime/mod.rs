@@ -136,7 +136,7 @@ async fn bridge(
     // Plain forwarding sink — no observe here anymore.
     let client_out = ws_sink.with(|event: RealtimeEvent| async move {
         Ok::<Message, axum::Error>(Message::Text(
-            serde_json::to_string(&event).unwrap_or_default(),
+            serde_json::to_string(&event).unwrap_or_default().into(),
         ))
     });
 
