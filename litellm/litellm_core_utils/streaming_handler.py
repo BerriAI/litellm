@@ -2122,10 +2122,12 @@ class CustomStreamWrapper:
             return
         try:
             try:
-                selected_response = litellm.stream_chunk_builder(  # rebind-ok: set once from builder success or fallback path
-                    chunks=self.chunks,
-                    messages=self.messages,
-                    logging_obj=self.logging_obj,
+                selected_response = (
+                    litellm.stream_chunk_builder(  # rebind-ok: set once from builder success or fallback path
+                        chunks=self.chunks,
+                        messages=self.messages,
+                        logging_obj=self.logging_obj,
+                    )
                 )
             except Exception as builder_error:  # noqa: BLE001 - mirror end-of-stream; builder can fail many ways, any must fall back to chunk usage
                 # Mirror end-of-stream: stream_chunk_builder can re-raise (as
