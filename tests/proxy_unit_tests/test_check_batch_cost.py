@@ -627,7 +627,7 @@ class TestCheckBatchCost:
         must be written back with that status and batch_processed=True so it stops being
         polled forever.
         """
-        from unittest.mock import patch
+        import base64
 
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
             return_value=0
@@ -639,7 +639,9 @@ class TestCheckBatchCost:
 
         mock_job = MagicMock()
         mock_job.id = "job-terminal-1"
-        mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
+        mock_job.unified_object_id = base64.urlsafe_b64encode(
+            b"litellm_proxy;model_id:model-123;llm_batch_id:batch-456"
+        ).decode()
         mock_job.created_by = "user-1"
 
         assert check_batch_cost_instance._has_batch_processed_column is True
@@ -655,23 +657,7 @@ class TestCheckBatchCost:
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
 
-        decoded_id = "llm_model_id,model-123;llm_batch_id,batch-456;"
-
-        with (
-            patch(
-                "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
-                side_effect=[decoded_id, None],
-            ),
-            patch(
-                "litellm.proxy.openai_files_endpoints.common_utils.get_model_id_from_unified_batch_id",
-                return_value="model-123",
-            ),
-            patch(
-                "litellm.proxy.openai_files_endpoints.common_utils.get_batch_id_from_unified_batch_id",
-                return_value="batch-456",
-            ),
-        ):
-            await check_batch_cost_instance.check_batch_cost()
+        await check_batch_cost_instance.check_batch_cost()
 
         assert (
             mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1
@@ -683,6 +669,133 @@ class TestCheckBatchCost:
         assert (
             update_data["batch_processed"] is True
         ), "terminal-status update() must set batch_processed=True so polling stops"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("terminal_status", ["failed", "expired", "cancelled"])
+    async def test_terminal_status_persists_managed_output_file_ids(
+        self,
+        check_batch_cost_instance,
+        mock_prisma_client,
+        mock_llm_router,
+        terminal_status,
+    ):
+        """A cancelled/failed/expired batch with provider output files must be persisted
+        with unified managed file IDs, never raw provider IDs. Raw IDs written here leak
+        to every later GET /batches/{id} and GET /batches because the terminal row is
+        final (batch_processed=True) and read paths only resolve, never mint.
+        """
+        import base64
+        import json
+
+        from litellm.types.utils import LiteLLMBatch
+
+        unified_batch_uid = base64.urlsafe_b64encode(
+            b"litellm_proxy;model_id:model-123;llm_batch_id:batch-456"
+        ).decode()
+        raw_output_file_id = "file-terminal-out-abc"
+        raw_error_file_id = "file-terminal-err-xyz"
+        raw_input_file_id = "file-terminal-in-123"
+        unified_input_file_id = base64.urlsafe_b64encode(
+            b"litellm_proxy:application/octet-stream;unified_id,in-1;target_model_names,gpt-5-batch"
+        ).decode()
+        unified_output_file_id = base64.urlsafe_b64encode(
+            f"litellm_proxy:application/octet-stream;unified_id,u-1;llm_output_file_id,{raw_output_file_id}".encode()
+        ).decode()
+        unified_error_file_id = base64.urlsafe_b64encode(
+            f"litellm_proxy:application/octet-stream;unified_id,u-2;llm_output_file_id,{raw_error_file_id}".encode()
+        ).decode()
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=None
+        )
+
+        input_file_row = MagicMock()
+        input_file_row.unified_file_id = unified_input_file_id
+
+        def find_managed_file(where):
+            if where["flat_model_file_ids"]["has"] == raw_input_file_id:
+                return input_file_row
+            return None
+
+        mock_prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(
+            side_effect=find_managed_file
+        )
+
+        mock_job = MagicMock()
+        mock_job.id = "job-terminal-mint-1"
+        mock_job.unified_object_id = unified_batch_uid
+        mock_job.created_by = "user-1"
+        mock_job.team_id = "team-1"
+
+        check_batch_cost_instance._has_batch_processed_column = True
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+
+        response = LiteLLMBatch(
+            id="batch-456",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id=raw_input_file_id,
+            object="batch",
+            status=terminal_status,
+            output_file_id=raw_output_file_id,
+            error_file_id=raw_error_file_id,
+        )
+        mock_llm_router.aretrieve_batch = AsyncMock(return_value=response)
+
+        mock_hook = MagicMock()
+        mock_hook.get_unified_output_file_id.side_effect = [
+            unified_output_file_id,
+            unified_error_file_id,
+        ]
+        mock_hook.store_unified_file_id = AsyncMock()
+        check_batch_cost_instance.proxy_logging_obj.get_proxy_hook.return_value = (
+            mock_hook
+        )
+
+        await check_batch_cost_instance.check_batch_cost()
+
+        mock_hook.get_unified_output_file_id.assert_any_call(
+            output_file_id=raw_output_file_id,
+            model_id="model-123",
+            model_name="gpt-5-batch",
+        )
+        mock_hook.get_unified_output_file_id.assert_any_call(
+            output_file_id=raw_error_file_id,
+            model_id="model-123",
+            model_name="gpt-5-batch",
+        )
+        stored = {
+            next(iter(c.kwargs["model_mappings"].values())): c.kwargs["file_id"]
+            for c in mock_hook.store_unified_file_id.call_args_list
+        }
+        assert stored == {
+            raw_output_file_id: unified_output_file_id,
+            raw_error_file_id: unified_error_file_id,
+        }
+        for store_call in mock_hook.store_unified_file_id.call_args_list:
+            assert store_call.kwargs["user_api_key_dict"].user_id == "user-1"
+            assert store_call.kwargs["user_api_key_dict"].team_id == "team-1"
+
+        assert mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1
+        update_call = mock_prisma_client.db.litellm_managedobjecttable.update.call_args
+        assert update_call.kwargs["where"] == {"id": "job-terminal-mint-1"}
+        update_data = update_call.kwargs["data"]
+        assert update_data["status"] == terminal_status
+        assert update_data["batch_processed"] is True
+        persisted = json.loads(update_data["file_object"])
+        assert persisted["id"] == unified_batch_uid
+        assert persisted["input_file_id"] == unified_input_file_id
+        assert persisted["output_file_id"] == unified_output_file_id
+        assert persisted["error_file_id"] == unified_error_file_id
+        assert raw_output_file_id not in update_data["file_object"]
+        assert raw_error_file_id not in update_data["file_object"]
 
     @pytest.mark.asyncio
     async def test_raw_output_file_id_converted_to_managed_id(
