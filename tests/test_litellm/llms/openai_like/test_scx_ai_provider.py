@@ -34,13 +34,13 @@ class TestSCXAIProviderConfig:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="scx-ai/gpt-oss-120b",
+            model="scx-ai/GLM-5.2",
             custom_llm_provider=None,
             api_base=None,
             api_key=None,
         )
 
-        assert model == "gpt-oss-120b"
+        assert model == "GLM-5.2"
         assert provider == "scx-ai"
         assert api_base == "https://api.scx.ai/v1"
 
@@ -48,7 +48,7 @@ class TestSCXAIProviderConfig:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="scx-ai/gpt-oss-120b",
+            model="scx-ai/GLM-5.2",
             custom_llm_provider=None,
             api_base="https://custom.scx.ai/v1",
             api_key="sk-test",
@@ -62,7 +62,7 @@ class TestSCXAIProviderConfig:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="gpt-oss-120b",
+            model="GLM-5.2",
             custom_llm_provider=None,
             api_base="https://api.scx.ai/v1",
             api_key=None,
@@ -81,7 +81,7 @@ class TestSCXAIProviderConfig:
         optional_params = config.map_openai_params(
             non_default_params={"temperature": 1.7},
             optional_params={},
-            model="gpt-oss-120b",
+            model="GLM-5.2",
             drop_params=False,
         )
         assert optional_params["temperature"] == 1.0
@@ -89,7 +89,7 @@ class TestSCXAIProviderConfig:
         optional_params = config.map_openai_params(
             non_default_params={"temperature": 0.4},
             optional_params={},
-            model="gpt-oss-120b",
+            model="GLM-5.2",
             drop_params=False,
         )
         assert optional_params["temperature"] == 0.4
@@ -105,7 +105,7 @@ class TestSCXAIProviderConfig:
         optional_params = config.map_openai_params(
             non_default_params={"max_completion_tokens": 256},
             optional_params={},
-            model="gpt-oss-120b",
+            model="GLM-5.2",
             drop_params=False,
         )
         assert optional_params["max_tokens"] == 256
@@ -119,7 +119,7 @@ class TestSCXAIProviderConfig:
                 {
                     "model_name": "scx-chat",
                     "litellm_params": {
-                        "model": "scx-ai/gpt-oss-120b",
+                        "model": "scx-ai/GLM-5.2",
                         "api_key": "test-key",
                     },
                 }
@@ -132,13 +132,10 @@ class TestSCXAIProviderConfig:
 
 class TestSCXAIModelMetadata:
     SCX_MODELS = (
-        "scx-ai/Llama-4-Maverick-17B-128E-Instruct",
-        "scx-ai/gemma-4-31B-it",
-        "scx-ai/Qwen3-32B",
-        "scx-ai/MiniMax-M2.7",
-        "scx-ai/gpt-oss-120b",
+        "scx-ai/GLM-5.2",
+        "scx-ai/Qwen3.8-Max",
     )
-    VISION_MODELS = ("scx-ai/Llama-4-Maverick-17B-128E-Instruct", "scx-ai/gemma-4-31B-it")
+    VISION_MODELS = ("scx-ai/Qwen3.8-Max",)
 
     @staticmethod
     def _load(path_parts):
@@ -160,7 +157,16 @@ class TestSCXAIModelMetadata:
             assert info["output_cost_per_token"] > 0
             assert info["supports_function_calling"] is True
             assert info["supports_tool_choice"] is True
+            assert info["supports_reasoning"] is True
+            assert info["supports_response_schema"] is True
             assert info.get("supports_vision", False) is (model in self.VISION_MODELS)
+
+            assert info["supports_prompt_caching"] is True
+            assert 0 < info["cache_read_input_token_cost"] < info["input_cost_per_token"]
+
+            assert info["max_output_tokens"] == 131072
+            assert info["max_tokens"] == info["max_output_tokens"]
+            assert info["max_input_tokens"] >= 1_000_000
 
     def test_scx_ai_models_synced_to_backup(self):
         model_cost = self._load(("model_prices_and_context_window.json",))

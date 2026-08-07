@@ -173,7 +173,7 @@ describe("provider_info_helpers", () => {
     });
 
     it("should return an scx-ai model placeholder for SCX_AI provider", () => {
-      expect(getPlaceholder(Providers.SCX_AI)).toBe("scx-ai/MiniMax-M2.7");
+      expect(getPlaceholder(Providers.SCX_AI)).toBe("scx-ai/GLM-5.2");
     });
 
     it("should return claude-3-opus placeholder for Anthropic provider", () => {
