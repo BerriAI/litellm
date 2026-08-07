@@ -9,7 +9,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 import json
 import os
 import re
-from typing import Any, Final, cast
+from typing import Annotated, Any, Final, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
@@ -1939,8 +1939,8 @@ async def openai_proxy_route(
 async def openai_websocket_proxy_route(
     websocket: WebSocket,
     endpoint: str,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
-):
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth_websocket)],
+) -> None:
     """WebSocket passthrough for OpenAI prefixes (realtime / responses.connect)."""
     base_target_url = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
     openai_api_key = passthrough_endpoint_router.get_credentials(
@@ -1949,7 +1949,7 @@ async def openai_websocket_proxy_route(
     )
     if openai_api_key is None:
         await websocket.close(code=1011)
-        raise Exception("Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.")
+        raise ValueError("Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.")
 
     encoded_endpoint = httpx.URL(endpoint).path
     if not encoded_endpoint.startswith("/"):
@@ -1960,7 +1960,6 @@ async def openai_websocket_proxy_route(
         path=encoded_endpoint,
         custom_llm_provider=litellm.LlmProviders.OPENAI,
     )
-    # HTTP(S) base -> WS(S) target for the upgrade.
     if updated_url.startswith("https://"):
         wss_target = "wss://" + updated_url[len("https://") :]
     elif updated_url.startswith("http://"):
@@ -1968,12 +1967,17 @@ async def openai_websocket_proxy_route(
     else:
         wss_target = updated_url
 
-    return await websocket_passthrough_request(
+    query_string = websocket.url.query
+    if query_string:
+        separator = "&" if "?" in wss_target else "?"
+        wss_target = f"{wss_target}{separator}{query_string}"
+
+    await websocket_passthrough_request(
         websocket=websocket,
         target=wss_target,
         custom_headers={"Authorization": f"Bearer {openai_api_key}"},
         user_api_key_dict=user_api_key_dict,
-        forward_headers=True,
+        forward_headers=False,
         endpoint=f"/openai/{endpoint}",
         accept_websocket=True,
     )
