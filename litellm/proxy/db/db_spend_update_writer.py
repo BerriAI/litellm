@@ -1428,7 +1428,7 @@ class DBSpendUpdateWriter:
 
     @staticmethod
     def _daily_transaction_key(*parts: object | None) -> str:
-        return "_".join(str(part or "") for part in parts)
+        return json.dumps(tuple(str(part or "") for part in parts), separators=(",", ":"))
 
     # fmt: off
 
