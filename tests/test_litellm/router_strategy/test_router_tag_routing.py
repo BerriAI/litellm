@@ -429,42 +429,58 @@ def test_get_tags_from_request_kwargs_various_inputs():
 def test_split_tags_positive_only():
     from litellm.router_strategy.tag_based_routing import _split_tags
 
-    positive, excluded = _split_tags(["paid", "teamA"])
+    required, positive, excluded = _split_tags(["paid", "teamA"])
+    assert required == ()
     assert positive == ["paid", "teamA"]
-    assert excluded == []
+    assert excluded == ()
 
 
 def test_split_tags_negation_only():
     from litellm.router_strategy.tag_based_routing import _split_tags
 
-    positive, excluded = _split_tags(["!provider:anthropic"])
+    required, positive, excluded = _split_tags(["!provider:anthropic"])
+    assert required == ()
     assert positive == []
-    assert excluded == ["provider:anthropic"]
+    assert excluded == ("provider:anthropic",)
+
+
+def test_split_tags_required_only():
+    from litellm.router_strategy.tag_based_routing import _split_tags
+
+    required, positive, excluded = _split_tags(["&reasoning_type:high", "&provider:anthropic"])
+    assert required == ("reasoning_type:high", "provider:anthropic")
+    assert positive == []
+    assert excluded == ()
 
 
 def test_split_tags_mixed():
     from litellm.router_strategy.tag_based_routing import _split_tags
 
-    positive, excluded = _split_tags(["paid", "!provider:anthropic", "!inference:cerebras"])
+    required, positive, excluded = _split_tags(
+        ["paid", "!provider:anthropic", "!inference:cerebras", "&reasoning_type:high"]
+    )
+    assert required == ("reasoning_type:high",)
     assert positive == ["paid"]
     assert len(excluded) == 2
 
 
-def test_split_tags_bare_bang_skipped():
+def test_split_tags_bare_bang_and_amp_skipped():
     from litellm.router_strategy.tag_based_routing import _split_tags
 
-    # A bare "!" with nothing after it is not a valid negation tag; skip it
-    positive, excluded = _split_tags(["paid", "!"])
+    # A bare "!" or "&" with nothing after it is not a valid tag; skip it
+    required, positive, excluded = _split_tags(["paid", "!", "&"])
+    assert required == ()
     assert positive == ["paid"]
-    assert excluded == []
+    assert excluded == ()
 
 
 def test_split_tags_empty():
     from litellm.router_strategy.tag_based_routing import _split_tags
 
-    positive, excluded = _split_tags([])
+    required, positive, excluded = _split_tags([])
+    assert required == ()
     assert positive == []
-    assert excluded == []
+    assert excluded == ()
 
 
 # --- get_deployments_for_tag negation integration tests ---
@@ -1115,3 +1131,439 @@ async def test_request_level_enable_tag_filtering_false_cannot_disable_global():
             mock_response="hi",
         )
         assert response._hidden_params["model_id"] == "team-a-deployment"
+
+
+# --- _require_all_tags / _chain_allows_fail_open unit tests ---
+
+
+def test_require_all_tags_empty_required_set_is_noop():
+    from litellm.router_strategy.tag_based_routing import _require_all_tags
+
+    deployments = [{"litellm_params": {"tags": ["a"]}}, {"litellm_params": {"tags": []}}]
+    assert _require_all_tags(deployments, frozenset()) == tuple(deployments)
+
+
+def test_require_all_tags_keeps_only_deployments_with_every_required_tag():
+    from litellm.router_strategy.tag_based_routing import _require_all_tags
+
+    has_both = {"litellm_params": {"tags": ["reasoning_type:high", "provider:anthropic"]}}
+    has_one = {"litellm_params": {"tags": ["reasoning_type:high"]}}
+    has_neither = {"litellm_params": {"tags": ["provider:openai"]}}
+
+    result = _require_all_tags(
+        [has_both, has_one, has_neither], frozenset({"reasoning_type:high", "provider:anthropic"})
+    )
+    assert result == (has_both,)
+
+
+def test_chain_allows_fail_open_true_when_any_member_sets_flag():
+    from litellm.router_strategy.tag_based_routing import _chain_allows_fail_open
+
+    deployments = [
+        {"model_info": {}},
+        {"model_info": {"allow_fail_open": True}},
+    ]
+    assert _chain_allows_fail_open(deployments) is True
+
+
+def test_chain_allows_fail_open_false_by_default():
+    from litellm.router_strategy.tag_based_routing import _chain_allows_fail_open
+
+    deployments = [{"model_info": {}}, {}]
+    assert _chain_allows_fail_open(deployments) is False
+
+
+# --- get_deployments_for_tag required-AND ("&") integration tests ---
+
+
+@pytest.mark.asyncio()
+async def test_required_and_matches_deployment_with_all_tags():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:high", "provider:anthropic"],
+                },
+                "model_info": {"id": "high-reasoning-anthropic"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:high", "provider:openai"],
+                },
+                "model_info": {"id": "high-reasoning-openai"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["&reasoning_type:high", "&provider:anthropic"]},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "high-reasoning-anthropic"
+
+
+@pytest.mark.asyncio()
+async def test_required_and_excludes_deployment_missing_one_tag():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:high", "provider:anthropic"],
+                },
+                "model_info": {"id": "high-reasoning-anthropic"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:low", "provider:anthropic"],
+                },
+                "model_info": {"id": "low-reasoning-anthropic"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["&reasoning_type:high", "&provider:anthropic"]},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "high-reasoning-anthropic"
+
+
+@pytest.mark.asyncio()
+async def test_required_and_composes_with_negation():
+    # &reasoning_type:high requires the tag; !provider:anthropic bans that provider.
+    # Negation applies first, so the anthropic deployment is excluded even though
+    # it satisfies the required tag.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:high", "provider:anthropic"],
+                },
+                "model_info": {"id": "high-reasoning-anthropic"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:high", "provider:openai"],
+                },
+                "model_info": {"id": "high-reasoning-openai"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["&reasoning_type:high", "!provider:anthropic"]},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "high-reasoning-openai"
+
+
+@pytest.mark.asyncio()
+async def test_required_and_combines_with_positive_or_preference():
+    # &reasoning_type:high is a hard requirement; provider:anthropic/provider:openai
+    # is a preference (OR) applied on top of the survivors.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:high", "provider:anthropic"],
+                },
+                "model_info": {"id": "high-reasoning-anthropic"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:high", "provider:vertex"],
+                },
+                "model_info": {"id": "high-reasoning-vertex"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:low", "provider:anthropic"],
+                },
+                "model_info": {"id": "low-reasoning-anthropic"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["&reasoning_type:high", "provider:anthropic", "provider:openai"]},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "high-reasoning-anthropic"
+
+
+@pytest.mark.asyncio()
+async def test_required_and_single_tag_matches_trivially():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:high"],
+                },
+                "model_info": {"id": "high-reasoning"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:low"],
+                },
+                "model_info": {"id": "low-reasoning"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["&reasoning_type:high"]},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "high-reasoning"
+
+
+@pytest.mark.asyncio()
+async def test_required_and_unmatched_raises_by_default():
+    # allow_fail_open unset -> unmatched required-AND raises, same as today's "!" behavior.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:low"],
+                },
+                "model_info": {"id": "low-reasoning"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["&reasoning_type:high"]},
+            mock_response="hi",
+        )
+
+    from litellm.types.router import RouterErrors
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
+
+
+@pytest.mark.asyncio()
+async def test_required_and_combined_with_positive_unmatched_raises_by_default():
+    # &A eliminates every candidate before the positive-tag preference even runs;
+    # this must be gated by allow_fail_open too, not just the required-AND-only path.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:low", "provider:anthropic"],
+                },
+                "model_info": {"id": "low-reasoning-anthropic"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["&reasoning_type:high", "provider:anthropic"]},
+            mock_response="hi",
+        )
+
+    from litellm.types.router import RouterErrors
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
+
+
+# --- get_deployments_for_tag allow_fail_open integration tests ---
+
+
+@pytest.mark.asyncio()
+async def test_allow_fail_open_required_and_unmatched_falls_back_to_default_pool():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["default", "reasoning_type:low"],
+                },
+                "model_info": {"id": "default-model", "allow_fail_open": True},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["&reasoning_type:high"]},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "default-model"
+
+
+@pytest.mark.asyncio()
+async def test_allow_fail_open_negation_eliminates_everything_includes_banned_deployment():
+    # The core backwards-compatibility risk: once allow_fail_open opts a chain in,
+    # a "!" ban that eliminates every deployment falls back to the full default
+    # pool, INCLUDING the deployment the request tried to ban. This must never
+    # silently disappear (still raise) nor silently reappear on chains without
+    # the flag set (see test_negation_all_excluded_raises).
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:anthropic"],
+                },
+                "model_info": {"id": "anthropic-model", "allow_fail_open": True},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["!provider:anthropic"]},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "anthropic-model"
+
+
+@pytest.mark.asyncio()
+async def test_allow_fail_open_prefers_default_tagged_deployment_on_fallback():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:anthropic"],
+                },
+                "model_info": {"id": "anthropic-model", "allow_fail_open": True},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:anthropic", "default"],
+                },
+                "model_info": {"id": "anthropic-default-model", "allow_fail_open": True},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["!provider:anthropic"]},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "anthropic-default-model"
+
+
+@pytest.mark.asyncio()
+async def test_allow_fail_open_per_hop_across_fallback_chain():
+    # required-AND fail-open must be re-evaluated fresh on every hop, the same
+    # per-hop guarantee the negation feature already established.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:low"],
+                },
+                "model_info": {"id": "primary-low-reasoning"},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["default", "reasoning_type:low"],
+                },
+                "model_info": {"id": "fallback-model", "allow_fail_open": True},
+            },
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        enable_tag_filtering=True,
+    )
+
+    response = await router.acompletion(
+        model="primary",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"tags": ["&reasoning_type:high"]},
+        mock_response="hi",
+    )
+    assert response._hidden_params["model_id"] == "fallback-model"

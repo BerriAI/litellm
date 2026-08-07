@@ -170,6 +170,12 @@ class ModelInfo(MirroredPricingParams):
     ptu_effective_from: datetime.datetime | None = None
     ptu_effective_to: datetime.datetime | None = None
 
+    # when tag-based routing's "!" or "&" constraints eliminate every deployment
+    # in this model group, fall back to the default-tagged pool instead of
+    # raising no_deployments_with_tag_routing. Defaults to False (raise), so
+    # existing "!" negation behavior is unchanged unless explicitly opted in.
+    allow_fail_open: bool | None = None
+
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided
