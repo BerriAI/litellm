@@ -1079,9 +1079,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         non-200 response (including 429, handled by the retry wrapper above).
 
         AWS also reports some failures inside a 200 body, tagging ``Output.__type``
-        with an Exception marker, and those raise here too so the one consolidated
-        log entry for the request records ``guardrail_failed_to_respond`` instead of
-        a success.
+        with an Exception marker. Those deliberately do NOT raise: the request proceeds,
+        matching the behaviour of this code before chunking existed. The marker survives
+        the merge, so the one consolidated log entry still records
+        ``guardrail_failed_to_respond`` rather than a success. Making that path fail
+        closed is a separate change, tracked apart from this PR, and belongs behind the
+        existing ``unreachable_fallback`` setting rather than a hardcoded status.
 
         A block is logged here rather than by the caller: it ends the whole chunking
         flow immediately, with no further chunks attempted, so there is no later
