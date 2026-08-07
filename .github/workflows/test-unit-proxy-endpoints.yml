@@ -35,6 +35,7 @@ jobs:
         tests/test_litellm/proxy/guardrails
         tests/test_litellm/proxy/management_helpers
         tests/test_litellm/proxy/anthropic_endpoints
+        tests/test_litellm/proxy/chatgpt_endpoints
         tests/test_litellm/proxy/google_endpoints
         tests/test_litellm/proxy/openai_files_endpoint
         tests/test_litellm/proxy/batches_endpoints
