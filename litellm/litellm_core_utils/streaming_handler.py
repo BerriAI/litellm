@@ -2122,7 +2122,7 @@ class CustomStreamWrapper:
             return
         try:
             try:
-                partial_response = litellm.stream_chunk_builder(
+                partial_response: Final = litellm.stream_chunk_builder(
                     chunks=self.chunks,
                     messages=self.messages,
                     logging_obj=self.logging_obj,
@@ -2140,7 +2140,7 @@ class CustomStreamWrapper:
                 partial_response.usage = calculate_total_usage(chunks=self.chunks)
             if partial_response is None:
                 return
-            usage = cast(Usage | None, getattr(partial_response, "usage", None))
+            usage: Final = cast(Usage | None, getattr(partial_response, "usage", None))
             if usage is None:
                 return
             self.logging_obj.model_call_details["combined_usage_object"] = usage
