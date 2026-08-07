@@ -1,0 +1,50 @@
+name: Check Public API for Breaking Changes
+
+on:
+  pull_request:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_staging
+      - "litellm_**"
+    paths:
+      - "litellm/**/*.py"
+      - ".github/scripts/check_api_breaking_changes.py"
+      - ".github/workflows/check-api-breaking-changes.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check-public-api:
+    name: Diff the public API against the base branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Diff public API
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          uv run --no-project --with griffe==2.1.0 \
+            python .github/scripts/check_api_breaking_changes.py \
+            --repo . \
+            --base-ref "$BASE_SHA" \
+            --pr-title "$PR_TITLE" \
+            --pr-body "$PR_BODY"
