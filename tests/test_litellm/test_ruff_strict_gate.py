@@ -16,6 +16,13 @@ def rule(name, limit):
     return {name: {"limit": limit}}
 
 
+def test_paths_are_resolved_once_per_file_not_once_per_violation():
+    gate._relative_to_repo.cache_clear()
+    same_file = str(gate.REPO_ROOT / "litellm" / "a.py")
+    assert {gate._relative_to_repo(same_file) for _ in range(20)} == {"litellm/a.py"}
+    assert gate._relative_to_repo.cache_info().misses == 1
+
+
 def test_under_ceiling_passes():
     assert gate.evaluate({"ANN001": 100}, {"ANN001": 100}, rule("ANN001", 110)) == []
 

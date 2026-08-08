@@ -9,12 +9,14 @@
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety pre-commit \
-	lint-install lint-fetch-base bootstrap
+	lint-install lint-fetch-base bootstrap bootstrap-python bootstrap-dashboard
 
 # Default target
 help:
 	@echo "Available commands:"
 	@echo "  make bootstrap          - Provision a fresh clone/worktree"
+	@echo "  make bootstrap-python   - Provision only the Python env (no dashboard npm install)"
+	@echo "  make bootstrap-dashboard - Provision only the dashboard's node_modules"
 	@echo "  make install-dev        - Install development dependencies"
 	@echo "  make install-proxy-dev  - Install proxy development dependencies"
 	@echo "  make install-dev-ci     - Install dev dependencies (CI-compatible, pins OpenAI)"
@@ -72,17 +74,21 @@ info:
 install-dev:
 	$(UV) sync --inexact --frozen
 
-bootstrap:
+bootstrap: bootstrap-python bootstrap-dashboard
+	@echo "bootstrap: done"
+
+bootstrap-python:
 	$(UV) sync --inexact --frozen --extra proxy --group proxy-dev --group e2e-dev
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
-	cd ui/litellm-dashboard && ../../scripts/with_dashboard_node.sh npm install --no-audit --no-fund
 	@main_root=$$(git worktree list --porcelain | head -1 | sed 's/^worktree //'); \
 	if [ "$$main_root" != "$$(git rev-parse --show-toplevel)" ] && [ -f "$$main_root/.env" ] && [ ! -f .env ]; then \
 		cp "$$main_root/.env" .env && echo "bootstrap: copied .env from $$main_root"; \
 	else \
 		echo "bootstrap: .env left untouched"; \
 	fi
-	@echo "bootstrap: done"
+
+bootstrap-dashboard:
+	cd ui/litellm-dashboard && ../../scripts/with_dashboard_node.sh npm install --no-audit --no-fund
 
 install-proxy-dev:
 	$(UV) sync --frozen --group proxy-dev --extra proxy
@@ -240,7 +246,7 @@ lint-dev: lint-format-changed check-circular-imports check-import-safety
 # test-linting.yml (Python), test-litellm-ui-build.yml's frontend-lint (dashboard), and
 # check-ui-api-types.yml (API-type drift), skipping any whose files you didn't stage.
 # Not auto-installed as a git hook so it never slows an unrelated human commit.
-pre-commit: bootstrap
+pre-commit: bootstrap-python
 	./scripts/pre_commit_lint.sh
 
 # Testing targets
