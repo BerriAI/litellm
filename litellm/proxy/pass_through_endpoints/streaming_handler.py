@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Final
 
+import anyio
 import httpx
 
 import litellm
@@ -117,6 +118,9 @@ class PassThroughStreamingHandler:
                     )
                 except Exception as e:
                     verbose_proxy_logger.error("Error scheduling chunk_processor logging: %s", e)
+
+            with anyio.CancelScope(shield=True):
+                await response.aclose()
 
     @staticmethod
     async def _route_streaming_logging_to_handler(
