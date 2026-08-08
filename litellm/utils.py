@@ -4894,8 +4894,31 @@ def get_max_tokens(model: str) -> int | None:
         )
 
 
-def _strip_stable_vertex_version(model_name) -> str:
-    return re.sub(r"-\d+$", "", model_name)
+def _strip_stable_vertex_version(model_name: str) -> str:
+    """Strip Vertex AI *publish* version suffixes, not product generation numbers.
+
+    Vertex stable/versioned ids look like ``gemini-1.5-flash-001`` or
+    ``gemini-2.0-flash-001`` (3+ digit build ids). Anthropic-on-Vertex product
+    names use short generation numbers (``claude-sonnet-5``, ``claude-opus-4-1``)
+    and optional region resource names (``claude-sonnet-5@default``).
+
+    The old ``-\\d+$`` pattern treated ``-5`` as a version and rewrote
+    ``claude-sonnet-5`` → ``claude-sonnet``, while leaving
+    ``claude-sonnet-5@default`` untouched. That made bare and ``@default``
+    cost-map lookups diverge (issue #35758): bare ids missed priced entries
+    and logged $0, while ``@default`` still resolved.
+
+    Only strip:
+    - 3+ digit trailing version codes (``-001``, ``-002``)
+    - 8-digit date suffixes (``-20250929``)
+    Leave region suffixes after ``@`` alone.
+    """
+    if not model_name:
+        return model_name
+    if "@" in model_name:
+        # Region / resource name (e.g. model@default) is not a publish version.
+        return model_name
+    return re.sub(r"-(?:\d{8}|\d{3,})$", "", model_name)
 
 
 def _get_base_bedrock_model(model_name) -> str:
@@ -5159,6 +5182,23 @@ def _get_model_info_from_generalization(
     return None
 
 
+def _cost_map_provider_prefix(custom_llm_provider: str | None) -> str | None:
+    """Map sub-provider tags to the cost-map key prefix.
+
+    Cost-map keys use ``vertex_ai/...`` even when ``litellm_provider`` is the
+    more specific ``vertex_ai-anthropic_models`` (or other ``vertex_ai-*``
+    tags). Using the sub-provider as a key prefix produces miss keys like
+    ``vertex_ai-anthropic_models/claude-sonnet-5`` and falls through to $0.
+    """
+    if custom_llm_provider is None:
+        return None
+    if custom_llm_provider.startswith("vertex_ai"):
+        return "vertex_ai"
+    if custom_llm_provider.startswith("fireworks_ai"):
+        return "fireworks_ai"
+    return custom_llm_provider
+
+
 def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> PotentialModelNamesAndCustomLLMProvider:
     if custom_llm_provider is None:
         # Get custom_llm_provider
@@ -5170,18 +5210,23 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
         combined_model_name = model
         stripped_model_name = _strip_model_name(model=model, custom_llm_provider=custom_llm_provider)
         combined_stripped_model_name = stripped_model_name
-    elif custom_llm_provider and model.startswith(
-        custom_llm_provider + "/"
-    ):  # handle case where custom_llm_provider is provided and model starts with custom_llm_provider
-        split_model = model.split("/", 1)[1]
-        combined_model_name = model
-        stripped_model_name = _strip_model_name(model=split_model, custom_llm_provider=custom_llm_provider)
-        combined_stripped_model_name = f"{custom_llm_provider}/{stripped_model_name}"
     else:
-        split_model = model
-        combined_model_name = f"{custom_llm_provider}/{model}"
-        stripped_model_name = _strip_model_name(model=model, custom_llm_provider=custom_llm_provider)
-        combined_stripped_model_name = f"{custom_llm_provider}/{stripped_model_name}"
+        cost_map_prefix: Final = _cost_map_provider_prefix(custom_llm_provider) or custom_llm_provider
+        # Prefer the cost-map prefix (e.g. vertex_ai/) over sub-provider tags when
+        # stripping a leading provider segment from the model string.
+        if model.startswith(custom_llm_provider + "/"):
+            split_model = model.split("/", 1)[1]
+            combined_model_name = f"{cost_map_prefix}/{split_model}"
+        elif cost_map_prefix != custom_llm_provider and model.startswith(cost_map_prefix + "/"):
+            split_model = model.split("/", 1)[1]
+            combined_model_name = (
+                model if model.startswith(cost_map_prefix + "/") else f"{cost_map_prefix}/{split_model}"
+            )
+        else:
+            split_model = model
+            combined_model_name = f"{cost_map_prefix}/{model}"
+        stripped_model_name = _strip_model_name(model=split_model, custom_llm_provider=cost_map_prefix)
+        combined_stripped_model_name = f"{cost_map_prefix}/{stripped_model_name}"
 
     if custom_llm_provider in ("bedrock", "bedrock_converse"):
         from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
