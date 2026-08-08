@@ -24,19 +24,17 @@ set by construction; re-syncs of an up-to-date env are a near-instant no-op.
 The group set is folded into the cache and artifact fingerprint, so counts
 recorded under a different set are never matched, only recomputed.
 
-Checking is parallelized across a *pinned* number of worker threads rather than
-the host's core count. Threading is what makes the pass roughly 1.6x faster
-(137s -> 87s over this tree on four cores), but partitioning files across
-threads also reorders a handful of order-dependent inferences, so a few
-diagnostics differ between a serial pass, a two-thread pass and a four-thread
-pass; passes at the same width agree exactly, run after run. Width is therefore
-part of the measurement in exactly the way the installed package set is, and
-letting it follow ``nproc`` would make a 16-core laptop and a 4-core CI runner
-report different totals for the same tree. It is the constant
-``BASEDPYRIGHT_THREADS`` here, set to the GitHub-hosted runner's vCPU count so
-CI gets full parallelism, and it is folded into the fingerprint alongside the
-group set, so a cache entry or CI artifact recorded at another width is never
-matched, only recomputed.
+Checking runs single-threaded on purpose. basedpyright's ``--threads`` looks
+like free speed and is not: partitioning files across threads reorders
+order-dependent inferences, so the tree's totals move with the width (149330
+serial, 149325 threaded here), which makes a counting gate's verdict a function
+of the host. Pinning a width to keep counts comparable then decouples it from
+the machine, and letting it follow ``nproc`` instead gives every core count its
+own fingerprint, so no one could reuse CI's precomputed base artifact. The
+speed did not survive measurement either: on four cores ``--threads 4`` ranged
+84-114s against 137-151s serial, and on one contributor's laptop it was ~6x
+*slower* than serial (724s vs 113s at width 8). Serial is the only width that
+is both portable and comparable.
 
 The gate runs basedpyright itself, for both the head and the base pass, with
 ``NODE_OPTIONS`` raised to the heap this repo needs: basedpyright's node
@@ -105,8 +103,6 @@ PRISMA_SCHEMA = REPO_ROOT / "litellm" / "proxy" / "schema.prisma"
 # repo; appended last so it wins node's last-flag-wins resolution over any
 # caller-set value while preserving the caller's other NODE_OPTIONS flags.
 NODE_HEAP_OPTION = "--max-old-space-size=8192"
-
-BASEDPYRIGHT_THREADS: Final = 4
 
 # Bucket for a basedpyright diagnostic with no `rule`. Counted so it's gated.
 UNCODED = "<uncoded>"
@@ -240,10 +236,9 @@ def run_basedpyright(cwd: Path = REPO_ROOT, env_dir: Path = TYPECHECK_ENV_DIR) -
     the only pin that works, because basedpyright auto-detects a `.venv` in the
     project root and that beats both PATH order and VIRTUAL_ENV, silently
     measuring the caller's fatter venv (whose extra typed packages flip
-    diagnostics) whenever the repo has one. `--threads` is pinned for the same
-    reason: it is a measurement parameter, not a local tuning knob. Exit 0
-    (clean) and 1 (errors found) are both output-bearing runs; anything else is
-    a crash and fails loudly instead of reading as zero errors."""
+    diagnostics) whenever the repo has one. Exit 0 (clean) and 1 (errors found)
+    are both output-bearing runs; anything else is a crash and fails loudly
+    instead of reading as zero errors."""
     bin_dir: Final = env_dir / "bin"
     proc = subprocess.run(
         [
@@ -251,8 +246,6 @@ def run_basedpyright(cwd: Path = REPO_ROOT, env_dir: Path = TYPECHECK_ENV_DIR) -
             "--outputjson",
             "--pythonpath",
             str(bin_dir / "python"),
-            "--threads",
-            str(BASEDPYRIGHT_THREADS),
         ],
         cwd=cwd,
         capture_output=True,
@@ -327,7 +320,6 @@ def over_ceiling(
 
 def environment_fingerprints(
     dep_groups: tuple[str, ...] = TYPECHECK_DEP_GROUPS,
-    threads: int = BASEDPYRIGHT_THREADS,
 ) -> tuple[str, ...]:
     return (
         *(
@@ -336,7 +328,6 @@ def environment_fingerprints(
             if path.exists()
         ),
         "groups:" + ",".join(dep_groups),
-        f"threads:{threads}",
     )
 
 

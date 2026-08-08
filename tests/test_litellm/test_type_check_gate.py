@@ -132,15 +132,18 @@ def test_run_basedpyright_pins_import_resolution_to_the_owned_env(tmp_path):
     assert argv[argv.index("--pythonpath") + 1] == str(env_dir / "bin" / "python")
 
 
-def test_run_basedpyright_pins_the_thread_width_instead_of_inheriting_the_hosts(tmp_path):
+def test_run_basedpyright_stays_single_threaded(tmp_path):
+    """`--threads` shifts the tree's totals (149330 serial vs 149325 threaded), which
+    would make this counting gate's verdict a function of the host, and it measured
+    slower than serial on real hardware. Neither failure is visible from a passing
+    run, so pin the absence of the flag."""
     captured = tmp_path / "argv.txt"
     env_dir = _stub_env(
         tmp_path,
         f'echo "$@" > "{captured}"\necho \'{{"generalDiagnostics": []}}\'',
     )
     gate.run_basedpyright(cwd=tmp_path, env_dir=env_dir)
-    argv = captured.read_text().split()
-    assert argv[argv.index("--threads") + 1] == str(gate.BASEDPYRIGHT_THREADS)
+    assert "--threads" not in captured.read_text().split()
 
 
 def test_run_basedpyright_fails_loudly_on_a_crash_exit_code(tmp_path):
@@ -297,11 +300,6 @@ def test_fingerprints_carry_the_dependency_group_set():
         dep_groups=("proxy-dev",)
     ) != gate.environment_fingerprints(dep_groups=("proxy-dev", "e2e-dev"))
     assert "groups:" + ",".join(gate.TYPECHECK_DEP_GROUPS) in gate.environment_fingerprints()
-
-
-def test_fingerprints_carry_the_thread_width():
-    assert f"threads:{gate.BASEDPYRIGHT_THREADS}" in gate.environment_fingerprints()
-    assert gate.environment_fingerprints(threads=2) != gate.environment_fingerprints(threads=4)
 
 
 def test_fingerprints_cover_the_prisma_schema():
