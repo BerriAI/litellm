@@ -46,6 +46,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
+    SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
@@ -135,6 +136,7 @@ from litellm.router_utils.handle_error import (
 from litellm.router_utils.health_state_cache import DeploymentHealthCache
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
+    warn_on_unknown_model_group_affinity_flags,
 )
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     build_io_token_rate_limit_headers,
@@ -603,6 +605,10 @@ class Router:
         # ``litellm.proxy.auth.auth_checks._is_model_cost_zero``.
         self._zero_cost_cache: dict[str, bool] = {}
 
+        self.deployment_affinity_ttl_seconds = deployment_affinity_ttl_seconds
+        self.model_group_affinity_config = model_group_affinity_config
+        warn_on_unknown_model_group_affinity_flags(model_group_affinity_config)
+
         if model_list is not None:
             # set_model_list will build indices automatically
             self.set_model_list(model_list)
@@ -744,7 +750,6 @@ class Router:
             litellm.failure_callback = [self.deployment_callback_on_failure]
         self.routing_strategy_args = routing_strategy_args
         self.provider_budget_config = provider_budget_config
-        self.deployment_affinity_ttl_seconds = deployment_affinity_ttl_seconds
         self.router_budget_logger: RouterBudgetLimiting | None = None
         if RouterBudgetLimiting.should_init_router_budget_limiter(
             model_list=model_list, provider_budget_config=self.provider_budget_config
@@ -766,7 +771,6 @@ class Router:
                 )
 
         self.model_group_retry_policy: dict[str, RetryPolicy] | None = model_group_retry_policy
-        self.model_group_affinity_config: dict[str, list[str]] | None = model_group_affinity_config
 
         self.allowed_fails_policy: AllowedFailsPolicy | None = None
         if allowed_fails_policy is not None:
@@ -789,21 +793,8 @@ class Router:
         # If model_group_affinity_config is set but no global affinity checks were
         # enabled, we still need the DeploymentAffinityCheck callback (with global
         # flags all False) so per-group config can activate affinity per model group.
-        if self.model_group_affinity_config and not any(
-            isinstance(cb, DeploymentAffinityCheck) for cb in (self.optional_callbacks or [])
-        ):
-            if self.optional_callbacks is None:
-                self.optional_callbacks = []
-            affinity_callback: Final = DeploymentAffinityCheck(
-                cache=self.cache,
-                ttl_seconds=self.deployment_affinity_ttl_seconds,
-                enable_user_key_affinity=False,
-                enable_responses_api_affinity=False,
-                enable_session_id_affinity=False,
-                model_group_affinity_config=self.model_group_affinity_config,
-            )
-            self.optional_callbacks.append(affinity_callback)
-            litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
+        if self.model_group_affinity_config:
+            self._ensure_deployment_affinity_callback()
 
         if self.alerting_config is not None:
             self._initialize_alerting()
@@ -1661,6 +1652,28 @@ class Router:
 
             _move_before_deployment_affinity(self.optional_callbacks, ec_callback)
             _move_before_deployment_affinity(litellm.callbacks, ec_callback)
+
+    def _ensure_deployment_affinity_callback(self) -> None:
+        """Register the DeploymentAffinityCheck callback (global flags all False) if absent.
+
+        Needed when nothing enabled a global affinity flag but affinity can still
+        activate per request: per-group `model_group_affinity_config` entries, or the
+        session-affinity marker a complexity router stamps at pre-routing time.
+        """
+        if any(isinstance(cb, DeploymentAffinityCheck) for cb in (self.optional_callbacks or [])):
+            return
+        if self.optional_callbacks is None:
+            self.optional_callbacks = []
+        affinity_callback: Final = DeploymentAffinityCheck(
+            cache=self.cache,
+            ttl_seconds=self.deployment_affinity_ttl_seconds,
+            enable_user_key_affinity=False,
+            enable_responses_api_affinity=False,
+            enable_session_id_affinity=False,
+            model_group_affinity_config=self.model_group_affinity_config,
+        )
+        self.optional_callbacks.append(affinity_callback)
+        litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
 
     def add_optional_pre_call_checks(self, optional_pre_call_checks: OptionalPreCallChecks | None):
         if optional_pre_call_checks is None:
@@ -7683,6 +7696,8 @@ class Router:
             strategy=complexity_router,
             strategy_label="Complexity-router",
         )
+        if complexity_router._uses_deployment_pin:
+            self._ensure_deployment_affinity_callback()
 
     def _is_adaptive_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """True when this deployment opts in via the `auto_router/adaptive_router` model prefix."""
@@ -11190,6 +11205,9 @@ class Router:
         router_strategy: Final = self._select_pre_routing_strategy(model=model, request_kwargs=request_kwargs)
         if router_strategy is None:
             self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
+            self._stamp_or_clear_metadata_key(
+                request_kwargs=request_kwargs, key=SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, value=None
+            )
             return None
 
         pre_routing_hook_response: Final = await router_strategy.async_pre_routing_hook(
@@ -11202,6 +11220,11 @@ class Router:
         self._record_routing_decision(
             request_kwargs=request_kwargs,
             routing_decision=(pre_routing_hook_response.routing_decision if pre_routing_hook_response else None),
+        )
+        self._stamp_or_clear_metadata_key(
+            request_kwargs=request_kwargs,
+            key=SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+            value=(pre_routing_hook_response.session_affinity_ttl_seconds if pre_routing_hook_response else None),
         )
 
         # `model` (the alias, e.g. "smart-router") is never the deployment actually
@@ -11234,21 +11257,40 @@ class Router:
         to the deployment that actually served the request. Every attempt therefore
         writes or clears, never just writes.
         """
-        if routing_decision is None:
+        Router._stamp_or_clear_metadata_key(
+            request_kwargs=request_kwargs,
+            key="routing_decision",
+            value=(
+                None
+                if routing_decision is None
+                else Router._redact_prompt_text_if_needed(
+                    request_kwargs=request_kwargs, routing_decision=routing_decision
+                )
+            ),
+        )
+
+    @staticmethod
+    def _stamp_or_clear_metadata_key(request_kwargs: dict, key: str, value: object | None) -> None:
+        """Write a proxy-internal metadata key for THIS routing attempt, or clear it.
+
+        Fallbacks and retries re-enter the pre-routing hook with the same
+        `request_kwargs`, so every attempt must write or clear, never just write;
+        a value left behind by an earlier attempt would be attributed to this one.
+        `get_or_create_metadata_bucket` is the single owner of "which dict holds
+        proxy-internal metadata": it picks `litellm_metadata` when present (so the
+        value never lands in the `metadata` dict that routes like /v1/messages
+        forward to the provider) and replaces a non-dict value rather than silently
+        skipping the write. Clearing pops from BOTH buckets so a request whose
+        bucket resolution changed between attempts cannot resurrect a stale value.
+        """
+        if value is None:
             for bucket in (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata")):
                 if isinstance(bucket, dict):
-                    bucket.pop("routing_decision", None)
+                    bucket.pop(key, None)
             return
 
-        # `get_or_create_metadata_bucket` is the single owner of "which dict holds
-        # proxy-internal metadata": it picks `litellm_metadata` when present (so the
-        # decision never lands in the `metadata` dict that routes like /v1/messages
-        # forward to the provider) and replaces a non-dict value rather than silently
-        # skipping the write.
         _, metadata_bucket = get_or_create_metadata_bucket(request_kwargs)
-        metadata_bucket["routing_decision"] = Router._redact_prompt_text_if_needed(
-            request_kwargs=request_kwargs, routing_decision=routing_decision
-        )
+        metadata_bucket[key] = value
 
     @staticmethod
     def _redact_prompt_text_if_needed(
