@@ -72,6 +72,7 @@ def test_transform_text_to_speech_response():
 
     import httpx
 
+    import litellm
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 
     config = RunwayMLTextToSpeechConfig()
@@ -93,10 +94,12 @@ def test_transform_text_to_speech_response():
     mock_audio_response = Mock(spec=httpx.Response)
     mock_audio_response.raise_for_status = Mock()
 
-    with patch.object(config, "_poll_task_sync", return_value=mock_polled):
-        with patch("litellm.llms.custom_httpx.http_handler._get_httpx_client"):
-            with patch("litellm.llms.runwayml.text_to_speech.transformation.safe_get") as mock_safe_get:
-                mock_safe_get.return_value = mock_audio_response
+    mock_client = Mock()
+    mock_client.get.return_value = mock_audio_response
+
+    with patch.object(litellm, "user_url_validation", False):
+        with patch.object(config, "_poll_task_sync", return_value=mock_polled):
+            with patch("litellm.llms.custom_httpx.http_handler._get_httpx_client", return_value=mock_client):
                 result = config.transform_text_to_speech_response(
                     model="eleven_multilingual_v2",
                     raw_response=mock_response,
@@ -104,7 +107,7 @@ def test_transform_text_to_speech_response():
                 )
 
     assert isinstance(result, HttpxBinaryResponseContent)
-    mock_safe_get.assert_called_once()
+    mock_client.get.assert_called_once()
 
 
 def test_async_transform_text_to_speech_response():
@@ -114,6 +117,7 @@ def test_async_transform_text_to_speech_response():
 
     import httpx
 
+    import litellm
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 
     config = RunwayMLTextToSpeechConfig()
@@ -135,11 +139,13 @@ def test_async_transform_text_to_speech_response():
     mock_audio_response = Mock(spec=httpx.Response)
     mock_audio_response.raise_for_status = Mock()
 
+    mock_client = Mock()
+    mock_client.get = AsyncMock(return_value=mock_audio_response)
+
     async def run_test():
-        with patch.object(config, "_poll_task_async", new_callable=AsyncMock, return_value=mock_polled):
-            with patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"):
-                with patch("litellm.llms.runwayml.text_to_speech.transformation.async_safe_get", new_callable=AsyncMock) as mock_safe_get:
-                    mock_safe_get.return_value = mock_audio_response
+        with patch.object(litellm, "user_url_validation", False):
+            with patch.object(config, "_poll_task_async", new_callable=AsyncMock, return_value=mock_polled):
+                with patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", return_value=mock_client):
                     result = await config.async_transform_text_to_speech_response(
                         model="eleven_multilingual_v2",
                         raw_response=mock_response,
@@ -149,4 +155,5 @@ def test_async_transform_text_to_speech_response():
 
     result = asyncio.run(run_test())
     assert isinstance(result, HttpxBinaryResponseContent)
+    mock_client.get.assert_called_once()
 

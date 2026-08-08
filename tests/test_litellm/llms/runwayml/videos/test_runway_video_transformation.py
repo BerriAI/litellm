@@ -218,6 +218,8 @@ class TestRunwayMLVideoTransformation:
         """Test video content download with SSRF-protected fetch."""
         from unittest.mock import patch
 
+        import litellm
+
         mock_response = Mock(spec=httpx.Response)
         mock_response.json.return_value = {
             "id": "test-id",
@@ -229,21 +231,25 @@ class TestRunwayMLVideoTransformation:
         mock_video_response.content = b"fake-video-bytes"
         mock_video_response.raise_for_status = Mock()
 
-        with patch("litellm.llms.runwayml.videos.transformation._get_httpx_client") as mock_client:
-            with patch("litellm.llms.runwayml.videos.transformation.safe_get") as mock_safe_get:
-                mock_safe_get.return_value = mock_video_response
+        mock_client = Mock()
+        mock_client.get.return_value = mock_video_response
+
+        with patch.object(litellm, "user_url_validation", False):
+            with patch("litellm.llms.runwayml.videos.transformation._get_httpx_client", return_value=mock_client):
                 result = self.config.transform_video_content_response(
                     raw_response=mock_response,
                     logging_obj=self.mock_logging_obj,
                 )
 
         assert result == b"fake-video-bytes"
-        mock_safe_get.assert_called_once()
+        mock_client.get.assert_called_once()
 
     def test_async_transform_video_content_response(self):
         """Test async video content download with SSRF-protected fetch."""
         import asyncio
         from unittest.mock import AsyncMock, patch
+
+        import litellm
 
         mock_response = Mock(spec=httpx.Response)
         mock_response.json.return_value = {
@@ -256,10 +262,12 @@ class TestRunwayMLVideoTransformation:
         mock_video_response.content = b"fake-video-bytes"
         mock_video_response.raise_for_status = Mock()
 
+        mock_client = Mock()
+        mock_client.get = AsyncMock(return_value=mock_video_response)
+
         async def run_test():
-            with patch("litellm.llms.runwayml.videos.transformation.get_async_httpx_client") as mock_client:
-                with patch("litellm.llms.runwayml.videos.transformation.async_safe_get", new_callable=AsyncMock) as mock_safe_get:
-                    mock_safe_get.return_value = mock_video_response
+            with patch.object(litellm, "user_url_validation", False):
+                with patch("litellm.llms.runwayml.videos.transformation.get_async_httpx_client", return_value=mock_client):
                     result = await self.config.async_transform_video_content_response(
                         raw_response=mock_response,
                         logging_obj=self.mock_logging_obj,
@@ -268,6 +276,7 @@ class TestRunwayMLVideoTransformation:
 
         result = asyncio.run(run_test())
         assert result == b"fake-video-bytes"
+        mock_client.get.assert_called_once()
 
 
 if __name__ == "__main__":
