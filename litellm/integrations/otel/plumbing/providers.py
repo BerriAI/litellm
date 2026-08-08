@@ -1,6 +1,7 @@
 """Provider / exporter factory + the Baggage span processor."""
 
 from collections.abc import Callable, Iterable, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from opentelemetry import _logs, baggage, metrics
@@ -112,7 +113,7 @@ def _otlp_traces_endpoint(endpoint: str | None) -> str | None:
         return endpoint
     endpoint = endpoint.rstrip("/")
     # Splunk Observability uses ``/v2/trace/otlp``; never rewrite it.
-    if endpoint.endswith("/v1/traces") or "/v2/trace/otlp" in endpoint or endpoint.endswith("/api/trace"):
+    if endpoint.endswith(("/v1/traces", "/api/trace")) or "/v2/trace/otlp" in endpoint:
         return endpoint
     for other_signal in ("/v1/logs", "/v1/metrics"):
         if endpoint.endswith(other_signal):
@@ -120,7 +121,7 @@ def _otlp_traces_endpoint(endpoint: str | None) -> str | None:
     return endpoint + "/v1/traces"
 
 
-_GRPC_BACKENDS = frozenset({"arize"})
+_GRPC_BACKENDS: Final = frozenset({"arize"})
 
 
 def default_otlp_kind_for_backend(callback_name: "str | None") -> str:
@@ -133,7 +134,7 @@ def destination_resource_attrs(destination: "OtelDestination") -> Mapping[str, s
     ``model_id`` / ``arize.project.name``; empty for header-routed backends), read
     by both export paths so the gen-AI span and its parents share one Resource.
     """
-    return dict(destination.resource_attributes)
+    return MappingProxyType(dict(destination.resource_attributes))
 
 
 def parse_headers(raw: str | None) -> dict[str, str]:

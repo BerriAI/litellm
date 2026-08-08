@@ -4790,7 +4790,9 @@ if MCP_AVAILABLE:
 
         return stored
 
-    async def _refresh_request_otel_destinations(user_api_key_auth: Any) -> None:
+    async def _refresh_request_otel_destinations(
+        user_api_key_auth: object,
+    ) -> None:
         """Re-resolve the caller's admin destinations for THIS JSON-RPC message.
 
         A stateful MCP session dispatches every later message on descendants of the task
@@ -4803,7 +4805,9 @@ if MCP_AVAILABLE:
         if user_api_key_auth is None:
             return
         try:
-            from litellm.proxy.litellm_pre_call_utils import _apply_admin_logging_exporters
+            from litellm.proxy.litellm_pre_call_utils import (
+                _apply_admin_logging_exporters,  # pyright: ignore[reportPrivateUsage]  # the MCP path applies the same pre-call resolution as the HTTP path
+            )
 
             await _apply_admin_logging_exporters(user_api_key_auth)
         except Exception as exc:  # noqa: BLE001  # a resolver failure must not break the MCP call

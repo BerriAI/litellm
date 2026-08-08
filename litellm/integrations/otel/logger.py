@@ -212,7 +212,7 @@ class OpenTelemetryV2(CustomLogger):
         other backend, and each one's own exporter went dark. Matching the name as well
         lets each backend register itself while still de-duplicating a repeat of itself.
         """
-        already_otel = any(
+        already_otel: Final = any(
             cb.__class__.__module__.startswith(_OTEL_MODULES)
             and (not per_backend or getattr(cb, "callback_name", None) == self.callback_name)
             for cb in callbacks
@@ -290,15 +290,15 @@ class OpenTelemetryV2(CustomLogger):
         # by the previous attempt is cleared here; leaving it made the close callback
         # short-circuit and the successful attempt after a failure went untraced.
         self._closed_call_ids.pop(call_id, None)
-        start_time_ns = to_ns(datetime.now())
-        spans: tuple[Span, ...] = ()
+        start_time_ns: Final = to_ns(datetime.now())
+        spans: tuple[Span, ...] = ()  # rebind-ok: reassigned on the branch below
         # Parent to the request's anchored root span (stable across the request),
         # falling back to ambient on the SDK path. Open the span live only when
         # that resolves to a recordable parent; otherwise defer to the close
         # callback (the thread-pool case, where the anchor isn't visible here).
         parent_context: Final = resolve_request_span_context()
         if is_recordable_span(get_current_span(parent_context)):
-            spans = tuple(
+            spans = tuple(  # rebind-ok: replaces the empty default declared above
                 self._emitter.start_span(
                     SpanRole.LLM_CALL,
                     call.provisional_span_name,
@@ -415,7 +415,7 @@ class OpenTelemetryV2(CustomLogger):
         # The tool-call span carries ``gen_ai.operation.name``, so the fan-out processor
         # treats it as a gen-AI span and skips it; route it to the request's admin
         # destinations like the LLM-call span, or it reaches only the global exporter.
-        call = LLMCallEvent.from_dict(kwargs)
+        call: Final = LLMCallEvent.from_dict(kwargs)
         self._emitter.emit_fanout(
             SpanRole.MCP_TOOL_CALL,
             data,
@@ -487,11 +487,11 @@ class OpenTelemetryV2(CustomLogger):
         """
         from litellm.integrations.otel.presets import dynamic_otlp_headers
 
-        call = LLMCallEvent.from_dict(kwargs)
-        call_id = call.call_id
+        call: Final = LLMCallEvent.from_dict(kwargs)
+        call_id: Final = call.call_id
 
-        carrier = self._open_llm_calls.pop(call_id, None) if call_id else None
-        payload = call.payload
+        carrier: Final = self._open_llm_calls.pop(call_id, None) if call_id else None
+        payload: Final = call.payload
 
         # The closed marker guards the carrier-less path only, where it stops a repeat
         # success/failure callback re-emitting a span that already shipped. An open
@@ -503,13 +503,13 @@ class OpenTelemetryV2(CustomLogger):
         # its own payload id (the provider's response id, falling back to the call id).
         # Keying on the call id made the successful attempt after a failure look like a
         # duplicate, so a destination saw only the failure.
-        emit_key = (payload.get("id") if payload else None) or call_id
+        emit_key: Final = (payload.get("id") if payload else None) or call_id
         if carrier is None and emit_key and emit_key in self._closed_call_ids:
             return None
 
         if carrier is None:
-            destinations = self._destinations_for_backend(call)
-            own_credentials = bool(dynamic_otlp_headers(self.callback_name, call.dynamic_params))
+            destinations: Final = self._destinations_for_backend(call)
+            own_credentials: Final = bool(dynamic_otlp_headers(self.callback_name, call.dynamic_params))
             if call.is_no_upstream_call or payload is None or not (destinations or own_credentials):
                 return None
             self._mark_closed(emit_key)
@@ -522,14 +522,14 @@ class OpenTelemetryV2(CustomLogger):
                 call.dynamic_params,
             )
 
-        end_time_ns = to_ns(end_time)
+        end_time_ns: Final = to_ns(end_time)
         self._mark_closed(emit_key)
         if payload is None:
             for span in carrier.spans:
                 span.end(end_time=end_time_ns)
             return None
 
-        data = LLMCallSpanData.from_standard_logging_payload(
+        data: Final = LLMCallSpanData.from_standard_logging_payload(
             payload,
             capture_content=self.config.capture_span_content,
             time_to_first_chunk_seconds=call.time_to_first_chunk_seconds,
@@ -569,7 +569,7 @@ class OpenTelemetryV2(CustomLogger):
         Two callers: the SDK thread-pool path and the destination-resolver path. Both anchor to
         the request's root span via the worker-copied context and seed identity Baggage.
         """
-        data = LLMCallSpanData.from_standard_logging_payload(
+        data: Final = LLMCallSpanData.from_standard_logging_payload(
             payload,
             capture_content=self.config.capture_span_content,
             time_to_first_chunk_seconds=time_to_first_chunk_seconds,
@@ -878,7 +878,7 @@ def publish_global_otel_v2_provider(
         register_admin_destination_logger,
     )
 
-    logger = select_global_otel_v2_logger(in_memory_loggers, registered=registered)
+    logger: Final = select_global_otel_v2_logger(in_memory_loggers, registered=registered)
     set_global_provider(logger._tracer_provider)
     register_admin_destination_logger()
     return logger

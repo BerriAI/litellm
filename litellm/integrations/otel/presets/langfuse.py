@@ -19,12 +19,12 @@ def langfuse_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str,
     public_key: Final = params.get("langfuse_public_key")
     secret_key: Final = params.get("langfuse_secret_key")
     if public_key and secret_key:
-        return {
+        return {  # mutable-ok: handed to a model or SDK that needs a concrete dict
             "Authorization": _V1Langfuse._get_langfuse_authorization_header(
                 public_key=public_key, secret_key=secret_key
             )
         }
-    return {}
+    return {}  # mutable-ok: handed to a model or SDK that needs a concrete dict
 
 
 def langfuse_preset(
@@ -33,13 +33,15 @@ def langfuse_preset(
     allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
     base: Final = config_overrides or OpenTelemetryV2Config()
-    mappers = ensure_mappers(base.mapper_names, "langfuse")
+    mappers: Final = ensure_mappers(base.mapper_names, "langfuse")
     try:
-        cfg = _V1Langfuse.get_langfuse_otel_config()
+        cfg: Final = _V1Langfuse.get_langfuse_otel_config()
     except Exception:
         if not allow_missing_credentials:
             raise
-        return base.model_copy(update={"mapper_names": mappers})
+        return base.model_copy(
+            update={"mapper_names": mappers}  # mutable-ok: handed to a model or SDK that needs a concrete dict
+        )  # mutable-ok: pydantic model_copy takes a plain update mapping
     kind: Final = cfg.exporter if isinstance(cfg.exporter, str) else "otlp_http"
     return base.model_copy(
         update={

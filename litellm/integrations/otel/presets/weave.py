@@ -17,7 +17,9 @@ from litellm.types.utils import StandardCallbackDynamicParams
 
 def weave_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str, str]:
     """Per-request Weave OTLP headers from team/key dynamic params."""
-    headers: dict[str, str] = {}
+    headers: dict[  # rebind-ok: reassigned on the branch below
+        str, str
+    ] = {}  # rebind-ok: populated by the optional-credential branches below  # mutable-ok: construction is handed to an API that needs a concrete dict
     api_key: Final = params.get("wandb_api_key")
     if api_key:
         headers["Authorization"] = _get_weave_authorization_header(api_key=api_key)
@@ -33,13 +35,15 @@ def weave_preset(
     allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
     base: Final = config_overrides or OpenTelemetryV2Config()
-    mappers = ensure_mappers(base.mapper_names, "openinference", "weave")
+    mappers: Final = ensure_mappers(base.mapper_names, "openinference", "weave")
     try:
-        weave_cfg = get_weave_otel_config()
+        weave_cfg: Final = get_weave_otel_config()
     except Exception:
         if not allow_missing_credentials:
             raise
-        return base.model_copy(update={"mapper_names": mappers})
+        return base.model_copy(
+            update={"mapper_names": mappers}  # mutable-ok: handed to a model or SDK that needs a concrete dict
+        )  # mutable-ok: pydantic model_copy takes a plain update mapping
     return base.model_copy(
         update={
             "exporters": [

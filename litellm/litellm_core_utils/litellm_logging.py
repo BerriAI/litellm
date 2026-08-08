@@ -4025,11 +4025,16 @@ def _init_custom_logger_compatible_class(
                 for callback in _in_memory_loggers:
                     if type(callback) is OpenTelemetryV2:
                         return callback
-                settings = _get_custom_logger_settings_from_proxy_server(callback_name=logging_integration)
-                config = OpenTelemetryV2Config(**settings)
+                settings: Final = _get_custom_logger_settings_from_proxy_server(callback_name=logging_integration)
+                config = OpenTelemetryV2Config(**settings)  # rebind-ok: refined below when no exporter resolved
                 if not config.exporters:
-                    config = OpenTelemetryV2Config(**{**settings, "exporter": config.exporter})
-                otel_logger_v2 = OpenTelemetryV2(config=config)
+                    config = OpenTelemetryV2Config(  # rebind-ok: reassigned on the branch below
+                        **{
+                            **settings,
+                            "exporter": config.exporter,
+                        }  # mutable-ok: handed to a model or SDK that needs a concrete dict
+                    )  # mutable-ok: handed to a model or SDK that needs a concrete dict
+                otel_logger_v2: Final = OpenTelemetryV2(config=config)
                 _in_memory_loggers.append(otel_logger_v2)
                 _maybe_auto_initialize_arize_phoenix(_in_memory_loggers)
                 return otel_logger_v2
@@ -4393,7 +4398,7 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
         if isinstance(callback, OpenTelemetryV2) and getattr(callback, "callback_name", None) == callback_name:
             return callback
     try:
-        config = preset_fn(allow_missing_credentials=False)
+        config: Final = preset_fn(allow_missing_credentials=False)
     except Exception:
         return None
     if not config.exporters:
@@ -4407,7 +4412,7 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
             "register a logging destination for it.",
             callback_name,
         )
-    v2_logger = OpenTelemetryV2(config=config, callback_name=callback_name)
+    v2_logger: Final = OpenTelemetryV2(config=config, callback_name=callback_name)
     _in_memory_loggers.append(v2_logger)
     return v2_logger
 
@@ -4430,7 +4435,7 @@ def otel_v2_owned_backends() -> frozenset[str]:
     """
     from litellm.integrations.otel.logger import OpenTelemetryV2
 
-    dispatched = litellm._async_success_callback
+    dispatched: Final = litellm._async_success_callback
     return frozenset(
         name
         for logger in _in_memory_loggers

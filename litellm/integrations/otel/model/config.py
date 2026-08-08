@@ -71,7 +71,7 @@ class _OTelV2Flag(BaseSettings):
         """
         if not isinstance(value, str):
             return value
-        stripped = value.strip()
+        stripped: Final = value.strip()
         if not stripped:
             return False
         try:
@@ -289,7 +289,7 @@ class OpenTelemetryV2Config(BaseSettings):
         # span (including prompt and completion content) to stdout synchronously on the
         # request path. An explicitly chosen exporter (even ``console``), a non-console
         # kind, or an endpoint all still fold.
-        console_by_default = self.exporter == "console" and "exporter" not in self.model_fields_set
+        console_by_default: Final = self.exporter == "console" and "exporter" not in self.model_fields_set
         if not self.exporters and (self.endpoint or not console_by_default):
             self.exporters = [
                 ExporterSpec(

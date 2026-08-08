@@ -16,7 +16,7 @@ those per-request headers.
 """
 
 from collections.abc import Callable
-from typing import Final, TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.integrations.otel.presets.agentops import agentops_preset
 from litellm.integrations.otel.presets.arize import arize_dynamic_headers, arize_preset
@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 #: routing). Only integrations that support dynamic credentials appear here —
 #: Arize-Phoenix/Langtrace/Levo/AgentOps/generic don't, so they use the logger's
 #: default tracer.
-DYNAMIC_HEADERS_BY_CALLBACK: dict[str, Callable[[StandardCallbackDynamicParams], dict[str, str]]] = {
+DYNAMIC_HEADERS_BY_CALLBACK: Final[dict[str, Callable[[StandardCallbackDynamicParams], dict[str, str]]]] = {
     "arize": arize_dynamic_headers,
     "langfuse_otel": langfuse_dynamic_headers,
     "weave_otel": weave_dynamic_headers,
@@ -76,13 +76,15 @@ def dynamic_otlp_destination(
 
     if callback_name not in DYNAMIC_HEADERS_BY_CALLBACK or not dynamic_params:
         return None
-    values = {str(key): str(value) for key, value in dynamic_params.items() if isinstance(value, str)}
+    values: Final = {  # mutable-ok: handed to a model or SDK that needs a concrete dict
+        str(key): str(value) for key, value in dynamic_params.items() if isinstance(value, str)
+    }  # mutable-ok: handed to a model or SDK that needs a concrete dict
     return build_destination(callback_name or "", values)
 
 
 #: Callback name → preset. The ``Preset`` annotation makes mypy verify every
 #: registered value matches the preset interface.
-PRESET_BY_CALLBACK: dict[str, Preset] = {
+PRESET_BY_CALLBACK: Final[dict[str, Preset]] = {  # mutable-ok: module registry, read-only after import
     "agentops": agentops_preset,
     "arize": arize_preset,
     "arize_phoenix": phoenix_preset,

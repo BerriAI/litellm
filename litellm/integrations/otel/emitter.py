@@ -238,16 +238,16 @@ class SpanEmitter:
         # alone coalesced the successful attempt into the failed one it replaced and the
         # retried call reached its destinations only as the failure. The response id splits
         # the attempts apart while a sync+async double-firing of one attempt still shares it.
-        attempt_id = data.response_id if isinstance(data, LLMCallSpanData) else None
-        dedup_key = (
+        attempt_id: Final = data.response_id if isinstance(data, LLMCallSpanData) else None
+        dedup_key: Final = (
             (f"{data.identity.call_id}:{attempt_id}" if attempt_id else data.identity.call_id)
             if isinstance(data, (LLMCallSpanData, MCPToolCallSpanData))
             else None
         )
         if self._seen(dedup_key, role):
             return None
-        name = _NAME_BUILDERS[role](data)
-        first: Span | None = None
+        name: Final = _NAME_BUILDERS[role](data)
+        first: Span | None = None  # rebind-ok: set to the first span produced below
         for tracer in tracers:
             span = self.start_span(
                 role,

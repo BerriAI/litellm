@@ -50,21 +50,28 @@ def agentops_preset(
     """
     settings: Final = _AgentOpsSettings()
     base: Final = config_overrides or OpenTelemetryV2Config()
-    global_exporter = (
+    global_exporter: Final = (
         ()
         if allow_missing_credentials and not settings.api_key
         else (
             ExporterSpec(
                 kind=_AGENTOPS_EXPORTER_KIND,
                 endpoint=_AGENTOPS_ENDPOINT,
-                options=({"api_key": settings.api_key} if settings.api_key else None),
+                options=(
+                    {"api_key": settings.api_key}
+                    if settings.api_key
+                    else None  # mutable-ok: handed to a model or SDK that needs a concrete dict
+                ),  # mutable-ok: the exporter spec carries a concrete options mapping
                 owner=ExporterOwner.AGENTOPS,
             ),
         )
     )
     return base.model_copy(
         update={
-            "exporters": [*base.exporters, *global_exporter],
+            "exporters": [
+                *base.exporters,
+                *global_exporter,
+            ],  # mutable-ok: pydantic model_copy takes a plain update mapping
             "resource_attributes": {
                 **base.resource_attributes,
                 "service.name": settings.service_name,

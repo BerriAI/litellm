@@ -34,7 +34,7 @@ def phoenix_preset(
     headers: Final = cfg.otlp_auth_headers if hasattr(cfg, "otlp_auth_headers") else None
     project_name: Final = _PhoenixSettings().project_name
     base: Final = config_overrides or OpenTelemetryV2Config()
-    global_exporter = (
+    global_exporter: Final = (
         ExporterSpec(
             kind=cfg.protocol if hasattr(cfg, "protocol") else "otlp_http",
             endpoint=cfg.endpoint,
@@ -44,7 +44,10 @@ def phoenix_preset(
     )
     return base.model_copy(
         update={
-            "exporters": [*base.exporters, *global_exporter],
+            "exporters": [
+                *base.exporters,
+                *global_exporter,
+            ],  # mutable-ok: pydantic model_copy takes a plain update mapping
             "mapper_names": ensure_mappers(base.mapper_names, "openinference"),
             "resource_attributes": {
                 **base.resource_attributes,

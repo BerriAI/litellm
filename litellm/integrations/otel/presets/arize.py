@@ -14,7 +14,7 @@ from litellm.integrations.otel.model.config import (
 from litellm.integrations.otel.presets.utils import ensure_mappers
 from litellm.types.utils import StandardCallbackDynamicParams
 
-ARIZE_PUBLIC_OTLP_ENDPOINT = "https://otlp.arize.com/v1"
+ARIZE_PUBLIC_OTLP_ENDPOINT: Final = "https://otlp.arize.com/v1"
 
 
 class _ArizeSettings(BaseSettings):
@@ -33,11 +33,11 @@ def arize_preset(
     allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
     arize_cfg: Final = _V1ArizeLogger.get_arize_config()
-    settings = _ArizeSettings()
-    has_own_endpoint = bool(settings.grpc_endpoint or settings.http_endpoint)
-    has_credentials = bool(arize_cfg.space_id or arize_cfg.space_key or arize_cfg.api_key)
+    settings: Final = _ArizeSettings()
+    has_own_endpoint: Final = bool(settings.grpc_endpoint or settings.http_endpoint)
+    has_credentials: Final = bool(arize_cfg.space_id or arize_cfg.space_key or arize_cfg.api_key)
     base: Final = config_overrides or OpenTelemetryV2Config()
-    global_exporter = (
+    global_exporter: Final = (
         ()
         if allow_missing_credentials and not has_credentials and not has_own_endpoint
         else (
@@ -51,7 +51,10 @@ def arize_preset(
     )
     return base.model_copy(
         update={
-            "exporters": [*base.exporters, *global_exporter],
+            "exporters": [
+                *base.exporters,
+                *global_exporter,
+            ],  # mutable-ok: pydantic model_copy takes a plain update mapping
             "mapper_names": ensure_mappers(base.mapper_names, "openinference"),
             "resource_attributes": {
                 **base.resource_attributes,
@@ -77,9 +80,11 @@ def _arize_headers(arize_cfg, settings: "_ArizeSettings", has_own_endpoint: bool
 
 def arize_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str, str]:
     """Per-request Arize OTLP headers from team/key dynamic params."""
-    headers: dict[str, str] = {}
+    headers: dict[  # rebind-ok: reassigned on the branch below
+        str, str
+    ] = {}  # rebind-ok: populated by the optional-credential branches below  # mutable-ok: construction is handed to an API that needs a concrete dict
     # ``arize_space_key`` is the suggested param and wins over ``arize_space_id``.
-    space = params.get("arize_space_key") or params.get("arize_space_id")
+    space: Final = params.get("arize_space_key") or params.get("arize_space_id")
     if space:
         headers["arize-space-id"] = space
     api_key: Final = params.get("arize_api_key")

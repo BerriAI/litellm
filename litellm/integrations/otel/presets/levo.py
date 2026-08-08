@@ -17,7 +17,7 @@ def levo_preset(
 ) -> OpenTelemetryV2Config:
     base: Final = config_overrides or OpenTelemetryV2Config()
     try:
-        cfg = _V1Levo.get_levo_config()
+        cfg: Final = _V1Levo.get_levo_config()
     except Exception:
         if not allow_missing_credentials:
             raise
