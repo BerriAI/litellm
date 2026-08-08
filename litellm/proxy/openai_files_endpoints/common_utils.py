@@ -470,6 +470,7 @@ def prepare_data_with_credentials(
     credentials: dict,
     file_id: str | None = None,
     include_internal_credentials: bool = False,
+    routing_model: str | None = None,
 ) -> None:
     """
     Update data dictionary with model credentials (in-place).
@@ -480,8 +481,17 @@ def prepare_data_with_credentials(
         file_id: Optional original file_id to set (for decoded file IDs)
         include_internal_credentials: Preserve an immutable server-side snapshot
             for code paths that must distinguish proxy config from request params.
+        routing_model: Model-group alias to keep in ``data["model"]`` after the
+            merge. Credentials carry the deployment's underlying
+            ``litellm_params.model`` (which call sites dispatching straight to
+            the provider SDK need), but router-bound call sites must keep
+            routing by alias: the underlying model loses the model-group
+            identity (access groups, team scoping) when several aliases share
+            one provider model (#36103).
     """
     data.update(credentials)
+    if routing_model is not None:
+        data["model"] = routing_model
     if include_internal_credentials:
         data["_litellm_internal_model_credentials"] = MappingProxyType(dict(credentials))
     data.pop("custom_llm_provider", None)

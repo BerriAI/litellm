@@ -169,7 +169,9 @@ async def test_vector_store_file_list_resolves_managed_vector_store_before_team_
     assert response == {"ok": True}
     assert captured_data["vector_store_id"] == "vs_provider_native"
     assert captured_data["api_key"] == "sk-managed-deployment"
-    assert captured_data["model"] == "openai/managed-deployment"
+    # the alias survives the credential merge so router dispatch keeps the
+    # model-group identity (#36103)
+    assert captured_data["model"] == "managed-deployment"
     llm_router.get_deployment_credentials_with_provider.assert_called_once_with(
         model_id="managed-deployment"
     )

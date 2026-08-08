@@ -174,7 +174,8 @@ async def test_vector_store_file_list_resolves_credentials_from_model_query_para
 
     assert result["api_key"] == "sk-team-openai"
     assert result["api_base"] == "https://api.openai.com/v1"
-    assert result["model"] == "openai/gpt-4o-mini"
+    # routing stays on the model-group alias, not the deployment's provider model (#36103)
+    assert result["model"] == "team-openai"
     assert "custom_llm_provider" not in result
     llm_router.get_deployment_credentials_with_provider.assert_called_once_with(
         model_id="team-openai"
@@ -207,7 +208,8 @@ async def test_vector_store_file_list_resolves_single_openai_team_deployment():
 
     assert result["api_key"] == "sk-team-openai"
     assert result["api_base"] == "https://api.openai.com/v1"
-    assert result["model"] == "openai/gpt-4o-mini"
+    # routing stays on the model-group alias, not the deployment's provider model (#36103)
+    assert result["model"] == "team-openai"
     assert "custom_llm_provider" not in result
     llm_router.get_deployment_credentials_with_provider.assert_called_once_with(
         model_id="team-openai", team_id=None
@@ -245,7 +247,8 @@ async def test_vector_store_file_list_wildcard_model_hint_falls_back_to_team_dep
 
     assert result["api_key"] == "sk-team-openai"
     assert result["api_base"] == "https://api.openai.com/v1"
-    assert result["model"] == "openai/gpt-4o-mini"
+    # routing stays on the matched team alias, not the deployment's provider model (#36103)
+    assert result["model"] == "team-openai"
     assert "custom_llm_provider" not in result
     assert llm_router.get_deployment_credentials_with_provider.call_count == 3
 

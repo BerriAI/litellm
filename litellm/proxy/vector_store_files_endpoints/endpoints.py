@@ -120,6 +120,7 @@ async def _update_request_data_with_managed_file_id(
                             data=data,
                             credentials=credentials,
                             file_id=llm_output_file_id,  # Use the actual provider file ID
+                            routing_model=routing_model,
                         )
                         verbose_logger.info(
                             "Routing vector store file operation to model: %s, file_id: %s -> %s",
@@ -284,6 +285,7 @@ async def _update_request_data_with_model_routing_hint(
         prepare_data_with_credentials(
             data=data,
             credentials=credentials,
+            routing_model=model_hint if isinstance(model_hint, str) else None,
         )
         return data
 
@@ -305,6 +307,7 @@ async def _update_request_data_with_model_routing_hint(
         model_names_to_check.append(model_name)
 
     openai_credentials = None
+    openai_model_name = None
     for model_name in model_names_to_check:
         credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_name, team_id=caller_team_id)
         if credentials is None:
@@ -325,9 +328,10 @@ async def _update_request_data_with_model_routing_hint(
         if openai_credentials is not None:
             return data
         openai_credentials = credentials
+        openai_model_name = model_name
 
     if openai_credentials is not None:
-        prepare_data_with_credentials(data=data, credentials=openai_credentials)
+        prepare_data_with_credentials(data=data, credentials=openai_credentials, routing_model=openai_model_name)
     elif len(model_names_to_check) == 1:
         await _authorize_model_routing_hint(
             model=model_names_to_check[0],
