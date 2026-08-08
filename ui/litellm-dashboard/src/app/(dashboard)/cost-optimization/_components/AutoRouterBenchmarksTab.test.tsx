@@ -315,7 +315,7 @@ describe("AutoRouterBenchmarksTab", () => {
       expect(screen.getByText("6.9%")).toBeInTheDocument();
       expect(screen.getByText("vs. 3.1% on your non-router traffic")).toBeInTheDocument();
 
-      expect(screen.getByText("Stream abandonment")).toBeInTheDocument();
+      expect(screen.getByText("Potential Turn Abandons")).toBeInTheDocument();
       expect(screen.getByText("2.4%")).toBeInTheDocument();
       expect(screen.getByText("vs. 2.1% on your non-router traffic")).toBeInTheDocument();
     });
