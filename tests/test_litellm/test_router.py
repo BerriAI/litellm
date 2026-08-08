@@ -16,6 +16,8 @@ sys.path.insert(
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router import _resolve_cache_type
+from litellm.types.caching import LiteLLMCacheType
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -7669,6 +7671,20 @@ def test_router_cache_kwargs_type_ignored_when_redis_params_given(reset_litellm_
         )
 
     assert created_caches == [{"host": "localhost", "port": "6379", "socket_timeout": 5}]
+
+
+@pytest.mark.parametrize(
+    "requested_type, expected",
+    [(None, LiteLLMCacheType.LOCAL), ("disk", LiteLLMCacheType.DISK), (LiteLLMCacheType.S3, LiteLLMCacheType.S3)],
+)
+def test_resolve_cache_type(requested_type, expected):
+    assert _resolve_cache_type(requested_type) == expected
+
+
+@pytest.mark.parametrize("requested_type", ["not-a-cache", 5])
+def test_resolve_cache_type_rejects_invalid(requested_type):
+    with pytest.raises(ValueError):
+        _resolve_cache_type(requested_type)
 
 
 def test_router_invalid_cache_kwargs_type_raises(reset_litellm_cache):
