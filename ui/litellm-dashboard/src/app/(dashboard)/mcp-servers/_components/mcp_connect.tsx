@@ -4,8 +4,9 @@ import React, { useState } from "react";
 import { Card, Typography, Space, Alert, Button, Switch, Form } from "antd";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, Title as TremorTitle, Text as TremorText } from "@tremor/react";
 import { CopyIcon, Code, Terminal, Globe, CheckIcon, ExternalLinkIcon, KeyIcon, ServerIcon, Zap } from "lucide-react";
-import { getProxyBaseUrl } from "@/components/networking";
+import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
+import { resolveUiApiDocBaseUrl } from "@/utils/proxyUtils";
 
 const { Title, Text } = Typography;
 
@@ -110,11 +111,14 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
 };
 
 interface MCPConnectProps {
+  accessToken: string | null;
   currentServerAccessGroups?: string[];
 }
 
-const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] }) => {
-  const proxyBaseUrl = getProxyBaseUrl();
+const MCPConnect: React.FC<MCPConnectProps> = ({ accessToken, currentServerAccessGroups = [] }) => {
+  const proxySettings = useProxySettings(accessToken);
+  // Prefer public docs base URL when set (LITELLM_UI_API_DOC_BASE_URL), not the runtime proxy URL.
+  const proxyBaseUrl = resolveUiApiDocBaseUrl(proxySettings);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [currentServer] = useState("Zapier_MCP"); // This should match the current server being viewed
 
