@@ -21,6 +21,7 @@ import traceback
 from collections import defaultdict
 from collections.abc import AsyncGenerator, Callable, Generator, Mapping, Sequence
 from functools import lru_cache
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, Union, cast
 
 import anyio
@@ -192,6 +193,7 @@ from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     GenericBudgetConfigType,
     LiteLLMBatch,
+    LlmProviders,
     ModelInfo,
     ModelResponseStream,
     StandardLoggingPayload,
@@ -4919,6 +4921,13 @@ class Router:
                     )
 
                     kwargs_copy["file"] = file
+                if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
+                    kwargs_copy["extra_body"] = MappingProxyType(
+                        {
+                            **(kwargs_copy.get("extra_body") or MappingProxyType({})),
+                            "target_model_names": stripped_model,
+                        }
+                    )
                 if (
                     "gcs_bucket_name" in data
                 ):  # TODO: Remove this once we have a better way to handle GCS bucket name:  Problem is that we need to pass the gcs_bucket_name to the router for the create_file call but it doesn't show up there

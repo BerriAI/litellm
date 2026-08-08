@@ -3706,6 +3706,7 @@ LlmProvidersSet: Final = {provider.value for provider in LlmProviders}
 OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
     LlmProviders.OPENAI.value,
     LlmProviders.HOSTED_VLLM.value,
+    LlmProviders.LITELLM_PROXY.value,
 }
 
 ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "vertex_ai"]
