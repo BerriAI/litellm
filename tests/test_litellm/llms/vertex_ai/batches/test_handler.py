@@ -51,11 +51,7 @@ PROJECT = "my-project"
 LOCATION = "us-central1"
 BATCH_ID = "3814889423749775360"
 
-CREATE_DATA = {
-    "input_file_id": (
-        "gs://bucket/publishers/google/models/gemini-1.5-flash-001/file-uuid"
-    )
-}
+CREATE_DATA = {"input_file_id": ("gs://bucket/publishers/google/models/gemini-1.5-flash-001/file-uuid")}
 
 
 def _vertex_job_response(state: str = "JOB_STATE_SUCCEEDED") -> dict:
@@ -108,9 +104,51 @@ def test_create_vertex_batch_url():
     h = _make_handler()
     url = h.create_vertex_batch_url(vertex_location=LOCATION, vertex_project=PROJECT)
     assert url == (
-        f"https://{LOCATION}-aiplatform.googleapis.com/v1/projects/{PROJECT}"
-        f"/locations/{LOCATION}/batchPredictionJobs"
+        f"https://{LOCATION}-aiplatform.googleapis.com/v1/projects/{PROJECT}/locations/{LOCATION}/batchPredictionJobs"
     )
+
+
+def test_create_batch_rejects_global_vertex_location():
+    """``vertex_location='global'`` is silently accepted today and produces a
+    downstream HTTP 400 because the Batch Prediction API rejects the
+    resulting ``/locations/global/`` URL. Fail fast with a clear error
+    before any I/O instead of forwarding a URL that always 400s.
+    """
+    h = _make_handler()
+    with pytest.raises(ValueError, match="global"):
+        h.create_batch(
+            _is_async=False,
+            create_batch_data=CREATE_DATA,
+            api_base=None,
+            vertex_credentials=None,
+            vertex_project=PROJECT,
+            vertex_location="global",
+            timeout=600.0,
+            max_retries=None,
+        )
+    # The auth seam MUST NOT fire for an invalid location; the rejection
+    # is input validation, not an authn/authz error.
+    h._ensure_access_token.assert_not_called()
+
+
+def test_create_batch_async_rejects_global_vertex_location():
+    """The async branch of ``create_batch`` must also short-circuit on
+    ``vertex_location='global'`` and not return a coroutine that would
+    later hit the network.
+    """
+    h = _make_handler()
+    with pytest.raises(ValueError, match="global"):
+        h.create_batch(
+            _is_async=True,
+            create_batch_data=CREATE_DATA,
+            api_base=None,
+            vertex_credentials=None,
+            vertex_project=PROJECT,
+            vertex_location="global",
+            timeout=600.0,
+            max_retries=None,
+        )
+    h._ensure_access_token.assert_not_called()
 
 
 # =========================================================================== #
@@ -340,9 +378,7 @@ def test_retrieve_batch_sync_invokes_logging_pre_call():
 
     logging_obj.pre_call.assert_called_once()
     _, kwargs = logging_obj.pre_call.call_args
-    assert kwargs["additional_args"]["api_base"].endswith(
-        f"/batchPredictionJobs/{BATCH_ID}"
-    )
+    assert kwargs["additional_args"]["api_base"].endswith(f"/batchPredictionJobs/{BATCH_ID}")
 
 
 # =========================================================================== #
@@ -413,9 +449,7 @@ def test_list_batches_sync_omits_unset_pagination_params():
 def test_list_batches_async_returns_coroutine():
     h = _make_handler()
     async_client = MagicMock()
-    async_client.get = AsyncMock(
-        return_value=_http_response(json_body=_list_response())
-    )
+    async_client.get = AsyncMock(return_value=_http_response(json_body=_list_response()))
     sync_client = MagicMock()
 
     with (
@@ -470,9 +504,7 @@ def test_cancel_batch_sync_posts_cancel_then_retrieves():
     h = _make_handler()
     client = MagicMock()
     client.post.return_value = _http_response(json_body={})
-    client.get.return_value = _http_response(
-        json_body=_vertex_job_response(state="JOB_STATE_CANCELLED")
-    )
+    client.get.return_value = _http_response(json_body=_vertex_job_response(state="JOB_STATE_CANCELLED"))
 
     with patch(f"{HMOD}._get_httpx_client", return_value=client):
         out = h.cancel_batch(
@@ -504,9 +536,7 @@ def test_cancel_batch_async_returns_coroutine_posts_then_retrieves():
     async_client = MagicMock()
     async_client.post = AsyncMock(return_value=_http_response(json_body={}))
     async_client.get = AsyncMock(
-        return_value=_http_response(
-            json_body=_vertex_job_response(state="JOB_STATE_CANCELLED")
-        )
+        return_value=_http_response(json_body=_vertex_job_response(state="JOB_STATE_CANCELLED"))
     )
 
     with (
@@ -564,9 +594,7 @@ def test_cancel_batch_sync_proxy_url_without_cancel_suffix_uses_rsplit_branch():
     )
     client = MagicMock()
     client.post.return_value = _http_response(json_body={})
-    client.get.return_value = _http_response(
-        json_body=_vertex_job_response(state="JOB_STATE_CANCELLED")
-    )
+    client.get.return_value = _http_response(json_body=_vertex_job_response(state="JOB_STATE_CANCELLED"))
 
     with patch(f"{HMOD}._get_httpx_client", return_value=client):
         out = h.cancel_batch(
@@ -592,9 +620,7 @@ def test_cancel_batch_sync_httpstatuserror_logged_and_reraised():
     client = MagicMock()
     request = httpx.Request("POST", "https://x/batchPredictionJobs/1:cancel")
     err_response = httpx.Response(status_code=502, request=request, text="bad gw")
-    client.post.side_effect = httpx.HTTPStatusError(
-        "boom", request=request, response=err_response
-    )
+    client.post.side_effect = httpx.HTTPStatusError("boom", request=request, response=err_response)
 
     with patch(f"{HMOD}._get_httpx_client", return_value=client):
         with pytest.raises(httpx.HTTPStatusError):
@@ -616,11 +642,7 @@ def test_create_batch_async_httpstatuserror_logged_and_reraised():
     async_client = MagicMock()
     request = httpx.Request("POST", "https://x/batchPredictionJobs")
     err_response = httpx.Response(status_code=500, request=request, text="boom")
-    async_client.post = AsyncMock(
-        side_effect=httpx.HTTPStatusError(
-            "boom", request=request, response=err_response
-        )
-    )
+    async_client.post = AsyncMock(side_effect=httpx.HTTPStatusError("boom", request=request, response=err_response))
 
     with (
         patch(f"{HMOD}._get_httpx_client", return_value=MagicMock()),
@@ -727,9 +749,7 @@ def test_async_cancel_batch_httpstatuserror_and_retrieve_non_200():
     async_client = MagicMock()
     request = httpx.Request("POST", "https://x/batchPredictionJobs/1:cancel")
     err_response = httpx.Response(status_code=502, request=request, text="bad")
-    async_client.post = AsyncMock(
-        side_effect=httpx.HTTPStatusError("boom", request=request, response=err_response)
-    )
+    async_client.post = AsyncMock(side_effect=httpx.HTTPStatusError("boom", request=request, response=err_response))
     async_client.get = AsyncMock()
     with (
         patch(f"{HMOD}._get_httpx_client", return_value=MagicMock()),

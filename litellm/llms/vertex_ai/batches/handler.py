@@ -42,6 +42,21 @@ class VertexAIBatchPrediction(VertexLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
     ) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
+        # Vertex AI Batch Prediction requires a specific region. The
+        # ``global`` control-plane alias is accepted by
+        # ``validate_vertex_location`` for non-batch endpoints but the
+        # Batch Prediction API rejects any URL containing
+        # ``/locations/global/`` with HTTP 400 downstream. Fail fast
+        # here rather than forwarding a URL that always 400s.
+        if vertex_location == "global":
+            raise ValueError(
+                "vertex_location='global' is not supported for Vertex AI "
+                "Batch Prediction. Batch Prediction requires a specific "
+                "region (e.g. 'us-central1', 'europe-west4'). The 'global' "
+                "alias is only valid for control-plane endpoints that the "
+                "Batch Prediction API does not accept."
+            )
+
         sync_handler: Final = _get_httpx_client()
 
         access_token, project_id = self._ensure_access_token(
