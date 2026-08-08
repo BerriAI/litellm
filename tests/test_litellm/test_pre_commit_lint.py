@@ -129,6 +129,126 @@ def _run(repo: Path, bin_dir: Path, extra_env: dict[str, str]) -> subprocess.Com
     )
 
 
+def _commit_all(repo: Path, message: str) -> None:
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", message],
+        cwd=repo,
+        check=True,
+    )
+
+
+def _set_base_ref(repo: Path) -> None:
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/litellm_internal_staging", "HEAD"],
+        cwd=repo,
+        check=True,
+    )
+
+
+def test_nothing_staged_scopes_to_working_tree_diff_and_runs_checks(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    _set_base_ref(repo)
+    (repo / "litellm" / "foo.py").write_text("x = 2\n")
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nothing staged; scoping to the working tree's diff" in proc.stdout
+    assert "litellm/foo.py" in proc.stdout
+    assert "linting Python" in proc.stdout
+
+
+def test_nothing_staged_checks_committed_branch_changes(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    _set_base_ref(repo)
+    (repo / "litellm" / "foo.py").write_text("x = 2\n")
+    _commit_all(repo, "branch change")
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nothing staged; scoping to the working tree's diff" in proc.stdout
+    assert "linting Python" in proc.stdout
+
+
+def test_nothing_staged_includes_untracked_files_in_scope(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    _set_base_ref(repo)
+    (repo / "litellm" / "brand_new.py").write_text("z = 3\n")
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "litellm/brand_new.py" in proc.stdout
+    assert "linting Python" in proc.stdout
+
+
+def test_nothing_staged_deletion_only_branch_triggers_checks(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    _set_base_ref(repo)
+    (repo / "litellm" / "foo.py").unlink()
+    _commit_all(repo, "delete module")
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nothing to check" not in proc.stdout
+    assert "litellm/foo.py" in proc.stdout
+    assert "linting Python" in proc.stdout
+    assert "ruff format --check" not in proc.stdout
+
+
+def test_staged_deletion_triggers_checks_without_feeding_missing_files_to_tools(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    subprocess.run(["git", "rm", "-q", "litellm/foo.py"], cwd=repo, check=True)
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nothing staged" not in proc.stdout
+    assert "linting Python" in proc.stdout
+    assert "ruff format --check" not in proc.stdout
+
+
+def test_deleted_dashboard_file_still_triggers_dashboard_lint(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    _set_base_ref(repo)
+    (repo / "ui" / "litellm-dashboard" / "src" / "app.ts").unlink()
+    _commit_all(repo, "delete dashboard file")
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "linting dashboard" in proc.stdout
+
+
+def test_nothing_staged_and_no_changes_is_an_explicit_no_op(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    _set_base_ref(repo)
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nothing to check" in proc.stdout
+    assert "linting Python" not in proc.stdout
+
+
+def test_nothing_staged_without_a_base_ref_fails_with_a_fetch_hint(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 1
+    assert "cannot resolve the merge base" in proc.stdout
+    assert "git fetch origin litellm_internal_staging" in proc.stdout
+
+
+def test_partial_staging_warns_which_checks_were_skipped(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    (repo / "notes.md").write_text("hi\n")
+    subprocess.run(["git", "add", "notes.md"], cwd=repo, check=True)
+    (repo / "litellm" / "foo.py").write_text("x = 4\n")
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SKIPPED Python lint (make lint)" in proc.stdout
+    assert "litellm/foo.py" in proc.stdout
+    assert "linting Python" not in proc.stdout
+
+
 def test_python_dashboard_and_gen_api_blocks_run_concurrently_with_grouped_output(tmp_path: Path) -> None:
     repo, bin_dir = _sandbox(tmp_path)
     barrier_dir = tmp_path / "barrier"
@@ -159,8 +279,8 @@ def test_full_output_is_saved_to_a_log_file_in_the_git_dir(tmp_path: Path) -> No
     assert "linting dashboard" in log
     assert "API types" in log
     assert "unstaged/untracked changes" in log
-    assert f"pre-commit: full log: {log_file}" in proc.stdout
-    assert "pre-commit: full log:" not in log
+    assert f"check: full log: {log_file}" in proc.stdout
+    assert "check: full log:" not in log
 
 
 def test_unwritable_log_warns_and_falls_back_to_running_without_one(tmp_path: Path) -> None:
@@ -170,7 +290,7 @@ def test_unwritable_log_warns_and_falls_back_to_running_without_one(tmp_path: Pa
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "linting Python" in proc.stdout
     assert "output will not be saved" in proc.stderr
-    assert "pre-commit: full log:" not in proc.stdout
+    assert "check: full log:" not in proc.stdout
     failing = _run(repo, bin_dir, {"STUB_FAIL": "make-lint"})
     assert failing.returncode == 1
 
