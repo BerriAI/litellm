@@ -301,3 +301,51 @@ def test_gemini_image_generation_cost_no_web_search_when_absent():
     )
 
     assert cost_zero == cost_none
+
+
+def test_gemini_3_1_flash_lite_image_pricing_metadata():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    model_info = litellm.get_model_info(
+        model="gemini/gemini-3.1-flash-lite-image",
+        custom_llm_provider="gemini",
+    )
+
+    assert model_info["mode"] == "image_generation"
+    assert model_info["input_cost_per_token"] == pytest.approx(2.5e-07)
+    assert model_info["output_cost_per_token"] == pytest.approx(1.5e-06)
+    assert model_info["output_cost_per_image_token"] == pytest.approx(3e-05)
+    assert model_info["output_cost_per_image"] == pytest.approx(0.0336)
+
+
+def test_gemini_3_1_flash_lite_image_generation_cost():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    model = "gemini/gemini-3.1-flash-lite-image"
+    model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
+
+    input_text_tokens = 20
+    output_image_tokens = 1120
+    image_response = ImageResponse(
+        data=[ImageObject(b64_json="img1")],
+        usage=ImageUsage(
+            input_tokens=input_text_tokens,
+            input_tokens_details=ImageUsageInputTokensDetails(
+                text_tokens=input_text_tokens,
+                image_tokens=0,
+            ),
+            output_tokens=output_image_tokens,
+            total_tokens=input_text_tokens + output_image_tokens,
+        ),
+    )
+
+    cost = gemini_image_generation_cost_calculator(
+        model=model,
+        image_response=image_response,
+    )
+
+    expected_cost = (
+        input_text_tokens * model_info["input_cost_per_token"]
+        + output_image_tokens * model_info["output_cost_per_image_token"]
+    )
+    assert round(cost, 10) == round(expected_cost, 10)
