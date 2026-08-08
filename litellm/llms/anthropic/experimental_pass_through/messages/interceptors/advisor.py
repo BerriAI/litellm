@@ -16,7 +16,7 @@ How it works:
 
 import uuid
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 import litellm.constants as _c
@@ -100,6 +100,14 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
 
         parent_request_id: Final[str] = str(kwargs.pop("litellm_call_id", None) or uuid.uuid4())
         metadata_base: Final[dict] = dict(kwargs.pop("metadata", None) or {})
+        advisor_metadata: Final = {
+            **metadata_base,
+            "advisor_sub_call": True,
+            "parent_request_id": parent_request_id,
+        }
+        advisor_router: Final = (
+            None if (advisor_api_key or advisor_api_base) else _resolve_advisor_router(advisor_model)
+        )
         iteration = 0
 
         while True:
@@ -141,17 +149,27 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
 
             # --- Advisor sub-call (always non-streaming, no tools) ---
             try:
-                advisor_response: AnthropicMessagesResponse = await _call_advisor(
-                    model=advisor_model,
-                    messages=advisor_messages,
-                    max_tokens=max_tokens,
-                    metadata={
-                        **metadata_base,
-                        "advisor_sub_call": True,
-                        "parent_request_id": parent_request_id,
-                    },
-                    api_key=advisor_api_key,
-                    api_base=advisor_api_base,
+                advisor_response: AnthropicMessagesResponse = (
+                    await advisor_router.aanthropic_messages(
+                        model=advisor_model,
+                        messages=advisor_messages,
+                        tools=None,
+                        stream=False,
+                        max_tokens=max_tokens,
+                        metadata=advisor_metadata,
+                    )
+                    if advisor_router is not None
+                    else await _call_messages_handler(
+                        model=advisor_model,
+                        messages=advisor_messages,
+                        tools=None,
+                        stream=False,
+                        max_tokens=max_tokens,
+                        custom_llm_provider=None,
+                        metadata=advisor_metadata,
+                        api_key=advisor_api_key,
+                        api_base=advisor_api_base,
+                    )
                 )
             except Exception as advisor_sub_call_exception:
                 mark_advisor_orchestration_failure(advisor_sub_call_exception)
@@ -383,47 +401,6 @@ def _resolve_advisor_router(advisor_model: str) -> "Router | None":
     if llm_router.pattern_router.route(advisor_model) is not None:
         return llm_router
     return None
-
-
-async def _call_advisor(
-    *,
-    model: str,
-    messages: list[dict],
-    max_tokens: int,
-    metadata: dict,
-    api_key: str | None,
-    api_base: str | None,
-) -> AnthropicMessagesResponse:
-    """Run the advisor sub-call, through the proxy router when it applies.
-
-    A caller-supplied ``api_key`` / ``api_base`` override is an explicit
-    request to bypass the configured deployment, so it keeps the direct
-    SDK-level path.
-    """
-    router: Final = None if (api_key or api_base) else _resolve_advisor_router(model)
-    response: Final = (
-        await router.aanthropic_messages(
-            model=model,
-            messages=messages,
-            tools=None,
-            stream=False,
-            max_tokens=max_tokens,
-            metadata=metadata,
-        )
-        if router is not None
-        else await _call_messages_handler(
-            model=model,
-            messages=messages,
-            tools=None,
-            stream=False,
-            max_tokens=max_tokens,
-            custom_llm_provider=None,
-            metadata=metadata,
-            api_key=api_key,
-            api_base=api_base,
-        )
-    )
-    return cast(AnthropicMessagesResponse, response)  # cast-ok: both /messages entry points are untyped
 
 
 async def _call_messages_handler(
