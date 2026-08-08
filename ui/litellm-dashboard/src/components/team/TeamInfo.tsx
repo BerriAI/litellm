@@ -35,6 +35,12 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
+import {
+  computeTeamModelBadges,
+  normalizeTeamModelSelection,
+  TeamAccessGroupModelGrant,
+  TeamModelBadgeKind,
+} from "./teamModelAccess";
 import MetadataKeyValueFields, {
   metadataObjectToPairs,
   metadataPairsToObject,
@@ -81,6 +87,13 @@ const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "opted_out_global_guardrails",
   "disable_global_guardrails",
 ]);
+
+const TEAM_MODEL_BADGE_COLORS: Record<TeamModelBadgeKind, "red" | "gray" | "blue" | "green"> = {
+  "all-proxy": "red",
+  "no-default": "gray",
+  direct: "blue",
+  "access-group": "green",
+};
 
 export interface TeamMembership {
   user_id: string;
@@ -132,6 +145,7 @@ export interface TeamData {
     access_group_models?: string[];
     access_group_mcp_server_ids?: string[];
     access_group_agent_ids?: string[];
+    access_group_details?: TeamAccessGroupModelGrant[];
     router_settings?: Record<string, any>;
     guardrails?: string[];
     policies?: string[];
@@ -483,7 +497,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       const updateData: any = {
         team_id: teamId,
         team_alias: values.team_alias,
-        models: values.models,
+        models: normalizeTeamModelSelection(values.models),
         tpm_limit: sanitizeNumeric(values.tpm_limit),
         rpm_limit: sanitizeNumeric(values.rpm_limit),
         model_tpm_limit: modelTpmLimit,
@@ -764,21 +778,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <Card>
                   <Text>Models</Text>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {info.models.length === 0 || info.models.includes("all-proxy-models") ? (
-                      <Badge color="red">All proxy models</Badge>
-                    ) : (
-                      <>
-                        {info.models.map((model: string, index: number) => (
-                          <Badge key={`direct-${index}`} color="blue">
-                            {model}
-                          </Badge>
-                        ))}
-                        {(info.access_group_models || []).map((model: string, index: number) => (
-                          <Badge key={`ag-${index}`} color="green" title="From access group">
-                            {model}
-                          </Badge>
-                        ))}
-                      </>
+                    {computeTeamModelBadges(info.models, info.access_group_models || [], info.access_group_details).map(
+                      (badge, index) => (
+                        <Tooltip key={`${badge.kind}-${badge.label}-${index}`} title={badge.tooltip}>
+                          <span>
+                            <Badge color={TEAM_MODEL_BADGE_COLORS[badge.kind]}>{badge.label}</Badge>
+                          </span>
+                        </Tooltip>
+                      ),
                     )}
                   </div>
                 </Card>
@@ -982,7 +989,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Form.Item
                       label="Models"
                       name="models"
-                      rules={[{ required: true, message: "Please select at least one model" }]}
+                      extra="Leave empty to grant no models directly. The team keeps any models granted through its access groups"
                     >
                       <ModelSelect
                         value={form.getFieldValue("models") || []}

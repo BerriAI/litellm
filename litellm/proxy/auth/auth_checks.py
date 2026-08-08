@@ -13,6 +13,7 @@ import asyncio
 import math
 import re
 import time
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 
 from fastapi import HTTPException, Request, status
@@ -2834,7 +2835,7 @@ async def get_org_object(
 
 
 async def _get_resources_from_access_groups(
-    access_group_ids: list[str],
+    access_group_ids: Sequence[str],
     resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids"],
     prisma_client: PrismaClient | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
@@ -2893,7 +2894,7 @@ async def _get_resources_from_access_groups(
 
 
 async def _get_models_from_access_groups(
-    access_group_ids: list[str],
+    access_group_ids: Sequence[str],
     prisma_client: PrismaClient | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
