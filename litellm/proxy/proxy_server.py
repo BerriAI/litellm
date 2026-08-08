@@ -10191,6 +10191,70 @@ async def vertex_ai_live_passthrough_endpoint(
 
 ######################################################################
 
+#            Vertex AI Chirp STT — WebSocket streaming endpoint
+
+######################################################################
+
+
+@app.websocket("/v1/audio/stream-transcriptions")
+@app.websocket("/audio/stream-transcriptions")
+async def chirp_stt_stream_endpoint(
+    websocket: WebSocket,
+    user_api_key_dict=Depends(user_api_key_auth_websocket),
+):
+    """
+    Real-time speech-to-text via WebSocket + Vertex AI gRPC StreamingRecognize.
+
+    Accepts a WebSocket connection, receives raw audio chunks, and streams back
+    interim/final transcription results as they arrive from Google's STT API.
+
+    First message must be a JSON config. Subsequent binary messages are audio.
+    Send {\"type\": \"end\"} or close the socket to finish.
+    """
+    from litellm.llms.vertex_ai.audio_transcription.websocket_handler import (
+        ChirpSttWebSocketSession,
+    )
+
+    await ChirpSttWebSocketSession().run(
+        websocket=websocket,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+
+######################################################################
+
+#            Vertex AI Chirp TTS — WebSocket streaming endpoint
+
+######################################################################
+
+
+@app.websocket("/v1/audio/stream-speech")
+@app.websocket("/audio/stream-speech")
+async def chirp_tts_stream_endpoint(
+    websocket: WebSocket,
+    user_api_key_dict=Depends(user_api_key_auth_websocket),
+):
+    """
+    Real-time text-to-speech via WebSocket + Vertex AI gRPC streaming_synthesize.
+
+    Accepts a WebSocket connection, receives text chunks (e.g., from a streaming
+    LLM), and sends back binary audio chunks as they are synthesized.
+
+    First message must be a JSON config. Send {\"type\": \"text\", \"content\": \"...\"}
+    for each text chunk. Send {\"type\": \"end\"} or close the socket to finish.
+    """
+    from litellm.llms.vertex_ai.text_to_speech.websocket_handler import (
+        ChirpTtsWebSocketSession,
+    )
+
+    await ChirpTtsWebSocketSession().run(
+        websocket=websocket,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+
+######################################################################
+
 #                          /v1/realtime Endpoints
 
 ######################################################################

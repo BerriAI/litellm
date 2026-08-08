@@ -7522,6 +7522,25 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         )
 
 
+def _is_chirp_grpc_request(model: str, optional_params: dict) -> bool:
+    from litellm.llms.vertex_ai.audio_transcription.transformation import (
+        is_chirp_grpc_model,
+    )
+
+    return is_chirp_grpc_model(model) or bool(optional_params.get("use_grpc"))
+
+
+def _resolve_chirp_hd_voice_name(voice: str | dict | None, optional_params: dict) -> str | None:
+    from litellm.llms.vertex_ai.text_to_speech.transformation import is_chirp_hd_voice
+
+    voice_dict: Final = optional_params.get("vertex_voice_dict")
+    if isinstance(voice_dict, dict) and is_chirp_hd_voice(voice_dict):
+        return voice_dict.get("name")
+    if isinstance(voice, str) and is_chirp_hd_voice(voice):
+        return voice
+    return None
+
+
 @client
 def transcription(
     model: str,
@@ -7744,6 +7763,23 @@ def transcription(
                 optional_params=optional_params,
                 timeout=timeout,
             )
+    elif custom_llm_provider == "vertex_ai" and _is_chirp_grpc_request(model, optional_params):
+        from litellm.llms.vertex_ai.audio_transcription.grpc_handler import (
+            VertexAIChirpGrpcTranscription,
+        )
+
+        response = VertexAIChirpGrpcTranscription().audio_transcriptions(
+            model=model,
+            audio_file=file,
+            optional_params=optional_params,
+            litellm_params=litellm_params_dict,
+            model_response=model_response,
+            atranscription=atranscription,
+            timeout=timeout,
+            logging_obj=litellm_logging_obj,
+            api_key=api_key,
+            api_base=api_base,
+        )
     elif provider_config is not None:
         response = base_llm_http_handler.audio_transcriptions(
             model=model,
@@ -7884,6 +7920,12 @@ def speech(
             drop_params=False,
             kwargs=kwargs,
         )
+
+    # For Chirp 3 HD TTS (gRPC path), normalise the model name to the canonical
+    # price-list entry so cost tracking resolves correctly regardless of which
+    # model alias the caller used (e.g. "vertex_ai/tts-1").
+    if custom_llm_provider in ("vertex_ai", "vertex_ai_beta") and _resolve_chirp_hd_voice_name(voice, optional_params) is not None:
+        model = "chirp-3-hd"
 
     logging_obj: Final[LiteLLMLoggingObj] = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj"))
     logging_obj.update_environment_variables(
@@ -8117,21 +8159,39 @@ def speech(
             }
         )
 
-        response = vertex_config.dispatch_text_to_speech(
-            model=model,
-            input=input,
-            voice=voice,
-            optional_params=optional_params,
-            litellm_params_dict=litellm_params_dict,
-            logging_obj=logging_obj,
-            timeout=timeout,
-            extra_headers=headers,
-            base_llm_http_handler=base_llm_http_handler,
-            aspeech=aspeech or False,
-            api_base=generic_optional_params.api_base,
-            api_key=None,  # Vertex AI uses OAuth, not API key
-            **kwargs,
-        )
+        # Chirp 3 HD voices require the gRPC streaming_synthesize path; the REST
+        # synthesize endpoint does not support them.
+        _chirp_voice_name: Final = _resolve_chirp_hd_voice_name(voice, optional_params)
+        if _chirp_voice_name is not None:
+            from litellm.llms.vertex_ai.text_to_speech.grpc_handler import (
+                VertexAIChirpGrpcTextToSpeech,
+            )
+
+            response = VertexAIChirpGrpcTextToSpeech().speech(
+                input=input,
+                voice_name=_chirp_voice_name,
+                optional_params=optional_params,
+                litellm_params=litellm_params_dict,
+                logging_obj=logging_obj,
+                timeout=timeout,
+                aspeech=aspeech or False,
+            )
+        else:
+            response = vertex_config.dispatch_text_to_speech(
+                model=model,
+                input=input,
+                voice=voice,
+                optional_params=optional_params,
+                litellm_params_dict=litellm_params_dict,
+                logging_obj=logging_obj,
+                timeout=timeout,
+                extra_headers=headers,
+                base_llm_http_handler=base_llm_http_handler,
+                aspeech=aspeech or False,
+                api_base=generic_optional_params.api_base,
+                api_key=None,  # Vertex AI uses OAuth, not API key
+                **kwargs,
+            )
     elif custom_llm_provider == "gemini":
         from .endpoints.speech.speech_to_completion_bridge.handler import (
             speech_to_completion_bridge_handler,

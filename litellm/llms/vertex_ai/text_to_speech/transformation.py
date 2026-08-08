@@ -11,6 +11,22 @@ from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
 
+_CHIRP_HD_VOICE_MARKER: Final = "chirp3-hd"
+
+
+def is_chirp_hd_voice(voice: str | dict | None) -> bool:
+    if isinstance(voice, dict):
+        name: Final = voice.get("name") or ""
+        return _CHIRP_HD_VOICE_MARKER in name.lower().replace("_", "-")
+    if isinstance(voice, str):
+        return _CHIRP_HD_VOICE_MARKER in voice.lower().replace("_", "-")
+    return False
+
+
+def extract_language_code_from_voice(voice_name: str) -> str:
+    parts: Final = voice_name.split("-")
+    return f"{parts[0]}-{parts[1]}" if len(parts) >= 2 else "en-US"
+
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
