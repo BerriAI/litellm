@@ -1469,7 +1469,7 @@ model LiteLLM_ShadowEvalJob {
   result_json         Json?
 
   cost_estimate       Float?   // estimated cost of running the judge
-  cost_actual         Float?   // actual cost (judge calls * price)
+  cost_actual         Float    @default(0) // actual cost (judge calls * price)
 
   created_at          DateTime @default(now())
   created_by          String?  // user_id of the key that created this job

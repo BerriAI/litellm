@@ -25339,8 +25339,9 @@ export interface components {
             /**
              * Cost Actual
              * @description Running total of judge-call spend for this job
+             * @default 0
              */
-            cost_actual?: number | null;
+            cost_actual: number;
             /** Cost Estimate */
             cost_estimate?: number | null;
             /** Created At */

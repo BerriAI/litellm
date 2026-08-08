@@ -261,6 +261,38 @@ class TestStoppedJobCannotBeReactivated:
         assert call_kwargs["data"]["status"] == "running"
 
 
+@pytest.mark.asyncio
+class TestVerdictWriteAccumulatesCost:
+    async def test_cost_actual_uses_increment_not_a_raw_set(self):
+        """Regression: cost_actual must accumulate across verdicts, not overwrite.
+
+        The DB column defaults to 0 (not NULL) precisely so this increment lands
+        on a real number instead of NULL + x = NULL. If this update ever
+        regresses to a flat `"cost_actual": judge_cost` assignment, only the
+        last verdict's cost would survive instead of the running total.
+        """
+        prisma = MagicMock()
+        prisma.db.litellm_shadowevalverdict.create = AsyncMock()
+        prisma.db.litellm_shadowevaljob.update_many = AsyncMock()
+
+        logger = ShadowEvalLogger(router_provider=lambda: MagicMock(), prisma_provider=lambda: prisma)
+        logger._call_router_shadow = AsyncMock(return_value=("shadow text", "shadow-model", "SIMPLE", 10))
+        logger._call_judge = AsyncMock(return_value=("real", 0.9, "clearer", 0.05))
+
+        job = {"id": "j1", "router_name": "r", "judge_model": "m", "shadow_percentage": 100.0, "status": "running"}
+        await logger._run_shadow_eval(
+            job=job,
+            request_id="req-1",
+            messages=[{"role": "user", "content": "hi"}],
+            response_obj={"choices": [{"message": {"content": "real text"}}]},
+            real_model="gpt-4o",
+            model_parameters={},
+        )
+
+        _, call_kwargs = prisma.db.litellm_shadowevaljob.update_many.call_args
+        assert call_kwargs["data"]["cost_actual"] == {"increment": 0.05}
+
+
 class TestExtractResponseText:
     def test_dict_response(self):
         resp = {"choices": [{"message": {"content": "hello"}}]}

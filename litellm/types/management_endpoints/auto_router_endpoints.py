@@ -221,6 +221,6 @@ class GetShadowEvalJobResponse(BaseModel):
         default=None, description="Present once at least one verdict has been recorded"
     )
     cost_estimate: float | None = None
-    cost_actual: float | None = Field(default=None, description="Running total of judge-call spend for this job")
+    cost_actual: float = Field(default=0.0, description="Running total of judge-call spend for this job")
     created_at: str
     completed_at: str | None = None

@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS "LiteLLM_ShadowEvalJob" (
     "failed_count" INTEGER NOT NULL DEFAULT 0,
     "result_json" JSONB,
     "cost_estimate" DOUBLE PRECISION,
-    "cost_actual" DOUBLE PRECISION,
+    "cost_actual" DOUBLE PRECISION NOT NULL DEFAULT 0,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "created_by" TEXT,
     "completed_at" TIMESTAMP(3),
