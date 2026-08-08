@@ -105,6 +105,27 @@ describe("RouterSettingsAccordion", () => {
     expect(fetchAvailableModelsForTeam).not.toHaveBeenCalled();
   });
 
+  it("ignores a stale team's model response that resolves after a newer team was selected", async () => {
+    const resolvers: ((models: { model_group: string }[]) => void)[] = [];
+    vi.mocked(fetchAvailableModelsForTeam).mockImplementation(
+      () => new Promise((resolve) => resolvers.push(resolve)) as Promise<{ model_group: string }[]>,
+    );
+
+    const { rerender } = render(<RouterSettingsAccordion accessToken="test-token" teamId="team-slow" />);
+    await waitFor(() => expect(resolvers).toHaveLength(1));
+
+    rerender(<RouterSettingsAccordion accessToken="test-token" teamId="team-fast" />);
+    await waitFor(() => expect(resolvers).toHaveLength(2));
+
+    await act(async () => {
+      resolvers[1]([{ model_group: "fast-team-model" }]);
+      resolvers[0]([{ model_group: "slow-team-model" }]);
+    });
+
+    expect(screen.getByTestId("available-models")).toHaveTextContent("fast-team-model");
+    expect(screen.getByTestId("available-models")).not.toHaveTextContent("slow-team-model");
+  });
+
   it("does not call onChange when unmounted mid-wait", async () => {
     const onChange = vi.fn<(value: RouterSettingsAccordionValue) => void>();
     const { unmount } = render(<RouterSettingsAccordion accessToken="test-token" onChange={onChange} />);
