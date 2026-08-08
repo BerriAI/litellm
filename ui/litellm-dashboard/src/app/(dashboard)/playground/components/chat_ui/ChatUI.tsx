@@ -1298,6 +1298,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       <ShadcnSelect
                         value={selectedVoice}
                         onValueChange={(value) => {
+                          if (value == null) {
+                            return;
+                          }
                           setSelectedVoice(value);
                           sessionStorage.setItem("selectedVoice", value);
                         }}
