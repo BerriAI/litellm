@@ -59,6 +59,12 @@ _BASE64_INLINE_PATTERN: Final = re.compile(
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
+    # Set True on callbacks that must still run for `no-log` requests --
+    # metering, billing and budget enforcement, as opposed to observability.
+    # `no-log` means "do not send this request to logging integrations"; it is
+    # not a way for a caller to opt out of being billed.
+    runs_on_no_log: bool = False
+
     # Class variables or attributes
     def __init__(
         self,

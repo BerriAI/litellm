@@ -50,6 +50,10 @@ _UNATTRIBUTED_TRACKABLE_CALL_TYPES: Final[frozenset[str]] = frozenset(
 
 
 class _ProxyDBLogger(CustomLogger):
+    # Spend tracking is accounting, not observability: it must still run when a
+    # caller sends `no-log`, or that caller silently stops being billed.
+    runs_on_no_log: bool = True
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
 
