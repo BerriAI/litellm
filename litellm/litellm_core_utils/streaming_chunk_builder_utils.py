@@ -5,6 +5,8 @@ from itertools import groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
+from pydantic import BaseModel
+
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import (
     ChatCompletionAssistantContentValue,
@@ -636,6 +638,8 @@ class ChunkProcessor:
 
         if isinstance(usage_chunk, dict):
             return Usage(**usage_chunk)
+        if isinstance(usage_chunk, BaseModel) and not isinstance(usage_chunk, Usage):
+            return Usage(**usage_chunk.model_dump())
         return usage_chunk
 
     def _calculate_usage_per_chunk(
