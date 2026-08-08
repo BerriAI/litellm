@@ -235,3 +235,50 @@ def test_sync_transport_error_before_completed_event_raises():
     with pytest.raises(httpx.ReadError):
         for _ in iterator:
             pass
+
+
+class _TrackingByteStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: list[bytes]):
+        self._chunks = chunks
+        self.aclose_called = False
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            yield chunk
+
+    async def aclose(self) -> None:
+        self.aclose_called = True
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_underlying_httpx_response():
+    stream = _TrackingByteStream([_sse_event({"type": "response.output_text.delta", "delta": "hi"})])
+    response = httpx.Response(
+        200,
+        stream=stream,
+        request=httpx.Request("POST", "http://upstream.test/v1/responses"),
+    )
+
+    iterator = ResponsesAPIStreamingIterator(
+        response=response,
+        model="gpt-4o-mini",
+        responses_api_provider_config=_mock_config(),
+        logging_obj=_logging_obj_stub(),
+        litellm_metadata={},
+        custom_llm_provider="openai",
+    )
+
+    await iterator.__anext__()
+    await iterator.aclose()
+
+    assert stream.aclose_called
+    assert response.is_closed
+
+
+@pytest.mark.asyncio
+async def test_aclose_is_a_noop_for_iterators_without_a_response():
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+    iterator = BaseResponsesAPIStreamingIterator.__new__(BaseResponsesAPIStreamingIterator)
+
+    await iterator.aclose()
