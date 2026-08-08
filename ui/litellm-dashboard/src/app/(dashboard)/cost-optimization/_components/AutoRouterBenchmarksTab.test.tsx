@@ -124,13 +124,13 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("5.3M")).toBeInTheDocument();
   });
 
-  it("pairs the savings with the session and turn counts it was earned over", () => {
+  it("pairs the savings with the session count it was earned over", () => {
     mockHook({ data: response([group(), group({ router_name: "gpt-auto" })]) });
     renderTab();
 
     expect(screen.getByText("Avg saved per session")).toBeInTheDocument();
     expect(screen.getByText("$23.13")).toBeInTheDocument();
-    expect(screen.getByText("across 94 sessions and 3,073 turns")).toBeInTheDocument();
+    expect(screen.getByText("across 94 sessions")).toBeInTheDocument();
   });
 
   it("shows a cost increase as a positive delta rather than a saving", () => {
