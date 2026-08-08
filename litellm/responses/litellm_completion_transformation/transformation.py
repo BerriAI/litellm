@@ -60,6 +60,7 @@ from litellm.types.utils import (
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE = InMemoryCache()
+COMPACTION_TOKEN_BUFFER = 1000
 
 
 class ChatCompletionSession(TypedDict, total=False):
@@ -232,7 +233,7 @@ class LiteLLMCompletionResponsesConfig:
         if not context_management: return False
         if len(context_management) != 1: return False
 
-        if input_token_size > context_management[0]["compact_threshold"]:
+        if input_token_size + COMPACTION_TOKEN_BUFFER > context_management[0]["compact_threshold"]:
             return True
 
     @staticmethod
