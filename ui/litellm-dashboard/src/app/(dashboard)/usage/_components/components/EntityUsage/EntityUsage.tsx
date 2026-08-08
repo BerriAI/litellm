@@ -132,6 +132,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
     isFetchingMore,
     progress,
     cancelled,
+    failed,
+    incomplete,
     cancel,
   } = usePaginatedDailyActivity({
     fetchFn,
@@ -146,6 +148,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
     isFetchingMore: agentIsFetchingMore,
     progress: agentProgress,
     cancelled: agentCancelled,
+    failed: agentFailed,
     cancel: agentCancel,
   } = usePaginatedDailyActivity({
     fetchFn: agentDailyActivityCall,
@@ -745,14 +748,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
           }
         />
       )}
-      {cancelled && (
+      {(cancelled || failed) && (
         <Alert
           banner
-          type="info"
+          type={failed ? "error" : "info"}
           className="mb-2"
           message={
             <span>
-              Showing partial data ({progress.currentPage}/{progress.totalPages} pages loaded)
+              {failed ? "Fetching spend data failed, so totals cover only part of the range" : "Showing partial data"} (
+              {progress.currentPage}/{progress.totalPages} pages loaded)
             </span>
           }
         />
@@ -781,14 +785,17 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
           }
         />
       )}
-      {agentCancelled && entityType === "team" && (
+      {(agentCancelled || agentFailed) && entityType === "team" && (
         <Alert
           banner
-          type="info"
+          type={agentFailed ? "error" : "info"}
           className="mb-2"
           message={
             <span>
-              Showing partial agent data ({agentProgress.currentPage}/{agentProgress.totalPages} pages loaded)
+              {agentFailed
+                ? "Fetching agent data failed, so totals cover only part of the range"
+                : "Showing partial agent data"}{" "}
+              ({agentProgress.currentPage}/{agentProgress.totalPages} pages loaded)
             </span>
           }
         />
@@ -811,6 +818,12 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         filterOptions={getAllTags() || undefined}
         filterMode={entityType === "user" ? "single" : "multiple"}
         teams={teams || []}
+        exportDisabled={incomplete}
+        exportDisabledReason={
+          failed
+            ? "Spend data failed to load for the whole range, so an export would under-report. Reload the page first."
+            : "Spend data is still loading, so an export would under-report. Wait for it to finish."
+        }
       />
       <TabGroup>
         <TabList variant="solid" className="mt-1">

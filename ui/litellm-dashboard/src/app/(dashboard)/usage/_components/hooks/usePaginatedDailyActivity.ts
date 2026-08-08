@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DailyData } from "@/components/UsagePage/types";
+import { mergeDailyResults } from "./mergeDailyActivity";
 
 export interface PaginationProgress {
   currentPage: number;
@@ -47,6 +48,10 @@ interface UsePaginatedDailyActivityReturn {
   isFetchingMore: boolean;
   progress: PaginationProgress;
   cancelled: boolean;
+  /** True when a page fetch failed, so the data on screen covers only part of the range. */
+  failed: boolean;
+  /** True whenever the data on screen is known not to cover the whole requested range. */
+  incomplete: boolean;
   cancel: () => void;
 }
 
@@ -99,6 +104,7 @@ export function usePaginatedDailyActivity({
     totalPages: 0,
   });
   const [cancelled, setCancelled] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   const fetchIdRef = useRef(0);
   const cancelledRef = useRef(false);
@@ -129,12 +135,14 @@ export function usePaginatedDailyActivity({
       setIsFetchingMore(false);
       setProgress({ currentPage: 0, totalPages: 0 });
       setCancelled(false);
+      setFailed(false);
       return;
     }
 
     const currentFetchId = ++fetchIdRef.current;
     cancelledRef.current = false;
     setCancelled(false);
+    setFailed(false);
 
     const isStale = () => fetchIdRef.current !== currentFetchId || cancelledRef.current;
 
@@ -191,7 +199,7 @@ export function usePaginatedDailyActivity({
 
           if (isStale()) return;
 
-          accumulatedResults = [...accumulatedResults, ...pageData.results];
+          accumulatedResults = mergeDailyResults(accumulatedResults, pageData.results);
           accumulatedMetadata = sumMetadata(accumulatedMetadata, pageData.metadata);
           accumulatedMetadata.total_pages = totalPages;
           accumulatedMetadata.has_more = page < totalPages;
@@ -218,6 +226,7 @@ export function usePaginatedDailyActivity({
           console.error("Error fetching daily activity:", error);
           setLoading(false);
           setIsFetchingMore(false);
+          setFailed(true);
         }
       }
     };
@@ -235,5 +244,7 @@ export function usePaginatedDailyActivity({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, fetchFn, argsKey]);
 
-  return { data, loading, isFetchingMore, progress, cancelled, cancel };
+  const incomplete = isFetchingMore || cancelled || failed;
+
+  return { data, loading, isFetchingMore, progress, cancelled, failed, incomplete, cancel };
 }

@@ -1,6 +1,6 @@
 import type { DateRangePickerValue } from "@tremor/react";
 import { Button, Text } from "@tremor/react";
-import { Select } from "antd";
+import { Select, Tooltip } from "antd";
 import React, { useState } from "react";
 import EntityUsageExportModal from "./EntityUsageExportModal";
 import type { EntitySpendData, EntityType } from "./types";
@@ -21,6 +21,9 @@ interface UsageExportHeaderProps {
   customTitle?: string;
   compactLayout?: boolean;
   teams?: Team[];
+  /** Blocks the export while the data on screen does not cover the whole requested range. */
+  exportDisabled?: boolean;
+  exportDisabledReason?: string;
 }
 
 const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
@@ -37,6 +40,8 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   customTitle,
   compactLayout = false,
   teams = [],
+  exportDisabled = false,
+  exportDisabledReason,
 }) => {
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
@@ -79,21 +84,24 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
           )}
 
           <div className="justify-self-end">
-            <Button
-              onClick={() => setIsExportModalOpen(true)}
-              icon={() => (
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                  />
-                </svg>
-              )}
-            >
-              Export Data
-            </Button>
+            <Tooltip title={exportDisabled ? exportDisabledReason : undefined}>
+              <Button
+                disabled={exportDisabled}
+                onClick={() => setIsExportModalOpen(true)}
+                icon={() => (
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                    />
+                  </svg>
+                )}
+              >
+                Export Data
+              </Button>
+            </Tooltip>
           </div>
         </div>
       </div>

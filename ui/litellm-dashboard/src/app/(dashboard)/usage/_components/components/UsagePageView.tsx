@@ -542,15 +542,17 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               }
             />
           )}
-          {paginatedResult.cancelled && (
+          {(paginatedResult.cancelled || paginatedResult.failed) && (
             <Alert
               banner
-              type="info"
+              type={paginatedResult.failed ? "error" : "info"}
               className="mb-2"
               message={
                 <span>
-                  Showing partial data ({paginatedResult.progress.currentPage}/{paginatedResult.progress.totalPages}{" "}
-                  pages loaded)
+                  {paginatedResult.failed
+                    ? "Fetching spend data failed, so totals cover only part of the range"
+                    : "Showing partial data"}{" "}
+                  ({paginatedResult.progress.currentPage}/{paginatedResult.progress.totalPages} pages loaded)
                 </span>
               }
             />
