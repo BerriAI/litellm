@@ -1,5 +1,6 @@
 """
 Helper util for handling XAI-specific cost calculation
+- Prefers the cost xAI reports on the response over recomputing it locally
 - Uses the generic cost calculator which already handles tiered pricing correctly
 - Handles XAI-specific reasoning token billing (billed as part of completion tokens)
 """
@@ -12,11 +13,40 @@ from litellm.types.utils import Usage
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo
 
+USD_TICKS_PER_DOLLAR: Final = 10_000_000_000
+
+
+def _cost_reported_by_xai(usage: "Usage") -> float | None:
+    """
+    Return what xAI billed for the request in USD, or None if it reported nothing.
+
+    xAI states the amount it charged in ``usage.cost_in_usd_ticks``, where 1 USD is
+    ``USD_TICKS_PER_DOLLAR`` ticks: https://docs.x.ai/developers/cost-tracking
+
+    That figure is the total for the whole request, tokens and every server-side
+    tool invocation together, so whoever consumes it must not add anything on top.
+
+    It arrives on an untyped extra field, from a response body that a caller able to
+    set api_base controls, so only the documented shape is trusted: a non-negative
+    integer. Anything else yields None and the caller prices the request from tokens
+    instead, which keeps a hostile endpoint from returning a negative amount to
+    subtract from its own recorded spend.
+    """
+    ticks: Final[object] = getattr(usage, "cost_in_usd_ticks", None)
+    if not isinstance(ticks, int) or isinstance(ticks, bool):
+        return None
+    if ticks < 0:
+        return None
+    return ticks / USD_TICKS_PER_DOLLAR
+
 
 def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     """
-    Calculates the cost per token for a given XAI model, prompt tokens, and completion tokens.
-    Uses the generic cost calculator for all pricing logic, with XAI-specific reasoning token handling.
+    Prefers the amount xAI reported for the request, matching how the perplexity
+    calculator treats a provider-stated cost. That total is returned as completion
+    cost because xAI does not break it down by direction. Without one, falls back to
+    the generic cost calculator for all pricing logic, with XAI-specific reasoning
+    token handling.
 
     Input:
         - model: str, the model name without provider prefix
@@ -25,6 +55,10 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
+    reported_cost: Final = _cost_reported_by_xai(usage)
+    if reported_cost is not None:
+        return 0.0, reported_cost
+
     # XAI-specific completion cost: completion is billed as visible + reasoning
     # tokens. Detect when the transformation layer already folded them so we
     # don't double-count; fall back to raw xAI shape for callers that bypass
@@ -56,12 +90,18 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
     """
     Calculate the cost of web search requests for X.AI models.
 
-    X.AI Live Search costs $25 per 1,000 sources used.
-    Each source costs $0.025.
+    When xAI reports what it billed, that figure already covers the server-side
+    search calls and ``cost_per_token`` has returned it, so there is nothing to add
+    here.
 
-    The number of sources is stored in prompt_tokens_details.web_search_requests
-    by the transformation layer to be compatible with the existing detection system.
+    Otherwise fall back to the legacy Live Search rate of $25 per 1,000 sources
+    used ($0.025 each). The number of sources is stored in
+    prompt_tokens_details.web_search_requests by the transformation layer to be
+    compatible with the existing detection system.
     """
+    if _cost_reported_by_xai(usage) is not None:
+        return 0.0
+
     # Cost per source used: $25 per 1,000 sources = $0.025 per source
     cost_per_source: Final = 25.0 / 1000.0  # $0.025
 
