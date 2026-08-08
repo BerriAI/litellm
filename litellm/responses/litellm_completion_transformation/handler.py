@@ -21,7 +21,7 @@ from litellm.types.utils import ModelResponse
 
 
 class LiteLLMCompletionTransformationHandler:
-    async def response_api_handler(
+    def response_api_handler(
         self,
         model: str,
         input: Union[str, ResponseInputParam],
@@ -38,7 +38,7 @@ class LiteLLMCompletionTransformationHandler:
             Any, Any, Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]
         ],
     ]:
-        litellm_completion_request: dict =  await LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        litellm_completion_request: dict = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
             model=model,
             input=input,
             responses_api_request=responses_api_request,

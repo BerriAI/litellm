@@ -120,7 +120,7 @@ class ResponsesSessionHandler:
                 response_input_param = cast(ResponseInputParam, _response_input_param)
 
         if response_input_param:
-            chat_completion_messages = await LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 model="placeholder",
                 input=response_input_param,
                 responses_api_request=proxy_server_request_dict or {},
@@ -133,7 +133,7 @@ class ResponsesSessionHandler:
         elif _messages:
             # ensure all messages are /chat/completions/messages
             # certain requests can be stored as Responses API format - this ensures they are transformed to /chat/completions/messages
-            chat_completion_messages =  await LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            chat_completion_messages =  LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 model="placenholder",
                 input=_messages,
                 responses_api_request=proxy_server_request_dict or {},
