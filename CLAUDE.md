@@ -43,7 +43,7 @@ When you fix violations gated by `ruff-strict-budget.json`, `type-discipline-bud
 
 `make pre-commit` saves its complete output to a log file in .git (overwriting previous pre-commit logs) and prints that path as its first and last output lines. To inspect a run, read or grep that log instead of re-running the multi-minute checks just to see a different slice
 
-New Pydantic models must declare the fields they accept. `extra="allow"` is banned by `tests/code_coverage_tests/ban_pydantic_extra_allow.py`, which grandfathers the models that already had it, so don't add it to a new model and don't grow the grandfathered list without a real reason
+New Pydantic models must declare the fields they accept. `extra="allow"` is banned by `tests/code_coverage_tests/ban_pydantic_extra_allow.py`, which grandfathers the models that already had it, so don't add it to a new model. That list only shrinks: the check fails when your branch adds an entry to it, so removing a model's `extra="allow"` is the only edit it accepts. `make pre-commit` runs it on any commit that touches `litellm/` Python
 
 If you're trying to create a new function that relies on untyped stuff, instead of adding more Any's and pushing `reportAny` / `reportExplicitAny` closer to their basedpyright ceilings, just validate it in the caller with Pydantic (a model or `TypeAdapter` that returns the typed thing or raises will do) and then pass the now typed variable in
 

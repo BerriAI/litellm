@@ -1,6 +1,7 @@
 """Tests for the extra="allow" ban at tests/code_coverage_tests/ban_pydantic_extra_allow.py."""
 
 import os
+import subprocess
 import sys
 
 import pytest
@@ -153,3 +154,59 @@ def test_grandfathered_list_matches_repo():
     found = frozenset(violation.identifier() for violation in checker.find_extra_allow_models(_REPO_ROOT))
     assert sorted(found - checker.GRANDFATHERED) == []
     assert sorted(checker.GRANDFATHERED - found) == []
+
+
+def test_parse_grandfathered_reads_the_list_of_another_revision():
+    source = 'OTHER = frozenset({"nope"})\nGRANDFATHERED = frozenset(\n    {\n        "a.py::A",\n        "b.py::B",\n    }\n)\n'
+    assert checker.parse_grandfathered(source) == frozenset({"a.py::A", "b.py::B"})
+
+
+def test_parse_grandfathered_reads_this_files_own_list():
+    with open(os.path.join(_REPO_ROOT, checker.SELF_PATH), encoding="utf-8") as handle:
+        assert checker.parse_grandfathered(handle.read()) == checker.GRANDFATHERED
+
+
+def _baseline_commit(repo, entries):
+    """A one-commit repo whose copy of the checker grandfathers exactly ``entries``."""
+    target = os.path.join(repo, checker.SELF_PATH)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    with open(target, "w", encoding="utf-8") as handle:
+        handle.write("GRANDFATHERED = frozenset(\n    {\n")
+        handle.writelines(f'        "{entry}",\n' for entry in entries)
+        handle.write("    }\n)\n")
+    for command in (
+        ["git", "init", "-q", "."],
+        ["git", "add", checker.SELF_PATH],
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline"],
+    ):
+        subprocess.run(command, cwd=repo, check=True)
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+@pytest.mark.parametrize(
+    "baseline, expected",
+    [
+        pytest.param(checker.GRANDFATHERED, [], id="unchanged_list_passes"),
+        pytest.param(
+            checker.GRANDFATHERED | {"litellm/types/gone.py::Gone"},
+            [],
+            id="removing_an_entry_passes",
+        ),
+        pytest.param(
+            checker.GRANDFATHERED - {"litellm/types/utils.py::ImageResponse"},
+            ["litellm/types/utils.py::ImageResponse"],
+            id="adding_an_entry_is_reported",
+        ),
+    ],
+)
+def test_added_grandfathered_only_reports_growth(tmp_path, monkeypatch, baseline, expected):
+    base_sha = _baseline_commit(str(tmp_path), sorted(baseline))
+    monkeypatch.chdir(tmp_path)
+    assert list(checker.added_grandfathered(base_sha)) == expected
+
+
+def test_added_grandfathered_skips_a_base_without_the_checker(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert checker.added_grandfathered("HEAD") == ()

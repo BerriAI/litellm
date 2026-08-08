@@ -4,14 +4,20 @@
 real fields (pricing on ``ModelInfo``, for example) never get declared anywhere. The
 models listed in ``GRANDFATHERED`` predate this check and stay allowed; anything new
 must declare its fields.
+
+The list is one way. With ``--base <ref>`` the check also fails when it gained an entry
+relative to that ref, so the only edits to it that pass are removals.
 """
 
+import argparse
 import ast
 import os
+import subprocess
 import sys
 from typing import Final, Iterator, NamedTuple, Sequence
 
 SCAN_ROOT: Final = "litellm"
+SELF_PATH: Final = "tests/code_coverage_tests/ban_pydantic_extra_allow.py"
 
 GRANDFATHERED: Final = frozenset(
     {
@@ -193,6 +199,11 @@ def _iter_classes(body: Sequence[ast.stmt], prefix: str = "") -> Iterator[tuple[
 
 
 def find_violations_in_source(source: str, relative_path: str) -> tuple[Violation, ...]:
+    """Every opt-in this check understands spells ``allow`` in the module that declares the
+    model, whether as a literal, an ``Extra.allow`` attribute, or a constant it resolves, so a
+    module without that substring cannot hold one and is not worth parsing."""
+    if "allow" not in source:
+        return ()
     tree: Final = ast.parse(source, filename=relative_path)
     bindings: Final = _module_bindings(tree.body)
     return tuple(
@@ -218,11 +229,48 @@ def find_extra_allow_models(base_dir: str) -> tuple[Violation, ...]:
     )
 
 
+def parse_grandfathered(source: str) -> frozenset[str]:
+    """The entries ``GRANDFATHERED`` lists in ``source``, so another revision of this file
+    can be read without importing it. The entries are string literals, so they are collected
+    from the assignment's subtree rather than evaluating the ``frozenset`` call around them."""
+    return frozenset(
+        node.value
+        for statement in ast.parse(source).body
+        for name, value in _assigned_names(statement)
+        if name == "GRANDFATHERED"
+        for node in ast.walk(value)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    )
+
+
+def _source_at(ref: str) -> str | None:
+    completed: Final = subprocess.run(
+        ["git", "show", f"{ref}:{SELF_PATH}"], capture_output=True, text=True, check=False
+    )
+    return completed.stdout if completed.returncode == 0 else None
+
+
+def added_grandfathered(base_ref: str) -> tuple[str, ...]:
+    base_source: Final = _source_at(base_ref)
+    if base_source is None:
+        print(f"{SELF_PATH} does not exist at {base_ref}, so there is no list to ratchet against yet.")
+        return ()
+    return tuple(sorted(GRANDFATHERED - parse_grandfathered(base_source)))
+
+
 def main() -> int:
+    parser: Final = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--base",
+        help="git ref to ratchet GRANDFATHERED against, failing when this branch added an entry",
+    )
+    args: Final = parser.parse_args()
+
     base_dir = os.getcwd()
     found = find_extra_allow_models(base_dir)
     violations = tuple(violation for violation in found if violation.identifier() not in GRANDFATHERED)
     stale = tuple(sorted(GRANDFATHERED - {violation.identifier() for violation in found}))
+    added = added_grandfathered(args.base) if args.base else ()
 
     for violation in violations:
         print(f'{violation.file}:{violation.line}: {violation.model} sets extra="allow"')
@@ -241,8 +289,15 @@ def main() -> int:
         )
         for entry in stale:
             print(f"  {entry}")
+    if added:
+        print(
+            f"\nThis branch added {len(added)} entry/entries to GRANDFATHERED. The list only\n"
+            "shrinks, so declare the fields these models accept instead of grandfathering them:"
+        )
+        for entry in added:
+            print(f"  {entry}")
 
-    if violations or stale:
+    if violations or stale or added:
         return 1
     print('No new extra="allow" Pydantic models found.')
     return 0
