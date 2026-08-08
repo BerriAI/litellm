@@ -48,11 +48,12 @@ const GuardrailSelector: React.FC<GuardrailSelectorProps> = ({ onChange, value, 
         value={value}
         loading={loading}
         className={className}
-        options={guardrails.map((guardrail) => {
-          return {
-            label: `${guardrail.guardrail_name}`,
-            value: guardrail.guardrail_name,
-          };
+        options={guardrails.flatMap((guardrail) => {
+          const name = guardrail.guardrail_name;
+          if (name == null || name === "") {
+            return [];
+          }
+          return [{ label: name, value: name }];
         })}
       />
     </div>
