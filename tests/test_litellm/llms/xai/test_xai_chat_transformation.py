@@ -1,10 +1,16 @@
+import json
 import os
 import sys
+from unittest.mock import patch
+
+import httpx
+import litellm
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.xai.chat.transformation import XAIChatConfig
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
@@ -119,6 +125,64 @@ class TestXAIParallelToolCalls:
         assert result.get("parallel_tool_calls") is True
         assert len(result["messages"]) == 1
         assert result["messages"][0]["role"] == "user"
+
+
+class TestXAIGrokConversationCache:
+    def test_named_conversation_id_is_sent_as_header(self):
+        client = HTTPHandler()
+        raw_response = httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "grok-4.5",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hello"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            },
+            request=httpx.Request("POST", "https://api.x.ai/v1/chat/completions"),
+        )
+
+        with patch.object(client, "post", return_value=raw_response) as mock_post:
+            litellm.completion(
+                model="xai/grok-4.5",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_key="test-key",
+                x_grok_conv_id="conversation-123",
+                client=client,
+            )
+
+        request_kwargs = mock_post.call_args.kwargs
+        assert request_kwargs["headers"]["x-grok-conv-id"] == "conversation-123"
+        assert "x_grok_conv_id" not in json.loads(request_kwargs["data"])
+
+    def test_explicit_header_takes_precedence(self):
+        config = XAIChatConfig()
+        optional_params = {"x_grok_conv_id": "named-parameter-value"}
+        headers = {"X-Grok-Conv-Id": "explicit-header-value"}
+
+        result = config.validate_environment(
+            headers=headers,
+            model="grok-4.5",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params=optional_params,
+            litellm_params={},
+            api_key="test-key",
+        )
+
+        assert result["X-Grok-Conv-Id"] == "explicit-header-value"
+        assert "x-grok-conv-id" not in result
+        assert "x_grok_conv_id" not in optional_params
 
 
 class TestXAIUsageNormalization:

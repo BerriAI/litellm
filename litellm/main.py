@@ -420,6 +420,7 @@ async def acompletion(
     verbosity: Literal["low", "medium", "high"] | None = None,
     safety_identifier: str | None = None,
     service_tier: str | None = None,
+    x_grok_conv_id: str | None = None,
     # set api_base, api_version, api_key
     base_url: str | None = None,
     api_version: str | None = None,
@@ -584,6 +585,7 @@ async def acompletion(
         "verbosity": verbosity,
         "safety_identifier": safety_identifier,
         "service_tier": service_tier,
+        "x_grok_conv_id": x_grok_conv_id,
         "extra_headers": extra_headers,
         "acompletion": True,  # assuming this is a required parameter
         "thinking": thinking,
@@ -4872,6 +4874,7 @@ def completion(
     extra_headers: dict | None = None,
     safety_identifier: str | None = None,
     service_tier: str | None = None,
+    x_grok_conv_id: str | None = None,
     # soon to be deprecated params by OpenAI
     functions: list | None = None,
     function_call: str | None = None,
@@ -4920,6 +4923,7 @@ def completion(
         api_key (str, optional): API key (default is None).
         model_list (list, optional): List of api base, version, keys
         extra_headers (dict, optional): Additional headers to include in the request.
+        x_grok_conv_id (str, optional): Stable conversation ID used by xAI Chat Completions for prompt-cache routing.
 
         LITELLM Specific Params
         mock_response (str, optional): If provided, return a mock completion response for testing or debugging purposes (default is None).
@@ -5000,6 +5004,7 @@ def completion(
                 verbosity=verbosity,
                 safety_identifier=safety_identifier,
                 service_tier=service_tier,
+                x_grok_conv_id=x_grok_conv_id,
                 base_url=base_url,
                 api_version=api_version,
                 api_key=api_key,
@@ -5308,6 +5313,7 @@ def completion(
             ),
             "safety_identifier": safety_identifier,
             "service_tier": service_tier,
+            "x_grok_conv_id": x_grok_conv_id,
             "allowed_openai_params": kwargs.get("allowed_openai_params"),
             "base_model": base_model,
         }

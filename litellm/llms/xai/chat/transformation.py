@@ -29,6 +29,8 @@ from ...openai.chat.gpt_transformation import (
 
 
 class XAIChatConfig(OpenAIGPTConfig):
+    X_GROK_CONV_ID_HEADER = "x-grok-conv-id"
+
     @property
     def custom_llm_provider(self) -> str | None:
         return "xai"
@@ -56,6 +58,10 @@ class XAIChatConfig(OpenAIGPTConfig):
             should_use_xai_oauth,
         )
 
+        headers = self._add_grok_conversation_id_header(
+            headers=headers,
+            optional_params=optional_params,
+        )
         dynamic_api_key: Final = XAIModelInfo.get_api_key(api_key)
         if should_use_xai_oauth(litellm_params) and not dynamic_api_key:
             try:
@@ -79,6 +85,19 @@ class XAIChatConfig(OpenAIGPTConfig):
             api_key=dynamic_api_key,
             api_base=api_base,
         )
+
+    def _add_grok_conversation_id_header(
+        self,
+        headers: dict[str, str],  # mutable-ok: request headers are updated in place
+        optional_params: dict[str, Any],  # mutable-ok: provider-only param is consumed
+    ) -> dict[str, str]:  # mutable-ok: returns the updated request headers
+        conversation_id = optional_params.pop("x_grok_conv_id", None)
+        if conversation_id is None:
+            return headers
+        if any(key.lower() == self.X_GROK_CONV_ID_HEADER for key in headers):
+            return headers
+        headers[self.X_GROK_CONV_ID_HEADER] = str(conversation_id)
+        return headers
 
     def get_complete_url(
         self,
@@ -123,6 +142,7 @@ class XAIChatConfig(OpenAIGPTConfig):
             "top_p",
             "user",
             "web_search_options",
+            "x_grok_conv_id",
         ]
         # for some reason, grok-3-mini does not support stop tokens
         #########################################################
