@@ -2808,6 +2808,104 @@ async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
 
 
 @pytest.mark.asyncio
+async def test_sync_proxy_budget_state_clears_stale_budget_when_max_budget_unset():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/35680.
+
+    When litellm_settings.max_budget is removed from config (litellm.max_budget
+    resolves to 0), startup must clear any max_budget/budget_duration previously
+    synced onto the proxy budget rows, on both the current sync target
+    ("litellm-proxy-budget") and the legacy sync target ("default_user_id").
+    Without this, master-key traffic (which resolves to default_user_id) keeps
+    getting 429'd against a budget that no longer exists in config.
+    """
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    original_max_budget = litellm.max_budget
+    litellm.max_budget = 0.0
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.update_many = AsyncMock(return_value={"count": 2})
+    mock_cache = MagicMock()
+    mock_cache.async_delete_cache = AsyncMock()
+
+    try:
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+            ProxyStartupEvent._sync_proxy_budget_state(
+                user_api_key_cache=mock_cache,
+                prisma_client=mock_prisma,
+            )
+            await asyncio.sleep(0.1)
+
+        mock_prisma.db.litellm_usertable.update_many.assert_called_once()
+        clear_call = mock_prisma.db.litellm_usertable.update_many.call_args
+        assert set(clear_call.kwargs["where"]["user_id"]["in"]) == {
+            "litellm-proxy-budget",
+            "default_user_id",
+        }
+        assert clear_call.kwargs["where"]["max_budget"] == {"not": None}
+        assert clear_call.kwargs["data"] == {
+            "max_budget": None,
+            "budget_duration": None,
+            "budget_reset_at": None,
+        }
+
+        deleted_keys = {call.kwargs["key"] for call in mock_cache.async_delete_cache.call_args_list}
+        assert deleted_keys == {"litellm-proxy-budget", "default_user_id"}
+    finally:
+        litellm.max_budget = original_max_budget
+
+
+@pytest.mark.asyncio
+async def test_sync_proxy_budget_state_syncs_when_max_budget_configured():
+    """
+    When litellm.max_budget is set, startup must sync the budget onto the db
+    (existing behavior) and must NOT run the stale-budget clear path.
+    """
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    original_max_budget = litellm.max_budget
+    original_budget_duration = litellm.budget_duration
+    litellm.max_budget = 100.0
+    litellm.budget_duration = "30d"
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.update_many = AsyncMock(return_value={"count": 0})
+    mock_cache = MagicMock()
+    mock_cache.async_delete_cache = AsyncMock()
+
+    mock_generate_key_helper = AsyncMock(
+        return_value={
+            "user_id": "litellm-proxy-budget",
+            "max_budget": 100.0,
+            "budget_duration": "30d",
+            "spend": 0,
+            "models": [],
+        }
+    )
+
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch(
+                "litellm.proxy.proxy_server.generate_key_helper_fn",
+                mock_generate_key_helper,
+            ),
+        ):
+            ProxyStartupEvent._sync_proxy_budget_state(
+                user_api_key_cache=mock_cache,
+                prisma_client=mock_prisma,
+            )
+            await asyncio.sleep(0.1)
+
+        mock_generate_key_helper.assert_called_once()
+        mock_cache.async_delete_cache.assert_not_called()
+    finally:
+        litellm.max_budget = original_max_budget
+        litellm.budget_duration = original_budget_duration
+
+
+@pytest.mark.asyncio
 async def test_custom_ui_sso_sign_in_handler_config_loading():
     """
     Test that custom_ui_sso_sign_in_handler from config gets properly loaded into the global variable

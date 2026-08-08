@@ -1137,13 +1137,10 @@ async def proxy_startup_event(app: FastAPI):
         prompt_injection_detection_obj.update_environment(router=llm_router)
 
     verbose_proxy_logger.debug("prisma_client: %s", prisma_client)
-    if prisma_client is not None and litellm.max_budget > 0:
-        ProxyStartupEvent._add_proxy_budget_to_db()
-        asyncio.create_task(
-            ProxyStartupEvent._warm_global_spend_cache(
-                user_api_key_cache=user_api_key_cache,
-                prisma_client=prisma_client,
-            )
+    if prisma_client is not None:
+        ProxyStartupEvent._sync_proxy_budget_state(
+            user_api_key_cache=user_api_key_cache,
+            prisma_client=prisma_client,
         )
     ProxyStartupEvent._warn_budget_without_db(
         max_budget=litellm.max_budget,
@@ -8112,12 +8109,57 @@ class ProxyStartupEvent:
         )
 
     @classmethod
+    def _sync_proxy_budget_state(
+        cls,
+        user_api_key_cache: UserApiKeyCache,
+        prisma_client: PrismaClient,
+    ) -> None:
+        if litellm.max_budget > 0:
+            cls._add_proxy_budget_to_db()
+            asyncio.create_task(
+                cls._warm_global_spend_cache(
+                    user_api_key_cache=user_api_key_cache,
+                    prisma_client=prisma_client,
+                )
+            )
+        else:
+            asyncio.create_task(
+                cls._clear_stale_proxy_budget_from_db(
+                    user_api_key_cache=user_api_key_cache,
+                    prisma_client=prisma_client,
+                )
+            )
+
+    @classmethod
     def _add_proxy_budget_to_db(cls):
         """Adds a global proxy budget to db"""
         if litellm.budget_duration is None:
             raise Exception("budget_duration not set on Proxy. budget_duration is required to use max_budget.")
 
         asyncio.create_task(cls._upsert_proxy_budget_with_reset_at_backfill())
+
+    @classmethod
+    async def _clear_stale_proxy_budget_from_db(
+        cls,
+        user_api_key_cache: UserApiKeyCache,
+        prisma_client: PrismaClient,
+    ) -> None:
+        try:
+            await UserRepository(prisma_client).table.update_many(
+                where={
+                    "user_id": {"in": [LITELLM_PROXY_BUDGET_NAME, LITELLM_PROXY_ADMIN_NAME]},
+                    "max_budget": {"not": None},
+                },
+                data={
+                    "max_budget": None,
+                    "budget_duration": None,
+                    "budget_reset_at": None,
+                },
+            )
+            await user_api_key_cache.async_delete_cache(key=LITELLM_PROXY_BUDGET_NAME)
+            await user_api_key_cache.async_delete_cache(key=LITELLM_PROXY_ADMIN_NAME)
+        except Exception as e:
+            verbose_proxy_logger.warning("Failed to clear stale proxy budget rows: %s", e)
 
     @classmethod
     async def _upsert_proxy_budget_with_reset_at_backfill(cls) -> None:
