@@ -4526,7 +4526,12 @@ class Router:
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name=function_name)
 
             data: Final = deployment["litellm_params"].copy()
-            model_name: Final = data["model"]
+            deployment_model_name: Final = data["model"]
+            model_name = (
+                model
+                if "*" in deployment_model_name and "*" not in model
+                else deployment_model_name
+            )
             self.total_calls[model_name] += 1
 
             self._add_deployment_model_to_endpoint_for_llm_passthrough_route(
