@@ -611,7 +611,7 @@ from litellm.secret_managers.main import (
     normalize_nonempty_secret_str,
     str_to_bool,
 )
-from litellm.types.integrations.slack_alerting import SlackAlertingArgs
+from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
     AnthropicResponse,
@@ -8468,6 +8468,42 @@ class ProxyStartupEvent:
         )
 
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
+
+        ### PTU DAILY ROLLUP ###
+        from litellm.proxy.spend_tracking.ptu_flat_cost_rollup import (
+            PTU_ROLLUP_JOB_ID,
+            run_scheduled_ptu_rollup,
+        )
+
+        async def _alert_ptu_rollup_failure(message: str) -> None:
+            await proxy_logging_obj.alerting_handler(
+                message=message,
+                level="High",
+                alert_type=AlertType.failed_tracking_spend,
+            )
+
+        async def _scheduled_ptu_rollup() -> None:
+            # Reuse the PodLockManager from db_spend_update_writer so only one pod
+            # reconciles a day; a multi-pod race could prune another pod's fresh rows
+            await run_scheduled_ptu_rollup(
+                prisma_client,
+                pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
+                alert=_alert_ptu_rollup_failure,
+            )
+
+        scheduler.add_job(
+            _scheduled_ptu_rollup,
+            "cron",
+            hour=0,
+            minute=15,
+            timezone="UTC",
+            id=PTU_ROLLUP_JOB_ID,
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+        verbose_proxy_logger.info(
+            "PTU rollup job scheduled at 00:15 UTC daily (only models with PTU config accrue flat cost)"
+        )
 
         ### SPEND LOG CLEANUP ###
         if (
