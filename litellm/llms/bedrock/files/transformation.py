@@ -54,7 +54,7 @@ from litellm.types.utils import ExtractedFileData, LlmProviders, SpecialEnums
 from litellm.utils import get_llm_provider
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import BedrockError, resolve_s3_encryption_key_id
+from ..common_utils import BedrockError, merge_bedrock_aws_request_params, resolve_s3_encryption_key_id
 
 # litellm_params key used to hand the SigV4-signed GET headers from
 # `transform_file_content_request` to `validate_environment` (the only hook
@@ -285,6 +285,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         """
         Get the complete S3 URL for the file upload request
         """
+        request_params: Final = merge_bedrock_aws_request_params(litellm_params, optional_params)
         bucket_name = litellm_params.get("s3_bucket_name") or os.getenv("AWS_S3_BUCKET_NAME")
         if not bucket_name:
             raise ValueError(
@@ -293,7 +294,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         bucket_name, object_prefix = split_configured_cloud_bucket_name(bucket_name)
 
         s3_region_name: Final = litellm_params.get("s3_region_name") or optional_params.get("s3_region_name")
-        aws_region_name: Final = s3_region_name or self._get_aws_region_name(optional_params, model)
+        aws_region_name: Final = s3_region_name or self._get_aws_region_name(request_params, model)
 
         file_data: Final = data.get("file")
         purpose: Final = data.get("purpose")
@@ -309,7 +310,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         # S3 endpoint URL format
         s3_endpoint_url: Final = (
-            optional_params.get("s3_endpoint_url") or f"https://s3.{aws_region_name}.amazonaws.com"
+            request_params.get("s3_endpoint_url") or f"https://s3.{aws_region_name}.amazonaws.com"
         ).rstrip("/")
 
         return f"{s3_endpoint_url}/{bucket_name}/{encoded_object_name}"
@@ -849,14 +850,16 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         if s3_region_name:
             optional_params = {**optional_params, "aws_region_name": s3_region_name}
 
+        request_params: Final = merge_bedrock_aws_request_params(litellm_params, optional_params)
+
         # Sign the request and return a pre-signed request object
         signed_headers, signed_body = self._sign_s3_request(
             content=file_content,
             api_base=api_base,
-            optional_params=optional_params,
+            optional_params=request_params,
             s3_encryption_key_id=resolve_s3_encryption_key_id(
                 litellm_params=litellm_params,
-                optional_params=optional_params,
+                optional_params=request_params,
             ),
         )
 
