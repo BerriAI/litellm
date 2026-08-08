@@ -173,6 +173,53 @@ async def test_bedrock_sse_wrapper_no_error_event_when_stream_ends_with_message_
 
 
 @pytest.mark.asyncio
+async def test_bedrock_sse_wrapper_dispatches_logging_when_stream_is_closed_mid_stream():
+    """
+    Regression test for issue #35958: closing the wrapper mid-stream (what
+    Starlette does when a /v1/messages client disconnects) must dispatch
+    spend logging for the chunks already streamed. Logging used to run only
+    after the upstream stream was fully consumed, and an extra async-generator
+    layer around the wrapper deferred its teardown to garbage collection, so
+    interrupted Bedrock streams were billed nothing at all.
+
+    ``completion_start_time`` on the injected logging object is written by the
+    wrapper's logging dispatch and by nothing else on this path, so it doubles
+    as the observable signal that the dispatch happened.
+    """
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    async def _slow_stream():
+        for i in range(50):
+            yield {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": f"tok{i}"},
+            }
+
+    logging_obj = LiteLLMLoggingObj(
+        model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="chat",
+        start_time=datetime.now(),
+        litellm_call_id="test_bedrock_sse_wrapper_disconnect_logging",
+        function_id="test_bedrock_sse_wrapper_disconnect_logging",
+    )
+    stream = cfg.bedrock_sse_wrapper(
+        _slow_stream(),
+        litellm_logging_obj=logging_obj,
+        request_body={},
+    )
+    await stream.__anext__()
+    assert logging_obj.model_call_details.get("completion_start_time") is None
+
+    await stream.aclose()
+
+    assert logging_obj.model_call_details.get("completion_start_time") is not None
+
+
+@pytest.mark.asyncio
 async def test_bedrock_sse_wrapper_keeps_usage_in_message_start_and_message_delta():
     """Regression test: usage should be available on both message_start and message_delta SSE events."""
 
