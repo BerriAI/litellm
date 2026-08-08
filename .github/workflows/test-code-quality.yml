@@ -116,6 +116,9 @@ jobs:
       - name: ban_copy_deepcopy_kwargs
         run: uv run --no-sync python ./tests/code_coverage_tests/ban_copy_deepcopy_kwargs.py
 
+      - name: ban_pydantic_extra_allow
+        run: uv run --no-sync python ./tests/code_coverage_tests/ban_pydantic_extra_allow.py
+
       - name: check_fastuuid_usage
         run: uv run --no-sync python ./tests/code_coverage_tests/check_fastuuid_usage.py
 
