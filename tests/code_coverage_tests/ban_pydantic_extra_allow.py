@@ -102,41 +102,86 @@ class Binding(NamedTuple):
     line: int
     name: str
     value: ast.expr
+    branch: tuple[str, ...]
+
+
+def _shadows(later: Binding, earlier: Binding) -> bool:
+    """Whether ``later`` is guaranteed to have replaced ``earlier`` by the time something below
+    reads the name. It is, only when it runs on the same branch or an enclosing one; a binding in
+    a sibling branch of the same ``if`` or ``try`` is an alternative, not a replacement, so both
+    values stay in play."""
+    return later.line > earlier.line and earlier.branch[: len(later.branch)] == later.branch
 
 
 class Scope(NamedTuple):
     """Module-level bindings, read as of ``line``.
 
-    Resolution walks a name to the value it held just above the line reading it, and each hop
-    down a chain of aliases carries that alias's own line, so rebinding a name later can neither
-    hide an earlier opt-in nor implicate a model that never had one.
+    Resolution walks a name to the values it could hold just above the line reading it, and each
+    hop down a chain of aliases carries that alias's own line, so rebinding a name later can
+    neither hide an earlier opt-in nor implicate a model that never had one. A name bound in more
+    than one branch resolves to every branch's value, since which one runs is a runtime question.
     """
 
     bindings: tuple[Binding, ...]
     line: int
 
-    def resolve(self, node: ast.expr, seen: frozenset[str] = frozenset()) -> ast.expr:
+    def resolve(self, node: ast.expr, seen: frozenset[str] = frozenset()) -> tuple[ast.expr, ...]:
         if not isinstance(node, ast.Name) or node.id in seen:
-            return node
+            return (node,)
         visible: Final = tuple(
             binding for binding in self.bindings if binding.name == node.id and binding.line < self.line
         )
-        if not visible:
-            return node
-        return Scope(self.bindings, visible[-1].line).resolve(visible[-1].value, seen | {node.id})
+        live: Final = tuple(binding for binding in visible if not any(_shadows(other, binding) for other in visible))
+        if not live:
+            return (node,)
+        return tuple(
+            resolved
+            for binding in live
+            for resolved in Scope(self.bindings, binding.line).resolve(binding.value, seen | {node.id})
+        )
 
 
-def _module_bindings(body: Sequence[ast.stmt]) -> tuple[Binding, ...]:
+def _scoped_statements(node: ast.AST, branch: tuple[str, ...] = ()) -> Iterator[tuple[ast.stmt, tuple[str, ...]]]:
+    """Statements that belong to ``node``'s own scope, each with the branch it sits on, descending
+    through ``if``, ``try``, ``with``, loop and ``match`` blocks, since a name bound or a class
+    declared inside one of those is still bound in the enclosing scope. Functions and nested
+    classes open a new scope, so a nested class is yielded but not entered, and function bodies
+    are left alone."""
+    for field, value in ast.iter_fields(node):
+        for child in value if isinstance(value, list) else [value]:
+            if not isinstance(child, ast.AST) or isinstance(child, ast.expr):
+                continue
+            nested = branch if isinstance(node, ast.Module) else (*branch, f"{id(node)}.{field}")
+            if isinstance(child, ast.ClassDef):
+                yield child, nested
+                continue
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if isinstance(child, ast.stmt):
+                yield child, nested
+            yield from _scoped_statements(child, nested)
+
+
+def _statements(node: ast.AST) -> tuple[ast.stmt, ...]:
+    return tuple(statement for statement, _ in _scoped_statements(node))
+
+
+def _module_bindings(node: ast.AST) -> tuple[Binding, ...]:
     return tuple(
-        Binding(statement.lineno, name, value) for statement in body for name, value in _assigned_names(statement)
+        Binding(statement.lineno, name, value, branch)
+        for statement, branch in _scoped_statements(node)
+        for name, value in _assigned_names(statement)
     )
 
 
+def _names_allow(node: ast.expr) -> bool:
+    if isinstance(node, ast.Constant):
+        return node.value == "allow"
+    return isinstance(node, ast.Attribute) and node.attr == "allow"
+
+
 def _is_allow_literal(node: ast.expr, scope: Scope) -> bool:
-    resolved: Final = scope.resolve(node)
-    if isinstance(resolved, ast.Constant):
-        return resolved.value == "allow"
-    return isinstance(resolved, ast.Attribute) and resolved.attr == "allow"
+    return any(_names_allow(resolved) for resolved in scope.resolve(node))
 
 
 def _is_extra_allow_keyword(keyword: ast.keyword, scope: Scope) -> bool:
@@ -159,7 +204,7 @@ def _config_sets_extra_allow(node: ast.expr, scope: Scope) -> bool:
 
 
 def _is_extra_allow_value(node: ast.expr, scope: Scope) -> bool:
-    return _config_sets_extra_allow(scope.resolve(node), scope)
+    return any(_config_sets_extra_allow(resolved, scope) for resolved in scope.resolve(node))
 
 
 def _assigns_extra_allow(statement: ast.stmt, target_names: Sequence[str], scope: Scope) -> bool:
@@ -176,26 +221,26 @@ def _legacy_config_sets_extra_allow(class_def: ast.ClassDef, scope: Scope) -> bo
             isinstance(inner, ast.Assign)
             and any(isinstance(target, ast.Name) and target.id == "extra" for target in inner.targets)
             and _is_allow_literal(inner.value, scope)
-            for inner in statement.body
+            for inner in _statements(statement)
         )
-        for statement in class_def.body
+        for statement in _statements(class_def)
     )
 
 
 def _class_allows_extra(class_def: ast.ClassDef, scope: Scope) -> bool:
     if any(_is_extra_allow_keyword(keyword, scope) for keyword in class_def.keywords):
         return True
-    if any(_assigns_extra_allow(statement, ["model_config"], scope) for statement in class_def.body):
+    if any(_assigns_extra_allow(statement, ["model_config"], scope) for statement in _statements(class_def)):
         return True
     return _legacy_config_sets_extra_allow(class_def, scope)
 
 
-def _iter_classes(body: Sequence[ast.stmt], prefix: str = "") -> Iterator[tuple[str, ast.ClassDef]]:
-    for statement in body:
+def _iter_classes(node: ast.AST, prefix: str = "") -> Iterator[tuple[str, ast.ClassDef]]:
+    for statement in _statements(node):
         if isinstance(statement, ast.ClassDef):
             qualified = f"{prefix}{statement.name}"
             yield qualified, statement
-            yield from _iter_classes(statement.body, f"{qualified}.")
+            yield from _iter_classes(statement, f"{qualified}.")
 
 
 def find_violations_in_source(source: str, relative_path: str) -> tuple[Violation, ...]:
@@ -205,10 +250,10 @@ def find_violations_in_source(source: str, relative_path: str) -> tuple[Violatio
     if "allow" not in source:
         return ()
     tree: Final = ast.parse(source, filename=relative_path)
-    bindings: Final = _module_bindings(tree.body)
+    bindings: Final = _module_bindings(tree)
     return tuple(
         Violation(file=relative_path, line=class_def.lineno, model=qualified)
-        for qualified, class_def in _iter_classes(tree.body)
+        for qualified, class_def in _iter_classes(tree)
         if _class_allows_extra(class_def, Scope(bindings, class_def.lineno))
     )
 

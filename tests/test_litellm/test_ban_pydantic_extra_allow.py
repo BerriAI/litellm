@@ -85,6 +85,39 @@ _REPO_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."
             'EXTRA = "allow"\n\n\nclass Foo(BaseModel, extra=EXTRA):\n    pass\n',
             id="module_constant_class_keyword",
         ),
+        pytest.param(
+            'if TYPE_CHECKING:\n    ALLOW = ConfigDict(extra="allow")\n\n\nclass Foo(BaseModel):\n'
+            "    model_config = ALLOW\n",
+            id="constant_bound_inside_an_if_block",
+        ),
+        pytest.param(
+            'try:\n    ALLOW = ConfigDict(extra="allow")\nexcept ImportError:\n    ALLOW = None\n\n\n'
+            "class Foo(BaseModel):\n    model_config = ALLOW\n",
+            id="constant_bound_inside_a_try_block",
+        ),
+        pytest.param(
+            'try:\n    class Foo(BaseModel):\n        model_config = ConfigDict(extra="allow")\n'
+            "except ImportError:\n    pass\n",
+            id="class_declared_inside_a_try_block",
+        ),
+        pytest.param(
+            "if sys.version_info >= (3, 12):\n    class Foo(BaseModel):\n"
+            '        model_config = ConfigDict(extra="allow")\n',
+            id="class_declared_inside_an_if_block",
+        ),
+        pytest.param(
+            'class Foo(BaseModel):\n    if TYPE_CHECKING:\n        model_config = ConfigDict(extra="allow")\n',
+            id="model_config_assigned_inside_an_if_block",
+        ),
+        pytest.param(
+            'class Foo(BaseModel):\n    class Config:\n        if TYPE_CHECKING:\n            extra = "allow"\n',
+            id="legacy_inner_config_assigned_inside_an_if_block",
+        ),
+        pytest.param(
+            'if IS_V2:\n    CONFIG = ConfigDict(extra="allow")\nelse:\n    CONFIG = ConfigDict(extra="forbid")\n\n\n'
+            "class Foo(BaseModel):\n    model_config = CONFIG\n",
+            id="one_branch_of_a_conditional_binding_allows",
+        ),
     ],
 )
 def test_detects_extra_allow(source):
@@ -136,6 +169,11 @@ def test_detects_extra_allow(source):
             'ALLOW = ConfigDict(extra="forbid")\nALIAS = ALLOW\nALLOW = ConfigDict(extra="allow")\n\n\n'
             "class Foo(BaseModel):\n    model_config = ALIAS\n",
             id="alias_captured_forbid_before_its_source_was_rebound",
+        ),
+        pytest.param(
+            'if IS_V2:\n    CONFIG = ConfigDict(extra="allow")\nCONFIG = ConfigDict(extra="forbid")\n\n\n'
+            "class Foo(BaseModel):\n    model_config = CONFIG\n",
+            id="conditional_allow_rebound_unconditionally_before_the_class",
         ),
     ],
 )
