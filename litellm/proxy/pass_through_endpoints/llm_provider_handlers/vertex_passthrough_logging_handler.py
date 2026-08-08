@@ -396,6 +396,7 @@ class VertexPassthroughLoggingHandler:
         all_chunks: list[str],
         model: str | None,
         end_time: datetime,
+        custom_llm_provider: str | None = None,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
         Takes raw chunks from Vertex passthrough endpoint and logs them in litellm callbacks
@@ -429,7 +430,9 @@ class VertexPassthroughLoggingHandler:
             start_time=start_time,
             end_time=end_time,
             logging_obj=litellm_logging_obj,
-            custom_llm_provider=VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(url_route),
+            custom_llm_provider=(
+                custom_llm_provider or VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(url_route)
+            ),
         )
 
         return {
@@ -592,11 +595,12 @@ class VertexPassthroughLoggingHandler:
         response_cost: Final = litellm.completion_cost(
             completion_response=litellm_model_response,
             model=model,
-            custom_llm_provider="vertex_ai",
+            custom_llm_provider=custom_llm_provider,
         )
 
         kwargs["response_cost"] = response_cost
         kwargs["model"] = model
+        kwargs["custom_llm_provider"] = custom_llm_provider
 
         # pretty print standard logging object
         verbose_proxy_logger.debug("kwargs= %s", kwargs)

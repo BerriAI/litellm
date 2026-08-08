@@ -129,6 +129,7 @@ class PassThroughStreamingHandler:
         raw_bytes: list[bytes],
         end_time: datetime,
         model: str | None = None,
+        custom_llm_provider: str | None = None,
     ):
         """
         Route the logging for the collected chunks to the appropriate handler
@@ -152,6 +153,7 @@ class PassThroughStreamingHandler:
                 raw_bytes=raw_bytes,
                 end_time=end_time,
                 model=model,
+                custom_llm_provider=custom_llm_provider,
             )
             # Always reached from an async context (anthropic_messages,
             # google_genai, and proxy pass-through stream tasks). prefer_async_handlers
@@ -179,6 +181,7 @@ class PassThroughStreamingHandler:
         raw_bytes: list[bytes],
         end_time: datetime,
         model: str | None,
+        custom_llm_provider: str | None = None,
     ) -> tuple[PassThroughEndpointLoggingResultValues, dict]:
         """
         Synchronous, CPU-bound reconstruction of the standard logging payload
@@ -217,6 +220,7 @@ class PassThroughStreamingHandler:
                     all_chunks=all_chunks,
                     end_time=end_time,
                     model=model,
+                    custom_llm_provider=custom_llm_provider,
                 )
             )
             standard_logging_response_object = vertex_passthrough_logging_handler_result["result"]
