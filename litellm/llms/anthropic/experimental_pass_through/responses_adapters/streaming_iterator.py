@@ -257,24 +257,24 @@ class AnthropicResponsesStreamWrapper:
 
         # ---- response failed -> error ----
         if event_type == "response.failed":
-            response_obj: Final = getattr(event, "response", None) or (
+            failed_response_obj: Final = getattr(event, "response", None) or (
                 event.get("response") if isinstance(event, dict) else None
             )
             error_obj: Final = (
-                getattr(response_obj, "error", None)
-                or (response_obj.get("error") if isinstance(response_obj, dict) else None)
-                if response_obj is not None
+                getattr(failed_response_obj, "error", None)
+                or (failed_response_obj.get("error") if isinstance(failed_response_obj, dict) else None)
+                if failed_response_obj is not None
                 else None
             )
-            message: Final = _response_failed_message(error_obj)
-            self._chunk_queue.append(self._make_error_chunk(message))
+            failure_message: Final = _response_failed_message(error_obj)
+            self._chunk_queue.append(self._make_error_chunk(failure_message))
             self._sent_message_stop = True
             return
 
         # ---- error event -> error ----
         if event_type == "error":
-            message: Final = _error_event_message(event)
-            self._chunk_queue.append(self._make_error_chunk(message))
+            event_error_message: Final = _error_event_message(event)
+            self._chunk_queue.append(self._make_error_chunk(event_error_message))
             self._sent_message_stop = True
             return
 
