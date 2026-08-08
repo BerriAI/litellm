@@ -104,3 +104,32 @@ class TestWhisperTransformResponse:
                     is_json=False,
                 )
             )
+
+
+@pytest.mark.asyncio
+async def test_async_transcription_error_path_logs_audio_filename():
+    from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
+    from litellm.llms.openai.transcriptions.handler import OpenAIAudioTranscription
+    from litellm.utils import TranscriptionResponse
+
+    audio_file = ("test.wav", b"fake audio", "audio/wav")
+    expected_error = RuntimeError("upstream failure")
+    handler = OpenAIAudioTranscription()
+    handler._get_openai_client = MagicMock(side_effect=expected_error)
+    logging_obj = MagicMock()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await handler.async_audio_transcriptions(
+            audio_file=audio_file,
+            data={"model": "whisper-1", "file": audio_file},
+            model_response=TranscriptionResponse(),
+            timeout=1,
+            logging_obj=logging_obj,
+            api_key="test-api-key",
+        )
+
+    assert exc_info.value is expected_error
+    logging_obj.post_call.assert_called_once()
+    kwargs = logging_obj.post_call.call_args.kwargs
+    assert kwargs["input"] == get_audio_file_name(audio_file)
+    assert kwargs["original_response"] == str(expected_error)
