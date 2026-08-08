@@ -8,13 +8,11 @@ especially ensuring that encoding_format is not included when not provided.
 import json
 import os
 import sys
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.hosted_vllm.embedding.transformation import (
@@ -92,9 +90,7 @@ class TestHostedVLLMEmbeddingTransformation:
             headers={},
         )
 
-        assert (
-            "encoding_format" not in result
-        ), "encoding_format should not be in request when not provided"
+        assert "encoding_format" not in result, "encoding_format should not be in request when not provided"
 
     def test_encoding_format_not_included_when_none(self):
         """
@@ -141,6 +137,24 @@ class TestHostedVLLMEmbeddingTransformation:
         )
 
         assert result["encoding_format"] == "base64"
+
+    def test_encoding_format_list_is_not_included(self):
+        """Test that list-valued encoding_format defaults are not sent."""
+        input_data = ["hello world"]
+        optional_params = {
+            "dimensions": 384,
+            "encoding_format": ["float", "base64", "ubyte", "int8"],
+        }
+
+        result = self.config.transform_embedding_request(
+            model=self.model,
+            input=input_data,
+            optional_params=optional_params,
+            headers={},
+        )
+
+        assert result["dimensions"] == 384
+        assert "encoding_format" not in result
 
     def test_get_supported_openai_params(self):
         """Test that supported OpenAI parameters are correctly listed."""
@@ -283,9 +297,7 @@ class TestHostedVLLMEmbeddingTransformation:
             sent_data = json.loads(call_kwargs["data"])
 
             # Assert that encoding_format is NOT in the sent data
-            assert (
-                "encoding_format" not in sent_data
-            ), "encoding_format should not be in request when not provided"
+            assert "encoding_format" not in sent_data, "encoding_format should not be in request when not provided"
             assert sent_data["model"] == "BAAI/bge-small-en-v1.5"
             assert sent_data["input"] == ["Hello world"]
 
