@@ -82,6 +82,92 @@ def test_parameters_json_schema_transformation():
     assert "location" in tool["function"]["parameters"]["properties"]
 
 
+def test_parameters_schema_transformation():
+    """Test that a functionDeclaration's `parameters` Schema is carried over and normalized"""
+    adapter = GoogleGenAIAdapter()
+
+    tools = [
+        {
+            "functionDeclarations": [
+                {
+                    "name": "get_weather",
+                    "description": "Get current weather information",
+                    "parameters": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "location": {
+                                "type": "STRING",
+                                "description": "The city name",
+                            },
+                            "days": {"type": "INTEGER"},
+                        },
+                        "required": ["location"],
+                    },
+                }
+            ]
+        }
+    ]
+
+    openai_tools = adapter._transform_google_genai_tools_to_openai(tools)
+
+    assert len(openai_tools) == 1
+    function = openai_tools[0]["function"]
+    assert function["name"] == "get_weather"
+
+    parameters = function["parameters"]
+    assert parameters["type"] == "object"
+    assert parameters["properties"]["location"]["type"] == "string"
+    assert parameters["properties"]["location"]["description"] == "The city name"
+    assert parameters["properties"]["days"]["type"] == "integer"
+    assert parameters["required"] == ["location"]
+
+
+def test_parameters_json_schema_takes_precedence_over_parameters():
+    """Test that parametersJsonSchema still wins when both fields are present."""
+    adapter = GoogleGenAIAdapter()
+
+    tools = [
+        {
+            "functionDeclarations": [
+                {
+                    "name": "get_weather",
+                    "parametersJsonSchema": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                    },
+                    "parameters": {
+                        "type": "OBJECT",
+                        "properties": {"location": {"type": "STRING"}},
+                    },
+                }
+            ]
+        }
+    ]
+
+    openai_tools = adapter._transform_google_genai_tools_to_openai(tools)
+
+    parameters = openai_tools[0]["function"]["parameters"]
+    assert "city" in parameters["properties"]
+    assert "location" not in parameters["properties"]
+
+
+def test_function_declaration_without_parameters():
+    """Test that a functionDeclaration with no argument schema stays parameter-less."""
+    adapter = GoogleGenAIAdapter()
+
+    tools = [
+        {
+            "functionDeclarations": [
+                {"name": "get_time", "description": "Get the current time"}
+            ]
+        }
+    ]
+
+    openai_tools = adapter._transform_google_genai_tools_to_openai(tools)
+
+    assert "parameters" not in openai_tools[0]["function"]
+
+
 def test_streaming_tool_call_with_empty_args():
     """Test that streaming tool calls with empty arguments are handled correctly"""
     from litellm.google_genai.adapters.transformation import (
