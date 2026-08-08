@@ -207,6 +207,11 @@ class AgenticAnthropicStreamingIterator:
         self._replay_index = 0
         self._error_emitted = False
 
+    @property
+    def has_buffered_provider_output(self) -> bool:
+        """Whether provider output was received but withheld from the client behind keepalive pings."""
+        return self._hold_back and bool(self._collected_bytes)
+
     def __aiter__(self):
         return self
 
