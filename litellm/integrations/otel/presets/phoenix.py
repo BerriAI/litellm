@@ -28,22 +28,23 @@ class _PhoenixSettings(BaseSettings):
 def phoenix_preset(
     *,
     config_overrides: OpenTelemetryV2Config | None = None,
+    allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
     cfg: Final = _V1Phoenix.get_arize_phoenix_config()
     headers: Final = cfg.otlp_auth_headers if hasattr(cfg, "otlp_auth_headers") else None
     project_name: Final = _PhoenixSettings().project_name
     base: Final = config_overrides or OpenTelemetryV2Config()
+    global_exporter = (
+        ExporterSpec(
+            kind=cfg.protocol if hasattr(cfg, "protocol") else "otlp_http",
+            endpoint=cfg.endpoint,
+            headers=headers,
+            owner=ExporterOwner.ARIZE_PHOENIX,
+        ),
+    )
     return base.model_copy(
         update={
-            "exporters": [
-                *base.exporters,
-                ExporterSpec(
-                    kind=cfg.protocol if hasattr(cfg, "protocol") else "otlp_http",
-                    endpoint=cfg.endpoint,
-                    headers=headers,
-                    owner=ExporterOwner.ARIZE_PHOENIX,
-                ),
-            ],
+            "exporters": [*base.exporters, *global_exporter],
             "mapper_names": ensure_mappers(base.mapper_names, "openinference"),
             "resource_attributes": {
                 **base.resource_attributes,

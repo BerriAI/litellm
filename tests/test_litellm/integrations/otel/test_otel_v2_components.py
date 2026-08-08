@@ -489,6 +489,16 @@ def test_otlp_traces_endpoint_normalization():
         norm("https://x.splunk.com/v2/trace/otlp")
         == "https://x.splunk.com/v2/trace/otlp"
     )
+    # Langtrace ingests at /api/trace (a complete path, not an OTLP base) — appending
+    # /v1/traces 404s, so it must be left intact (regression for the double-append bug).
+    assert (
+        norm("https://app.langtrace.ai/api/trace")
+        == "https://app.langtrace.ai/api/trace"
+    )
+    assert (
+        norm("https://app.langtrace.ai/api/trace/")
+        == "https://app.langtrace.ai/api/trace"
+    )
     assert norm(None) is None
 
 
@@ -1051,3 +1061,100 @@ def test_sanitize_event_metadata_caps_value_length_and_handles_none():
     assert sanitize_event_metadata(None) == {}
     big = sanitize_event_metadata({"k": "v" * 5000})
     assert len(big["k"]) == 1024
+
+
+def test_blank_otel_v2_flag_reads_as_off(monkeypatch):
+    """Regression: a declared-but-empty ``LITELLM_OTEL_V2=`` raised a pydantic
+    ValidationError. The flag is read while ``proxy_server`` is still importing, so the
+    error escaped module import and the proxy never bound its port; a blank var is routine
+    in k8s ConfigMaps and ``.env``. Lives here rather than beside the mount tests because
+    those need an optional instrumentation package CI does not install, which would leave
+    this uncovered.
+    """
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+    for raw in ('', '   '):
+        monkeypatch.setenv('LITELLM_OTEL_V2', raw)
+        is_otel_v2_enabled.cache_clear()
+        assert is_otel_v2_enabled() is False
+    monkeypatch.setenv('LITELLM_OTEL_V2', '1')
+    is_otel_v2_enabled.cache_clear()
+    assert is_otel_v2_enabled() is True
+    is_otel_v2_enabled.cache_clear()
+
+
+def test_no_otel_v2_flag_value_can_raise(monkeypatch):
+    """The flag is read while ``proxy_server`` is still importing, so any value that
+    raises takes the proxy down before it binds. A stray space or a word pydantic does not
+    accept is an easy typo and must degrade to off, while a padded boolean still means
+    what it says."""
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+    def _read(raw):
+        monkeypatch.setenv('LITELLM_OTEL_V2', raw)
+        is_otel_v2_enabled.cache_clear()
+        return is_otel_v2_enabled()
+
+    for raw in ('enabled', '2', 'maybe', 'TRUE!', '-1'):
+        assert _read(raw) is False, f'{raw!r} should degrade to off'
+    for raw in ('true ', ' TRUE', '  yes  '):
+        assert _read(raw) is True, f'{raw!r} should read as on'
+    for raw in ('false ', '  0 '):
+        assert _read(raw) is False, f'{raw!r} should read as off'
+    is_otel_v2_enabled.cache_clear()
+
+
+def test_each_backend_registers_itself_on_the_per_backend_event_lists():
+    """Regression: only the first OTel v2 backend ever dispatched.
+
+    v2 collapsed every backend onto one class parameterised by ``callback_name``, but the
+    registration guard asked "is any OTel-module callback already here", so the first
+    registrant locked out every later backend. Each one was still constructed, so it looked
+    owned while never receiving an event, and its own configured exporter went dark. The
+    event lists are per-backend; ``service_callback`` stays single-owner, or the
+    proxy-internal service spans multiply once per configured backend.
+    """
+    import litellm
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+
+    first = OpenTelemetryV2(config=OpenTelemetryV2Config(), callback_name="arize")
+    second = OpenTelemetryV2(config=OpenTelemetryV2Config(), callback_name="langfuse_otel")
+
+    for lst in (litellm._async_success_callback, litellm._async_failure_callback, litellm.input_callback):
+        lst.clear()
+    first._register_in_callback_list(litellm._async_success_callback, per_backend=True)
+    second._register_in_callback_list(litellm._async_success_callback, per_backend=True)
+    first._register_in_callback_list(litellm._async_success_callback, per_backend=True)
+
+    names = [getattr(cb, "callback_name", None) for cb in litellm._async_success_callback]
+    assert names == ["arize", "langfuse_otel"], names
+
+    service: list = []
+    first._register_in_callback_list(service)
+    second._register_in_callback_list(service)
+    assert len(service) == 1, "service_callback must keep a single OTel owner"
+
+
+def test_owned_backends_counts_only_loggers_that_actually_dispatch():
+    """Regression: ownership read construction, so the destination sink stood down for a
+    backend nobody delivers and the tenant's traces were lost outright rather than doubled.
+    """
+    import litellm
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+    from litellm.litellm_core_utils import litellm_logging as lm
+
+    dispatched = OpenTelemetryV2(config=OpenTelemetryV2Config(), callback_name="arize")
+    constructed_only = OpenTelemetryV2(config=OpenTelemetryV2Config(), callback_name="langfuse_otel")
+    litellm._async_success_callback.clear()
+    litellm._async_success_callback.append(dispatched)
+    original = lm._in_memory_loggers[:]
+    try:
+        lm._in_memory_loggers.clear()
+        lm._in_memory_loggers.extend([dispatched, constructed_only])
+        assert lm.otel_v2_owned_backends() == frozenset({"arize"})
+    finally:
+        lm._in_memory_loggers.clear()
+        lm._in_memory_loggers.extend(original)
+        litellm._async_success_callback.clear()

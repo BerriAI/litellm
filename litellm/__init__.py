@@ -137,6 +137,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "langfuse",
     "langfuse_otel",
     "weave_otel",
+    "generic",
     "pagerduty",
     "humanloop",
     "azure_sentinel",

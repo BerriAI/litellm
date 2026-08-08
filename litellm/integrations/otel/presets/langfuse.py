@@ -14,29 +14,6 @@ from litellm.integrations.otel.presets.utils import ensure_mappers
 from litellm.types.utils import StandardCallbackDynamicParams
 
 
-def langfuse_preset(
-    *,
-    config_overrides: OpenTelemetryV2Config | None = None,
-) -> OpenTelemetryV2Config:
-    cfg: Final = _V1Langfuse.get_langfuse_otel_config()
-    kind: Final = cfg.exporter if isinstance(cfg.exporter, str) else "otlp_http"
-    base: Final = config_overrides or OpenTelemetryV2Config()
-    return base.model_copy(
-        update={
-            "exporters": [
-                *base.exporters,
-                ExporterSpec(
-                    kind=kind,
-                    endpoint=cfg.endpoint,
-                    headers=cfg.headers,
-                    owner=ExporterOwner.LANGFUSE_OTEL,
-                ),
-            ],
-            "mapper_names": ensure_mappers(base.mapper_names, "langfuse"),
-        }
-    )
-
-
 def langfuse_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str, str]:
     """Per-request Langfuse OTLP headers from team/key dynamic params."""
     public_key: Final = params.get("langfuse_public_key")
@@ -48,3 +25,33 @@ def langfuse_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str,
             )
         }
     return {}
+
+
+def langfuse_preset(
+    *,
+    config_overrides: OpenTelemetryV2Config | None = None,
+    allow_missing_credentials: bool = False,
+) -> OpenTelemetryV2Config:
+    base: Final = config_overrides or OpenTelemetryV2Config()
+    mappers = ensure_mappers(base.mapper_names, "langfuse")
+    try:
+        cfg = _V1Langfuse.get_langfuse_otel_config()
+    except Exception:
+        if not allow_missing_credentials:
+            raise
+        return base.model_copy(update={"mapper_names": mappers})
+    kind: Final = cfg.exporter if isinstance(cfg.exporter, str) else "otlp_http"
+    return base.model_copy(
+        update={
+            "exporters": [
+                *base.exporters,
+                ExporterSpec(
+                    kind=kind,
+                    endpoint=cfg.endpoint,
+                    headers=cfg.headers,
+                    owner=ExporterOwner.LANGFUSE_OTEL,
+                ),
+            ],
+            "mapper_names": mappers,
+        }
+    )

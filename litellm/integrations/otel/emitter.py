@@ -214,6 +214,54 @@ class SpanEmitter:
         self.finish_span(role, span, data, end_time_ns=end_time_ns)
         return span
 
+    def emit_fanout(
+        self,
+        role: SpanRole,
+        data: SpanData,
+        parent_context: Context | None = None,
+        *,
+        start_time_ns: int | None = None,
+        end_time_ns: int | None = None,
+        tracers: Sequence[Tracer],
+        links: Sequence[Link] | None = None,
+    ) -> Span | None:
+        """Emit one logical span once per tracer, deduping the call ONCE.
+
+        A backend that selects its target from the Resource (Arize's project) needs a
+        separately-tagged span per Resource group, so ``tracers`` is one tracer per group
+        (from ``TenantTracerCache.tracers_for``). Dedup runs once on the call id so a
+        sync+async double-firing still coalesces, then a span is started and finished on
+        each tracer (each provider stamps its own Resource). Returns the first span (or
+        ``None`` if deduped/empty).
+        """
+        # A router retry reuses one ``litellm_call_id`` across every attempt, so the call id
+        # alone coalesced the successful attempt into the failed one it replaced and the
+        # retried call reached its destinations only as the failure. The response id splits
+        # the attempts apart while a sync+async double-firing of one attempt still shares it.
+        attempt_id = data.response_id if isinstance(data, LLMCallSpanData) else None
+        dedup_key = (
+            (f"{data.identity.call_id}:{attempt_id}" if attempt_id else data.identity.call_id)
+            if isinstance(data, (LLMCallSpanData, MCPToolCallSpanData))
+            else None
+        )
+        if self._seen(dedup_key, role):
+            return None
+        name = _NAME_BUILDERS[role](data)
+        first: Span | None = None
+        for tracer in tracers:
+            span = self.start_span(
+                role,
+                name,
+                parent_context=parent_context,
+                start_time_ns=start_time_ns,
+                tracer=tracer,
+                links=links,
+            )
+            self.finish_span(role, span, data, end_time_ns=end_time_ns)
+            if first is None:
+                first = span
+        return first
+
     def finish_span(
         self,
         role: SpanRole,

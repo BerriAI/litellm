@@ -1,6 +1,6 @@
 """Provider / exporter factory + the Baggage span processor."""
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from opentelemetry import _logs, baggage, metrics
@@ -40,6 +40,8 @@ from litellm.integrations.otel.model.spans import LiteLLMSpanKind
 if TYPE_CHECKING:
     from opentelemetry.metrics import Meter
     from opentelemetry.sdk.metrics.export import MetricReader
+
+    from litellm.integrations.otel.model.destination import OtelDestination
 
 _SPAN_KIND_BY_ROLE_KIND: Final[dict[LiteLLMSpanKind, SpanKind]] = {
     LiteLLMSpanKind.SERVER: SpanKind.SERVER,
@@ -110,12 +112,28 @@ def _otlp_traces_endpoint(endpoint: str | None) -> str | None:
         return endpoint
     endpoint = endpoint.rstrip("/")
     # Splunk Observability uses ``/v2/trace/otlp``; never rewrite it.
-    if endpoint.endswith("/v1/traces") or "/v2/trace/otlp" in endpoint:
+    if endpoint.endswith("/v1/traces") or "/v2/trace/otlp" in endpoint or endpoint.endswith("/api/trace"):
         return endpoint
     for other_signal in ("/v1/logs", "/v1/metrics"):
         if endpoint.endswith(other_signal):
             return endpoint[: -len(other_signal)] + "/v1/traces"
     return endpoint + "/v1/traces"
+
+
+_GRPC_BACKENDS = frozenset({"arize"})
+
+
+def default_otlp_kind_for_backend(callback_name: "str | None") -> str:
+    """The intrinsic OTLP transport for a backend's own OTLP endpoint."""
+    return "otlp_grpc" if callback_name in _GRPC_BACKENDS else "otlp_http"
+
+
+def destination_resource_attrs(destination: "OtelDestination") -> Mapping[str, str]:
+    """The destination's builder-declared Resource attributes (e.g. Arize's
+    ``model_id`` / ``arize.project.name``; empty for header-routed backends), read
+    by both export paths so the gen-AI span and its parents share one Resource.
+    """
+    return dict(destination.resource_attributes)
 
 
 def parse_headers(raw: str | None) -> dict[str, str]:
@@ -415,19 +433,25 @@ def build_tracer_provider(
     exporter: SpanExporter | None = None,
     baggage_processor: SpanProcessor | None = None,
     use_simple_processor: bool | None = None,
+    tenant_fan_out_owner: str | None = None,
+    attach_tenant_fan_out: bool = False,
 ) -> TracerProvider:
-    """Build the shared :class:`TracerProvider`.
-
-    Attach the Baggage processor first (so identity attributes land on each
-    span before any export decision), then add one ``SpanProcessor`` per
-    ``config.exporters`` entry — this is what fans spans out to multiple
-    backends. ``exporter`` and ``use_simple_processor`` are explicit overrides:
-    pass a single exporter to attach exactly that one (used by tests).
+    """Build the shared :class:`TracerProvider`: Baggage processor first, then one
+    ``SpanProcessor`` per ``config.exporters`` entry (``exporter`` overrides for tests).
+    ``attach_tenant_fan_out``/``tenant_fan_out_owner`` add a ``TenantFanOutSpanProcessor``
+    forwarding proxy-internal spans to the request's destinations.
     """
     provider: Final = TracerProvider(resource=build_resource(config))
     if baggage_processor is None:
         baggage_processor = LiteLLMBaggageSpanProcessor(allowed_keys=config.baggage_promoted_keys)
     provider.add_span_processor(baggage_processor)
+
+    if attach_tenant_fan_out or tenant_fan_out_owner is not None:
+        from litellm.integrations.otel.plumbing.routing import (
+            TenantFanOutSpanProcessor,
+        )
+
+        provider.add_span_processor(TenantFanOutSpanProcessor(owner_callback_name=tenant_fan_out_owner))
 
     if exporter is not None:
         provider.add_span_processor(_processor_for(exporter, use_simple_processor))
