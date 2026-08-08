@@ -942,3 +942,34 @@ async def test_disable_team_logging_leaves_team_re_enablable():
 
     written = json.loads(mock_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"])
     assert [entry["callback_name"] for entry in written["logging"]] == ["langfuse"]
+
+
+def test_callback_vars_allowlist_admits_only_keys_the_provider_path_absorbs():
+    """Regression: a callback var escaped into the outbound provider request body.
+
+    ``litellm_logging_credential_name`` was allowlisted here but never added to
+    ``all_litellm_params``, so unlike every legitimate callback var it survived the
+    absorber and was written to the top level of the provider payload (and swept into
+    ``extra_body`` for openai-compatible providers), breaking strict providers. Worse,
+    ``callback_vars`` are stored encrypted because they hold secrets, so the path
+    decrypted a stored value into an outbound request. The key had no consumer at all;
+    a team is bound to a destination by ``credential_info.access``, not by a callback var.
+
+    Guards the general rule rather than the one key: anything this allowlist admits must
+    be absorbed by ``all_litellm_params`` and so never reach a provider.
+    """
+    import litellm
+    from litellm.proxy._types import AddTeamCallback
+    from litellm.types.utils import StandardCallbackDynamicParams
+
+    allowed = set(StandardCallbackDynamicParams.__annotations__.keys())
+    escaping = sorted(k for k in allowed if k not in litellm.all_litellm_params)
+    assert escaping == [], f"callback vars that would reach the provider payload: {escaping}"
+
+    with pytest.raises(Exception) as exc:
+        AddTeamCallback(
+            callback_name="langfuse",
+            callback_type="success",
+            callback_vars={"litellm_logging_credential_name": "some-destination"},
+        )
+    assert "Invalid callback variable" in str(exc.value)
