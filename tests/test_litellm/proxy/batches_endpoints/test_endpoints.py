@@ -1485,13 +1485,35 @@ async def test_list__managed_files_path(list_harness):
         user_api_key_dict=user,
         limit=7,
         after="batch-cursor",
-        provider="openai",
-        target_model_names="m1,m2",
         llm_router=list_harness.router,
     )
     list_harness.litellm_alist.assert_not_called()
     list_harness.router_alist.assert_not_called()
     assert resp is page
+
+
+@pytest.mark.asyncio
+async def test_list__managed_files_rejects_provider_filter(list_harness):
+    """Provider/target_model filters must not enter the managed-files path;
+    they must fall through to provider/model routing instead.
+    """
+    page = FakeListPage([make_batch(id="batch-1")])
+    list_harness.set_managed_files(page)
+
+    user = UserAPIKeyAuth(api_key="sk-test")
+    resp = await call_list(
+        list_harness,
+        user=user,
+        limit=7,
+        after="batch-cursor",
+        provider="openai",
+        target_model_names="m1,m2",
+    )
+
+    # Filtered requests bypass managed-files and use provider fallback.
+    list_harness.litellm_alist.assert_called_once()
+    list_harness.router_alist.assert_not_called()
+    assert list_harness.alist_kwargs()["custom_llm_provider"] == "openai"
 
 
 @pytest.mark.asyncio
