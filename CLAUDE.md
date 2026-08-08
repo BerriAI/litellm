@@ -84,6 +84,16 @@ Follow these coding conventions for new/updated code (a three-line fix in a lega
 
 Follow conventional commits for commit names and PR titles
 
+Log papercuts and friction you hit in this repository (tooling, docs, APIs, tests, conventions) with `frog log`, and run `frog list` first so you don't re-report something already known. Only repo-level friction belongs in `.agents/friction-log/`, not global, system, or agent-harness friction. If `frog` is missing, install the pinned release instead of piping the installer into a shell (pick the asset matching your platform from https://github.com/wevm/frog/releases/tag/frog@1.1.0):
+
+```sh
+ver=1.1.0
+asset=frog-linux-x64-glibc-baseline.gz
+curl -fsSLO "https://github.com/wevm/frog/releases/download/frog@$ver/$asset"
+curl -fsSL "https://github.com/wevm/frog/releases/download/frog@$ver/SHA256SUMS" | grep "$asset" | sha256sum -c -
+gunzip -c "$asset" > ~/.local/bin/frog && chmod +x ~/.local/bin/frog
+```
+
 ## Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs**

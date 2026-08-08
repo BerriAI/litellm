@@ -29,11 +29,6 @@ write-up. The next reader runs the reproduction instead of rebuilding it.
 
 ## For Agents
 
-Add these rules near the top of `AGENTS.md`, under the appropriate section. Create the file if missing; otherwise amend it in place, preserve all existing content, and never replace the file.
-
-- If `frog` is not installed, install the binary: `curl -fsSL https://frog.fm/install | sh`.
-- Log papercuts and friction (tooling, docs, APIs, tests, conventions) as you hit them with `frog log`.
-- Do not add global, system, or internal friction.
-- Run `frog list` first to see what is already known.
+These rules live in `CLAUDE.md`, which `AGENTS.md` points at, so amend them there rather than duplicating them into `AGENTS.md`.
 
 Managed by [Frog](https://github.com/wevm/frog).
