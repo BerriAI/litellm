@@ -4,13 +4,19 @@ import json
 import traceback
 from collections import deque
 from collections.abc import AsyncIterator
-from typing import Any, Final
+from typing import Any, Final, Protocol, runtime_checkable
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.exceptions import APIError, MidStreamFallbackError
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
+
+
+@runtime_checkable
+class _SupportsAclose(Protocol):
+    async def aclose(self) -> None: ...
 
 
 def _response_failed_message(error_obj: object) -> str:
@@ -40,6 +46,14 @@ def _error_event_message(event: object) -> str:
     if nested_message is not None:
         return str(nested_message)
     return "The upstream provider returned an error while streaming."
+
+
+def _stream_exception_message(exception: Exception) -> str:
+    if isinstance(exception, APIError):
+        return exception.message.removeprefix("litellm.APIError: ")
+    if isinstance(exception, MidStreamFallbackError) and isinstance(exception.original_exception, APIError):
+        return exception.original_exception.message.removeprefix("litellm.APIError: ")
+    return "Upstream provider error while streaming."
 
 
 class AnthropicResponsesStreamWrapper:
@@ -324,6 +338,15 @@ class AnthropicResponsesStreamWrapper:
     def __aiter__(self) -> "AnthropicResponsesStreamWrapper":
         return self
 
+    async def _close_responses_stream(self) -> None:
+        responses_stream: Final[object] = self.responses_stream
+        if isinstance(responses_stream, _SupportsAclose):
+            await responses_stream.aclose()
+            return
+        upstream_response: Final[object] = getattr(responses_stream, "response", None)
+        if isinstance(upstream_response, _SupportsAclose):
+            await upstream_response.aclose()
+
     async def __anext__(self) -> dict[str, Any]:
         # Return any queued chunks first
         if self._chunk_queue:
@@ -332,6 +355,7 @@ class AnthropicResponsesStreamWrapper:
         # Don't consume the upstream again after a terminal chunk
         # (message_stop / error) has been emitted
         if self._sent_message_stop:
+            await self._close_responses_stream()
             raise StopAsyncIteration
 
         # Emit message_start if not yet done (fallback if response.created wasn't fired)
@@ -350,7 +374,7 @@ class AnthropicResponsesStreamWrapper:
             pass
         except Exception as e:
             verbose_logger.error("AnthropicResponsesStreamWrapper error: %s\n%s", e, traceback.format_exc())
-            self._chunk_queue.append(self._make_error_chunk("Upstream provider error while streaming."))
+            self._chunk_queue.append(self._make_error_chunk(_stream_exception_message(e)))
             self._sent_message_stop = True
 
         # Drain any remaining queued chunks

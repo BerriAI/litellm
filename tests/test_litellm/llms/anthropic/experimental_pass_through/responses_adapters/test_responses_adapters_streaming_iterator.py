@@ -8,11 +8,13 @@ import json
 import os
 import sys
 from types import SimpleNamespace
+from typing import Final
 
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
+from litellm.exceptions import APIError, MidStreamFallbackError
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.streaming_iterator import (
     AnthropicResponsesStreamWrapper,
 )
@@ -278,6 +280,84 @@ class TestReviewFindings:
         chunks = [c async for c in wrapper]
         assert chunks[-1]["type"] == "message_stop"
         assert [c["type"] for c in chunks].count("message_stop") == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("stream_error", "expected_message"),
+        [
+            (
+                APIError(
+                    status_code=400,
+                    message="The request exceeded the context limit.",
+                    llm_provider="test",
+                    model="m",
+                ),
+                "The request exceeded the context limit.",
+            ),
+            (
+                MidStreamFallbackError(
+                    message="The model is overloaded.",
+                    model="m",
+                    llm_provider="test",
+                    original_exception=APIError(
+                        status_code=429,
+                        message="The model is overloaded.",
+                        llm_provider="test",
+                        model="m",
+                    ),
+                ),
+                "The model is overloaded.",
+            ),
+        ],
+    )
+    async def test_responses_iterator_error_preserves_provider_message(
+        self, stream_error: Exception, expected_message: str
+    ) -> None:
+        class ErroringStream:
+            def __aiter__(self) -> "ErroringStream":
+                return self
+
+            async def __anext__(self) -> object:
+                raise stream_error
+
+        wrapper: Final = AnthropicResponsesStreamWrapper(responses_stream=ErroringStream(), model="m")
+        chunks: Final = [chunk async for chunk in wrapper]
+        assert [chunk["type"] for chunk in chunks] == ["message_start", "error"]
+        assert chunks[-1]["error"]["message"] == expected_message
+
+    @pytest.mark.asyncio
+    async def test_terminal_chunk_closes_upstream_response(self) -> None:
+        class ClosableResponse:
+            def __init__(self) -> None:
+                self.closed = False
+
+            async def aclose(self) -> None:
+                self.closed = True
+
+        class ResponseBackedCompletedStream:
+            def __init__(self) -> None:
+                self.response = ClosableResponse()
+                self.events = (
+                    {"type": "response.created"},
+                    {"type": "response.completed", "response": {"status": "completed"}},
+                )
+                self.index = 0
+
+            def __aiter__(self) -> "ResponseBackedCompletedStream":
+                return self
+
+            async def __anext__(self) -> dict[str, object]:
+                if self.index >= len(self.events):
+                    raise StopAsyncIteration
+                event = self.events[self.index]
+                self.index += 1
+                return event
+
+        responses_stream: Final = ResponseBackedCompletedStream()
+        wrapper: Final = AnthropicResponsesStreamWrapper(responses_stream=responses_stream, model="m")
+        chunks: Final = [chunk async for chunk in wrapper]
+        assert chunks[-1]["type"] == "message_stop"
+        assert responses_stream.response.closed
 
 
 class TestResponseCompletedUsage:
