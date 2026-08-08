@@ -14,13 +14,13 @@ from litellm.types.llms.openai import ResponseAPIUsage
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 
 
-def _get_field(obj: Any, key: str, default: Any = None) -> Any:
+def _get_field(obj: object, key: str, default: object = None) -> object:
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
 
 
-def _translate_usage(raw_usage: Any) -> AnthropicUsage:
+def _translate_usage(raw_usage: object) -> AnthropicUsage:
     if raw_usage is None or isinstance(raw_usage, ResponseAPIUsage):
         return LiteLLMAnthropicToResponsesAPIAdapter.translate_responses_api_usage_to_anthropic_usage(raw_usage)
 
@@ -284,14 +284,15 @@ class AnthropicResponsesStreamWrapper:
 
             # Check if tool_use was in the output to override stop_reason
             if response_obj is not None:
-                output: Final = _get_field(response_obj, "output", []) or []
-                for out_item in output:
-                    out_type = getattr(out_item, "type", None) or (
-                        out_item.get("type") if isinstance(out_item, dict) else None
-                    )
-                    if out_type == "function_call":
-                        stop_reason = "tool_use"
-                        break
+                output: Final = _get_field(response_obj, "output", [])
+                if isinstance(output, list):
+                    for out_item in output:
+                        out_type = getattr(out_item, "type", None) or (
+                            out_item.get("type") if isinstance(out_item, dict) else None
+                        )
+                        if out_type == "function_call":
+                            stop_reason = "tool_use"
+                            break
 
             self._chunk_queue.append(
                 {
