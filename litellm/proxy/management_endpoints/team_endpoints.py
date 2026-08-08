@@ -1966,7 +1966,7 @@ async def update_team(
             )
 
         # Verify caller has access to manage this team
-        team_for_auth = LiteLLM_TeamTable.model_validate(existing_team_row.model_dump())
+        team_for_auth: Final = LiteLLM_TeamTable.model_validate(existing_team_row.model_dump())
         await _verify_team_access(
             team_obj=team_for_auth,
             user_api_key_dict=user_api_key_dict,
@@ -4062,7 +4062,11 @@ async def team_info(
         # Resolve resources inherited from access groups
         resolved_team_info: Final = await _resolve_team_access_group_resources(_team_info)
 
-        _team_info.resolved_logging_exporters = resolved_logging_exporter_names(
+        # Set on the object that is actually returned: the helper above hands back
+        # ``_team_info`` itself only when the team has no access groups, and a
+        # ``model_copy`` when it does, so mutating ``_team_info`` here would be
+        # discarded for every team that inherits from an access group.
+        resolved_team_info.resolved_logging_exporters = resolved_logging_exporter_names(
             team_id,
             _team_info.organization_id,
         )
