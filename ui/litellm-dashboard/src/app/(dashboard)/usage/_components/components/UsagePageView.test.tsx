@@ -539,6 +539,10 @@ describe("UsagePage", () => {
   };
 
   beforeEach(() => {
+    // UsagePageView now persists the selected view/tab/date-range to
+    // localStorage; without clearing it here, whichever test runs first
+    // pollutes every test after it in this file.
+    localStorage.clear();
     mockUseAuthorized.mockReturnValue({
       isLoading: false,
       isAuthorized: true,

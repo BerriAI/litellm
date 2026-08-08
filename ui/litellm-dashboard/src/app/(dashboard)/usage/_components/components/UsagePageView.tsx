@@ -48,6 +48,8 @@ import {
 } from "@/components/networking";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { ChartLoader } from "@/components/shared/chart_loader";
+import { getMatchingRelativeOption, getRelativeRangeByShortLabel } from "@/components/shared/date_range_presets";
+import { getLocalStorageItem, removeLocalStorageItem, setLocalStorageItem } from "@/utils/localStorageUtils";
 import { Tag } from "@/components/tag_management/types";
 import UserAgentActivity from "@/components/user_agent_activity";
 import ViewUserSpend from "@/components/view_user_spend";
@@ -76,6 +78,77 @@ interface UsagePageProps {
   organizations: Organization[];
 }
 
+const USAGE_DATE_RANGE_PRESET_KEY = "litellmUsageDateRangePreset";
+const USAGE_DATE_RANGE_CUSTOM_KEY = "litellmUsageDateRangeCustom";
+const USAGE_VIEW_KEY = "litellmUsageView";
+const USAGE_ACTIVITY_TAB_KEY = "litellmUsageActivityTabIndex";
+
+const VALID_USAGE_OPTIONS: UsageOption[] = [
+  "global",
+  "my-usage",
+  "organization",
+  "team",
+  "customer",
+  "tag",
+  "agent",
+  "user",
+  "user-agent-activity",
+];
+
+const DEFAULT_DATE_RANGE = (): DateRangePickerValue => ({
+  from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+  to: new Date(),
+});
+
+/** Resolves the persisted time range. Relative presets ("7d", "today", ...) are
+ * recomputed fresh from `now` on every load, so a saved preset never goes stale. */
+function loadPersistedDateRange(): DateRangePickerValue {
+  const presetLabel = getLocalStorageItem(USAGE_DATE_RANGE_PRESET_KEY);
+  if (presetLabel) {
+    const range = getRelativeRangeByShortLabel(presetLabel);
+    if (range) return range;
+  }
+
+  const customRaw = getLocalStorageItem(USAGE_DATE_RANGE_CUSTOM_KEY);
+  if (customRaw) {
+    try {
+      const { from, to } = JSON.parse(customRaw) as { from: string; to: string };
+      const fromDate = new Date(from);
+      const toDate = new Date(to);
+      if (!isNaN(fromDate.getTime()) && !isNaN(toDate.getTime())) {
+        return { from: fromDate, to: toDate };
+      }
+    } catch {
+      // fall through to default
+    }
+  }
+
+  return DEFAULT_DATE_RANGE();
+}
+
+function persistDateRange(value: DateRangePickerValue): void {
+  const presetLabel = getMatchingRelativeOption(value);
+  if (presetLabel) {
+    setLocalStorageItem(USAGE_DATE_RANGE_PRESET_KEY, presetLabel);
+    removeLocalStorageItem(USAGE_DATE_RANGE_CUSTOM_KEY);
+    return;
+  }
+  removeLocalStorageItem(USAGE_DATE_RANGE_PRESET_KEY);
+  if (value.from && value.to) {
+    setLocalStorageItem(USAGE_DATE_RANGE_CUSTOM_KEY, JSON.stringify({ from: value.from, to: value.to }));
+  }
+}
+
+function loadPersistedUsageView(): UsageOption {
+  const stored = getLocalStorageItem(USAGE_VIEW_KEY);
+  return VALID_USAGE_OPTIONS.includes(stored as UsageOption) ? (stored as UsageOption) : "global";
+}
+
+function loadPersistedActivityTabIndex(): number {
+  const stored = Number(getLocalStorageItem(USAGE_ACTIVITY_TAB_KEY));
+  return Number.isInteger(stored) && stored >= 0 && stored <= 4 ? stored : 0;
+}
+
 const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
   // Aggregated endpoint: try first, fall back to paginated if unavailable
@@ -93,15 +166,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   // Separate loading states for better UX
   const [isDateChanging, setIsDateChanging] = useState(false);
 
-  // Create initial dates outside of state to prevent recreation
-  const initialFromDate = useMemo(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), []);
-  const initialToDate = useMemo(() => new Date(), []);
-
-  // Single date state that directly triggers data fetching
-  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
-    from: initialFromDate,
-    to: initialToDate,
-  });
+  // Single date state that directly triggers data fetching. Initialized from
+  // localStorage so a saved selection survives a page reload; relative presets
+  // ("7d", "today", ...) are recomputed fresh here rather than replayed as a
+  // frozen timestamp, so "now" always tracks the actual current day.
+  const [dateValue, setDateValue] = useState<DateRangePickerValue>(() => loadPersistedDateRange());
 
   const [allTags, setAllTags] = useState<EntityList[]>([]);
   const { data: customers = [] } = useCustomers();
@@ -165,7 +234,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
-  const [usageView, setUsageView] = useState<UsageOption>("global");
+  const [usageView, setUsageViewState] = useState<UsageOption>(() => loadPersistedUsageView());
+  const setUsageView = useCallback((value: UsageOption) => {
+    setUsageViewState(value);
+    setLocalStorageItem(USAGE_VIEW_KEY, value);
+  }, []);
+  const [activityTabIndex, setActivityTabIndexState] = useState<number>(() => loadPersistedActivityTabIndex());
+  const setActivityTabIndex = useCallback((index: number) => {
+    setActivityTabIndexState(index);
+    setLocalStorageItem(USAGE_ACTIVITY_TAB_KEY, String(index));
+  }, []);
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
@@ -297,7 +375,34 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
     // Update date immediately for UI responsiveness
     setDateValue(newValue);
+    persistDateRange(newValue);
   }, []);
+
+  // If the user leaves this tab open across midnight (or backgrounded on
+  // mobile), a relative preset like "Today"/"7d" should track the real
+  // current day again once they come back, not stay pinned to load time.
+  useEffect(() => {
+    const refreshPresetIfStale = () => {
+      const presetLabel = getMatchingRelativeOption(dateValue);
+      if (!presetLabel) return;
+      const freshRange = getRelativeRangeByShortLabel(presetLabel);
+      if (!freshRange) return;
+      if (
+        freshRange.from.getTime() !== dateValue.from?.getTime() ||
+        freshRange.to.getTime() !== dateValue.to?.getTime()
+      ) {
+        setDateValue(freshRange);
+        persistDateRange(freshRange);
+      }
+    };
+
+    document.addEventListener("visibilitychange", refreshPresetIfStale);
+    window.addEventListener("focus", refreshPresetIfStale);
+    return () => {
+      document.removeEventListener("visibilitychange", refreshPresetIfStale);
+      window.removeEventListener("focus", refreshPresetIfStale);
+    };
+  }, [dateValue]);
 
   // Derived states from userSpendData
   const totalSpend = userSpendData.metadata?.total_spend || 0;
@@ -588,7 +693,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   />
                 </div>
               )}
-              <TabGroup>
+              <TabGroup defaultIndex={activityTabIndex} onIndexChange={setActivityTabIndex}>
                 <div className="flex justify-between items-center">
                   <TabList variant="solid" className="mt-1">
                     <Tab>Cost</Tab>
