@@ -10,6 +10,7 @@ All /customer management endpoints
 """
 
 #### END-USER/CUSTOMER MANAGEMENT ####
+from collections.abc import Iterable
 from datetime import datetime, timedelta
 from typing import Final
 
@@ -21,6 +22,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_checks import delete_cached_end_user_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.proxy.management_helpers.object_permission_utils import (
@@ -41,6 +43,13 @@ from litellm.types.proxy.management_endpoints.customer_endpoints import (
 )
 
 router: Final = APIRouter()
+
+
+async def _invalidate_cached_end_users(end_user_ids: Iterable[str]) -> None:
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    for end_user_id in end_user_ids:
+        await delete_cached_end_user_object(end_user_id=end_user_id, user_api_key_cache=user_api_key_cache)
 
 
 def _to_customer_response(record: BaseModel) -> CustomerResponse:
@@ -96,6 +105,7 @@ async def block_user(data: BlockUsers):
                     },
                 )
                 records.append(record)
+            await _invalidate_cached_end_users(data.user_ids)
         else:
             raise HTTPException(
                 status_code=500,
@@ -389,6 +399,8 @@ async def new_end_user(
             include={"litellm_budget_table": True, "object_permission": True},
         )
 
+        await _invalidate_cached_end_users((data.user_id,))
+
         return _to_customer_response(end_user_record)
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -632,6 +644,8 @@ async def update_end_user(
                 raise ValueError(f"Failed updating customer data. User ID does not exist passed user_id={data.user_id}")
             verbose_proxy_logger.debug("received response from updating prisma client. response=%s", response)
 
+            await _invalidate_cached_end_users((data.user_id,))
+
             return _to_customer_response(response)
         else:
             raise ValueError(f"user_id is required, passed user_id = {data.user_id}")
@@ -705,6 +719,7 @@ async def delete_end_user(
                 where={"user_id": {"in": data.user_ids}}
             )
             verbose_proxy_logger.debug("received response from updating prisma client. response=%s", response)
+            await _invalidate_cached_end_users(data.user_ids)
             return DeleteCustomersResponse(
                 deleted_customers=response,
                 message="Successfully deleted customers with ids: " + str(data.user_ids),

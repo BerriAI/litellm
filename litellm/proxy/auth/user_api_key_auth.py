@@ -1573,6 +1573,7 @@ async def _user_api_key_auth_builder(
                         hashed_token=hash_token(api_key),
                         user_api_key_cache=user_api_key_cache,
                         proxy_logging_obj=proxy_logging_obj,
+                        broadcast_invalidation=False,
                     )
                     raise ProxyException(
                         message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",

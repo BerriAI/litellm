@@ -101,6 +101,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
 from litellm.proxy.common_utils.config_sync_pubsub import publish_config_param_change
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.create_views import (
@@ -2965,8 +2966,14 @@ async def evict_config_param(param_name: str) -> None:
 
 
 async def invalidate_config_param(param_name: str) -> None:
-    """Evict from both cache layers; call after every LiteLLM_Config write."""
+    """Evict from both cache layers; call after every LiteLLM_Config write.
+
+    ``evict_config_param`` only clears this worker's in-memory layer and the
+    shared Redis entry, so the broadcast is what stops the other workers from
+    serving their own in-memory copy of the pre-write value until it expires.
+    """
     await evict_config_param(param_name)
+    await publish_auth_cache_invalidation(cache_key=_config_cache_key(param_name), target="config_param")
     await publish_config_param_change(param_name)
 
 

@@ -8,6 +8,9 @@ import pytest
 from redis.asyncio import Redis
 
 import litellm
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    AUTH_CACHE_INVALIDATION_CHANNEL,
+)
 from litellm.proxy.common_utils.config_sync_pubsub import (
     CONFIG_SYNC_CHANNEL,
     CONFIG_SYNC_JITTER_MAX_SECONDS,
@@ -717,9 +720,13 @@ async def _publish_calls_for_invalidated_param(param_name: str) -> List[Tuple[st
     return client.published
 
 
+def _config_sync_publishes(published: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+    return [call for call in published if call[0] == CONFIG_SYNC_CHANNEL]
+
+
 @pytest.mark.parametrize("param_name", sorted(_EXPECTED_RESYNC_APPLIED_CONFIG_PARAM_NAMES))
 async def test_invalidate_config_param_publishes_params_a_resync_applies(param_name: str) -> None:
-    published = await _publish_calls_for_invalidated_param(param_name)
+    published = _config_sync_publishes(await _publish_calls_for_invalidated_param(param_name))
 
     assert len(published) == 1
     channel, message = published[0]
@@ -731,7 +738,21 @@ async def test_invalidate_config_param_publishes_params_a_resync_applies(param_n
 async def test_invalidate_config_param_does_not_publish_startup_only_params(param_name: str) -> None:
     published = await _publish_calls_for_invalidated_param(param_name)
 
-    assert published == []
+    assert _config_sync_publishes(published) == []
+
+
+@pytest.mark.parametrize("param_name", ["general_settings", *_STARTUP_ONLY_CONFIG_PARAM_NAMES[:1]])
+async def test_invalidate_config_param_always_evicts_the_param_across_workers(param_name: str) -> None:
+    """
+    Dropping the other workers' cached copy of the param is independent of whether
+    a resync applies to it, so every param write is broadcast at the config cache.
+    """
+    published = await _publish_calls_for_invalidated_param(param_name)
+
+    invalidations = [call for call in published if call[0] == AUTH_CACHE_INVALIDATION_CHANNEL]
+    assert [json.loads(message) for _, message in invalidations] == [
+        {"cache_key": f"litellm_config:param:{param_name}", "cache": "config_param"}
+    ]
 
 
 def test_resync_applied_config_param_membership_is_pinned() -> None:

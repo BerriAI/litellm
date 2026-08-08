@@ -6442,11 +6442,18 @@ class ProxyConfig:
         redis_cache: RedisCache | None,
         user_api_key_cache: UserApiKeyCache,
     ) -> None:
+        from litellm.proxy.utils import litellm_config_cache
+
         if redis_cache is None or self.auth_cache_invalidation_subscriber is not None:
             return
         subscriber: Final = AuthCacheInvalidationSubscriber(
             redis_cache=redis_cache,
-            user_api_key_cache=user_api_key_cache,
+            in_memory_caches=MappingProxyType(
+                {
+                    "user_api_key": user_api_key_cache.in_memory_cache,
+                    "config_param": litellm_config_cache.in_memory_cache,
+                }
+            ),
         )
         self.auth_cache_invalidation_subscriber = subscriber
         subscriber.start()

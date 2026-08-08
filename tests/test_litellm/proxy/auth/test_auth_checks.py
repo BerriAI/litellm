@@ -5615,3 +5615,111 @@ def test_is_user_proxy_admin_rejects_view_only_admin():
     assert _is_user_proxy_admin(user_obj=viewer) is False
     assert _is_user_proxy_admin(user_obj=admin) is True
     assert _is_user_proxy_admin(user_obj=None) is False
+
+class _RecordedInvalidations:
+    def __init__(self) -> None:
+        self.published: list = []
+
+    async def publish(self, cache_key: str, target: str = "user_api_key") -> None:
+        self.published.append((cache_key, target))
+
+
+@pytest.fixture
+def recorded_invalidations():
+    recorder = _RecordedInvalidations()
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        recorder.publish,
+    ):
+        yield recorder
+
+
+@pytest.mark.asyncio
+async def test_delete_cache_key_object_broadcasts_revocation(recorded_invalidations):
+    """
+    A revoked or regenerated key stays usable on every other worker until its
+    in-memory entry expires unless the eviction is broadcast.
+    """
+    from litellm.proxy.auth.auth_checks import _delete_cache_key_object
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache = UserApiKeyCache()
+    cache.in_memory_cache.set_cache("hashed-token", {"key_name": "sk-1"})
+
+    await _delete_cache_key_object(
+        hashed_token="hashed-token",
+        user_api_key_cache=cache,
+        proxy_logging_obj=None,
+    )
+
+    assert cache.in_memory_cache.get_cache("hashed-token") is None
+    assert recorded_invalidations.published == [("hashed-token", "user_api_key")]
+
+
+@pytest.mark.asyncio
+async def test_delete_cache_key_object_skips_broadcast_when_opted_out(recorded_invalidations):
+    """The expired-key auth path evicts on every worker on its own, so it must not
+    let a client replaying that key drive one broadcast per request."""
+    from litellm.proxy.auth.auth_checks import _delete_cache_key_object
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    await _delete_cache_key_object(
+        hashed_token="hashed-token",
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=None,
+        broadcast_invalidation=False,
+    )
+
+    assert recorded_invalidations.published == []
+
+
+@pytest.mark.asyncio
+async def test_delete_cache_access_object_broadcasts(recorded_invalidations):
+    from litellm.proxy.auth.auth_checks import _delete_cache_access_object
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache = UserApiKeyCache()
+    cache.in_memory_cache.set_cache("access_group_id:ag-1", {"models": []})
+
+    await _delete_cache_access_object(access_group_id="ag-1", user_api_key_cache=cache)
+
+    assert cache.in_memory_cache.get_cache("access_group_id:ag-1") is None
+    assert recorded_invalidations.published == [("access_group_id:ag-1", "user_api_key")]
+
+
+@pytest.mark.asyncio
+async def test_delete_cached_end_user_object_evicts_and_broadcasts_both_entries(recorded_invalidations):
+    """
+    The auth path caches the end-user row and, separately, the verdict on whether
+    the id resolves at all. Both survive a /customer mutation without this.
+    """
+    from litellm.proxy.auth.auth_checks import delete_cached_end_user_object
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache = UserApiKeyCache()
+    cache.in_memory_cache.set_cache("end_user_id:eu-1", {"user_id": "eu-1", "blocked": False})
+    cache.in_memory_cache.set_cache("end_user_validation:eu-1", "valid")
+
+    await delete_cached_end_user_object(end_user_id="eu-1", user_api_key_cache=cache)
+
+    assert cache.in_memory_cache.get_cache("end_user_id:eu-1") is None
+    assert cache.in_memory_cache.get_cache("end_user_validation:eu-1") is None
+    assert recorded_invalidations.published == [
+        ("end_user_id:eu-1", "user_api_key"),
+        ("end_user_validation:eu-1", "user_api_key"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_delete_cached_end_user_object_still_broadcasts_when_eviction_fails(recorded_invalidations):
+    from litellm.proxy.auth.auth_checks import delete_cached_end_user_object
+
+    cache = MagicMock()
+    cache.async_delete_cache = AsyncMock(side_effect=ConnectionError("redis down"))
+
+    await delete_cached_end_user_object(end_user_id="eu-1", user_api_key_cache=cache)
+
+    assert recorded_invalidations.published == [
+        ("end_user_id:eu-1", "user_api_key"),
+        ("end_user_validation:eu-1", "user_api_key"),
+    ]

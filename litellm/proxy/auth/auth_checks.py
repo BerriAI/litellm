@@ -1150,7 +1150,7 @@ async def get_end_user_object(
     if end_user_id is None:
         return None
 
-    _key: Final = f"end_user_id:{end_user_id}"
+    _key: Final = _end_user_cache_key(end_user_id)
 
     # Check cache first
     cached_user_obj: Final = await user_api_key_cache.async_get_cache(
@@ -1192,7 +1192,7 @@ async def get_end_user_object(
 
         # Save to cache
         await user_api_key_cache.async_set_cache(
-            key=f"end_user_id:{end_user_id}",
+            key=_key,
             value=_response,
             model_type=LiteLLM_EndUserTable,
         )
@@ -1205,6 +1205,39 @@ async def get_end_user_object(
 
 _END_USER_VALIDATION_NEGATIVE_TTL: Final = 60
 _END_USER_VALIDATION_POSITIVE_TTL: Final = 300
+
+
+def _end_user_cache_key(end_user_id: str) -> str:
+    return f"end_user_id:{end_user_id}"
+
+
+def _end_user_validation_cache_key(end_user_id: str) -> str:
+    return f"end_user_validation:{end_user_id}"
+
+
+async def delete_cached_end_user_object(
+    end_user_id: str,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    """
+    Every endpoint that mutates litellm_endusertable must call this: the auth path
+    reads the end-user object and the id-validation verdict cache-first, so without
+    invalidation a blocked, rebudgeted, or deleted customer keeps being served until
+    the TTL expires. Best-effort on both steps, and broadcast so workers that did not
+    handle the mutation drop their in-memory copy too.
+    """
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
+
+    for cache_key in (_end_user_cache_key(end_user_id), _end_user_validation_cache_key(end_user_id)):
+        try:
+            await user_api_key_cache.async_delete_cache(key=cache_key)
+        except Exception as e:  # noqa: BLE001  # best-effort eviction: a cache backend error must not fail the mutation
+            verbose_proxy_logger.warning(
+                "Failed to evict cached end-user entry %s; a stale end-user may be served until its TTL expires: %s",
+                cache_key,
+                e,
+            )
+        await publish_auth_cache_invalidation(cache_key=cache_key)
 
 
 async def resolve_and_validate_end_user_id(
@@ -1242,7 +1275,7 @@ async def resolve_and_validate_end_user_id(
     if prisma_client is None:
         return raw_end_user_id
 
-    cache_key: Final = f"end_user_validation:{raw_end_user_id}"
+    cache_key: Final = _end_user_validation_cache_key(raw_end_user_id)
     cached: Final = await user_api_key_cache.async_get_cache(key=cache_key)
     if cached == "valid":
         return raw_end_user_id
@@ -1905,7 +1938,19 @@ async def _delete_cache_key_object(
     hashed_token: str,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None,
+    broadcast_invalidation: bool = True,
 ):
+    """
+    ``broadcast_invalidation`` is what makes a revoked or regenerated key stop
+    working fleet-wide right away; the local delete plus the Redis delete leave
+    every other worker serving its own in-memory copy until the TTL expires.
+
+    Callers that evict a key each worker can already invalidate on its own (an
+    expired key, whose expiry every worker reads off the cached object) pass
+    False so a client replaying that key can't drive a broadcast per request.
+    """
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
+
     key: Final = hashed_token
 
     user_api_key_cache.delete_cache(key=key)
@@ -1913,6 +1958,9 @@ async def _delete_cache_key_object(
     ## UPDATE REDIS CACHE ##
     if proxy_logging_obj is not None:
         await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+
+    if broadcast_invalidation:
+        await publish_auth_cache_invalidation(cache_key=key)
 
 
 @log_db_metrics
@@ -2106,6 +2154,8 @@ async def _delete_cache_access_object(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None = None,
 ):
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
+
     key: Final = f"access_group_id:{access_group_id}"
 
     user_api_key_cache.delete_cache(key=key)
@@ -2113,6 +2163,8 @@ async def _delete_cache_access_object(
     ## UPDATE REDIS CACHE ##
     if proxy_logging_obj is not None:
         await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+
+    await publish_auth_cache_invalidation(cache_key=key)
 
 
 @log_db_metrics
