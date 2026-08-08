@@ -229,6 +229,20 @@ async def test_is_admin_view_safe_false():
     assert spend_management_endpoints._is_admin_view_safe(auth) is False
 
 
+def test_legacy_spend_logs_openapi_points_to_ui_endpoint(client):
+    response = client.get("/openapi.json")
+    assert response.status_code == 200
+
+    operation = response.json()["paths"]["/spend/logs"]["get"]
+    description = operation.get("description", "")
+
+    assert operation.get("deprecated") is True
+    assert "/spend/logs/ui" in description
+    assert "curl -G" in description
+    assert "page_size=50" in description
+    assert 'curl -X GET "http://0.0.0.0:8000/spend/logs"' not in description
+
+
 @pytest.mark.asyncio
 async def test_is_admin_view_safe_exception():
     # Ensure exceptions are swallowed and return False
