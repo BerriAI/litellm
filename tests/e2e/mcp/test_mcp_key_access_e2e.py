@@ -47,20 +47,9 @@ class TestMcpKeyWithoutAccessIsDenied:
 
         denied_tools = unwrap(client.list_tools(denied_key)).tool_names_for_server(server_id)
         assert denied_tools == frozenset(), (
-            f"ungranted key saw the server's tools; tools/list leaked across the permission "
-            f"boundary: {denied_tools}"
+            f"ungranted key saw the server's tools; tools/list leaked across the permission boundary: {denied_tools}"
         )
 
-    @pytest.mark.skip(
-        reason=(
-            "LIT-5052: the control call proving a granted key CAN invoke the tool sends a "
-            "`telemetry` argument that Datadog's search_datadog_logs tool now rejects, so it "
-            "errors with 'unexpected additional properties [\"telemetry\"]' and the denial "
-            "assertion is never reached. `telemetry` was never a documented Datadog "
-            "parameter; the test relied on the server ignoring unknown properties. Unskip "
-            "once the argument is dropped."
-        )
-    )
     @pytest.mark.covers("mcp.call_tool.api_key.denied_without_permission")
     def test_call_tool_denied_without_permission(
         self,
@@ -73,21 +62,19 @@ class TestMcpKeyWithoutAccessIsDenied:
         permitted_key = _key(client, resources, mcp_servers=[server_id])
         denied_key = _key(client, resources, mcp_servers=None)
 
-        tool_name = client.await_tool(permitted_key, server_id, SEARCH_LOGS_TOOL)
+        tool = client.await_tool_entry(permitted_key, server_id, SEARCH_LOGS_TOOL)
 
         search_args = {
             "query": "service:litellm",
             "from": DD_SEARCH_FROM,
             "to": "now",
             "max_tokens": 1000,
-            "telemetry": {"intent": "e2e control call proving granted key can invoke Datadog MCP"},
         }
+        tool.assert_arguments_are_documented(search_args)
         permitted_call = client.await_call_tool(
-            permitted_key, server_id=server_id, name=tool_name, arguments=search_args
+            permitted_key, server_id=server_id, name=tool.name, arguments=search_args
         )
         assert permitted_call.is_error is not True, f"granted key's tool call errored: {permitted_call}"
 
-        denied = client.await_call_tool_denied(
-            denied_key, server_id=server_id, name=tool_name, arguments=search_args
-        )
+        denied = client.await_call_tool_denied(denied_key, server_id=server_id, name=tool.name, arguments=search_args)
         assert "access_denied" in denied.body, f"403 was not an MCP access denial: {denied.body}"
