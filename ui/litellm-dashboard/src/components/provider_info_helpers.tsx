@@ -85,6 +85,7 @@ export enum Providers {
   CLARIFAI = "Clarifai",
   CLOUDFLARE = "Cloudflare",
   CODESTRAL = "Codestral",
+  Cognition = "Cognition",
   Cohere = "Cohere",
   COHERE_CHAT = "Cohere Chat",
   COMETAPI = "Cometapi",
@@ -193,6 +194,7 @@ export const provider_map: Record<string, string> = {
   CLARIFAI: "clarifai",
   CLOUDFLARE: "cloudflare",
   CODESTRAL: "codestral",
+  Cognition: "cognition",
   Cohere: "cohere",
   COHERE_CHAT: "cohere_chat",
   COMETAPI: "cometapi",
@@ -439,6 +441,8 @@ export const getPlaceholder = (selectedProvider: string): string => {
     return "cursor/claude-4-sonnet";
   } else if (selectedProvider === Providers.ZAI) {
     return "zai/glm-4.5";
+  } else if (selectedProvider === Providers.Cognition) {
+    return "cognition/swe-1.7";
   } else {
     return "gpt-3.5-turbo";
   }
