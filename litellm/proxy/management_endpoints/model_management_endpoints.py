@@ -13,9 +13,9 @@ model/{model_id}/update - PATCH endpoint for model update.
 import asyncio
 import datetime
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from json import JSONDecodeError
-from typing import Any, Final, Literal, cast
+from typing import Final, Literal, Protocol, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -78,9 +78,7 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
     Deployment,
-    DeploymentTypedDict,
     GenericLiteLLMParams,
-    LiteLLMParamsTypedDict,
     updateDeployment,
 )
 from litellm.utils import get_utc_datetime
@@ -104,10 +102,80 @@ class UpdatePublicModelGroupsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class _ProxyModelRow(Protocol):
+    model_id: str
+    model_name: str
+    model_info: Mapping[str, object] | None
+
+    def model_dump_json(self, *, exclude_none: bool = False) -> str: ...
+
+
+class _ProxyModelTable(Protocol):
+    def find_unique(self, *, where: Mapping[str, object]) -> Awaitable[_ProxyModelRow | None]: ...
+
+    def find_many(self, *, where: Mapping[str, object]) -> Awaitable[Sequence[_ProxyModelRow]]: ...
+
+    def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> Awaitable[_ProxyModelRow]: ...
+
+    def delete(self, *, where: Mapping[str, object]) -> Awaitable[_ProxyModelRow | None]: ...
+
+    def delete_many(self, *, where: Mapping[str, object]) -> Awaitable[int]: ...
+
+
+class _TxModelTables(Protocol):
+    litellm_proxymodeltable: _ProxyModelTable
+
+
+class _TeamRow(Protocol):
+    models: Sequence[str]
+
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
+class _TeamTable(Protocol):
+    def find_unique(self, *, where: Mapping[str, object]) -> Awaitable[_TeamRow | None]: ...
+
+    def update(
+        self, *, where: Mapping[str, object], data: Mapping[str, object], include: Mapping[str, bool]
+    ) -> Awaitable[LiteLLM_TeamTable]: ...
+
+
+class _TeamIdRef(Protocol):
+    team_id: str
+
+
+class _ModelAliasRow(Protocol):
+    id: int
+    model_aliases: dict[str, str]
+    team: _TeamIdRef | None
+
+
+class _ModelAliasTable(Protocol):
+    def find_many(self, *, include: Mapping[str, bool]) -> Awaitable[Sequence[_ModelAliasRow]]: ...
+
+    def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> Awaitable[object]: ...
+
+
+def _proxy_model_table(prisma_client: PrismaClient) -> _ProxyModelTable:
+    return ModelRepository(prisma_client).table
+
+
+def _repo_team_table(prisma_client: PrismaClient) -> _TeamTable:
+    return TeamRepository(prisma_client).table
+
+
+def _db_team_table(prisma_client: PrismaClient) -> _TeamTable:
+    return prisma_client.db.litellm_teamtable
+
+
+def _model_alias_table(prisma_client: PrismaClient) -> _ModelAliasTable:
+    return ModelTableRepository(prisma_client).table
+
+
 async def get_db_model(model_id: str, prisma_client: PrismaClient) -> Deployment | None:
     db_model: Final = cast(
         BaseModel | None,
-        await ModelRepository(prisma_client).table.find_unique(where={"model_id": model_id}),
+        await _proxy_model_table(prisma_client).find_unique(where={"model_id": model_id}),
     )
 
     if not db_model:
@@ -166,14 +234,9 @@ def _raise_on_strategy_router_write_violation(
 
 
 def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> PrismaCompatibleUpdateDBModel:
-    merged_deployment_dict: Final = DeploymentTypedDict(
-        model_name=db_model.model_name,
-        litellm_params=LiteLLMParamsTypedDict(**db_model.litellm_params.model_dump(exclude_none=True)),
-        model_info=db_model.model_info.model_dump(exclude_none=True),
-    )
-    # update model name
-    if updated_patch.model_name:
-        merged_deployment_dict["model_name"] = updated_patch.model_name
+    merged_model_name: Final = updated_patch.model_name or db_model.model_name
+    merged_litellm_params: Final = db_model.litellm_params.model_dump(exclude_none=True)
+    merged_model_info: Final = db_model.model_info.model_dump(exclude_none=True)
 
     # update litellm params
     if updated_patch.litellm_params:
@@ -182,13 +245,11 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
             k: encrypt_value_helper(v) for k, v in updated_patch.litellm_params.model_dump(exclude_none=True).items()
         }
 
-        merged_deployment_dict["litellm_params"].update(encrypted_params)
+        merged_litellm_params.update(encrypted_params)
 
     # update model info
     if updated_patch.model_info:
-        if "model_info" not in merged_deployment_dict:
-            merged_deployment_dict["model_info"] = {}
-        merged_deployment_dict["model_info"].update(updated_patch.model_info.model_dump(exclude_none=True))
+        merged_model_info.update(updated_patch.model_info.model_dump(exclude_none=True))
 
     # Honor explicit-null clears LAST, after both merges, so a model_info blob the UI
     # passes through (which today re-sends the OLD pricing on every save) cannot
@@ -202,29 +263,25 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
     if updated_patch.litellm_params:
         for field in updated_patch.litellm_params.model_fields_set:
             if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.litellm_params, field) is None:
-                merged_deployment_dict["litellm_params"].pop(field, None)
-                merged_deployment_dict.get("model_info", {}).pop(field, None)
+                merged_litellm_params.pop(field, None)
+                merged_model_info.pop(field, None)
     if updated_patch.model_info:
         for field in updated_patch.model_info.model_fields_set:
             if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.model_info, field) is None:
-                merged_deployment_dict["model_info"].pop(field, None)
-                merged_deployment_dict.get("litellm_params", {}).pop(field, None)
+                merged_model_info.pop(field, None)
+                merged_litellm_params.pop(field, None)
 
     # convert to prisma compatible format
 
-    prisma_compatible_model_dict: Final = PrismaCompatibleUpdateDBModel()
-    if "model_name" in merged_deployment_dict:
-        prisma_compatible_model_dict["model_name"] = merged_deployment_dict["model_name"]
+    for key, value in merged_model_info.items():
+        if isinstance(value, datetime.datetime):
+            merged_model_info[key] = value.isoformat()
 
-    if "litellm_params" in merged_deployment_dict:
-        prisma_compatible_model_dict["litellm_params"] = json.dumps(merged_deployment_dict["litellm_params"])
-
-    if "model_info" in merged_deployment_dict:
-        model_info: Final = merged_deployment_dict["model_info"]
-        for key, value in model_info.items():
-            if isinstance(value, datetime.datetime):
-                model_info[key] = value.isoformat()
-        prisma_compatible_model_dict["model_info"] = json.dumps(model_info)
+    prisma_compatible_model_dict: Final = PrismaCompatibleUpdateDBModel(
+        model_name=merged_model_name,
+        litellm_params=json.dumps(merged_litellm_params),
+        model_info=json.dumps(merged_model_info),
+    )
 
     if updated_patch.blocked is not None:
         prisma_compatible_model_dict["blocked"] = updated_patch.blocked
@@ -338,7 +395,7 @@ async def patch_model(
         update_data["updated_at"] = cast(str, get_utc_datetime())
 
         # Perform partial update
-        updated_model: Final = await ModelRepository(prisma_client).table.update(
+        updated_model: Final = await _proxy_model_table(prisma_client).update(
             where={"model_id": model_id},
             data=update_data,
         )
@@ -769,8 +826,8 @@ async def _setup_new_team_model_assignment(
 
 
 async def _get_team_deployments(
-    team_id: str, prisma_client: PrismaClient, table: Any | None = None
-) -> list[LiteLLM_ProxyModelTable]:
+    team_id: str, prisma_client: PrismaClient, table: _ProxyModelTable | None = None
+) -> Sequence[_ProxyModelRow]:
     """
     Fetch all deployments for a given team_id from the database.
 
@@ -785,7 +842,7 @@ async def _get_team_deployments(
     existing transaction.
     """
     prefix: Final = f"model_name_{team_id}_"
-    table = table or ModelRepository(prisma_client).table
+    table = table or _proxy_model_table(prisma_client)
     response: Final = await table.find_many(
         where={
             "model_name": {"startswith": prefix},
@@ -806,7 +863,7 @@ async def _get_team_deployments(
 async def delete_team_models(
     team_ids: list[str],
     prisma_client: PrismaClient,
-    llm_router: Any | None,
+    llm_router: Router | None,
 ) -> list[str]:
     """
     Delete every BYOK model owned by the given teams, from the DB and the router.
@@ -820,7 +877,8 @@ async def delete_team_models(
     Returns the model_ids that were deleted.
     """
     deleted_model_ids: Final[list[str]] = []
-    async with prisma_client.db.tx() as tx:
+    async with prisma_client.db.tx() as tx_ctx:
+        tx: Final[_TxModelTables] = tx_ctx
         for team_id in team_ids:
             rows = await _get_team_deployments(team_id, prisma_client, table=tx.litellm_proxymodeltable)
             model_ids = [row.model_id for row in rows]
@@ -920,11 +978,11 @@ async def _remove_unbacked_team_models(
     if not names_to_remove:
         return
 
-    existing_team_row: Final = await prisma_client.db.litellm_teamtable.find_unique(where={"team_id": team_id})
+    existing_team_row: Final = await _db_team_table(prisma_client).find_unique(where={"team_id": team_id})
     if existing_team_row is None:
         return
 
-    updated_team_row: Final[LiteLLM_TeamTable] = await prisma_client.db.litellm_teamtable.update(
+    updated_team_row: Final[LiteLLM_TeamTable] = await _db_team_table(prisma_client).update(
         where={"team_id": team_id},
         data={"models": [model for model in existing_team_row.models if model not in names_to_remove]},
         include={"object_permission": True},
@@ -953,7 +1011,7 @@ async def _update_existing_team_model_assignment(
     """
 
     def _get_team_public_model_name(
-        model_info: dict | str | None,
+        model_info: object,
     ) -> str | None:
         parsed: Final = model_info_as_mapping(model_info)
         if parsed is None:
@@ -1062,7 +1120,7 @@ class ModelManagementAuthChecks:
                 detail={"error": CommonProxyErrors.not_premium_user.value},
             )
 
-        _existing_team_row: Final = await TeamRepository(prisma_client).table.find_unique(
+        _existing_team_row: Final = await _repo_team_table(prisma_client).find_unique(
             where={"team_id": model_params.model_info.team_id}
         )
 
@@ -1091,7 +1149,7 @@ class ModelManagementAuthChecks:
     ) -> Literal[True]:
         ## Check team model auth
         if model_params.model_info is not None and model_params.model_info.team_id is not None:
-            team_obj_row: Final = await TeamRepository(prisma_client).table.find_unique(
+            team_obj_row: Final = await _repo_team_table(prisma_client).find_unique(
                 where={"team_id": model_params.model_info.team_id}
             )
             if team_obj_row is None:
@@ -1192,7 +1250,7 @@ async def delete_model(
             - store keys separately
             """
             # encrypt litellm params #
-            result: Final = await ModelRepository(prisma_client).table.delete(where={"model_id": model_info.id})
+            result: Final = await _proxy_model_table(prisma_client).delete(where={"model_id": model_info.id})
 
             if result is None:
                 raise HTTPException(
@@ -1265,9 +1323,9 @@ async def delete_team_model_alias(
     Returns:
     - List of team id + model alias pairs that were removed
     """
-    team_model_aliases: Final = await ModelTableRepository(prisma_client).table.find_many(include={"team": True})
+    team_model_aliases: Final = await _model_alias_table(prisma_client).find_many(include={"team": True})
     tasks: Final = []
-    removed_model_aliases: Final = []
+    removed_model_aliases: Final[list[tuple[str, str]]] = []
     for team_model_alias in team_model_aliases:
         model_aliases = team_model_alias.model_aliases  # {"alias": "public model name"}
         id = team_model_alias.id
@@ -1278,7 +1336,7 @@ async def delete_team_model_alias(
                 removed_model_aliases.append((team_model_alias.team.team_id, key))
             del model_aliases[key]
             tasks.append(
-                ModelTableRepository(prisma_client).table.update(
+                _model_alias_table(prisma_client).update(
                     where={"id": id},
                     data={"model_aliases": json.dumps(model_aliases)},
                 )
@@ -1492,7 +1550,7 @@ async def update_model(
                 },
             )
 
-        _model_id = None
+        _model_id: str | None = None
         _model_info: Final = getattr(model_params, "model_info", None)
         if _model_info is None:
             raise Exception("model_info not provided")
@@ -1551,11 +1609,11 @@ async def update_model(
                 else:
                     pass
 
-            _data: Final[dict] = {
+            _data: Final[dict[str, str]] = {
                 "litellm_params": json.dumps(merged_dictionary),
                 "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             }
-            model_response: Final = await ModelRepository(prisma_client).table.update(
+            model_response: Final = await _proxy_model_table(prisma_client).update(
                 where={"model_id": _model_id},
                 data=_data,
             )

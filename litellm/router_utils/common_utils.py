@@ -7,6 +7,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIFileObject
 
 from litellm._logging import verbose_logger
+from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
 from litellm.types.router import CredentialLiteLLMParams
 
@@ -41,6 +42,22 @@ def resolve_model_group_alias(model_group_alias: object, model: str) -> str | No
     if not isinstance(target, str) or not target:
         return None
     return target
+
+
+def truncate_fallback_error_detail(detail: str) -> str:
+    """
+    Bound a fallback failure detail before it is logged or appended to an exception message.
+
+    Each level of the fallback walk records the failure of the level below it, so an
+    untruncated detail carries every nested failure with it and grows superlinearly with
+    the number of attempted model groups. One deterministic pre-network failure walked
+    through a small fallback graph is enough to turn that into hundreds of megabytes of
+    output on the event-loop thread, which starves the process that produced it.
+    """
+    if len(detail) <= ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS:
+        return detail
+    dropped: Final = len(detail) - ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
+    return f"{detail[:ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS]}... [truncated {dropped} characters]"
 
 
 def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:

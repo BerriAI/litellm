@@ -12,7 +12,6 @@ from litellm.litellm_core_utils.cloud_storage_security import (
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.bedrock import (
     BedrockCreateBatchRequest,
     BedrockCreateBatchResponse,
@@ -29,7 +28,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import LiteLLMBatch, LlmProviders
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import CommonBatchFilesUtils
+from ..common_utils import CommonBatchFilesUtils, resolve_s3_encryption_key_id
 
 # Bedrock batch input files are uploaded as
 # s3://bucket/litellm-bedrock-files-{model, ":" -> "-"}-{uuid4}.jsonl (see
@@ -200,7 +199,10 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         )
 
         # Add optional KMS encryption key ID if provided
-        s3_encryption_key_id = litellm_params.get("s3_encryption_key_id") or get_secret_str("AWS_S3_ENCRYPTION_KEY_ID")
+        s3_encryption_key_id = resolve_s3_encryption_key_id(
+            litellm_params=litellm_params,
+            optional_params=optional_params,
+        )
         if s3_encryption_key_id:
             s3_output_config["s3EncryptionKeyId"] = s3_encryption_key_id
 

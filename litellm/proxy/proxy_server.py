@@ -17,7 +17,7 @@ import traceback
 import warnings
 from collections.abc import AsyncGenerator, Callable, Mapping
 from datetime import datetime, timedelta, timezone
-from types import UnionType
+from types import MappingProxyType, UnionType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -296,6 +296,9 @@ from litellm.proxy.common_request_processing import (
     _is_azure_model_router_request,
     _should_return_raw_model_name,
     create_response,
+)
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    AuthCacheInvalidationSubscriber,
 )
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
@@ -868,7 +871,7 @@ async def proxy_shutdown_event():
 async def _initialize_shared_aiohttp_session():
     """Initialize shared aiohttp session for connection reuse with connection limits."""
     try:
-        from aiohttp import ClientSession, TCPConnector
+        from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 
         from litellm.llms.custom_httpx.http_handler import (
             _build_aiohttp_keepalive_socket_factory,
@@ -889,7 +892,7 @@ async def _initialize_shared_aiohttp_session():
             connector_kwargs["socket_factory"] = socket_factory
 
         connector: Final = TCPConnector(**connector_kwargs)
-        session: Final = ClientSession(connector=connector)
+        session: Final = ClientSession(connector=connector, cookie_jar=DummyCookieJar())
 
         verbose_proxy_logger.info(
             "SESSION REUSE: Created shared aiohttp session for connection pooling (ID: %s, limit=%s, limit_per_host=%s)",
@@ -1012,6 +1015,37 @@ async def proxy_startup_event(app: FastAPI):
                 verbose_proxy_logger.warning("Password migration skipped: %s", e)
 
         asyncio.create_task(_run_pw_migration())
+
+        async def _run_agent_grant_id_migration() -> None:
+            from litellm.proxy.agent_endpoints.agent_registry import (
+                global_agent_registry,
+                object_permission_table,
+            )
+
+            for attempt in range(3):
+                try:
+                    result = await global_agent_registry.migrate_legacy_grant_ids(
+                        table=object_permission_table(prisma_client)
+                    )
+                    if result.rewritten:
+                        verbose_proxy_logger.info(
+                            "Rewrote %s object_permission rows from legacy config agent ids", result.rewritten
+                        )
+                    if result.missed == 0:
+                        return
+                    verbose_proxy_logger.warning(
+                        "Legacy agent grant id migration attempt %s/3 left %s rows unmigrated",
+                        attempt + 1,
+                        result.missed,
+                    )
+                except Exception as e:  # noqa: BLE001  # startup task must survive any DB error and retry
+                    verbose_proxy_logger.warning(
+                        "Legacy agent grant id migration attempt %s/3 failed: %s", attempt + 1, e
+                    )
+                if attempt < 2:
+                    await asyncio.sleep(5)
+
+        asyncio.create_task(_run_agent_grant_id_migration())
 
     ## A coordination_redis block saved from the admin UI lives in the database,
     ## which is only reachable once the prisma client exists. Apply it here, before
@@ -1192,6 +1226,8 @@ async def proxy_startup_event(app: FastAPI):
             verbose_proxy_logger.error("Error stopping DB health watchdog task: %s", e)
 
     await proxy_config.stop_config_sync_subscriber()
+
+    await proxy_config.stop_auth_cache_invalidation_subscriber()
 
     await proxy_shutdown_event()
 
@@ -3904,6 +3940,7 @@ class ProxyConfig:
         self._last_hashicorp_vault_config: dict[str, Any] | None = None
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
+        self.auth_cache_invalidation_subscriber: AuthCacheInvalidationSubscriber | None = None
         from litellm.litellm_core_utils.get_model_cost_map import (
             get_model_cost_map_loaded_at,
         )
@@ -6090,6 +6127,15 @@ class ProxyConfig:
             else:
                 general_settings["disable_auto_add_proxy_admin_to_teams"] = value if value is None else bool(value)
 
+        if "apply_user_budget_to_team_keys" in _general_settings and (
+            "apply_user_budget_to_team_keys" not in self._yaml_general_settings_keys
+        ):
+            db_value: Final = _general_settings["apply_user_budget_to_team_keys"]
+            if isinstance(db_value, str):
+                general_settings["apply_user_budget_to_team_keys"] = db_value.lower() == "true"
+            else:
+                general_settings["apply_user_budget_to_team_keys"] = db_value if db_value is None else bool(db_value)
+
         ## STORE MODEL IN DB ##
         if "store_model_in_db" in _general_settings:
             value = _general_settings["store_model_in_db"]
@@ -6390,6 +6436,30 @@ class ProxyConfig:
             await subscriber.stop()
         except Exception as e:
             verbose_proxy_logger.error("Error stopping config sync subscriber: %s", e)
+
+    def start_auth_cache_invalidation_subscriber(
+        self,
+        redis_cache: RedisCache | None,
+        user_api_key_cache: UserApiKeyCache,
+    ) -> None:
+        if redis_cache is None or self.auth_cache_invalidation_subscriber is not None:
+            return
+        subscriber: Final = AuthCacheInvalidationSubscriber(
+            redis_cache=redis_cache,
+            user_api_key_cache=user_api_key_cache,
+        )
+        self.auth_cache_invalidation_subscriber = subscriber
+        subscriber.start()
+
+    async def stop_auth_cache_invalidation_subscriber(self) -> None:
+        subscriber: Final = self.auth_cache_invalidation_subscriber
+        if subscriber is None:
+            return
+        self.auth_cache_invalidation_subscriber = None
+        try:
+            await subscriber.stop()
+        except Exception as e:  # noqa: BLE001  # best-effort: a failing stop must not break proxy shutdown
+            verbose_proxy_logger.error("Error stopping auth cache invalidation subscriber: %s", e)
 
     async def _init_non_llm_objects_in_db(self, prisma_client: PrismaClient):
         """
@@ -8328,6 +8398,11 @@ class ProxyStartupEvent:
             id="periodic_reload_job",
             replace_existing=True,
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+
+        proxy_config.start_auth_cache_invalidation_subscriber(
+            redis_cache=redis_usage_cache,
+            user_api_key_cache=user_api_key_cache,
         )
 
         if store_model_in_db is True:
@@ -14947,6 +15022,29 @@ Keep it more precise, to prevent overwrite other values unintentially
 
 _PLUGIN_KEY_REDACTED: Final = "***"
 
+_GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "max_parallel_requests": "Integer",
+        "global_max_parallel_requests": "Integer",
+        "max_request_size_mb": "Integer",
+        "max_response_size_mb": "Integer",
+        "proxy_config_reload_interval_seconds": "Integer",
+        "pass_through_endpoints": "PydanticModel",
+        "store_model_in_db": "Boolean",
+        "store_prompts_in_spend_logs": "Boolean",
+        "maximum_spend_logs_retention_period": "String",
+        "mcp_internal_ip_ranges": "List",
+        "mcp_trusted_proxy_ranges": "List",
+        "mcp_xff_num_trusted_hops": "Integer",
+        "always_include_stream_usage": "Boolean",
+        "forward_client_headers_to_llm_api": "Boolean",
+        "mcp_required_fields": "List",
+        "cancel_on_disconnect": "Boolean",
+        "disable_auto_add_proxy_admin_to_teams": "Boolean",
+        "apply_user_budget_to_team_keys": "Boolean",
+    }
+)
+
 
 def _preserve_redacted_plugin_keys(incoming: object, existing: object) -> object:
     """Restore real plugin_key values the client never sees.
@@ -15445,25 +15543,7 @@ async def get_config_list(
     else:
         db_general_settings_dict = {}
 
-    allowed_args: Final = {
-        "max_parallel_requests": {"type": "Integer"},
-        "global_max_parallel_requests": {"type": "Integer"},
-        "max_request_size_mb": {"type": "Integer"},
-        "max_response_size_mb": {"type": "Integer"},
-        "proxy_config_reload_interval_seconds": {"type": "Integer"},
-        "pass_through_endpoints": {"type": "PydanticModel"},
-        "store_model_in_db": {"type": "Boolean"},
-        "store_prompts_in_spend_logs": {"type": "Boolean"},
-        "maximum_spend_logs_retention_period": {"type": "String"},
-        "mcp_internal_ip_ranges": {"type": "List"},
-        "mcp_trusted_proxy_ranges": {"type": "List"},
-        "mcp_xff_num_trusted_hops": {"type": "Integer"},
-        "always_include_stream_usage": {"type": "Boolean"},
-        "forward_client_headers_to_llm_api": {"type": "Boolean"},
-        "mcp_required_fields": {"type": "List"},
-        "cancel_on_disconnect": {"type": "Boolean"},
-        "disable_auto_add_proxy_admin_to_teams": {"type": "Boolean"},
-    }
+    allowed_args: Final = _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES
 
     return_val: Final = []
 
@@ -15471,7 +15551,7 @@ async def get_config_list(
         if field_name in allowed_args:
             ## HANDLE TYPED DICT
 
-            typed_dict_type = allowed_args[field_name]["type"]
+            typed_dict_type = allowed_args[field_name]
 
             if typed_dict_type == "PydanticModel":
                 if field_name == "pass_through_endpoints":
@@ -15513,7 +15593,7 @@ async def get_config_list(
 
                     _response_obj = ConfigList(
                         field_name=field_name,
-                        field_type=allowed_args[field_name]["type"],
+                        field_type=allowed_args[field_name],
                         field_description=field_info.description or "",
                         field_value=_redact_general_setting_value(
                             field_name,
@@ -15541,7 +15621,7 @@ async def get_config_list(
 
                 _response_obj = ConfigList(
                     field_name=field_name,
-                    field_type=allowed_args[field_name]["type"],
+                    field_type=allowed_args[field_name],
                     field_description=field_info.description or "",
                     field_value=_redact_general_setting_value(field_name, _field_value, is_full_admin),
                     stored_in_db=_stored_in_db,

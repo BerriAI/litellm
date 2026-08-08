@@ -2,7 +2,9 @@ import base64
 import json
 import os
 import time
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Iterable, Mapping, MutableMapping
+from functools import cache
+from itertools import chain
 from types import MappingProxyType
 from typing import Any, Final
 from urllib.parse import unquote
@@ -10,7 +12,7 @@ from urllib.parse import unquote
 import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -26,12 +28,16 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     split_configured_cloud_bucket_name,
     validate_managed_cloud_file_id,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    extract_file_data,
+    text_completion_prompt_to_messages,
+)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
 )
+from litellm.types.llms.bedrock import BedrockBatchRecordKind
 from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
@@ -41,18 +47,40 @@ from litellm.types.llms.openai import (
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
     PathLike,
+    ResponseInputParam,
+    ResponsesAPIOptionalRequestParams,
 )
 from litellm.types.utils import ExtractedFileData, LlmProviders, SpecialEnums
 from litellm.utils import get_llm_provider
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import BedrockError
+from ..common_utils import BedrockError, resolve_s3_encryption_key_id
 
 # litellm_params key used to hand the SigV4-signed GET headers from
 # `transform_file_content_request` to `validate_environment` (the only hook
 # the shared file-content HTTP handler exposes for setting request headers).
 # Same pattern as the `upload_url` handoff in `transform_create_file_request`.
 S3_SIGNED_GET_HEADERS_PARAM: Final = "_s3_signed_get_headers"
+
+
+def _frozen_mapping(items: Iterable[tuple[str, Any]]) -> Mapping[str, Any]:
+    return MappingProxyType(dict(items))
+
+
+# JSONL batch records are untyped json, so the `/v1/responses` fields are
+# validated into their concrete Responses API types before being handed to the
+# Responses-to-Chat bridge. Both adapters drop keys the Responses API doesn't
+# define, which is what the bridge would ignore anyway. Built on first use
+# rather than at import: `ResponseInputParam` is a deep union and only batch
+# files carrying `/v1/responses` records need it.
+@cache
+def _responses_input_adapter() -> TypeAdapter[str | ResponseInputParam]:
+    return TypeAdapter(str | ResponseInputParam)
+
+
+@cache
+def _responses_request_adapter() -> TypeAdapter[ResponsesAPIOptionalRequestParams]:
+    return TypeAdapter(ResponsesAPIOptionalRequestParams)
 
 
 class _BedrockS3RequestParams(BaseModel):
@@ -303,41 +331,55 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     # example; add others here as they adopt the same schema.
     CONVERSE_INVOKE_PROVIDERS = ("nova",)
 
-    # OpenAI batch URL that signals an embedding request. Per OpenAI Batch API
-    # spec, every JSONL record carries a `url` field; we use it as the
-    # authoritative signal to route the line to the embedding code path
-    # instead of inferring from the presence of `input` vs `messages`.
+    # OpenAI batch URLs that select which request shape a JSONL line carries.
+    # Per the OpenAI Batch API spec every record carries a `url`, so we use it
+    # as the authoritative routing signal instead of inferring from the
+    # presence of `input` vs `prompt` vs `messages`.
     OPENAI_EMBEDDINGS_URL = "/v1/embeddings"
+    OPENAI_TEXT_COMPLETIONS_URL = "/v1/completions"
+    OPENAI_RESPONSES_URL = "/v1/responses"
 
     @staticmethod
-    def _is_embedding_record(openai_jsonl_record: dict[str, Any]) -> bool:
+    def _classify_batch_record(openai_jsonl_record: Mapping[str, Any]) -> BedrockBatchRecordKind:
         """
-        Decide whether an OpenAI batch JSONL line is an embedding request.
+        Decide which OpenAI endpoint shape an OpenAI batch JSONL line carries.
 
-        Precedence (strict - any explicit `url` short-circuits):
-          1. `url == "/v1/embeddings"` -> embedding. Authoritative per the
-             OpenAI Batch API spec.
-          2. Any other non-empty `url` (e.g. `/v1/chat/completions`) -> NOT
-             embedding. We trust the caller's explicit signal even if the
-             body would otherwise suggest embedding; misrouting a chat
-             record into the embedding transformer would corrupt the
-             modelInput, while a chat-shaped body sent to the chat path
-             either succeeds or fails cleanly inside that transformer.
-          3. `url` missing/empty -> fall back to body shape. Requires
-             `input` present AND `messages` absent so a malformed record
-             carrying both keys routes to the chat path (safer default:
-             Anthropic transforms ignore unknown top-level keys, whereas
-             the embedding transformer would silently drop the messages).
+        Precedence (strict - any recognized `url` short-circuits):
+          1. A `url` matching a supported endpoint wins. Authoritative per the
+             OpenAI Batch API spec, which requires it on every record.
+          2. Any other non-empty `url` -> chat. We trust the caller's explicit
+             signal rather than re-deriving it from the body, and an
+             unexpectedly-shaped body fails cleanly inside the chat
+             transformer instead of being silently misrouted.
+          3. `url` missing/empty -> fall back to body shape. `messages` wins
+             over the other keys so a malformed record carrying several of
+             them keeps its conversation instead of having it dropped, and a
+             bare `input` stays an embedding for backwards compatibility
+             (that ambiguity with `/v1/responses` is only resolvable from
+             `url`).
         """
-        url: Final = openai_jsonl_record.get("url")
-        if url == BedrockFilesConfig.OPENAI_EMBEDDINGS_URL:
-            return True
-        if url:
-            return False
-        body: Final = openai_jsonl_record.get("body", {})
-        if not isinstance(body, dict):
-            return False
-        return "input" in body and "messages" not in body
+        match openai_jsonl_record.get("url"):
+            case BedrockFilesConfig.OPENAI_EMBEDDINGS_URL:
+                return BedrockBatchRecordKind.EMBEDDING
+            case BedrockFilesConfig.OPENAI_TEXT_COMPLETIONS_URL:
+                return BedrockBatchRecordKind.TEXT_COMPLETION
+            case BedrockFilesConfig.OPENAI_RESPONSES_URL:
+                return BedrockBatchRecordKind.RESPONSES
+            case None | "":
+                pass
+            case _:
+                return BedrockBatchRecordKind.CHAT
+
+        body: Final = openai_jsonl_record.get("body")
+        if not isinstance(body, Mapping):
+            return BedrockBatchRecordKind.CHAT
+        if "messages" in body:
+            return BedrockBatchRecordKind.CHAT
+        if "prompt" in body:
+            return BedrockBatchRecordKind.TEXT_COMPLETION
+        if "input" in body:
+            return BedrockBatchRecordKind.EMBEDDING
+        return BedrockBatchRecordKind.CHAT
 
     # Identifier for the Bedrock Titan v2 InvokeModel body schema as stored
     # in `model_prices_and_context_window.json`. Centralized so future
@@ -544,9 +586,84 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         )
         return dict(titan_config._transform_request(input=input_text, inference_params=inference_params))
 
+    @staticmethod
+    def _transform_text_completion_body_to_chat_body(openai_request_body: Mapping[str, Any]) -> Mapping[str, Any]:
+        """
+        Rewrite an OpenAI `/v1/completions` batch body as a Chat Completions body.
+
+        Bedrock batch `modelInput` is the model's InvokeModel/Converse body, and
+        no Bedrock batch model takes a bare `prompt`, so the wrapping that
+        `litellm.text_completion` does in real time has to happen here too.
+        """
+        prompt: Final = openai_request_body.get("prompt")
+        if prompt is None:
+            raise ValueError(
+                "Batch record for /v1/completions is missing required `prompt` field: "
+                f"model={openai_request_body.get('model', '')}"
+            )
+        return _frozen_mapping(
+            chain(
+                ((key, value) for key, value in openai_request_body.items() if key != "prompt"),
+                (("messages", text_completion_prompt_to_messages(prompt)),),
+            )
+        )
+
+    @staticmethod
+    def _transform_responses_body_to_chat_body(openai_request_body: Mapping[str, Any]) -> Mapping[str, Any]:
+        """
+        Rewrite an OpenAI `/v1/responses` batch body as a Chat Completions body.
+
+        Delegates to the same Responses-to-Chat bridge the real-time path uses
+        for providers without a native Responses API (which is every Bedrock
+        model), so `input`, `instructions`, `max_output_tokens` and the tool
+        params translate identically in batch and real time. The bridge always
+        emits a `tools` key; an empty one is dropped rather than shipped as an
+        empty array inside `modelInput`.
+        """
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            LiteLLMCompletionResponsesConfig,
+        )
+
+        responses_input: Final = openai_request_body.get("input")
+        if responses_input is None:
+            raise ValueError(
+                "Batch record for /v1/responses is missing required `input` field: "
+                f"model={openai_request_body.get('model', '')}"
+            )
+        chat_body: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=openai_request_body.get("model", ""),
+            input=_responses_input_adapter().validate_python(responses_input),
+            responses_api_request=_responses_request_adapter().validate_python(
+                _frozen_mapping(
+                    (key, value) for key, value in openai_request_body.items() if key not in ("model", "input")
+                )
+            ),
+            metadata=openai_request_body.get("metadata"),
+        )
+        return _frozen_mapping((key, value) for key, value in chat_body.items() if key != "tools" or value)
+
+    @staticmethod
+    def _transform_batch_body_to_chat_body(
+        openai_request_body: Mapping[str, Any],
+        record_kind: BedrockBatchRecordKind,
+    ) -> Mapping[str, Any]:
+        """
+        Normalize a non-embedding batch body to the Chat Completions shape the
+        per-provider Bedrock transformations expect.
+        """
+        match record_kind:
+            case BedrockBatchRecordKind.TEXT_COMPLETION:
+                return BedrockFilesConfig._transform_text_completion_body_to_chat_body(openai_request_body)
+            case BedrockBatchRecordKind.RESPONSES:
+                return BedrockFilesConfig._transform_responses_body_to_chat_body(openai_request_body)
+            case BedrockBatchRecordKind.CHAT:
+                return openai_request_body
+            case BedrockBatchRecordKind.EMBEDDING:
+                raise ValueError("Embedding batch records do not have a chat-completion equivalent")
+
     def _map_openai_to_bedrock_params(
         self,
-        openai_request_body: dict[str, Any],
+        openai_request_body: Mapping[str, Any],
         provider: str | None = None,
     ) -> dict[str, Any]:
         """
@@ -658,14 +775,18 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             provider = self.get_bedrock_invoke_provider(model)
 
             # Route to the embedding transformer when the OpenAI batch line
-            # targets /v1/embeddings; otherwise fall back to the existing
-            # chat-completion path. We branch here (rather than inside
+            # targets /v1/embeddings; every other endpoint shape is normalized
+            # to chat completions first. We branch here (rather than inside
             # `_map_openai_to_bedrock_params`) so the chat helper keeps its
             # narrow contract and the embedding helper can evolve independently.
-            if self._is_embedding_record(_openai_jsonl_content):
+            record_kind = self._classify_batch_record(_openai_jsonl_content)
+            if record_kind is BedrockBatchRecordKind.EMBEDDING:
                 model_input = self._map_openai_embedding_to_bedrock_params(openai_request_body=openai_body)
             else:
-                model_input = self._map_openai_to_bedrock_params(openai_request_body=openai_body, provider=provider)
+                model_input = self._map_openai_to_bedrock_params(
+                    openai_request_body=self._transform_batch_body_to_chat_body(openai_body, record_kind),
+                    provider=provider,
+                )
 
             # Create Bedrock batch record
             record_id = _openai_jsonl_content.get("custom_id", f"CALL{str(idx).zfill(7)}")
@@ -733,6 +854,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             content=file_content,
             api_base=api_base,
             optional_params=optional_params,
+            s3_encryption_key_id=resolve_s3_encryption_key_id(
+                litellm_params=litellm_params,
+                optional_params=optional_params,
+            ),
         )
 
         litellm_params["upload_url"] = api_base
@@ -750,6 +875,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         content: str,
         api_base: str,
         optional_params: dict,
+        s3_encryption_key_id: str | None = None,
     ) -> tuple[dict, str]:
         """
         Sign S3 PUT request using the same proven logic as S3Logger.
@@ -782,12 +908,25 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         content_hash: Final = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
         # Prepare headers with required S3 headers (same as s3_v2.py)
-        request_headers: Final = {
-            "Content-Type": "application/json",  # JSONL files are JSON content
-            "x-amz-content-sha256": content_hash,  # REQUIRED by S3
-            "Content-Language": "en",
-            "Cache-Control": "private, immutable, max-age=31536000, s-maxage=0",
-        }
+        sse_headers: Final = (
+            MappingProxyType(
+                {
+                    "x-amz-server-side-encryption": "aws:kms",
+                    "x-amz-server-side-encryption-aws-kms-key-id": s3_encryption_key_id,
+                }
+            )
+            if s3_encryption_key_id
+            else MappingProxyType({})
+        )
+        request_headers: Final = MappingProxyType(
+            {
+                "Content-Type": "application/json",  # JSONL files are JSON content
+                "x-amz-content-sha256": content_hash,  # REQUIRED by S3
+                "Content-Language": "en",
+                "Cache-Control": "private, immutable, max-age=31536000, s-maxage=0",
+                **sse_headers,
+            }
+        )
 
         # Use requests.Request to prepare the request (same pattern as s3_v2.py)
         req: Final = requests.Request("PUT", api_base, data=content, headers=request_headers)

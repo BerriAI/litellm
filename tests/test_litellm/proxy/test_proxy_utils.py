@@ -1096,6 +1096,7 @@ async def test_prisma_health_check_failure_names_itself_at_operator_visible_leve
     function and reads as "the check never ran", and reporting it only at debug
     level hides a database fault behind a flag nobody enables in production."""
     import logging
+    from functools import partial
     from unittest.mock import AsyncMock
 
     from litellm.proxy.utils import PrismaClient
@@ -1103,6 +1104,9 @@ async def test_prisma_health_check_failure_names_itself_at_operator_visible_leve
     client = MagicMock()
     client.db.query_raw = AsyncMock(side_effect=Exception("connection refused"))
     client.proxy_logging_obj.failure_handler = AsyncMock()
+    client._probe_target_wrapper = MagicMock(return_value=client.db)
+    client._run_health_probe = partial(PrismaClient._run_health_probe, client)
+    client._report_health_check_failure = AsyncMock()
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         with pytest.raises(Exception, match="connection refused"):
@@ -1142,6 +1146,7 @@ async def test_prisma_health_check_failure_redacts_database_credentials(caplog):
     text can carry a full connection string, so the credential has to be gone
     from the emitted record."""
     import logging
+    from functools import partial
     from unittest.mock import AsyncMock
 
     from litellm.proxy.utils import PrismaClient
@@ -1151,6 +1156,9 @@ async def test_prisma_health_check_failure_redacts_database_credentials(caplog):
         side_effect=Exception("could not connect to postgresql://admin:hunter2@db.internal:5432/litellm")
     )
     client.proxy_logging_obj.failure_handler = AsyncMock()
+    client._probe_target_wrapper = MagicMock(return_value=client.db)
+    client._run_health_probe = partial(PrismaClient._run_health_probe, client)
+    client._report_health_check_failure = AsyncMock()
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         with pytest.raises(Exception):

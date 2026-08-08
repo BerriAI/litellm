@@ -3478,6 +3478,23 @@ class TestSessionAffinity:
         assert second.model == "o1-preview"
 
     @pytest.mark.asyncio
+    async def test_a_pinned_turn_reports_the_tier_that_serves_it(self, mock_router_instance, session_affinity_config):
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+        )
+        pinned = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert pinned.routing_decision["tier"] == "REASONING"
+
+    @pytest.mark.asyncio
     async def test_different_sessions_classify_independently(self, mock_router_instance, session_affinity_config):
         mock_router_instance.cache = DualCache()
         router = ComplexityRouter(
@@ -4362,7 +4379,24 @@ class TestRoutingDecisionContents:
         assert decision is not None
         assert decision["cause"] == "default_fallback"
         assert decision["routed_model"] == response.model
-        assert "tier" not in decision
+        assert decision.get("tier") == "MEDIUM"
+
+    @pytest.mark.asyncio
+    async def test_a_default_model_fallback_claims_no_tier(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "default_model": "gpt-4o"},
+        )
+        response = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={},
+            messages=[{"role": "system", "content": "be nice"}],
+        )
+        assert response is not None
+        assert response.routing_decision is not None
+        assert response.routing_decision["cause"] == "default_fallback"
+        assert "tier" not in response.routing_decision
 
     @pytest.mark.asyncio
     async def test_session_pin_decision(self, mock_router_instance, basic_config):
@@ -5907,11 +5941,21 @@ class TestConversationShapeDiscriminator:
         )
         builds = source.split("self._build_routing_decision(")[1:]
         assert builds
-        missing = [
-            i
-            for i, block in enumerate(builds)
-            if "conversation_continuing=conversation_continuing" not in block.split("),")[0]
-        ]
+        missing = []
+        for i, block in enumerate(builds):
+            depth = 0
+            end = 0
+            for j, char in enumerate(block):
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                    if depth < 0:
+                        end = j
+                        break
+            extracted = block[:end]
+            if "conversation_continuing=conversation_continuing" not in extracted:
+                missing.append(i)
         assert not missing, f"routing decisions {missing} do not carry the conversation shape"
 
 

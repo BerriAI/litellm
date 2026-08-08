@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+import logging
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,6 +15,7 @@ sys.path.insert(
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
+from litellm.integrations.custom_logger import CustomLogger
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -7415,3 +7417,136 @@ class TestAutoRouterMaxInputCharsWiring:
         router = self._router()
 
         assert self._registered_auto_router(router).max_input_chars == DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
+
+
+class _LogCapture(logging.Handler):
+    def __init__(self, level):
+        super().__init__(level=level)
+        self._level = level
+        self.messages = []
+
+    def emit(self, record):
+        if record.levelno == self._level:
+            self.messages.append(record.getMessage())
+
+
+class _FallbackAttemptRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.failed_targets = []
+
+    async def log_failure_fallback_event(self, original_model_group, kwargs, original_exception):
+        self.failed_targets.append(kwargs.get("model"))
+
+
+def _cyclic_fallback_router(num_retries=0):
+    groups = ["group-a", "group-b", "group-c", "group-d"]
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-fake",
+                    "mock_response": "litellm.InternalServerError",
+                },
+            }
+            for group in groups
+        ],
+        fallbacks=[
+            {"group-a": ["group-b", "group-c"]},
+            {"group-b": ["group-a", "group-c"]},
+            {"group-c": ["group-d"]},
+            {"group-d": ["group-b", "group-a"]},
+        ],
+        num_retries=num_retries,
+    )
+
+
+async def _drive_cyclic_fallback(router, capture, recorder=None, **request_kwargs):
+    router_logger = logging.getLogger("LiteLLM Router")
+    previous_level = router_logger.level
+    router_logger.setLevel(capture.level)
+    router_logger.addHandler(capture)
+    if recorder is not None:
+        litellm.callbacks.append(recorder)
+    try:
+        with pytest.raises(litellm.InternalServerError):
+            await router.acompletion(
+                model="group-a", messages=[{"role": "user", "content": "hi"}], **request_kwargs
+            )
+    finally:
+        router_logger.removeHandler(capture)
+        router_logger.setLevel(previous_level)
+        if recorder is not None:
+            litellm.callbacks.remove(recorder)
+
+
+@pytest.mark.asyncio
+async def test_cyclic_fallback_graph_does_not_amplify_one_request():
+    """A fallback graph whose entries loop back on each other is easy to build by accident,
+    and every group in the loop fails identically on a deterministic error, so the walk must
+    not revisit a group and must not re-emit a growing chained traceback at each level. Left
+    unbounded, one request blocks the event loop long enough for health probes to fail."""
+    recorder = _FallbackAttemptRecorder()
+    capture = _LogCapture(logging.ERROR)
+
+    await _drive_cyclic_fallback(_cyclic_fallback_router(), capture, recorder)
+
+    assert sorted(set(recorder.failed_targets)) == ["group-b", "group-c", "group-d"]
+    assert len(recorder.failed_targets) == len(set(recorder.failed_targets))
+    assert not any("Traceback (most recent call last)" in message for message in capture.messages)
+    assert sum(len(message) for message in capture.messages) < 5_000
+
+
+@pytest.mark.asyncio
+async def test_retry_breadcrumbs_do_not_carry_the_walk_state():
+    """log_retry copies every kwarg into previous_models, which reaches spend logs and
+    logging callbacks. The set of already-attempted groups is router-internal walk state
+    with no diagnostic value there, and it is the one entry that is not a plain scalar.
+    A retry has to be configured for the walk state to reach log_retry at all."""
+    router = _cyclic_fallback_router(num_retries=1)
+    capture = _LogCapture(logging.ERROR)
+
+    await _drive_cyclic_fallback(router, capture)
+
+    assert router.previous_models, "no retry breadcrumbs were recorded"
+    assert any(
+        "fallback_depth" in breadcrumb for breadcrumb in router.previous_models
+    ), "no breadcrumb carried router walk state, so this test cannot see the leak"
+    for breadcrumb in router.previous_models:
+        assert "attempted_targets" not in breadcrumb
+
+
+@pytest.mark.asyncio
+async def test_fallback_traceback_stays_available_at_debug_level():
+    """Dropping the stack from the ERROR line is only safe because the fallback path still
+    emits it once per level at DEBUG, which is what an operator needs to diagnose why every
+    fallback failed. This pins that remaining debug traceback."""
+    capture = _LogCapture(logging.DEBUG)
+
+    await _drive_cyclic_fallback(_cyclic_fallback_router(), capture)
+
+    assert any("Traceback (most recent call last)" in message for message in capture.messages)
+
+
+@pytest.mark.asyncio
+async def test_fallback_failure_detail_from_upstream_is_bounded():
+    """The detail each level records about the level below it is attacker-influenced, since
+    it carries whatever the upstream error said. It has to be bounded on its own, so a walk
+    over several groups cannot compound one large message into the log or into the message
+    handed back to the caller."""
+    huge_message = "z" * 50_000
+    capture = _LogCapture(logging.ERROR)
+
+    await _drive_cyclic_fallback(
+        _cyclic_fallback_router(),
+        capture,
+        mock_response=litellm.InternalServerError(
+            message=huge_message, llm_provider="openai", model="group-a"
+        ),
+    )
+
+    assert capture.messages, "the fallback failure path did not log at ERROR"
+    assert huge_message not in "".join(capture.messages)
+    assert max(len(message) for message in capture.messages) < 5_000

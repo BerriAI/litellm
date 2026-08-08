@@ -4,9 +4,12 @@ This file contains common utils for anthropic calls.
 
 import copy
 import re
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import Any, Final, Literal
 
 import httpx
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -1055,6 +1058,152 @@ def sanitize_tool_use_ids_in_anthropic_messages(messages: list[Any]) -> list[Any
         else:
             out.append({**m, "content": new_content})
     return out
+
+
+class _ReplayedSearchQuery(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    query: str = ""
+
+
+class _ReplayedWebSearchResult(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["web_search_result"]
+    url: str = ""
+    title: str = ""
+    snippet: str = ""
+    encrypted_content: str = ""
+
+
+class _ReplayedWebSearchToolResult(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["web_search_tool_result"]
+    tool_use_id: str
+    content: tuple[_ReplayedWebSearchResult, ...]
+
+
+class _ReplayedServerToolUse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["server_tool_use"]
+    id: str
+    input: _ReplayedSearchQuery = _ReplayedSearchQuery()
+
+
+class _TextBlock(BaseModel):
+    type: Literal["text"] = "text"
+    text: str
+
+
+_WEB_SEARCH_TOOL_RESULT_ADAPTER: Final = TypeAdapter(_ReplayedWebSearchToolResult)
+_SERVER_TOOL_USE_ADAPTER: Final = TypeAdapter(_ReplayedServerToolUse)
+
+
+def _flattenable_web_search_tool_result(block: object) -> _ReplayedWebSearchToolResult | None:
+    """
+    The parsed block when it is a ``web_search_tool_result`` carrying no
+    ``encrypted_content``, else None for anything Anthropic itself issued.
+
+    An empty ``content`` list is flattenable too. It is what the interceptor emits
+    when a search legitimately returns nothing and when a search raises, and it
+    carries neither evidence to preserve nor an ``encrypted_content`` to respect,
+    so leaving it in place only buys the 400 this whole function exists to avoid.
+    """
+    try:
+        parsed: Final = _WEB_SEARCH_TOOL_RESULT_ADAPTER.validate_python(block)
+    except ValidationError:
+        return None
+    if any(result.encrypted_content for result in parsed.content):
+        return None
+    return parsed
+
+
+def _replayed_server_tool_use(block: object) -> _ReplayedServerToolUse | None:
+    try:
+        return _SERVER_TOOL_USE_ADAPTER.validate_python(block)
+    except ValidationError:
+        return None
+
+
+def _render_web_search_results(query: str, results: tuple[_ReplayedWebSearchResult, ...]) -> str:
+    header: Final = f"Web search results for '{query}':" if query else "Web search results:"
+    if not results:
+        return f"{header}\n\nNo results were returned."
+    body: Final = "\n\n".join(
+        "\n".join(
+            line
+            for line in (
+                f"Title: {result.title}" if result.title else "",
+                f"URL: {result.url}" if result.url else "",
+                f"Snippet: {result.snippet}" if result.snippet else "",
+            )
+            if line
+        )
+        for result in results
+    )
+    return f"{header}\n\n{body}" if body else header
+
+
+def _rewrite_replayed_web_search_block(
+    block: object,
+    flattenable: Mapping[str, _ReplayedWebSearchToolResult],
+    queries: Mapping[str, str],
+) -> object | None:
+    parsed_result: Final = _flattenable_web_search_tool_result(block)
+    if parsed_result is not None:
+        return _TextBlock(
+            text=_render_web_search_results(queries.get(parsed_result.tool_use_id, ""), parsed_result.content)
+        ).model_dump()
+    parsed_use: Final = _replayed_server_tool_use(block)
+    if parsed_use is not None and parsed_use.id in flattenable:
+        return None
+    return block
+
+
+def _flatten_web_search_results_in_message(message: object) -> object:
+    if not isinstance(message, Mapping) or not isinstance(message.get("content"), Sequence):
+        return message
+    content: Final = message["content"]
+    if isinstance(content, str):
+        return message
+    flattenable: Final = MappingProxyType(
+        {
+            parsed.tool_use_id: parsed
+            for parsed in (_flattenable_web_search_tool_result(block) for block in content)
+            if parsed is not None
+        }
+    )
+    if not flattenable:
+        return message
+    queries: Final = MappingProxyType(
+        {
+            parsed.id: parsed.input.query
+            for parsed in (_replayed_server_tool_use(block) for block in content)
+            if parsed is not None
+        }
+    )
+    rewritten: Final = tuple(_rewrite_replayed_web_search_block(block, flattenable, queries) for block in content)
+    return {**message, "content": [b for b in rewritten if b is not None]}  # mutable-ok: JSON wire format
+
+
+def flatten_unencrypted_web_search_results_in_anthropic_messages(  # mutable-ok: as sibling sanitizers
+    messages: list[Any],
+) -> list[Any]:
+    """
+    Return a new message list with replayed ``web_search_tool_result`` blocks that
+    carry no ``encrypted_content`` rewritten into plain ``text`` blocks holding the
+    same title / url / snippet evidence.
+
+    ``encrypted_content`` is an opaque blob only Anthropic's own search backend can
+    mint, so blocks synthesized by LiteLLM (websearch interception against a search
+    provider) are rejected with ``Invalid encrypted_content in search_result block``
+    when a native client loops them back as history. Flattening them keeps the
+    evidence in the conversation instead of 400ing the follow-up turn, and leaves
+    genuine Anthropic-issued blocks untouched.
+    """
+    return [_flatten_web_search_results_in_message(m) for m in messages]  # mutable-ok: JSON wire format
 
 
 def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:

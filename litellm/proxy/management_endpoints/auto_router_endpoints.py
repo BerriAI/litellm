@@ -4,8 +4,9 @@ AUTO ROUTER MANAGEMENT ENDPOINTS
 POST /auto_router/test_routing - Route one prompt through an unsaved complexity-router config
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final
 
 from pydantic import BaseModel, TypeAdapter
@@ -260,6 +261,7 @@ async def preview_auto_router_routing(
 class _SessionAggRow(BaseModel):
     router_name: str
     router_type: str
+    tier_turns: Mapping[str, int]
     sessions: int
     turns: int
     unordered_turns: int
@@ -284,6 +286,23 @@ class _SessionAggRow(BaseModel):
 _SESSION_AGG_ROWS: Final = TypeAdapter(list[_SessionAggRow])
 
 _BENCHMARKS_SQL: Final = """
+WITH windowed AS (
+    SELECT * FROM "LiteLLM_AutoRouterSession"
+    WHERE last_turn_at >= $1::timestamp AND first_turn_at < $2::timestamp
+),
+tier_maps AS (
+    SELECT router_name, router_type, jsonb_object_agg(tier, tier_turns) AS tier_turns
+    FROM (
+        SELECT router_name, router_type, kv.key AS tier, SUM((kv.value)::int)::int AS tier_turns
+        FROM windowed, LATERAL jsonb_each_text(tier_turns) AS kv
+        GROUP BY router_name, router_type, kv.key
+    ) per_tier
+    GROUP BY router_name, router_type
+)
+SELECT
+    agg.*,
+    COALESCE(tier_maps.tier_turns, '{}'::jsonb) AS tier_turns
+FROM (
 SELECT
     router_name,
     router_type,
@@ -306,10 +325,11 @@ SELECT
     COALESCE(SUM(spend), 0)::float8 AS spend,
     COALESCE(SUM(saved_spend), 0)::float8 AS saved_spend,
     COALESCE(SUM(EXTRACT(EPOCH FROM (last_turn_at - first_turn_at))), 0)::float8 AS session_seconds
-FROM "LiteLLM_AutoRouterSession"
-WHERE last_turn_at >= $1::timestamp AND first_turn_at < $2::timestamp
+FROM windowed
 GROUP BY router_name, router_type
-ORDER BY SUM(spend) DESC
+) agg
+LEFT JOIN tier_maps USING (router_name, router_type)
+ORDER BY agg.spend DESC
 """
 
 
@@ -366,6 +386,7 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
     return _SessionAggRow(
         router_name="",
         router_type="",
+        tier_turns=MappingProxyType({}),
         sessions=sum(row.sessions for row in rows),
         turns=sum(row.turns for row in rows),
         unordered_turns=sum(row.unordered_turns for row in rows),
@@ -443,6 +464,7 @@ async def get_auto_router_benchmarks(
         AutoRouterBenchmarkGroup(
             router_name=row.router_name,
             router_type=row.router_type,
+            tier_turns=row.tier_turns,
             **_benchmark_totals(row).model_dump(),
         )
         for row in rows

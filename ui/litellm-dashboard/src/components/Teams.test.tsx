@@ -613,6 +613,34 @@ describe("Teams - access_group_ids in team create", () => {
       );
     });
   });
+
+  it("creates a team with no models selected, sending the no-default-models sentinel instead of an empty list", async () => {
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+
+    const createButton = screen.getAllByRole("button", { name: /create team/i })[0];
+    act(() => {
+      fireEvent.click(createButton);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/team name/i)).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Group Only Team" } });
+
+    const createTeamSubmitButtons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(createTeamSubmitButtons[createTeamSubmitButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(teamCreateCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          team_alias: "Group Only Team",
+          models: ["no-default-models"],
+        }),
+      );
+    });
+  });
 });
 
 describe("Teams - metadata key-value pairs in team create", () => {
