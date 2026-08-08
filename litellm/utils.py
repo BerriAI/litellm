@@ -7766,6 +7766,7 @@ class ProviderConfigManager:
             LlmProviders.CEREBRAS: (lambda: litellm.CerebrasConfig(), False),
             LlmProviders.BASETEN: (lambda: litellm.BasetenConfig(), False),
             LlmProviders.VOLCENGINE: (lambda: litellm.VolcEngineConfig(), False),
+            LlmProviders.BYTEPLUS: (lambda: litellm.BytePlusConfig(), False),
             LlmProviders.TEXT_COMPLETION_CODESTRAL: (
                 lambda: litellm.CodestralTextCompletionConfig(),
                 False,
@@ -7997,6 +7998,12 @@ class ProviderConfigManager:
             )
 
             return VolcEngineEmbeddingConfig()
+        elif litellm.LlmProviders.BYTEPLUS == provider:
+            from litellm.llms.byteplus.embedding.transformation import (
+                BytePlusEmbeddingConfig,
+            )
+
+            return BytePlusEmbeddingConfig()
         elif litellm.LlmProviders.DASHSCOPE == provider:
             from litellm.llms.dashscope.embed.transformation import (
                 DashScopeEmbeddingConfig,
@@ -8312,6 +8319,8 @@ class ProviderConfigManager:
             return litellm.LiteLLMProxyResponsesAPIConfig()
         elif litellm.LlmProviders.VOLCENGINE == provider:
             return litellm.VolcEngineResponsesAPIConfig()
+        elif litellm.LlmProviders.BYTEPLUS == provider:
+            return litellm.BytePlusResponsesAPIConfig()
         elif litellm.LlmProviders.MANUS == provider:
             return litellm.ManusResponsesAPIConfig()
         elif litellm.LlmProviders.PERPLEXITY == provider:
@@ -8734,6 +8743,12 @@ class ProviderConfigManager:
             )
 
             return get_modelscope_image_generation_config(model)
+        elif LlmProviders.BYTEPLUS == provider:
+            from litellm.llms.byteplus.image_generation import (
+                get_byteplus_image_generation_config,
+            )
+
+            return get_byteplus_image_generation_config(model)
         return None
 
     @staticmethod
@@ -9047,6 +9062,12 @@ class ProviderConfigManager:
             )
 
             return AWSPollyTextToSpeechConfig()
+        elif litellm.LlmProviders.BYTEPLUS == provider:
+            from litellm.llms.byteplus.text_to_speech.transformation import (
+                BytePlusTextToSpeechConfig,
+            )
+
+            return BytePlusTextToSpeechConfig()
         return None
 
     @staticmethod

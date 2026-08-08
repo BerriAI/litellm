@@ -5570,6 +5570,7 @@ def completion(
             or custom_llm_provider == "baseten"
             or custom_llm_provider == "sambanova"
             or custom_llm_provider == "volcengine"
+            or custom_llm_provider == "byteplus"
             or custom_llm_provider == "anyscale"
             or custom_llm_provider == "openai"
             or custom_llm_provider == "together_ai"
@@ -6823,6 +6824,33 @@ def embedding(
                 aembedding=aembedding,
                 headers=headers,
             )
+        elif custom_llm_provider == "byteplus":
+            byteplus_key: Final = (
+                api_key or litellm.api_key or get_secret_str("BYTEPLUS_API_KEY") or get_secret_str("ARK_API_KEY")
+            )
+            if byteplus_key is None:
+                raise ValueError(
+                    "Missing API key for BytePlus. Set BYTEPLUS_API_KEY or ARK_API_KEY environment variable or pass api_key parameter."
+                )
+            if extra_headers is not None and isinstance(extra_headers, dict):
+                headers = extra_headers  # rebind-ok: same pattern as volcengine block above
+            else:
+                headers = {}  # rebind-ok: same pattern as volcengine block above
+            response = base_llm_http_handler.embedding(  # rebind-ok: same pattern as volcengine block above
+                model=model,
+                input=input,
+                timeout=timeout,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging,
+                api_base=api_base,
+                optional_params=optional_params,
+                litellm_params={},
+                model_response=EmbeddingResponse(),
+                api_key=byteplus_key,
+                client=client,
+                aembedding=aembedding,
+                headers=headers,
+            )
         elif custom_llm_provider == "dashscope":
             dashscope_key: Final = api_key or litellm.api_key or get_secret_str("DASHSCOPE_API_KEY")
             if dashscope_key is None:
@@ -7902,7 +7930,9 @@ def speech(
         custom_llm_provider=custom_llm_provider,
     )
     response: HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent] | None = None
-    if custom_llm_provider == "openai" or custom_llm_provider in litellm.openai_compatible_providers:
+    if (
+        custom_llm_provider == "openai" or custom_llm_provider in litellm.openai_compatible_providers
+    ) and custom_llm_provider != "byteplus":
         if voice is None or not (isinstance(voice, str)):
             raise litellm.BadRequestError(
                 message="'voice' is required to be passed as a string for OpenAI TTS",
@@ -8216,19 +8246,20 @@ def speech(
             client=client,
             _is_async=aspeech or False,
         )
-    elif custom_llm_provider == "aws_polly":
-        from litellm.llms.aws_polly.text_to_speech.transformation import (
-            AWSPollyTextToSpeechConfig,
+    elif custom_llm_provider == "aws_polly" or custom_llm_provider == "byteplus":
+        from litellm.llms.base_llm.text_to_speech.transformation import (
+            BaseTextToSpeechConfig,
         )
 
-        # AWS Polly Text-to-Speech
         if text_to_speech_provider_config is None:
-            text_to_speech_provider_config = AWSPollyTextToSpeechConfig()
+            raise litellm.BadRequestError(
+                message=f"{custom_llm_provider} Text-to-Speech configuration not found",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
 
-        # Cast to specific AWS Polly config type to access dispatch method
-        aws_polly_config: Final = cast(AWSPollyTextToSpeechConfig, text_to_speech_provider_config)
-
-        response = aws_polly_config.dispatch_text_to_speech(
+        dispatch_config: Final = cast(BaseTextToSpeechConfig, text_to_speech_provider_config)
+        response = dispatch_config.dispatch_text_to_speech(  # rebind-ok: same pattern as other TTS provider blocks
             model=model,
             input=input,
             voice=voice,
