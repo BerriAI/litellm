@@ -1855,6 +1855,11 @@ class CustomStreamWrapper:
                 return processed_chunk
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
+            # Mirror async: recover partial usage from chunks already delivered so
+            # failure_handler does not zero spend when the provider never sent a
+            # final usage chunk (client disconnect / mid-stream error). See #14457.
+            if self.logging_obj is not None:
+                self._record_partial_usage_for_failure()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
             threading.Thread(target=self.logging_obj.failure_handler, args=(e, traceback_exception)).start()
             self._handle_stream_fallback_error(e)
@@ -2107,11 +2112,37 @@ class CustomStreamWrapper:
         handler records the real partial spend instead of zero. A request that
         later recovers via a router fallback overwrites this with the combined
         success log on the same request id, so this never double counts.
+
+        Pass messages/logging_obj into stream_chunk_builder so prompt tokens are
+        estimated from the request when the provider only emits usage on the
+        (never-received) final chunk - the same contract as normal end-of-stream
+        assembly and proxy disconnect billing.
         """
         if self.logging_obj is None or not self.chunks:
             return
         try:
-            partial_response: Final = litellm.stream_chunk_builder(chunks=self.chunks)
+            try:
+                selected_response = (
+                    litellm.stream_chunk_builder(  # rebind-ok: set once from builder success or fallback path
+                        chunks=self.chunks,
+                        messages=self.messages,
+                        logging_obj=self.logging_obj,
+                    )
+                )
+            except Exception as builder_error:  # noqa: BLE001 - mirror end-of-stream; builder can fail many ways, any must fall back to chunk usage
+                # Mirror end-of-stream: stream_chunk_builder can re-raise (as
+                # APIError) on large agentic streams. Fall back to raw-chunk
+                # usage so failure_handler still preserves partial spend.
+                verbose_logger.warning(
+                    "stream_chunk_builder raised during partial-usage recovery (%s); "
+                    "falling back to calculate_total_usage from chunks.",
+                    builder_error,
+                )
+                selected_response = self.model_response_creator()  # rebind-ok: builder fallback path
+                selected_response.usage = calculate_total_usage(chunks=self.chunks)
+            if selected_response is None:
+                return
+            partial_response: Final = selected_response
             usage: Final = cast(Usage | None, getattr(partial_response, "usage", None))
             if usage is None:
                 return
