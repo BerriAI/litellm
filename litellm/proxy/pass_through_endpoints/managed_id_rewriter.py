@@ -675,6 +675,7 @@ async def _mint_or_reuse_object(
                     "model_object_id": namespaced_model_object_id,
                     "file_purpose": file_purpose,
                     "created_by": user_api_key_dict.user_id,
+                    "created_by_api_key": user_api_key_dict.api_key,
                     "team_id": user_api_key_dict.team_id,
                     "updated_by": user_api_key_dict.user_id,
                 },
