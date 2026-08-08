@@ -117,6 +117,74 @@ describe("ChatUI", () => {
     });
   });
 
+  it("shows only endpoint-compatible models when chat endpoint is selected", async () => {
+    (fetchModelsModule.fetchAvailableModels as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { model_group: "ChatModel", mode: "chat" },
+      { model_group: "SpeechModel", mode: "audio_speech" },
+      { model_group: "ImageModel", mode: "image_generation" },
+      { model_group: "ResponsesModel", mode: "responses" },
+      { model_group: "RealtimeModel", mode: "realtime" },
+      { model_group: "NoModeModel" },
+    ]);
+
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    await selectComboboxOption("Select an endpoint", "/v1/chat/completions");
+    await openComboboxByPlaceholder("Select a Model");
+
+    await waitFor(() => {
+      expect(screen.getAllByText("ChatModel").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("NoModeModel").length).toBeGreaterThan(0);
+      expect(screen.queryByText("SpeechModel")).toBeNull();
+      expect(screen.queryByText("ImageModel")).toBeNull();
+      expect(screen.queryByText("ResponsesModel")).toBeNull();
+      expect(screen.queryByText("RealtimeModel")).toBeNull();
+    });
+  });
+
+  it("shows only realtime models when realtime endpoint is selected", async () => {
+    (fetchModelsModule.fetchAvailableModels as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { model_group: "ChatModel", mode: "chat" },
+      { model_group: "RealtimeModel", mode: "realtime" },
+      { model_group: "NoModeModel" },
+    ]);
+
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    await selectComboboxOption("Select an endpoint", "/v1/realtime");
+    await openComboboxByPlaceholder("Select a Model");
+
+    await waitFor(() => {
+      expect(screen.getAllByText("RealtimeModel").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("NoModeModel").length).toBeGreaterThan(0);
+      expect(screen.queryByText("ChatModel")).toBeNull();
+    });
+  });
+
   it("should show 'Enter custom model' option in model selector", async () => {
     render(
       <ChatUI
