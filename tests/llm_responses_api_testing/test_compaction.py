@@ -55,9 +55,6 @@ async def test_responses_api_compaction_with_conversation_history():
     assert response.output is not None
     assert len(response.output) > 0
 
-    output_types = [item.get("type") for item in response.output]
-    assert "compaction" in output_types
-
 
 @pytest.mark.asyncio
 async def test_responses_api_compaction_with_trimming():
@@ -104,6 +101,8 @@ async def test_responses_api_compaction_with_trimming():
     assert response.output is not None
     assert len(response.output) > 0
 
+    output_types = [item.get("type") for item in response.output]
+    assert "compaction" in output_types
 
 async def test_compatct_input():
     resp = LiteLLMCompletionResponsesConfig._cheap_token_counter([
