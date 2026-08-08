@@ -35298,6 +35298,12 @@ export interface components {
             db_model: boolean;
             /** Id */
             id: string | null;
+            /** Routing Strategy */
+            routing_strategy?: string | null;
+            /** Routing Strategy Args */
+            routing_strategy_args?: {
+                [key: string]: unknown;
+            } | null;
             /** Team Id */
             team_id?: string | null;
             /** Team Public Model Name */

@@ -22,6 +22,7 @@ import weakref
 from collections import defaultdict
 from collections.abc import AsyncGenerator, Callable, Generator, Mapping, Sequence
 from functools import lru_cache
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, Union, cast
 
 import anyio
@@ -342,6 +343,19 @@ def _replay_live_router_model_cost() -> None:
 
 set_live_deployment_replay(_replay_live_router_model_cost)
 
+_EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+@lru_cache(maxsize=512)
+def _warn_model_group_strategy_once(model: str, kind: str, fingerprint: str, message: str) -> None:
+    """
+    Reports a model-group strategy misconfiguration once per
+    (model, problem kind, offending config): distinct problem kinds warn
+    independently, a changed config re-warns, and lru_cache makes the
+    check-and-record atomic under concurrent dispatch.
+    """
+    verbose_router_logger.warning("%s (model_group=%s, kind=%s, config=%s)", message, model, kind, fingerprint)
+
 
 # Kwargs that log_retry must not copy into a retry breadcrumb. The breadcrumbs reach spend
 # logs and logging callbacks, and these carry either the request payload or router-internal
@@ -602,6 +616,9 @@ class Router:
         # ``id()``-reuse risk after GC). See
         # ``litellm.proxy.auth.auth_checks._is_model_cost_zero``.
         self._zero_cost_cache: dict[str, bool] = {}
+        self._get_model_group_strategy_config = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(
+            self._compute_model_group_strategy_config
+        )
 
         if model_list is not None:
             # set_model_list will build indices automatically
@@ -1132,18 +1149,142 @@ class Router:
                 )
             return self._override_selectors[strategy]
 
+    def _deployment_strategy_entry(self, idx: int) -> tuple[str | None, Mapping[str, object]] | None:
+        """
+        The (normalized strategy, args) a deployment declares via
+        `model_info.routing_strategy`, or None when unset. An empty string
+        counts as unset, so a PATCH (which cannot delete a model_info key) can
+        still clear the field.
+        """
+        info: Final = self.model_list[idx].get("model_info") or _EMPTY_MAPPING
+        raw: Final = info.get("routing_strategy")
+        if not raw:
+            return None
+        normalized: Final = self._normalize_strategy(raw) if isinstance(raw, (str, RoutingStrategy)) else None
+        return normalized, info.get("routing_strategy_args") or _EMPTY_MAPPING
+
+    def _compute_model_group_strategy_config(self, model: str) -> tuple[str, Mapping[str, object]] | None:
+        """
+        Reads `model_info.routing_strategy` (+ `routing_strategy_args`) off the
+        deployments of `model`. When deployments of the same model_name disagree,
+        the configured deployment with the smallest deployment id wins, which is
+        stable across edits and upserts (those re-append the deployment, so
+        model_list order is not); invalid or conflicting values are reported
+        once per offending config so a bad stored value can never take down
+        that model's traffic. Runs on every request, so the constructor wraps
+        it as `_get_model_group_strategy_config` with a per-instance lru_cache
+        that `_invalidate_model_group_info_cache` clears on model-list changes.
+        """
+        indices: Final = self.model_name_to_deployment_indices.get(model)
+        if not indices:
+            return None
+        ordered: Final = sorted(
+            indices,
+            key=lambda idx: str((self.model_list[idx].get("model_info") or _EMPTY_MAPPING).get("id") or ""),
+        )
+        configured: Final = tuple(
+            entry for idx in ordered if (entry := self._deployment_strategy_entry(idx)) is not None
+        )
+        if not configured:
+            return None
+        valid: Final = tuple(
+            (strategy, args)
+            for strategy, args in configured
+            if strategy is not None and strategy in self._OVERRIDABLE_ROUTING_STRATEGIES
+        )
+        has_invalid: Final = len(valid) < len(configured)
+        has_conflict: Final = len(frozenset(strategy for strategy, _ in valid)) > 1
+        if has_invalid or has_conflict:
+            _warn_model_group_strategy_once(
+                model,
+                "config",
+                ",".join(str(strategy) for strategy, _ in configured),
+                f"model_info.routing_strategy for model_group '{model}' has "
+                f"{'an unsupported value' if has_invalid else 'conflicting values across deployments'}; using "
+                f"'{valid[0][0] if valid else self._normalize_strategy(self.routing_strategy)}'. "
+                f"Supported strategies: {sorted(self._OVERRIDABLE_ROUTING_STRATEGIES)}.",
+            )
+        return valid[0] if valid else None
+
+    def _build_model_group_selector(self, strategy: str, args: Mapping[str, object]) -> object | TypeError | ValueError:
+        try:
+            return self._build_strategy_selector(strategy=strategy, routing_strategy_args=args)
+        except (TypeError, ValueError) as exc:
+            return exc
+
+    def _live_model_group_selector_keys(self) -> frozenset[str]:
+        """
+        Composite selector-cache keys still referenced by some model group's
+        `model_info` strategy config. Used to evict selectors orphaned by model
+        edits or deletions before caching a newly built one.
+        """
+        return frozenset(
+            f"{strategy}|{json.dumps(args, sort_keys=True, default=str)}"
+            for name in tuple(self.model_name_to_deployment_indices)
+            if (config := self._get_model_group_strategy_config(name)) is not None
+            for strategy, args in (config,)
+            if args and strategy != "simple-shuffle"
+        )
+
+    def _evict_stale_model_group_selectors(self) -> None:
+        """
+        Drops cached model-group selectors that no deployment's `model_info`
+        strategy config references anymore (after edits, deletions, or args
+        going invalid), unregistering them from litellm's callback lists.
+        """
+        if not getattr(self, "_override_selectors", None):
+            return
+        live_keys: Final = self._live_model_group_selector_keys()
+        with self._override_selectors_lock:
+            stale: Final = tuple(k for k in self._override_selectors if "|" in k and k not in live_keys)
+            self._unregister_router_selectors(tuple(self._override_selectors.pop(k) for k in stale))
+
+    def _resolve_model_group_context(
+        self, model: str, strategy: str, args: Mapping[str, object]
+    ) -> tuple[str, object | None] | None:
+        """
+        Selector resolution for a `model_info.routing_strategy` hit. Returns
+        None when the selector cannot be built (invalid `routing_strategy_args`),
+        so the caller falls through to the legacy routing-group / top-level
+        strategy instead of failing the request; the failure is reported once
+        per model_name.
+        """
+        if strategy == "simple-shuffle" or not args:
+            verbose_router_logger.debug("routing_group=model-info model=%s strategy=%s", model, strategy)
+            return strategy, self._get_override_strategy_selector(strategy)
+        selector_key: Final = f"{strategy}|{json.dumps(args, sort_keys=True, default=str)}"
+        with self._override_selectors_lock:
+            cached: Final = self._override_selectors.get(selector_key)
+        if cached is not None:
+            verbose_router_logger.debug("routing_group=model-info model=%s strategy=%s", model, strategy)
+            return strategy, cached
+        built: Final = self._build_model_group_selector(strategy, args)
+        if built is None or isinstance(built, Exception):
+            _warn_model_group_strategy_once(
+                model,
+                "args",
+                selector_key,
+                f"model_info.routing_strategy_args for model_group '{model}' cannot initialize strategy "
+                f"'{strategy}' ({built}); falling back to the routing-group / top-level strategy.",
+            )
+            return None
+        with self._override_selectors_lock:
+            winner: Final = self._override_selectors.setdefault(selector_key, built)
+        if winner is not built:
+            self._unregister_router_selectors((built,))
+        verbose_router_logger.debug("routing_group=model-info model=%s strategy=%s", model, strategy)
+        return strategy, winner
+
     def _get_routing_context(self, model: str, request_kwargs: dict | None = None) -> tuple[str | None, Any | None]:
         """
         Resolves the routing strategy and selector to use for the given model.
 
-        A per-request `routing_strategy` in `request_kwargs` (forwarded by the
-        proxy from key/team `router_settings`) takes precedence over both the
-        model's routing group and the router's top-level strategy, since it is
-        the most specific expression of caller intent.
-
-        Otherwise every model belongs to exactly one group: an explicit entry
-        from `routing_groups`, or the implicit `"default"` group driven by the
-        router's top-level `routing_strategy` / `routing_strategy_args`.
+        Precedence, most specific first: a per-request `routing_strategy` in
+        `request_kwargs` (forwarded by the proxy from key/team
+        `router_settings`), then `model_info.routing_strategy` on the model's
+        own deployments, then the model's `routing_groups` entry (legacy), then
+        the implicit `"default"` group driven by the router's top-level
+        `routing_strategy` / `routing_strategy_args`.
 
         `self.routing_strategy` may be either a string or a `RoutingStrategy`
         enum member (the constructor accepts both), so it is normalized to a
@@ -1154,6 +1295,13 @@ class Router:
         if override is not None:
             verbose_router_logger.debug("routing_group=request-override model=%s strategy=%s", model, override)
             return override, self._get_override_strategy_selector(override)
+
+        model_group_config: Final = self._get_model_group_strategy_config(model)
+        mg_resolution: Final = (
+            self._resolve_model_group_context(model, *model_group_config) if model_group_config is not None else None
+        )
+        if mg_resolution is not None:
+            return mg_resolution
 
         group_name: Final = self._model_to_group.get(model)
         if group_name is None:
@@ -8022,6 +8170,7 @@ class Router:
 
         verbose_router_logger.debug("\nInitialized Model List %s", self.get_model_names())
         self.model_names = {m["model_name"] for m in model_list}
+        self._evict_stale_model_group_selectors()
 
         # Note: model_name_to_deployment_indices is already built incrementally
         # by _create_deployment -> _add_model_to_list_and_index_map
@@ -8296,6 +8445,7 @@ class Router:
         self.team_public_model_names = frozenset(
             public_model_name for _, public_model_name in self.team_model_to_deployment_indices
         )
+        self._evict_stale_model_group_selectors()
 
         for team_id in list(self.team_pattern_routers.keys()):
             team_pattern_router = self.team_pattern_routers[team_id]
@@ -9973,6 +10123,7 @@ class Router:
         result and bypass budget enforcement.
         """
         self._cached_get_model_group_info.cache_clear()
+        self._get_model_group_strategy_config.cache_clear()
         self._zero_cost_cache.clear()
 
     def _invalidate_access_groups_cache(self) -> None:

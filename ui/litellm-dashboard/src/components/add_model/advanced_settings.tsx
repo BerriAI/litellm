@@ -6,6 +6,7 @@ import TextArea from "antd/es/input/TextArea";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Team } from "../key_team_helpers/key_list";
 import CacheControlSettings from "./cache_control_settings";
+import { formItemValidateJSONObject, ROUTING_STRATEGY_OPTIONS } from "./routing_strategy_options";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import { Tag } from "../tag_management/types";
 import { formItemValidateJSON } from "../../utils/textUtils";
@@ -167,6 +168,39 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 placeholder="Select or enter guardrails"
                 options={guardrailsList.map((name) => ({ value: name, label: name }))}
               />
+            </Form.Item>
+
+            <Form.Item
+              label={
+                <span>
+                  Routing Strategy{" "}
+                  <Tooltip title="Load-balancing strategy used when this model name has multiple deployments. Applies to the whole model group; if left unset, the router's top-level strategy is used.">
+                    <a
+                      href="https://docs.litellm.ai/docs/routing"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </a>
+                  </Tooltip>
+                </span>
+              }
+              name="routing_strategy"
+              className="mb-4"
+              help="How requests are spread across this model name's deployments."
+            >
+              <Select allowClear placeholder="Inherit router default" options={[...ROUTING_STRATEGY_OPTIONS]} />
+            </Form.Item>
+
+            <Form.Item
+              label="Routing Strategy Args"
+              name="routing_strategy_args"
+              className="mb-4"
+              rules={[{ validator: formItemValidateJSONObject }]}
+              help="Optional JSON args for the selected strategy, e.g. latency window TTL."
+            >
+              <TextArea rows={2} placeholder='{"ttl": 3600}' />
             </Form.Item>
 
             <Form.Item label="Tags" name="tags" className="mb-4">

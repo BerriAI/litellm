@@ -18,6 +18,12 @@ import {
   Button as TremorButton,
 } from "@tremor/react";
 import { Button, Form, Input, Modal, Select, Tooltip } from "antd";
+import {
+  formItemValidateJSONObject,
+  hasRoutingStrategyArgs,
+  ROUTING_STRATEGY_OPTIONS,
+  routingStrategyLabel,
+} from "./add_model/routing_strategy_options";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -427,6 +433,13 @@ export default function ModelInfoView({
             health_check_model: values.health_check_model,
           };
         }
+        if (values.routing_strategy !== undefined || values.routing_strategy_args !== undefined) {
+          updatedModelInfo = {
+            ...updatedModelInfo,
+            routing_strategy: values.routing_strategy ?? "",
+            routing_strategy_args: values.routing_strategy_args ? JSON.parse(values.routing_strategy_args) : {},
+          };
+        }
       } catch (e) {
         NotificationsManager.fromBackend("Invalid JSON in Model Info");
         return;
@@ -800,6 +813,10 @@ export default function ModelInfoView({
                         : undefined,
                     tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
                     health_check_model: isWildcardModel ? localModelData.model_info?.health_check_model : null,
+                    routing_strategy: localModelData.model_info?.routing_strategy || "",
+                    routing_strategy_args: hasRoutingStrategyArgs(localModelData.model_info?.routing_strategy_args)
+                      ? JSON.stringify(localModelData.model_info.routing_strategy_args)
+                      : "",
                     litellm_credential_name: localModelData.litellm_params?.litellm_credential_name || "",
                     litellm_extra_params: JSON.stringify(
                       Object.fromEntries(
@@ -1065,6 +1082,43 @@ export default function ModelInfoView({
                             ) : (
                               "Not Set"
                             )}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <Text className="font-medium">Routing Strategy</Text>
+                        {isEditing ? (
+                          <Form.Item name="routing_strategy" className="mb-0">
+                            <Select
+                              allowClear
+                              placeholder="Inherit router default"
+                              style={{ width: "100%" }}
+                              options={[...ROUTING_STRATEGY_OPTIONS]}
+                            />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
+                            {routingStrategyLabel(localModelData.model_info?.routing_strategy)}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <Text className="font-medium">Routing Strategy Args</Text>
+                        {isEditing ? (
+                          <Form.Item
+                            name="routing_strategy_args"
+                            className="mb-0"
+                            rules={[{ validator: formItemValidateJSONObject }]}
+                          >
+                            <Input placeholder='{"ttl": 3600}' />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
+                            {hasRoutingStrategyArgs(localModelData.model_info?.routing_strategy_args)
+                              ? JSON.stringify(localModelData.model_info.routing_strategy_args)
+                              : "Not Set"}
                           </div>
                         )}
                       </div>

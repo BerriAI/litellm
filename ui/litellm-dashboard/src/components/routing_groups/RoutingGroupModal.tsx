@@ -125,7 +125,7 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
               },
             },
           ]}
-          extra="Use this name as the model in API calls — LiteLLM routes the request to one of the group's models."
+          extra="A label for this strategy assignment. The group name is not a callable model: requests still use the member model names, and the strategy picks among each member's deployments."
         >
           <Input placeholder="fast-chat" disabled={mode === "edit"} />
         </Form.Item>

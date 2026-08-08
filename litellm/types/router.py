@@ -4,6 +4,7 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Final, Generic, Literal, TypeVar, get_type_hints
 
@@ -133,6 +134,9 @@ class ModelInfo(BaseModel):
 
     base_model: str | None = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     tier: Literal["free", "paid"] | None = None
+
+    routing_strategy: str | None = None
+    routing_strategy_args: Mapping[str, object] | None = None
 
     """
     Team Model Specific Fields

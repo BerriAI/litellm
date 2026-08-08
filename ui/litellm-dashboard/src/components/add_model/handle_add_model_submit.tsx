@@ -109,6 +109,15 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
           modelInfoObj[key] = value;
         } else if (key === "team_id") {
           modelInfoObj["team_id"] = value;
+        } else if (key === "routing_strategy") {
+          modelInfoObj["routing_strategy"] = value;
+        } else if (key === "routing_strategy_args") {
+          try {
+            modelInfoObj["routing_strategy_args"] = JSON.parse(value as string);
+          } catch (error) {
+            NotificationManager.fromBackend("Failed to parse Routing Strategy Args: " + error);
+            throw new Error("Failed to parse routing_strategy_args: " + error);
+          }
         } else if (key === "model_access_group") {
           modelInfoObj["access_groups"] = value;
         } else if (key == "mode") {
