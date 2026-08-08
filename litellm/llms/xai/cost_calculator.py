@@ -17,9 +17,7 @@ if TYPE_CHECKING:
 _DEFAULT_WEB_SEARCH_COST_PER_CALL = 5.0 / 1000.0
 
 
-def apply_server_side_tool_usage_details_to_usage(
-    usage: Usage, details: Mapping[str, Any] | None
-) -> None:
+def apply_server_side_tool_usage_details_to_usage(usage: Usage, details: Mapping[str, Any] | None) -> None:
     """
     Attach server_side_tool_usage_details and mirror web_search_calls onto
     prompt_tokens_details.web_search_requests for built-in tool cost gating.

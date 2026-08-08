@@ -96,9 +96,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         attaching server_side_tool_usage_details here, stream=true web_search usage is
         dropped when usage is normalized for billing.
         """
-        event = super().transform_streaming_response(
-            model=model, parsed_chunk=parsed_chunk, logging_obj=logging_obj
-        )
+        event = super().transform_streaming_response(model=model, parsed_chunk=parsed_chunk, logging_obj=logging_obj)
         if isinstance(
             event,
             (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent),
@@ -117,9 +115,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         details = getattr(usage, "server_side_tool_usage_details", None)
         if details is not None:
             return details
-        model_extra = getattr(usage, "model_extra", None) or getattr(
-            usage, "__pydantic_extra__", None
-        )
+        model_extra = getattr(usage, "model_extra", None) or getattr(usage, "__pydantic_extra__", None)
         if isinstance(model_extra, dict):
             return model_extra.get("server_side_tool_usage_details")
         return None
@@ -131,9 +127,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if response.usage is None:
             return
 
-        details = XAIResponsesAPIConfig._server_side_tool_usage_details_from_usage(
-            response.usage
-        )
+        details = XAIResponsesAPIConfig._server_side_tool_usage_details_from_usage(response.usage)
         if details is None:
             return
 
