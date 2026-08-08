@@ -4,6 +4,7 @@ import json
 import os
 import sys
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -2515,3 +2516,67 @@ def test_bedrock_messages_thinking_shape_follows_exact_bedrock_entry_flag(
     assert thinking.get("type") == "enabled"
     assert isinstance(thinking.get("budget_tokens"), int)
     assert "output_config" not in flipped
+
+
+@pytest.mark.parametrize(
+    "search_results, expected_evidence",
+    [
+        pytest.param(
+            [SimpleNamespace(title="Rome", url="https://ex.com/rome", snippet="Founded 753 BC.", date=None)],
+            "Snippet: Founded 753 BC.",
+            id="search_returned_results",
+        ),
+        pytest.param([], "No results were returned.", id="search_returned_nothing"),
+    ],
+)
+def test_replayed_intercepted_search_turn_leaves_no_unsupported_block_for_bedrock(search_results, expected_evidence):
+    """A native client replaying an intercepted search turn must not 400 on Bedrock.
+
+    ``websearch_interception`` hands Claude Desktop an Anthropic-native
+    ``server_tool_use`` + ``web_search_tool_result`` pair, and Anthropic's protocol
+    obliges the client to replay that assistant turn verbatim on every later turn.
+    Bedrock's Anthropic schema defines neither tag, so both have to be gone from the
+    outbound body by the time it is signed, with the search evidence carried forward
+    as text instead. Built from the real builder rather than a hand-written fixture
+    so the two cannot drift apart.
+    """
+    from litellm.integrations.websearch_interception.transformation import (
+        WebSearchTransformation,
+    )
+    from litellm.llms.anthropic.common_utils import (
+        flatten_unencrypted_web_search_results_in_anthropic_messages,
+    )
+    from litellm.types.router import GenericLiteLLMParams
+
+    replayed_turn = [
+        {
+            "type": "server_tool_use",
+            "id": "srvtoolu_1",
+            "name": "web_search",
+            "input": {"query": "when was Rome founded"},
+        },
+        WebSearchTransformation.build_web_search_tool_result_block(
+            tool_use_id="srvtoolu_1",
+            search_response=SimpleNamespace(results=search_results),
+        ),
+        {"type": "text", "text": "Rome was founded in 753 BC."},
+    ]
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "When was Rome founded?"}]},
+        {"role": "assistant", "content": replayed_turn},
+        {"role": "user", "content": [{"type": "text", "text": "Repeat the year."}]},
+    ]
+
+    body = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=flatten_unencrypted_web_search_results_in_anthropic_messages(messages),
+        anthropic_messages_optional_request_params={"max_tokens": 64},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    serialized = json.dumps(body)
+    assert "web_search_tool_result" not in serialized
+    assert "server_tool_use" not in serialized
+    assert expected_evidence in serialized
+    assert "Rome was founded in 753 BC." in serialized

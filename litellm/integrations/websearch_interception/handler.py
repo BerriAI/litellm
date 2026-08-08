@@ -9,7 +9,7 @@ server-side using litellm router's search tools.
 import asyncio
 import math
 import uuid
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
@@ -37,6 +37,8 @@ from litellm.types.integrations.custom_logger import (
     AgenticLoopRequestPatch,
 )
 from litellm.types.integrations.websearch_interception import (
+    AnthropicSearchQuery,
+    AnthropicServerToolUseBlock,
     WebSearchInterceptionConfig,
 )
 from litellm.types.llms.openai import AllMessageValues
@@ -833,22 +835,48 @@ class WebSearchInterceptionLogger(CustomLogger):
     def _build_native_result_blocks(
         tool_calls: list[dict],
         structured_results: list[SearchResponse | None],
-    ) -> list[dict[str, object]]:
-        """Build one ``web_search_tool_result`` block per tool_call."""
-        blocks: Final[list[dict[str, object]]] = []
-        for i, tool_call in enumerate(tool_calls):
-            tool_use_id = tool_call.get("id") or ""
-            structured = structured_results[i] if i < len(structured_results) else None
-            blocks.append(
-                WebSearchTransformation.build_web_search_tool_result_block(
-                    tool_use_id=tool_use_id,
-                    search_response=structured,
-                )
+    ) -> tuple[Mapping[str, object], ...]:
+        """
+        Build a ``server_tool_use`` + ``web_search_tool_result`` pair per tool_call.
+
+        The pair is what Anthropic's spec requires: a bare result block, or one
+        keyed by the model's ``toolu_...`` id instead of a ``srvtoolu_...`` one,
+        is rejected on replay ("String should match pattern '^srvtoolu_'") and
+        leaves native clients without a search to attach the sources to.
+        """
+        return tuple(
+            block
+            for i, tool_call in enumerate(tool_calls)
+            for block in WebSearchInterceptionLogger._native_result_pair(
+                query=WebSearchInterceptionLogger._tool_call_query(tool_call),
+                search_response=structured_results[i] if i < len(structured_results) else None,
             )
-        return blocks
+        )
 
     @staticmethod
-    def _inject_native_blocks(response: Any, native_blocks: list[dict[str, object]]) -> Any:
+    def _tool_call_query(tool_call: Mapping[str, object]) -> str:
+        tool_input: Final = tool_call.get("input")
+        if not isinstance(tool_input, Mapping):
+            return ""
+        query: Final = tool_input.get("query")
+        return query if isinstance(query, str) else ""
+
+    @staticmethod
+    def _native_result_pair(
+        query: str,
+        search_response: SearchResponse | None,
+    ) -> tuple[Mapping[str, object], Mapping[str, object]]:
+        tool_use_id: Final = f"srvtoolu_{uuid.uuid4().hex}"
+        return (
+            AnthropicServerToolUseBlock(id=tool_use_id, input=AnthropicSearchQuery(query=query)).model_dump(),
+            WebSearchTransformation.build_web_search_tool_result_block(
+                tool_use_id=tool_use_id,
+                search_response=search_response,
+            ),
+        )
+
+    @staticmethod
+    def _inject_native_blocks(response: Any, native_blocks: Sequence[Mapping[str, object]]) -> Any:
         """Prepend native blocks to response content, dict or object form."""
         if not native_blocks:
             return response
