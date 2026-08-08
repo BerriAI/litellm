@@ -66,6 +66,23 @@ def _admin_auth() -> UserAPIKeyAuth:
     )
 
 
+@pytest.fixture(autouse=True)
+def stub_team_cache_refresh():
+    """Keep the cached-team refresh out of the way of the mocked prisma rows.
+
+    The endpoints under test now refresh the auth cache after their DB write.
+    That helper validates a real Prisma row into LiteLLM_TeamTableCachedObj,
+    which the MagicMock rows these tests use cannot satisfy. The refresh being
+    called at all is asserted explicitly in
+    test_disable_team_logging_refreshes_cached_team.
+    """
+    with patch(
+        "litellm.proxy.management_endpoints.team_callback_endpoints._refresh_cached_team",
+        new_callable=AsyncMock,
+    ) as refresh:
+        yield refresh
+
+
 @pytest.fixture
 def unauthorized_caller():
     return UserAPIKeyAuth(
@@ -238,6 +255,9 @@ async def test_disable_team_logging_emits_audit_log_when_enabled(monkeypatch):
     assert before["metadata"]["callback_settings"]["success_callback"] == ["langfuse"]
     assert after["metadata"]["callback_settings"]["success_callback"] == []
     assert after["metadata"]["callback_settings"]["failure_callback"] == []
+    # The audit row has to show the slot the callbacks actually live in, so a
+    # disable of a logging-configured team does not record an empty diff.
+    assert after["metadata"]["logging"] == []
 
 
 @pytest.mark.asyncio
@@ -718,3 +738,207 @@ async def test_get_team_callbacks_reports_empty_for_team_without_callbacks():
         "failure_callbacks": [],
         "callback_vars": {},
     }
+
+
+@pytest.mark.asyncio
+async def test_disable_team_logging_stops_callbacks_registered_via_api():
+    """Disabling logging must stop the callbacks that are actually running.
+
+    Callbacks registered through the API or the Admin UI live in
+    metadata["logging"], and request-time resolution stops at that slot without
+    reading callback_settings. Clearing only callback_settings therefore reports
+    success while the team keeps sending to its logging destination. This drives
+    the endpoint and then asks the real request-time resolver what the written
+    row would do.
+    """
+    from litellm.proxy.litellm_pre_call_utils import _get_dynamic_logging_metadata
+
+    metadata = {
+        "logging": [
+            {
+                "callback_name": "langsmith",
+                "callback_type": "success",
+                "callback_vars": {"langsmith_project": "tenant-project"},
+            }
+        ]
+    }
+    mock_prisma = _patch_prisma(_team_row(team_id="team-1", metadata=metadata))
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.master_key", None),
+    ):
+        response = await disable_team_logging(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=_admin_auth(),
+            litellm_changed_by=None,
+        )
+
+    assert response["status"] == "success"
+    written = json.loads(mock_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"])
+    assert written["logging"] == []
+
+    resolved = _get_dynamic_logging_metadata(
+        UserAPIKeyAuth(api_key="hashed", team_id="team-1", team_metadata=written),
+        proxy_config=MagicMock(**{"load_team_config.return_value": {}}),
+    )
+    assert not (resolved.success_callback if resolved else None)
+    assert not (resolved.failure_callback if resolved else None)
+
+
+@pytest.mark.asyncio
+async def test_disable_team_logging_refreshes_cached_team(stub_team_cache_refresh):
+    """The DB write alone does not stop delivery.
+
+    Auth serves a cached team object and request-time callback resolution reads
+    the metadata off it, so without this refresh a key that is already in flight
+    keeps sending to the destination until the cache entry expires.
+    """
+    metadata = {
+        "logging": [
+            {
+                "callback_name": "langsmith",
+                "callback_type": "success",
+                "callback_vars": {"langsmith_project": "tenant-project"},
+            }
+        ]
+    }
+    mock_prisma = _patch_prisma(_team_row(team_id="team-1", metadata=metadata))
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.master_key", None),
+    ):
+        await disable_team_logging(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=_admin_auth(),
+            litellm_changed_by=None,
+        )
+
+    stub_team_cache_refresh.assert_awaited_once()
+    refreshed = stub_team_cache_refresh.await_args.kwargs["team_row"]
+    assert refreshed is mock_prisma.db.litellm_teamtable.update.return_value
+    # The row fed to the cache has to carry object_permission, or the refresh
+    # publishes a team whose tool allowlists look empty, which reads as
+    # unrestricted on the search-tool and MCP-tool checks.
+    update_kwargs = mock_prisma.db.litellm_teamtable.update.await_args.kwargs
+    assert update_kwargs["include"]["object_permission"] is True
+
+
+@pytest.mark.asyncio
+async def test_add_team_callbacks_refreshes_cached_team(stub_team_cache_refresh):
+    """Registering a callback must take effect for keys that are already live."""
+    mock_prisma = _patch_prisma(_team_row(team_id="team-1", metadata={"logging": []}))
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.master_key", None),
+    ):
+        await add_team_callbacks(
+            data=AddTeamCallback(
+                callback_name="langsmith",
+                callback_type="success",
+                callback_vars={"langsmith_project": "tenant-project"},
+            ),
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=_admin_auth(),
+            litellm_changed_by=None,
+        )
+
+    stub_team_cache_refresh.assert_awaited_once()
+    refreshed = stub_team_cache_refresh.await_args.kwargs["team_row"]
+    assert refreshed is mock_prisma.db.litellm_teamtable.update.return_value
+    update_kwargs = mock_prisma.db.litellm_teamtable.update.await_args.kwargs
+    assert update_kwargs["include"]["object_permission"] is True
+
+
+@pytest.mark.asyncio
+async def test_disable_team_logging_clears_both_metadata_shapes():
+    """A team carrying both shapes ends up with neither active."""
+    from litellm.proxy.litellm_pre_call_utils import _get_dynamic_logging_metadata
+
+    metadata = {
+        "logging": [
+            {
+                "callback_name": "langsmith",
+                "callback_type": "success_and_failure",
+                "callback_vars": {"langsmith_project": "tenant-project"},
+            }
+        ],
+        "callback_settings": {
+            "success_callback": ["gcs_bucket"],
+            "failure_callback": ["langfuse"],
+            "callback_vars": {"gcs_bucket_name": "legacy-bucket"},
+        },
+    }
+    mock_prisma = _patch_prisma(_team_row(team_id="team-1", metadata=metadata))
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.master_key", None),
+    ):
+        await disable_team_logging(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=_admin_auth(),
+            litellm_changed_by=None,
+        )
+
+    written = json.loads(mock_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"])
+    assert written["logging"] == []
+    assert written["callback_settings"]["success_callback"] == []
+    assert written["callback_settings"]["failure_callback"] == []
+
+    resolved = _get_dynamic_logging_metadata(
+        UserAPIKeyAuth(api_key="hashed", team_id="team-1", team_metadata=written),
+        proxy_config=MagicMock(**{"load_team_config.return_value": {}}),
+    )
+    assert not (resolved.success_callback if resolved else None)
+    assert not (resolved.failure_callback if resolved else None)
+
+
+@pytest.mark.asyncio
+async def test_disable_team_logging_leaves_team_re_enablable():
+    """The emptied slot must still accept a fresh registration afterwards."""
+    metadata = {
+        "logging": [
+            {
+                "callback_name": "langsmith",
+                "callback_type": "success",
+                "callback_vars": {"langsmith_project": "tenant-project"},
+            }
+        ]
+    }
+    row = _team_row(team_id="team-1", metadata=metadata)
+    mock_prisma = _patch_prisma(row)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.master_key", None),
+    ):
+        await disable_team_logging(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=_admin_auth(),
+            litellm_changed_by=None,
+        )
+        row.metadata = json.loads(mock_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"])
+        row.model_dump.return_value["metadata"] = row.metadata
+
+        await add_team_callbacks(
+            data=AddTeamCallback(
+                callback_name="langfuse",
+                callback_type="success",
+                callback_vars={"langfuse_public_key": "pk-lf-new"},
+            ),
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=_admin_auth(),
+            litellm_changed_by=None,
+        )
+
+    written = json.loads(mock_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"])
+    assert [entry["callback_name"] for entry in written["logging"]] == ["langfuse"]

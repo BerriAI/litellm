@@ -12,7 +12,7 @@ user metrics from tag activity data and return time series for dashboard visuali
 """
 
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -26,12 +26,12 @@ from litellm.repositories.verification_token_repository import (
 )
 
 # Constants for analytics periods
-MAX_DAYS = 7  # Number of days to show in DAU analytics
-MAX_WEEKS = 7  # Number of weeks to show in WAU analytics
-MAX_MONTHS = 7  # Number of months to show in MAU analytics
-MAX_TAGS = 250  # Maximum number of distinct tags to return
+MAX_DAYS: Final = 7  # Number of days to show in DAU analytics
+MAX_WEEKS: Final = 7  # Number of weeks to show in WAU analytics
+MAX_MONTHS: Final = 7  # Number of months to show in MAU analytics
+MAX_TAGS: Final = 250  # Maximum number of distinct tags to return
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
 class TagActiveUsersResponse(BaseModel):
@@ -130,7 +130,7 @@ async def get_distinct_user_agent_tags(
         )
 
     try:
-        sql_query = f"""
+        sql_query: Final = f"""
         SELECT 
             dts.tag,
             COUNT(*) as usage_count
@@ -141,16 +141,16 @@ async def get_distinct_user_agent_tags(
         LIMIT {MAX_TAGS}
         """
 
-        db_response = await prisma_client.db.query_raw(sql_query)
+        db_response: Final = await prisma_client.db.query_raw(sql_query)
 
-        results = [DistinctTagResponse(tag=row["tag"]) for row in db_response]
+        results: Final = [DistinctTagResponse(tag=row["tag"]) for row in db_response]
 
         return DistinctTagsResponse(results=results)
 
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch distinct user agent tags: {e!s}",
+            detail=f"Failed to fetch distinct user agent tags: {e}",
         )
 
 
@@ -197,19 +197,19 @@ async def get_daily_active_users(
         from datetime import timezone
 
         end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        end_date = end_dt.strftime("%Y-%m-%d")
+        end_date: Final = end_dt.strftime("%Y-%m-%d")
 
         # Calculate date range (last MAX_DAYS days)
-        start_dt = end_dt - timedelta(days=MAX_DAYS)
-        start_date = start_dt.strftime("%Y-%m-%d")
+        start_dt: Final = end_dt - timedelta(days=MAX_DAYS)
+        start_date: Final = start_dt.strftime("%Y-%m-%d")
 
         # Build SQL query with optional tag filter(s)
         where_clause = "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
-        params = [start_date, end_date]
+        params: Final = [start_date, end_date]
 
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
-            tag_conditions = []
+            tag_conditions: Final = []
             for i, tag in enumerate(tag_filters):
                 param_index = len(params) + 1
                 tag_conditions.append(f"dts.tag = ${param_index}")
@@ -219,7 +219,7 @@ async def get_daily_active_users(
             where_clause += " AND dts.tag ILIKE $3"
             params.append(f"%{tag_filter}%")
 
-        sql_query = f"""
+        sql_query: Final = f"""
         SELECT 
             dts.tag,
             dts.date,
@@ -231,9 +231,9 @@ async def get_daily_active_users(
         ORDER BY dts.date DESC, active_users DESC
         """
 
-        db_response = await prisma_client.db.query_raw(sql_query, *params)
+        db_response: Final = await prisma_client.db.query_raw(sql_query, *params)
 
-        results = [
+        results: Final = [
             TagActiveUsersResponse(tag=row["tag"], active_users=row["active_users"], date=row["date"])
             for row in db_response
         ]
@@ -243,7 +243,7 @@ async def get_daily_active_users(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch DAU analytics: {e!s}",
+            detail=f"Failed to fetch DAU analytics: {e}",
         )
 
 
@@ -294,20 +294,20 @@ async def get_weekly_active_users(
         from datetime import timezone
 
         end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        end_date = end_dt.strftime("%Y-%m-%d")
+        end_date: Final = end_dt.strftime("%Y-%m-%d")
 
         # Calculate date range for all weeks (49 days total)
         # Start from 48 days before end_date to cover exactly MAX_WEEKS complete weeks
-        start_dt = end_dt - timedelta(days=(MAX_WEEKS * 7 - 1))  # MAX_WEEKS weeks * 7 days - 1
-        start_date = start_dt.strftime("%Y-%m-%d")
+        start_dt: Final = end_dt - timedelta(days=(MAX_WEEKS * 7 - 1))  # MAX_WEEKS weeks * 7 days - 1
+        start_date: Final = start_dt.strftime("%Y-%m-%d")
 
         # Build SQL query with optional tag filter(s)
         where_clause = "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
-        params = [start_date, end_date]
+        params: Final = [start_date, end_date]
 
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
-            tag_conditions = []
+            tag_conditions: Final = []
             for i, tag in enumerate(tag_filters):
                 param_index = len(params) + 1
                 tag_conditions.append(f"dts.tag = ${param_index}")
@@ -318,7 +318,7 @@ async def get_weekly_active_users(
             params.append(f"%{tag_filter}%")
 
         # Use window function to group by weeks with clear week numbering
-        sql_query = f"""
+        sql_query: Final = f"""
         WITH weekly_data AS (
             SELECT 
                 dts.tag,
@@ -346,9 +346,9 @@ async def get_weekly_active_users(
         ORDER BY week_offset DESC, active_users DESC
         """
 
-        db_response = await prisma_client.db.query_raw(sql_query, *params)
+        db_response: Final = await prisma_client.db.query_raw(sql_query, *params)
 
-        results = [
+        results: Final = [
             TagActiveUsersResponse(
                 tag=row["tag"],
                 active_users=row["active_users"],
@@ -364,7 +364,7 @@ async def get_weekly_active_users(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch WAU analytics: {e!s}",
+            detail=f"Failed to fetch WAU analytics: {e}",
         )
 
 
@@ -415,20 +415,20 @@ async def get_monthly_active_users(
         from datetime import timezone
 
         end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        end_date = end_dt.strftime("%Y-%m-%d")
+        end_date: Final = end_dt.strftime("%Y-%m-%d")
 
         # Calculate date range for all months (210 days total)
         # Start from 209 days before end_date to cover exactly MAX_MONTHS complete months
-        start_dt = end_dt - timedelta(days=(MAX_MONTHS * 30 - 1))  # MAX_MONTHS months * 30 days - 1
-        start_date = start_dt.strftime("%Y-%m-%d")
+        start_dt: Final = end_dt - timedelta(days=(MAX_MONTHS * 30 - 1))  # MAX_MONTHS months * 30 days - 1
+        start_date: Final = start_dt.strftime("%Y-%m-%d")
 
         # Build SQL query with optional tag filter(s)
         where_clause = "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
-        params = [start_date, end_date]
+        params: Final = [start_date, end_date]
 
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
-            tag_conditions = []
+            tag_conditions: Final = []
             for i, tag in enumerate(tag_filters):
                 param_index = len(params) + 1
                 tag_conditions.append(f"dts.tag = ${param_index}")
@@ -439,7 +439,7 @@ async def get_monthly_active_users(
             params.append(f"%{tag_filter}%")
 
         # Use window function to group by months (30-day periods) with clear month numbering
-        sql_query = f"""
+        sql_query: Final = f"""
         WITH monthly_data AS (
             SELECT 
                 dts.tag,
@@ -467,9 +467,9 @@ async def get_monthly_active_users(
         ORDER BY month_offset DESC, active_users DESC
         """
 
-        db_response = await prisma_client.db.query_raw(sql_query, *params)
+        db_response: Final = await prisma_client.db.query_raw(sql_query, *params)
 
-        results = [
+        results: Final = [
             TagActiveUsersResponse(
                 tag=row["tag"],
                 active_users=row["active_users"],
@@ -485,7 +485,7 @@ async def get_monthly_active_users(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch MAU analytics: {e!s}",
+            detail=f"Failed to fetch MAU analytics: {e}",
         )
 
 
@@ -535,11 +535,11 @@ async def get_tag_summary(
 
         # Build SQL query with optional tag filter(s)
         where_clause = "WHERE dts.date >= $1 AND dts.date <= $2"
-        params = [start_date, end_date]
+        params: Final = [start_date, end_date]
 
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
-            tag_conditions = []
+            tag_conditions: Final = []
             for i, tag in enumerate(tag_filters):
                 param_index = len(params) + 1
                 tag_conditions.append(f"dts.tag = ${param_index}")
@@ -549,7 +549,7 @@ async def get_tag_summary(
             where_clause += " AND dts.tag ILIKE $3"
             params.append(f"%{tag_filter}%")
 
-        sql_query = f"""
+        sql_query: Final = f"""
         SELECT 
             dts.tag,
             COUNT(DISTINCT vt.user_id) as unique_users,
@@ -565,9 +565,9 @@ async def get_tag_summary(
         ORDER BY total_requests DESC
         """
 
-        db_response = await prisma_client.db.query_raw(sql_query, *params)
+        db_response: Final = await prisma_client.db.query_raw(sql_query, *params)
 
-        results = [
+        results: Final = [
             TagSummaryMetrics(
                 tag=row["tag"],
                 unique_users=row["unique_users"] or 0,
@@ -585,12 +585,12 @@ async def get_tag_summary(
     except ValueError as e:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid date format. Use YYYY-MM-DD: {e!s}",
+            detail=f"Invalid date format. Use YYYY-MM-DD: {e}",
         )
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch tag summary analytics: {e!s}",
+            detail=f"Failed to fetch tag summary analytics: {e}",
         )
 
 
@@ -641,14 +641,14 @@ async def get_per_user_analytics(
         from datetime import timezone
 
         end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        end_date = end_dt.strftime("%Y-%m-%d")
+        end_date: Final = end_dt.strftime("%Y-%m-%d")
 
         # Calculate date range (last 30 days)
-        start_dt = end_dt - timedelta(days=30)
-        start_date = start_dt.strftime("%Y-%m-%d")
+        start_dt: Final = end_dt - timedelta(days=30)
+        start_date: Final = start_dt.strftime("%Y-%m-%d")
 
         # Build where clause with date range
-        where_clause: dict[str, Any] = {"date": {"gte": start_date, "lte": end_date}}
+        where_clause: Final[dict[str, Any]] = {"date": {"gte": start_date, "lte": end_date}}
 
         # Add tag filtering if provided
         if tag_filters and len(tag_filters) > 0:
@@ -657,10 +657,10 @@ async def get_per_user_analytics(
             where_clause["tag"] = {"contains": tag_filter}
 
         # Get all tag records in the date range with optional tag filtering
-        tag_records = await DailyTagSpendRepository(prisma_client).table.find_many(where=where_clause)
+        tag_records: Final = await DailyTagSpendRepository(prisma_client).table.find_many(where=where_clause)
 
         # Get unique api_keys
-        api_keys = set(record.api_key for record in tag_records if record.api_key)
+        api_keys: Final = set(record.api_key for record in tag_records if record.api_key)
 
         if not api_keys:
             return PerUserAnalyticsResponse(
@@ -672,22 +672,22 @@ async def get_per_user_analytics(
             )
 
         # Lookup user_id for each api_key
-        api_key_records = await VerificationTokenRepository(prisma_client).table.find_many(
+        api_key_records: Final = await VerificationTokenRepository(prisma_client).table.find_many(
             where={"token": {"in": list(api_keys)}}
         )
 
         # Create mapping from api_key to user_id
-        api_key_to_user_id = {record.token: record.user_id for record in api_key_records if record.user_id}
+        api_key_to_user_id: Final = {record.token: record.user_id for record in api_key_records if record.user_id}
 
         # Get user emails for the user_ids
-        user_ids = list(set(api_key_to_user_id.values()))
-        user_records = await UserRepository(prisma_client).table.find_many(where={"user_id": {"in": user_ids}})
+        user_ids: Final = list(set(api_key_to_user_id.values()))
+        user_records: Final = await UserRepository(prisma_client).table.find_many(where={"user_id": {"in": user_ids}})
 
         # Create mapping from user_id to user_email
-        user_id_to_email = {record.user_id: record.user_email for record in user_records}
+        user_id_to_email: Final = {record.user_id: record.user_email for record in user_records}
 
         # Aggregate metrics by user
-        user_metrics: dict[str, PerUserMetrics] = {}
+        user_metrics: Final[dict[str, PerUserMetrics]] = {}
 
         for record in tag_records:
             if record.api_key in api_key_to_user_id:
@@ -716,18 +716,18 @@ async def get_per_user_analytics(
                 user_metrics[user_id].spend += record.spend or 0.0
 
         # Convert to list and sort by successful requests (descending)
-        results = sorted(
+        results: Final = sorted(
             list(user_metrics.values()),
             key=lambda x: x.successful_requests,
             reverse=True,
         )
 
         # Apply pagination
-        total_count = len(results)
-        total_pages = (total_count + page_size - 1) // page_size
-        start_idx = (page - 1) * page_size
-        end_idx = start_idx + page_size
-        paginated_results = results[start_idx:end_idx]
+        total_count: Final = len(results)
+        total_pages: Final = (total_count + page_size - 1) // page_size
+        start_idx: Final = (page - 1) * page_size
+        end_idx: Final = start_idx + page_size
+        paginated_results: Final = results[start_idx:end_idx]
 
         return PerUserAnalyticsResponse(
             results=paginated_results,
@@ -740,5 +740,5 @@ async def get_per_user_analytics(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch per-user analytics: {e!s}",
+            detail=f"Failed to fetch per-user analytics: {e}",
         )

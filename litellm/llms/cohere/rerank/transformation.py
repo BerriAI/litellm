@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -90,7 +90,7 @@ class CohereRerankConfig(BaseRerankConfig):
                 "Cohere API key is required. Please set 'COHERE_API_KEY' or 'CO_API_KEY' or 'litellm.cohere_key'"
             )
 
-        default_headers = {
+        default_headers: Final = {
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
             "content-type": "application/json",
@@ -114,7 +114,7 @@ class CohereRerankConfig(BaseRerankConfig):
             raise ValueError("query is required for Cohere rerank")
         if "documents" not in optional_rerank_params:
             raise ValueError("documents is required for Cohere rerank")
-        rerank_request = RerankRequest(
+        rerank_request: Final = RerankRequest(
             model=model,
             query=optional_rerank_params["query"],
             documents=optional_rerank_params["documents"],
@@ -142,7 +142,7 @@ class CohereRerankConfig(BaseRerankConfig):
         No transformation required, litellm follows cohere API response format
         """
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
             raise CohereError(message=raw_response.text, status_code=raw_response.status_code)
 

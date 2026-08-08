@@ -4,7 +4,7 @@ import random
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, Protocol, cast  # noqa: TID251  # untyped prisma/redis boundary needs cast
+from typing import TYPE_CHECKING, Final, Protocol, cast  # noqa: TID251  # untyped prisma/redis boundary needs cast
 
 from litellm._logging import verbose_proxy_logger
 
@@ -26,19 +26,19 @@ class _ConfigSyncPubSubClient(Protocol):
     def pubsub(self) -> _ConfigSyncPubSub: ...
 
 
-CONFIG_SYNC_CHANNEL = "litellm_proxy.config_change"
-CONFIG_SYNC_DEBOUNCE_SECONDS = 1.0
-CONFIG_SYNC_JITTER_MAX_SECONDS = 5.0
-CONFIG_SYNC_MIN_RESYNC_INTERVAL_SECONDS = 10.0
-_POLL_TIMEOUT_SECONDS = 1.0
-_BACKOFF_INITIAL_SECONDS = 5.0
-_BACKOFF_MAX_SECONDS = 60.0
+CONFIG_SYNC_CHANNEL: Final = "litellm_proxy.config_change"
+CONFIG_SYNC_DEBOUNCE_SECONDS: Final = 1.0
+CONFIG_SYNC_JITTER_MAX_SECONDS: Final = 5.0
+CONFIG_SYNC_MIN_RESYNC_INTERVAL_SECONDS: Final = 10.0
+_POLL_TIMEOUT_SECONDS: Final = 1.0
+_BACKOFF_INITIAL_SECONDS: Final = 5.0
+_BACKOFF_MAX_SECONDS: Final = 60.0
 
-_WRITE_ACTION_NAMES: frozenset[str] = frozenset(
+_WRITE_ACTION_NAMES: Final[frozenset[str]] = frozenset(
     {"create", "create_many", "update", "update_many", "upsert", "delete", "delete_many"}
 )
 
-_CONFIG_SYNCED_TABLE_NAMES: frozenset[str] = frozenset(
+_CONFIG_SYNCED_TABLE_NAMES: Final[frozenset[str]] = frozenset(
     {
         "litellm_proxymodeltable",
         "litellm_credentialstable",
@@ -57,7 +57,7 @@ _CONFIG_SYNCED_TABLE_NAMES: frozenset[str] = frozenset(
     }
 )
 
-_RESYNC_APPLIED_CONFIG_PARAM_NAMES: frozenset[str] = frozenset(
+_RESYNC_APPLIED_CONFIG_PARAM_NAMES: Final[frozenset[str]] = frozenset(
     {
         "general_settings",
         "router_settings",
@@ -90,7 +90,7 @@ def _raw_async_client(redis_cache: "RedisCache") -> object:
 def _pubsub_capable_client(redis_cache: "RedisCache") -> _ConfigSyncPubSubClient | None:
     from redis.asyncio import Redis
 
-    client = _raw_async_client(redis_cache)
+    client: Final = _raw_async_client(redis_cache)
     if isinstance(client, Redis):
         return cast(_ConfigSyncPubSubClient, client)  # cast-ok: protocol view of the standalone redis client
     return None
@@ -109,7 +109,7 @@ async def publish_config_change(redis_cache: "RedisCache | None", object_type: s
     if redis_cache is None:
         return
     try:
-        client = _pubsub_capable_client(redis_cache)
+        client: Final = _pubsub_capable_client(redis_cache)
         if client is None:
             verbose_proxy_logger.debug(
                 "config sync publish for %s skipped: cluster redis client has no pub/sub support",
@@ -144,18 +144,18 @@ class _PublishOnWriteActions:
         self._publish = publish
 
     def __getattr__(self, name: str) -> object:
-        attribute = cast(object, getattr(self._actions, name))  # cast-ok: getattr on dynamic prisma actions
+        attribute: Final = cast(object, getattr(self._actions, name))  # cast-ok: getattr on dynamic prisma actions
         if name not in _WRITE_ACTION_NAMES:
             return attribute
-        write_action = cast(Callable[..., Awaitable[object]], attribute)  # cast-ok: prisma actions are untyped
-        object_type = self._object_type
-        publish = self._publish
+        write_action: Final = cast(Callable[..., Awaitable[object]], attribute)  # cast-ok: prisma actions are untyped
+        object_type: Final = self._object_type
+        publish: Final = self._publish
 
         async def _write_then_publish(
             *args: object,
             **kwargs: object,  # kwargs-ok: transparent passthrough to untyped prisma action
         ) -> object:
-            result = await write_action(*args, **kwargs)
+            result: Final = await write_action(*args, **kwargs)
             await publish(object_type)
             return result
 
@@ -220,7 +220,7 @@ class ConfigSyncSubscriber:
         self._task = asyncio.create_task(self._run())
 
     async def stop(self) -> None:
-        task = self._task
+        task: Final = self._task
         if task is None:
             return
         self._task = None

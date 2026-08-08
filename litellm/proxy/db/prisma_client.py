@@ -13,7 +13,7 @@ import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Protocol
+from typing import Any, Final, Protocol
 
 from litellm._logging import verbose_proxy_logger
 from litellm.secret_managers.main import str_to_bool
@@ -117,7 +117,7 @@ class _TrackedPrismaEngine:
     async def start_transaction(self, *, content: str) -> str:
         self.tracker.begin_operation()
         try:
-            transaction_id = await self._engine.start_transaction(content=content)
+            transaction_id: Final = await self._engine.start_transaction(content=content)
         except (Exception, asyncio.CancelledError):
             self.tracker.end_operation()
             raise
@@ -147,17 +147,17 @@ def parse_iam_endpoint_from_url(url: str) -> IAMEndpoint:
     Used so a reader URL can drive its own IAM refresh without requiring
     callers to set parallel DATABASE_HOST_READ_REPLICA / etc. env vars.
     """
-    parsed = urllib.parse.urlparse(url)
+    parsed: Final = urllib.parse.urlparse(url)
     if not parsed.hostname or not parsed.username:
         raise ValueError("Cannot parse IAM endpoint from URL: missing host or username")
-    name = (parsed.path or "/").lstrip("/")
+    name: Final = (parsed.path or "/").lstrip("/")
     if not name:
         raise ValueError("Cannot parse IAM endpoint from URL: missing database name")
-    port = str(parsed.port) if parsed.port else "5432"
+    port: Final = str(parsed.port) if parsed.port else "5432"
     schema: str | None = None
     if parsed.query:
-        qs = urllib.parse.parse_qs(parsed.query)
-        schema_vals = qs.get("schema")
+        qs: Final = urllib.parse.parse_qs(parsed.query)
+        schema_vals: Final = qs.get("schema")
         if schema_vals:
             schema = schema_vals[0]
     return IAMEndpoint(
@@ -253,12 +253,12 @@ class PrismaWrapper:
         from prisma.errors import ClientNotConnectedError
 
         try:
-            engine = self._read_engine(prisma_client)
+            engine: Final = self._read_engine(prisma_client)
         except (AttributeError, ClientNotConnectedError):
             return None
         if isinstance(engine, _TrackedPrismaEngine):
             return engine.tracker
-        tracker = _PrismaDrainTracker()
+        tracker: Final = _PrismaDrainTracker()
         self._write_engine(prisma_client, _TrackedPrismaEngine(engine, tracker))
         return tracker
 
@@ -274,8 +274,8 @@ class PrismaWrapper:
         from prisma.errors import ClientNotConnectedError
 
         try:
-            target_prisma = self._original_prisma if prisma_client is None else prisma_client
-            pid = self._read_engine(target_prisma).process.pid
+            target_prisma: Final = self._original_prisma if prisma_client is None else prisma_client
+            pid: Final = self._read_engine(target_prisma).process.pid
             if isinstance(pid, int):
                 return pid
         except (AttributeError, ClientNotConnectedError, TypeError):
@@ -301,7 +301,7 @@ class PrismaWrapper:
     def _schedule_engine_retirement(self, pid: int, tracker: _PrismaDrainTracker | None) -> None:
         if pid <= 0:
             return
-        retirement_task = asyncio.create_task(self._retire_engine_when_drained(pid, tracker))
+        retirement_task: Final = asyncio.create_task(self._retire_engine_when_drained(pid, tracker))
         self._retirement_tasks = self._retirement_tasks.union((retirement_task,))
         retirement_task.add_done_callback(self._retirement_finished)
 
@@ -362,7 +362,7 @@ class PrismaWrapper:
             return None
         try:
             # Parse URL while still encoded to preserve structure
-            parsed = urllib.parse.urlparse(db_url)
+            parsed: Final = urllib.parse.urlparse(db_url)
             if parsed.password:
                 # Now decode just the password/token
                 return urllib.parse.unquote(parsed.password)
@@ -384,21 +384,21 @@ class PrismaWrapper:
             if "?" not in token:
                 return None
 
-            query_string = token.split("?", 1)[1]
-            params = urllib.parse.parse_qs(query_string)
+            query_string: Final = token.split("?", 1)[1]
+            params: Final = urllib.parse.parse_qs(query_string)
 
-            expires_str = params.get("X-Amz-Expires", [None])[0]
-            date_str = params.get("X-Amz-Date", [None])[0]
+            expires_str: Final = params.get("X-Amz-Expires", [None])[0]
+            date_str: Final = params.get("X-Amz-Date", [None])[0]
 
             if not expires_str or not date_str:
                 return None
 
-            token_created = datetime.strptime(date_str, "%Y%m%dT%H%M%SZ")
-            expires_in = int(expires_str)
+            token_created: Final = datetime.strptime(date_str, "%Y%m%dT%H%M%SZ")
+            expires_in: Final = int(expires_str)
 
             return token_created + timedelta(seconds=expires_in)
         except Exception as e:
-            verbose_proxy_logger.debug(f"Failed to parse token expiration: {e}")
+            verbose_proxy_logger.debug("Failed to parse token expiration: %s", e)
             return None
 
     def _calculate_seconds_until_refresh(self) -> float:
@@ -413,24 +413,24 @@ class PrismaWrapper:
             Returns 0 if token should be refreshed immediately.
             Returns FALLBACK_REFRESH_INTERVAL_SECONDS if parsing fails.
         """
-        db_url = os.getenv(self._db_url_env_var)
-        token = self._extract_token_from_db_url(db_url)
-        expiration_time = self._parse_token_expiration(token)
+        db_url: Final = os.getenv(self._db_url_env_var)
+        token: Final = self._extract_token_from_db_url(db_url)
+        expiration_time: Final = self._parse_token_expiration(token)
 
         if expiration_time is None:
             # If we can't parse the token, use fallback interval
             verbose_proxy_logger.debug(
-                f"Could not parse token expiration, using fallback interval of "
-                f"{self.FALLBACK_REFRESH_INTERVAL_SECONDS}s"
+                "Could not parse token expiration, using fallback interval of %ss",
+                self.FALLBACK_REFRESH_INTERVAL_SECONDS,
             )
             return self.FALLBACK_REFRESH_INTERVAL_SECONDS
 
         # Calculate when we should refresh (expiration - buffer)
-        refresh_at = expiration_time - timedelta(seconds=self.TOKEN_REFRESH_BUFFER_SECONDS)
+        refresh_at: Final = expiration_time - timedelta(seconds=self.TOKEN_REFRESH_BUFFER_SECONDS)
 
         # How long until refresh time?
-        now = datetime.utcnow()
-        seconds_until_refresh = (refresh_at - now).total_seconds()
+        now: Final = datetime.utcnow()
+        seconds_until_refresh: Final = (refresh_at - now).total_seconds()
 
         # If already past refresh time, return 0 (refresh immediately)
         return max(0, seconds_until_refresh)
@@ -440,8 +440,8 @@ class PrismaWrapper:
         if token_url is None:
             return True
 
-        token = self._extract_token_from_db_url(token_url)
-        expiration_time = self._parse_token_expiration(token)
+        token: Final = self._extract_token_from_db_url(token_url)
+        expiration_time: Final = self._parse_token_expiration(token)
 
         if expiration_time is None:
             # If we can't parse the token, assume it's expired to trigger refresh
@@ -464,18 +464,18 @@ class PrismaWrapper:
         from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
 
         if self._iam_endpoint is not None:
-            endpoint = self._iam_endpoint
+            endpoint: Final = self._iam_endpoint
             token = generate_iam_auth_token(db_host=endpoint.host, db_port=endpoint.port, db_user=endpoint.user)
             _db_url = endpoint.build_url(token)
         else:
-            db_host = os.getenv("DATABASE_HOST")
+            db_host: Final = os.getenv("DATABASE_HOST")
             # Default to the Postgres standard port; passing None to
             # `generate_iam_auth_token` makes botocore embed the literal
             # string "None" in the presigned URL, which then fails to parse.
-            db_port = os.getenv("DATABASE_PORT", "5432")
-            db_user = os.getenv("DATABASE_USER")
-            db_name = os.getenv("DATABASE_NAME")
-            db_schema = os.getenv("DATABASE_SCHEMA")
+            db_port: Final = os.getenv("DATABASE_PORT", "5432")
+            db_user: Final = os.getenv("DATABASE_USER")
+            db_name: Final = os.getenv("DATABASE_NAME")
+            db_schema: Final = os.getenv("DATABASE_SCHEMA")
 
             token = generate_iam_auth_token(db_host=db_host, db_port=db_port, db_user=db_user)
 
@@ -485,6 +485,38 @@ class PrismaWrapper:
 
         os.environ[self._db_url_env_var] = _db_url
         return _db_url
+
+    @property
+    def engine_generation(self) -> int:
+        """How many query-engine replacements have completed on this wrapper.
+
+        Bumped under `_reconnection_lock` only after a replacement engine has
+        connected, so a change across an await proves a *successful* planned
+        replacement happened in between — a replacement that failed (a real
+        outage) leaves it untouched.
+        """
+        return self._engine_generation
+
+    async def _reconnection_settled(self) -> None:
+        async with self._reconnection_lock:
+            pass
+
+    async def wait_for_planned_engine_replacement(self, timeout_seconds: float) -> None:
+        """Wait, bounded, for an in-flight planned engine replacement to finish.
+
+        Both replacement paths (`recreate_prisma_client` and
+        `_safe_refresh_token`) hold `_reconnection_lock` across their whole
+        kill/connect window, so re-acquiring it means the replacement has
+        settled one way or the other. Gives up silently on timeout: a caller
+        that stopped waiting must treat the replacement as not completed and
+        consult `engine_generation` rather than assume success.
+        """
+        if timeout_seconds <= 0 or not self._reconnection_lock.locked():
+            return
+        try:
+            await asyncio.wait_for(self._reconnection_settled(), timeout=timeout_seconds)
+        except asyncio.TimeoutError:
+            return
 
     async def recreate_prisma_client(
         self,
@@ -537,7 +569,7 @@ class PrismaWrapper:
         `_safe_refresh_token`, which double-checks token freshness under the
         lock) don't re-acquire it — `asyncio.Lock` is not reentrant.
         """
-        from prisma import Prisma  # type: ignore
+        from prisma import Prisma
 
         if expected_generation is not None and expected_generation != self._engine_generation:
             verbose_proxy_logger.info(
@@ -548,7 +580,7 @@ class PrismaWrapper:
             )
             return False
 
-        old_engine_pid = self._get_engine_pid()
+        old_engine_pid: Final = self._get_engine_pid()
         if old_engine_pid > 0:
             # Record BEFORE the kill so the engine-death watcher, which may
             # fire the instant the process dies, recognizes this as a planned
@@ -564,7 +596,7 @@ class PrismaWrapper:
             self._expected_engine_deaths.add(old_engine_pid)
             await self._kill_engine_process(old_engine_pid)
 
-        kwargs: dict[str, Any] = {}
+        kwargs: Final[dict[str, Any]] = {}
         if http_client is not None:
             kwargs["http"] = http_client
         if self._recreate_uses_datasource:
@@ -591,13 +623,13 @@ class PrismaWrapper:
         from prisma.types import DatasourceOverride
 
         if self._recreate_uses_datasource:
-            datasource = DatasourceOverride(url=new_db_url)
+            datasource: Final = DatasourceOverride(url=new_db_url)
             replacement_prisma = Prisma(datasource=datasource)
         else:
             replacement_prisma = Prisma()
 
-        old_prisma = self._original_prisma
-        old_engine_pid = self._get_engine_pid(old_prisma)
+        old_prisma: Final = self._original_prisma
+        old_engine_pid: Final = self._get_engine_pid(old_prisma)
         old_drain_tracker = self._active_drain_tracker
         if old_drain_tracker is None:
             old_drain_tracker = self._instrument_prisma_client(old_prisma)
@@ -606,7 +638,7 @@ class PrismaWrapper:
         except (Exception, asyncio.CancelledError):
             self._schedule_engine_retirement(self._get_engine_pid(replacement_prisma), None)
             raise
-        replacement_drain_tracker = self._instrument_prisma_client(replacement_prisma)
+        replacement_drain_tracker: Final = self._instrument_prisma_client(replacement_prisma)
 
         if old_engine_pid > 0:
             if len(self._expected_engine_deaths) >= 64:
@@ -670,8 +702,9 @@ class PrismaWrapper:
         This is more efficient than polling, requiring only 1 wake-up per token cycle.
         """
         verbose_proxy_logger.info(
-            f"{self._log_prefix}RDS IAM token refresh loop started. "
-            f"Tokens will be refreshed {self.TOKEN_REFRESH_BUFFER_SECONDS}s before expiration."
+            "%sRDS IAM token refresh loop started. Tokens will be refreshed %ss before expiration.",
+            self._log_prefix,
+            self.TOKEN_REFRESH_BUFFER_SECONDS,
         )
 
         while True:
@@ -695,8 +728,10 @@ class PrismaWrapper:
                 break
             except Exception as e:
                 verbose_proxy_logger.error(
-                    f"{self._log_prefix}Error in RDS IAM token refresh loop: {e}. "
-                    f"Retrying in {self.FALLBACK_REFRESH_INTERVAL_SECONDS}s..."
+                    "%sError in RDS IAM token refresh loop: %s. Retrying in %ss...",
+                    self._log_prefix,
+                    e,
+                    self.FALLBACK_REFRESH_INTERVAL_SECONDS,
                 )
                 # On error, wait before retrying to avoid tight error loops
                 try:
@@ -724,8 +759,8 @@ class PrismaWrapper:
                 )
                 return
 
-            previous_db_url = os.getenv(self._db_url_env_var)
-            new_db_url = self.get_rds_iam_token()
+            previous_db_url: Final = os.getenv(self._db_url_env_var)
+            new_db_url: Final = self.get_rds_iam_token()
             if new_db_url:
                 try:
                     await self._replace_prisma_client_for_token_refresh_locked(new_db_url)
@@ -756,11 +791,11 @@ class PrismaWrapper:
         legitimate proactive refresh still fires. Unparseable tokens return
         ``False`` (refresh) — skipping them would mean never refreshing.
         """
-        token = self._extract_token_from_db_url(token_url)
-        expiration_time = self._parse_token_expiration(token)
+        token: Final = self._extract_token_from_db_url(token_url)
+        expiration_time: Final = self._parse_token_expiration(token)
         if expiration_time is None:
             return False
-        seconds_left = (expiration_time - datetime.utcnow()).total_seconds()
+        seconds_left: Final = (expiration_time - datetime.utcnow()).total_seconds()
         return seconds_left > self.TOKEN_REFRESH_BUFFER_SECONDS
 
     def __getattr__(self, name: str):
@@ -786,7 +821,7 @@ class PrismaWrapper:
         original_attr = getattr(self._original_prisma, name)
 
         if self.iam_token_db_auth:
-            db_url = os.getenv(self._db_url_env_var)
+            db_url: Final = os.getenv(self._db_url_env_var)
 
             # Check if token is expired (should be rare if background task is running)
             if self.is_token_expired(db_url):
@@ -812,7 +847,7 @@ class PrismaWrapper:
                         "may have failed. Triggering synchronous fallback refresh...",
                         self._log_prefix,
                     )
-                    new_db_url = self.get_rds_iam_token()
+                    new_db_url: Final = self.get_rds_iam_token()
                     if new_db_url:
                         asyncio.run(self.recreate_prisma_client(new_db_url))
                         # Re-fetch attribute against the recreated Prisma instance.
@@ -831,8 +866,8 @@ class PrismaManager:
     @staticmethod
     def _get_prisma_dir() -> str:
         """Get the path to the migrations directory"""
-        abspath = os.path.abspath(__file__)
-        dname = os.path.dirname(os.path.dirname(abspath))
+        abspath: Final = os.path.abspath(__file__)
+        dname: Final = os.path.dirname(os.path.dirname(abspath))
         return dname
 
     @staticmethod
@@ -874,7 +909,7 @@ class PrismaManager:
                     try:
                         from litellm_proxy_extras.utils import ProxyExtrasDBManager
                     except ImportError as e:
-                        verbose_proxy_logger.error(f"\033[1;31mLiteLLM: Failed to import proxy extras. Got {e}\033[0m")
+                        verbose_proxy_logger.error("\x1b[1;31mLiteLLM: Failed to import proxy extras. Got %s\x1b[0m", e)
                         return False
 
                     prisma_dir = PrismaManager._get_prisma_dir()
@@ -899,12 +934,12 @@ class PrismaManager:
                     PrismaManager._apply_replica_identity_full_if_requested()
                     return True
             except subprocess.TimeoutExpired:
-                verbose_proxy_logger.warning(f"Attempt {attempt + 1} timed out")
+                verbose_proxy_logger.warning("Attempt %s timed out", attempt + 1)
                 time.sleep(random.randrange(5, 15))
             except subprocess.CalledProcessError as e:
                 attempts_left = 3 - attempt
                 retry_msg = f" Retrying... ({attempts_left} attempts left)" if attempts_left > 0 else ""
-                verbose_proxy_logger.warning(f"The process failed to execute. Details: {e}.{retry_msg}")
+                verbose_proxy_logger.warning("The process failed to execute. Details: %s.%s", e, retry_msg)
                 time.sleep(random.randrange(5, 15))
             finally:
                 os.chdir(original_dir)

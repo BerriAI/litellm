@@ -482,3 +482,26 @@ class TestVolcengineStreamingFieldFill:
         assert validated.payload.count == 0
         assert validated.payload.parts == []
         assert validated.payload.label is None
+
+
+class _Pep604Envelope(BaseModel):
+    payload: _FillWidget | _FillGadget
+    note: str | None
+    values: list[str] | str
+
+
+class TestVolcenginePep604FieldFill:
+    def test_fill_handles_pep604_union_spellings(self):
+        filled = VolcEngineResponsesAPIConfig._fill_missing_fields(
+            {"payload": {"type": "widget"}},
+            _Pep604Envelope,
+        )
+
+        assert filled["note"] is None
+        assert filled["values"] == []
+
+        validated = _Pep604Envelope.model_validate(filled)
+        assert isinstance(validated.payload, _FillWidget)
+        assert validated.payload.count == 0
+        assert validated.payload.parts == []
+        assert validated.payload.label is None

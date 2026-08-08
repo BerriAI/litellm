@@ -13,7 +13,7 @@ pattern: global spend, feature flags, config, or other shared read-through data.
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any, Protocol, TypeVar
+from typing import Any, Final, Protocol, TypeVar
 
 from litellm._logging import verbose_proxy_logger
 
@@ -104,7 +104,7 @@ class EventDrivenCacheCoordinator:
         await event.wait()
         if self._log_prefix:
             verbose_proxy_logger.debug("%s Signal received, reading from cache", self._log_prefix)
-        value: T | None = await cache.async_get_cache(key=cache_key)
+        value: Final[T | None] = await cache.async_get_cache(key=cache_key)
         if value is not None and self._log_prefix:
             verbose_proxy_logger.debug(
                 "%s Cache filled by other request, value: %s",
@@ -134,9 +134,9 @@ class EventDrivenCacheCoordinator:
 
         if self._log_prefix:
             verbose_proxy_logger.debug("%s Running load", self._log_prefix)
-        start = time.perf_counter()
+        start: Final = time.perf_counter()
         value = await load_fn()
-        elapsed_ms = (time.perf_counter() - start) * 1000
+        elapsed_ms: Final = (time.perf_counter() - start) * 1000
         if self._log_prefix:
             verbose_proxy_logger.debug(
                 "%s Load completed in %.2fms, result: %s",
@@ -178,19 +178,19 @@ class EventDrivenCacheCoordinator:
         Returns the value from cache or from load_fn, or None if load failed or
         cache was still empty after waiting.
         """
-        value = await self._get_cached(cache_key, cache)
+        value: Final = await self._get_cached(cache_key, cache)
         if value is not None:
             self._log_cache_hit(value)
             return value
 
         self._log_cache_miss()
-        event_to_wait = await self._claim_role()
+        event_to_wait: Final = await self._claim_role()
 
         if event_to_wait is not None:
             return await self._wait_for_signal_and_get(event_to_wait, cache_key, cache)
 
         try:
-            result = await self._load_and_cache(cache_key, cache, load_fn)
+            result: Final = await self._load_and_cache(cache_key, cache, load_fn)
             return result
         finally:
             await self._signal_done()

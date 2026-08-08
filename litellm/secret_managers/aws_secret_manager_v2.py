@@ -16,7 +16,7 @@ Requires:
 
 import json
 import os
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -136,13 +136,13 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             optional_params=optional_params,
         )
 
-        async_client = get_async_httpx_client(
+        async_client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
             params={"timeout": timeout},
         )
 
         try:
-            response = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
+            response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
             return response.json()["SecretString"]
         except httpx.TimeoutException:
@@ -188,12 +188,12 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             optional_params=optional_params,
         )
 
-        sync_client = _get_httpx_client(
+        sync_client: Final = _get_httpx_client(
             params={"timeout": timeout},
         )
 
         try:
-            response = sync_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
+            response: Final = sync_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             return response.json()["SecretString"]
         except httpx.TimeoutException:
             raise ValueError("Timeout error occurred")
@@ -228,16 +228,16 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         """
         Read a secret from the primary secret
         """
-        primary_secret_json_str = self.sync_read_secret(secret_name=primary_secret_name)
-        primary_secret_kv_pairs = self._parse_primary_secret(primary_secret_json_str)
+        primary_secret_json_str: Final = self.sync_read_secret(secret_name=primary_secret_name)
+        primary_secret_kv_pairs: Final = self._parse_primary_secret(primary_secret_json_str)
         return primary_secret_kv_pairs.get(secret_name)
 
     async def async_read_secret_from_primary_secret(self, secret_name: str, primary_secret_name: str) -> str | None:
         """
         Read a secret from the primary secret
         """
-        primary_secret_json_str = await self.async_read_secret(secret_name=primary_secret_name)
-        primary_secret_kv_pairs = self._parse_primary_secret(primary_secret_json_str)
+        primary_secret_json_str: Final = await self.async_read_secret(secret_name=primary_secret_name)
+        primary_secret_kv_pairs: Final = self._parse_primary_secret(primary_secret_json_str)
         return primary_secret_kv_pairs.get(secret_name)
 
     async def async_write_secret(
@@ -264,7 +264,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         """
         from litellm._uuid import uuid
 
-        data: dict[str, Any] = {
+        data: Final[dict[str, Any]] = {
             "Name": secret_name,
             "SecretString": secret_value,
             "ClientRequestToken": str(uuid.uuid4()),
@@ -281,7 +281,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                 tags_list = tags
             else:
                 raise ValueError("Tags must be a dict or list of {Key, Value} pairs")
-            data["Tags"] = tags_list  # type: ignore[assignment]
+            data["Tags"] = tags_list
 
         endpoint_url, headers, body = self._prepare_request(
             action="CreateSecret",
@@ -291,19 +291,19 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             request_data=data,
         )
 
-        async_client = get_async_httpx_client(
+        async_client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
             params={"timeout": timeout},
         )
 
         try:
-            response = await async_client.post(
+            response: Final = await async_client.post(
                 url=endpoint_url,
                 headers=headers,
                 data=body.decode("utf-8"),
             )
             response.raise_for_status()
-            create_response = response.json()
+            create_response: Final = response.json()
         except httpx.HTTPStatusError as err:
             raise ValueError(f"HTTP error occurred: {err.response.text}")
         except httpx.TimeoutException:
@@ -363,7 +363,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             replica_regions,
         )
 
-        data: dict[str, object] = {
+        data: Final[dict[str, object]] = {
             "SecretId": secret_name,
             "AddReplicaRegions": [{"Region": r} for r in replica_regions],
         }
@@ -375,13 +375,13 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             request_data=data,
         )
 
-        async_client = get_async_httpx_client(
+        async_client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
             params={"timeout": timeout},
         )
 
         try:
-            response = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
+            response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as err:
@@ -413,7 +413,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         """
         from litellm._uuid import uuid
 
-        data: dict[str, Any] = {
+        data: Final[dict[str, Any]] = {
             "SecretId": secret_name,
             "SecretString": secret_value,
             "ClientRequestToken": str(uuid.uuid4()),
@@ -427,13 +427,13 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             request_data=data,
         )
 
-        async_client = get_async_httpx_client(
+        async_client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
             params={"timeout": timeout},
         )
 
         try:
-            response = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
+            response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as err:
@@ -495,7 +495,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             dict: Response from AWS Secrets Manager containing deletion details
         """
         # Prepare the request data
-        data = {
+        data: Final = {
             "SecretId": secret_name,
             "RecoveryWindowInDays": recovery_window_in_days,
         }
@@ -507,13 +507,13 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             request_data=data,
         )
 
-        async_client = get_async_httpx_client(
+        async_client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
             params={"timeout": timeout},
         )
 
         try:
-            response = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
+            response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as err:
@@ -554,7 +554,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         if not optional_params.get("aws_sts_endpoint") and self.aws_sts_endpoint:
             optional_params["aws_sts_endpoint"] = self.aws_sts_endpoint
 
-        boto3_credentials_info = self._get_boto_credentials_from_optional_params(optional_params)
+        boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(optional_params)
 
         # Get endpoint
         _, endpoint_url = self.get_runtime_endpoint(
@@ -572,19 +572,19 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             if secret_value and action == "PutSecretValue":
                 data["SecretString"] = secret_value
 
-        body = json.dumps(data).encode("utf-8")
-        headers = {
+        body: Final = json.dumps(data).encode("utf-8")
+        headers: Final = {
             "Content-Type": "application/x-amz-json-1.1",
             "X-Amz-Target": f"secretsmanager.{action}",
         }
 
         # Sign request
-        request = AWSRequest(method="POST", url=endpoint_url, data=body, headers=headers)
+        request: Final = AWSRequest(method="POST", url=endpoint_url, data=body, headers=headers)
         SigV4Auth(
             boto3_credentials_info.credentials,
             "secretsmanager",
             boto3_credentials_info.aws_region_name,
         ).add_auth(request)
-        prepped = request.prepare()
+        prepped: Final = request.prepare()
 
         return endpoint_url, prepped.headers, body

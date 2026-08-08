@@ -9,12 +9,12 @@ Has 4 methods:
 """
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
@@ -24,7 +24,7 @@ class BaseCache(ABC):
         self.default_ttl = default_ttl
 
     def get_ttl(self, **kwargs) -> int | None:
-        kwargs_ttl: int | None = kwargs.get("ttl")
+        kwargs_ttl: Final[int | None] = kwargs.get("ttl")
         if kwargs_ttl is not None:
             try:
                 return int(kwargs_ttl)

@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from "react";
 import { Card, Button, InputNumber, Typography, Spin, Select, Tag, Row, Col } from "antd";
 import { EditOutlined, SaveOutlined } from "@ant-design/icons";
-import { getDefaultTeamSettings, updateDefaultTeamSettings } from "./networking";
+import { getDefaultTeamSettings, updateDefaultTeamSettings, Organization } from "./networking";
 import BudgetDurationDropdown, { getBudgetDurationLabel } from "./common_components/budget_duration_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import NotificationsManager from "./molecules/notifications_manager";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
+import OrganizationDropdown from "./common_components/OrganizationDropdown";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 
 const { Title, Text } = Typography;
 
@@ -67,6 +69,11 @@ const renderTags = (values: string[], displayFn?: (v: string) => string) => {
   );
 };
 
+const getOrganizationLabel = (organizationId: string, organizations: Organization[] | undefined): string => {
+  const organization = organizations?.find((org) => org.organization_id === organizationId);
+  return organization?.organization_alias ? `${organization.organization_alias} (${organizationId})` : organizationId;
+};
+
 interface SettingsValues {
   max_budget: number | null;
   budget_duration: string | null;
@@ -74,6 +81,7 @@ interface SettingsValues {
   rpm_limit: number | null;
   models: string[];
   team_member_permissions: string[];
+  organization_id: string | null;
 }
 
 const DEFAULT_VALUES: SettingsValues = {
@@ -83,6 +91,7 @@ const DEFAULT_VALUES: SettingsValues = {
   rpm_limit: null,
   models: [],
   team_member_permissions: [],
+  organization_id: null,
 };
 
 const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
@@ -92,6 +101,7 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
   const [editedValues, setEditedValues] = useState<SettingsValues>(DEFAULT_VALUES);
   const [saving, setSaving] = useState<boolean>(false);
   const [fetchError, setFetchError] = useState<boolean>(false);
+  const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -226,7 +236,7 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
               editContent={
                 <BudgetDurationDropdown
                   value={editedValues.budget_duration || null}
-                  onChange={(v) => update("budget_duration", v)}
+                  onChange={(v) => update("budget_duration", v ?? null)}
                   style={{ maxWidth: 320 }}
                 />
               }
@@ -272,6 +282,29 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
         <div className="mb-8">
           <div className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Access & Permissions</div>
           <div className="border-t border-gray-100">
+            <SettingRow
+              label="Default Organization"
+              description="Teams created without an explicit organization are assigned to this organization."
+              isEditing={isEditing}
+              viewContent={
+                values.organization_id ? (
+                  <Text>{getOrganizationLabel(values.organization_id, organizations)}</Text>
+                ) : (
+                  <NotSet />
+                )
+              }
+              editContent={
+                <OrganizationDropdown
+                  organizations={organizations}
+                  loading={isOrganizationsLoading}
+                  value={editedValues.organization_id ?? undefined}
+                  onChange={(organizationId) => update("organization_id", organizationId || null)}
+                  placeholder="Select an organization"
+                  style={{ maxWidth: 320 }}
+                />
+              }
+            />
+
             <SettingRow
               label="Models"
               description="Default list of models that new teams can access."

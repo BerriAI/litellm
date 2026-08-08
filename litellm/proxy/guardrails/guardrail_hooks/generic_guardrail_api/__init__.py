@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 def _get_config_value(litellm_params: Any, optional_params: Any, attribute_name: str) -> Any | None:
     if optional_params is not None:
-        value = (
+        value: Final = (
             optional_params.get(attribute_name)
             if isinstance(optional_params, dict)
             else getattr(optional_params, attribute_name, None)
@@ -23,9 +23,9 @@ def _get_config_value(litellm_params: Any, optional_params: Any, attribute_name:
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
 
-    optional_params = getattr(litellm_params, "optional_params", None)
+    optional_params: Final = getattr(litellm_params, "optional_params", None)
 
-    _generic_guardrail_api_callback = GenericGuardrailAPI(
+    _generic_guardrail_api_callback: Final = GenericGuardrailAPI(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
         headers=getattr(litellm_params, "headers", None),
@@ -45,10 +45,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _generic_guardrail_api_callback
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.GENERIC_GUARDRAIL_API.value: initialize_guardrail,
 }
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.GENERIC_GUARDRAIL_API.value: GenericGuardrailAPI,
 }

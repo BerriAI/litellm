@@ -1,7 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { NuqsTestingAdapter, OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
+import NotificationsManager from "./molecules/notifications_manager";
 import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_available_models_team_key";
 import { fetchMCPAccessGroups, getGuardrailsList, teamCreateCall } from "./networking";
 import Teams from "./Teams";
@@ -31,6 +34,10 @@ vi.mock("./networking", () => ({
 // Teams invalidates teamsTableKeys on mutations; the selected team is passed up from the table.
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   teamsTableKeys: { all: ["teamsTable"] },
+}));
+
+vi.mock("@/app/(dashboard)/hooks/teams/useTeamMetadataSchema", () => ({
+  useTeamMetadataSchema: vi.fn(() => ({ data: [], isLoading: false })),
 }));
 
 vi.mock("./molecules/notifications_manager", () => ({
@@ -71,31 +78,6 @@ vi.mock("@/components/team/TeamInfo", () => ({
     return <div data-testid="team-info-view" />;
   },
 }));
-
-// The selected team is URL-derived (?team=) via useTeamDetailRouting. Next's real useSearchParams
-// re-renders subscribers on history.pushState/replaceState; mirror that so URL changes propagate.
-vi.mock("next/navigation", async () => {
-  const { useSyncExternalStore } = await import("react");
-  const LOCATION_CHANGE_EVENT = "test-locationchange";
-  for (const method of ["pushState", "replaceState"] as const) {
-    const original = window.history[method].bind(window.history);
-    window.history[method] = (...args: Parameters<History["pushState"]>) => {
-      original(...args);
-      window.dispatchEvent(new Event(LOCATION_CHANGE_EVENT));
-    };
-  }
-  const subscribe = (onChange: () => void) => {
-    window.addEventListener(LOCATION_CHANGE_EVENT, onChange);
-    window.addEventListener("popstate", onChange);
-    return () => {
-      window.removeEventListener(LOCATION_CHANGE_EVENT, onChange);
-      window.removeEventListener("popstate", onChange);
-    };
-  };
-  return {
-    useSearchParams: () => new URLSearchParams(useSyncExternalStore(subscribe, () => window.location.search)),
-  };
-});
 
 vi.mock("./ModelSelect/ModelSelect", () => {
   const ModelSelect = React.forwardRef(({ value, onChange, dataTestId, id }: any, ref: any) => {
@@ -176,15 +158,21 @@ const createQueryClient = () => {
   });
 };
 
-const renderWithQueryClient = (component: React.ReactElement) => {
+const renderWithQueryClient = (
+  component: React.ReactElement,
+  options?: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFunction },
+) => {
   const queryClient = createQueryClient();
-  return render(<QueryClientProvider client={queryClient}>{component}</QueryClientProvider>);
+  return render(
+    <NuqsTestingAdapter searchParams={options?.searchParams} onUrlUpdate={options?.onUrlUpdate} hasMemory>
+      <QueryClientProvider client={queryClient}>{component}</QueryClientProvider>
+    </NuqsTestingAdapter>,
+  );
 };
 
 // Re-establish safe defaults before every test (clearAllMocks keeps return values, so restore them here).
 beforeEach(() => {
   mockTeamsTableProps = null;
-  window.history.replaceState(null, "", "/teams/");
 });
 
 describe("Teams - handleCreate organization handling", () => {
@@ -473,32 +461,42 @@ describe("Teams - team detail deep link (?team=)", () => {
   });
 
   it("selecting a team pushes ?team= to the URL", async () => {
-    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    const onUrlUpdate = vi.fn();
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />, { onUrlUpdate });
 
     await waitFor(() => expect(mockTeamsTableProps).not.toBeNull());
     act(() => mockTeamsTableProps.onSelectTeam({ ...baseTableTeam, team_id: "team-deep-link" }));
 
-    expect(window.location.search).toContain("team=team-deep-link");
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    const lastUpdate = onUrlUpdate.mock.calls.at(-1)![0];
+    expect(lastUpdate.searchParams.get("team")).toBe("team-deep-link");
+    expect(lastUpdate.options.history).toBe("push");
+
     await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
     expect(mockTeamInfoView).toHaveBeenLastCalledWith(expect.objectContaining({ teamId: "team-deep-link" }));
   });
 
   it("opens the team detail view directly from a ?team= deep link", async () => {
-    window.history.replaceState(null, "", "/teams/?team=team-from-url");
-    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />, {
+      searchParams: "?team=team-from-url",
+    });
 
     await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
     expect(mockTeamInfoView).toHaveBeenLastCalledWith(expect.objectContaining({ teamId: "team-from-url" }));
   });
 
   it("closing the team detail view removes ?team= from the URL", async () => {
-    window.history.replaceState(null, "", "/teams/?team=team-from-url");
-    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    const onUrlUpdate = vi.fn();
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />, {
+      searchParams: "?team=team-from-url",
+      onUrlUpdate,
+    });
 
     await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
     act(() => mockTeamInfoView.mock.calls.at(-1)?.[0].onClose());
 
-    expect(window.location.search).not.toContain("team=");
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    expect(onUrlUpdate.mock.calls.at(-1)![0].searchParams.has("team")).toBe(false);
     await waitFor(() => expect(screen.queryByTestId("team-info-view")).not.toBeInTheDocument());
   });
 });
@@ -613,6 +611,238 @@ describe("Teams - access_group_ids in team create", () => {
           access_group_ids: ["ag-1", "ag-2"],
         }),
       );
+    });
+  });
+
+  it("creates a team with no models selected, sending the no-default-models sentinel instead of an empty list", async () => {
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+
+    const createButton = screen.getAllByRole("button", { name: /create team/i })[0];
+    act(() => {
+      fireEvent.click(createButton);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/team name/i)).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Group Only Team" } });
+
+    const createTeamSubmitButtons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(createTeamSubmitButtons[createTeamSubmitButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(teamCreateCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          team_alias: "Group Only Team",
+          models: ["no-default-models"],
+        }),
+      );
+    });
+  });
+});
+
+describe("Teams - metadata key-value pairs in team create", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTeamInfoView.mockClear();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4"]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    vi.mocked(teamCreateCall).mockResolvedValue({
+      team_id: "new-team-1",
+      team_alias: "Test Team",
+      models: ["gpt-4"],
+      organization_id: null,
+      keys: [],
+      members_with_roles: [],
+      spend: 0,
+    });
+    mockUseOrganizations.mockReturnValue({
+      data: [{ organization_id: "org-1", organization_alias: "Org 1", models: [], members: [] }],
+    });
+  });
+
+  const openCreateModal = async () => {
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+
+    const createButton = screen.getAllByRole("button", { name: /create team/i })[0];
+    act(() => {
+      fireEvent.click(createButton);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/team name/i)).toBeInTheDocument();
+    });
+  };
+
+  it("renders the metadata editor in the main form without opening Additional Settings", async () => {
+    await openCreateModal();
+
+    expect(screen.getByRole("button", { name: /add key-value pair/i })).toBeInTheDocument();
+  });
+
+  it("submits metadata built from key-value pairs as a typed JSON object", async () => {
+    await openCreateModal();
+
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Test Team" } });
+    fireEvent.change(screen.getByTestId("create-team-models-select"), { target: { value: "gpt-4" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /add key-value pair/i }));
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("Key")).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByPlaceholderText("Key"), { target: { value: "cost_center" } });
+    fireEvent.change(screen.getByPlaceholderText("Value"), { target: { value: "eng-42" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /add key-value pair/i }));
+    await waitFor(() => {
+      expect(screen.getAllByPlaceholderText("Key")).toHaveLength(2);
+    });
+    fireEvent.change(screen.getAllByPlaceholderText("Key")[1], { target: { value: "tier" } });
+    fireEvent.change(screen.getAllByPlaceholderText("Value")[1], { target: { value: "3" } });
+
+    const createTeamSubmitButtons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(createTeamSubmitButtons[createTeamSubmitButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(teamCreateCall).toHaveBeenCalled();
+    });
+
+    const submittedValues = vi.mocked(teamCreateCall).mock.calls[0][1];
+    expect(JSON.parse(submittedValues.metadata)).toEqual({ cost_center: "eng-42", tier: 3 });
+  });
+
+  it("omits metadata entirely when no pairs are added", async () => {
+    await openCreateModal();
+
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Test Team" } });
+    fireEvent.change(screen.getByTestId("create-team-models-select"), { target: { value: "gpt-4" } });
+
+    const createTeamSubmitButtons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(createTeamSubmitButtons[createTeamSubmitButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(teamCreateCall).toHaveBeenCalled();
+    });
+
+    expect(vi.mocked(teamCreateCall).mock.calls[0][1].metadata).toBeUndefined();
+  });
+});
+
+describe("Teams - schema-declared metadata fields in team create", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTeamInfoView.mockClear();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4"]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    vi.mocked(teamCreateCall).mockResolvedValue({
+      team_id: "new-team-1",
+      team_alias: "Test Team",
+      models: ["gpt-4"],
+      organization_id: null,
+      keys: [],
+      members_with_roles: [],
+      spend: 0,
+    });
+    mockUseOrganizations.mockReturnValue({ data: null });
+    vi.mocked(useTeamMetadataSchema).mockReturnValue({
+      data: [{ key: "cost_center", label: "Cost Center" }],
+      isLoading: false,
+    } as any);
+  });
+
+  const openCreateModal = async () => {
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+
+    const createButton = screen.getAllByRole("button", { name: /create team/i })[0];
+    act(() => {
+      fireEvent.click(createButton);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/team name/i)).toBeInTheDocument();
+    });
+  };
+
+  it("should prepopulate the declared key as an ordinary pair row and submit its value", async () => {
+    await openCreateModal();
+
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Test Team" } });
+    fireEvent.change(screen.getByTestId("create-team-models-select"), { target: { value: "gpt-4" } });
+
+    await waitFor(() => {
+      expect((screen.getByPlaceholderText("Key") as HTMLInputElement).value).toBe("cost_center");
+    });
+    fireEvent.change(screen.getByPlaceholderText("Value"), { target: { value: "CC-1001" } });
+
+    const createTeamSubmitButtons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(createTeamSubmitButtons[createTeamSubmitButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(teamCreateCall).toHaveBeenCalled();
+    });
+
+    const submittedValues = vi.mocked(teamCreateCall).mock.calls[0][1];
+    expect(JSON.parse(submittedValues.metadata)).toEqual({ cost_center: "CC-1001" });
+  });
+
+  it("should toast only the validator's own message when the backend rejects the create", async () => {
+    vi.mocked(teamCreateCall).mockRejectedValue(
+      new Error("{'error': 'Cost center CC-9999 is not recognized. Contact the FinOps team.'}"),
+    );
+    await openCreateModal();
+
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Test Team" } });
+    fireEvent.change(screen.getByTestId("create-team-models-select"), { target: { value: "gpt-4" } });
+    await waitFor(() => {
+      expect((screen.getByPlaceholderText("Key") as HTMLInputElement).value).toBe("cost_center");
+    });
+    fireEvent.change(screen.getByPlaceholderText("Value"), { target: { value: "CC-9999" } });
+
+    const createTeamSubmitButtons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(createTeamSubmitButtons[createTeamSubmitButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
+        "Error creating the team: Cost center CC-9999 is not recognized. Contact the FinOps team.",
+      );
+    });
+  });
+
+  it("should show a skeleton in the metadata section while the schema is loading", async () => {
+    vi.mocked(useTeamMetadataSchema).mockReturnValue({ data: undefined, isLoading: true } as any);
+    await openCreateModal();
+
+    expect(screen.getByTestId("metadata-schema-skeleton")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /add key-value pair/i })).not.toBeInTheDocument();
+  });
+
+  it("should re-seed declared keys when the create modal is closed and reopened", async () => {
+    await openCreateModal();
+
+    await waitFor(() => {
+      expect((screen.getByPlaceholderText("Key") as HTMLInputElement).value).toBe("cost_center");
+    });
+    fireEvent.click(screen.getByLabelText("Remove key-value pair"));
+    await waitFor(() => {
+      expect(screen.queryByPlaceholderText("Key")).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /^close$/i }));
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/team name/i)).not.toBeInTheDocument();
+    });
+
+    const createButton = screen.getAllByRole("button", { name: /create team/i })[0];
+    act(() => {
+      fireEvent.click(createButton);
+    });
+
+    await waitFor(() => {
+      expect((screen.getByPlaceholderText("Key") as HTMLInputElement).value).toBe("cost_center");
     });
   });
 });

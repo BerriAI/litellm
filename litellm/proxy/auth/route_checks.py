@@ -1,4 +1,5 @@
 import re
+from typing import Final
 
 from fastapi import HTTPException, Request, status
 
@@ -18,7 +19,7 @@ from .auth_checks_organization import _user_is_org_admin
 # endpoint to a management router REQUIRES adding it here too — the surrounding
 # check falls through to "allow" if the route is not matched, which previously
 # let view-only admins call /team/block, /team/unblock, /key/bulk_update, etc.
-_PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES = frozenset(
+_PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES: Final = frozenset(
     [
         # user
         "/user/new",
@@ -56,9 +57,9 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES = frozenset(
 # Suffixes for `/key/{key_id}/...` path-parameterized write routes that the
 # enum templates with `{key_id}`. The blocklist above can't match templated
 # paths directly because the request route carries the resolved key id.
-_PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES = ("/regenerate", "/reset_spend")
+_PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES: Final = ("/regenerate", "/reset_spend")
 
-_AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS = frozenset(("openai_routes", "llm_api_routes"))
+_AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS: Final = frozenset(("openai_routes", "llm_api_routes"))
 
 
 class RouteChecks:
@@ -194,7 +195,7 @@ class RouteChecks:
             return "***"
 
         # Use SensitiveDataMasker with custom configuration for user_id
-        masker = SensitiveDataMasker(visible_prefix=6, visible_suffix=2, mask_char="*")
+        masker: Final = SensitiveDataMasker(visible_prefix=6, visible_suffix=2, mask_char="*")
 
         return masker._mask_value(user_id)
 
@@ -219,7 +220,7 @@ class RouteChecks:
             user_role = user_obj.user_role or "unknown"
             user_id = user_obj.user_id or "unknown"
 
-        masked_user_id = RouteChecks._mask_user_id(user_id)
+        masked_user_id: Final = RouteChecks._mask_user_id(user_id)
         raise Exception(
             f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
         )
@@ -256,10 +257,14 @@ class RouteChecks:
                 pass
             elif route == "/user/info":
                 # check if user can access this route
-                query_params = request.query_params
-                user_id = query_params.get("user_id")
-                verbose_proxy_logger.debug(f"user_id: {user_id} & valid_token.user_id: {valid_token.user_id}")
-                if user_id and user_id != valid_token.user_id:
+                query_params: Final = request.query_params
+                user_id: Final = query_params.get("user_id")
+                verbose_proxy_logger.debug("user_id: %s & valid_token.user_id: %s", user_id, valid_token.user_id)
+                if (
+                    user_id
+                    and user_id != valid_token.user_id
+                    and _user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+                ):
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail=f"key not allowed to access this user's info. user_id={user_id}, key's user_id={valid_token.user_id}",
@@ -326,7 +331,8 @@ class RouteChecks:
         if "admin_only_routes" in general_settings:
             if premium_user is not True:
                 verbose_proxy_logger.error(
-                    f"Trying to use 'admin_only_routes' this is an Enterprise only feature. {CommonProxyErrors.not_premium_user.value}"
+                    "Trying to use 'admin_only_routes' this is an Enterprise only feature. %s",
+                    CommonProxyErrors.not_premium_user.value,
                 )
                 return
             if route in general_settings["admin_only_routes"]:
@@ -417,10 +423,10 @@ class RouteChecks:
             return False
         if route == "/v1/mcp/server":
             return True
-        prefix = "/v1/mcp/server/"
+        prefix: Final = "/v1/mcp/server/"
         if not route.startswith(prefix):
             return False
-        remainder = route[len(prefix) :]
+        remainder: Final = route[len(prefix) :]
         return bool(remainder) and "/" not in remainder
 
     @staticmethod
@@ -449,8 +455,8 @@ class RouteChecks:
         if not isinstance(route, str):
             return False
         # Add support for deployment and engine model paths
-        deployment_pattern = r"^/openai/deployments/[^/]+/[^/]+/chat/completions$"
-        engine_pattern = r"^/engines/[^/]+/chat/completions$"
+        deployment_pattern: Final = r"^/openai/deployments/[^/]+/[^/]+/chat/completions$"
+        engine_pattern: Final = r"^/engines/[^/]+/chat/completions$"
 
         if re.match(deployment_pattern, route) or re.match(engine_pattern, route):
             return True
@@ -476,7 +482,7 @@ class RouteChecks:
             return False
 
         def _placeholder_to_regex(match: re.Match) -> str:
-            placeholder = match.group(0).strip("{}")
+            placeholder: Final = match.group(0).strip("{}")
             if placeholder.endswith(":path"):
                 # allow "/" in the placeholder value, but don't eat the route suffix after ":"
                 return r"[^:]+"
@@ -519,7 +525,7 @@ class RouteChecks:
         """
         if pattern.endswith("*"):
             # Get the prefix (everything before the wildcard)
-            prefix = pattern[:-1]
+            prefix: Final = pattern[:-1]
             return route.startswith(prefix)
         else:
             # If there's no wildcard, the pattern and route should match exactly
@@ -597,7 +603,7 @@ class RouteChecks:
             return None
 
         try:
-            method = request.method
+            method: Final = request.method
         except (AttributeError, KeyError):
             return None
         if not isinstance(method, str):
@@ -618,7 +624,7 @@ class RouteChecks:
             InitPassThroughEndpointHelpers,
         )
 
-        route_info = InitPassThroughEndpointHelpers.get_registered_pass_through_route(route=route, method=method)
+        route_info: Final = InitPassThroughEndpointHelpers.get_registered_pass_through_route(route=route, method=method)
         if route_info is None:
             return False
         return route_info.get("auth") is True
@@ -651,8 +657,8 @@ class RouteChecks:
         Check if route is a passthrough route.
         Supports both exact match and prefix match.
         """
-        metadata = user_api_key_dict.metadata
-        team_metadata = user_api_key_dict.team_metadata or {}
+        metadata: Final = user_api_key_dict.metadata
+        team_metadata: Final = user_api_key_dict.team_metadata or {}
         if metadata is None and team_metadata is None:
             return False
         if "allowed_passthrough_routes" not in metadata and "allowed_passthrough_routes" not in team_metadata:
@@ -663,7 +669,7 @@ class RouteChecks:
         ):
             return False
 
-        allowed_passthrough_routes = (
+        allowed_passthrough_routes: Final = (
             metadata.get("allowed_passthrough_routes") or team_metadata.get("allowed_passthrough_routes") or []
         )
 
@@ -688,7 +694,7 @@ class RouteChecks:
         # Inline import — auth_utils participates in a proxy import cycle.
         from .auth_utils import get_request_route  # noqa: PLC0415
 
-        route = get_request_route(request)
+        route: Final = get_request_route(request)
         if "thread" in route or "assistant" in route:
             return True
         return False
@@ -780,7 +786,7 @@ class RouteChecks:
             if route == "/user/update":
                 # Check the Request params are valid for PROXY_ADMIN_VIEW_ONLY
                 if request_data is not None and isinstance(request_data, dict):
-                    _params_updated = request_data.keys()
+                    _params_updated: Final = request_data.keys()
                     for param in _params_updated:
                         if param not in ["user_email", "password"]:
                             raise HTTPException(
@@ -796,8 +802,8 @@ class RouteChecks:
                     detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
                 )
             # Allow read operations on management routes (like /user/info, /team/info, /model/info)
-        method = request.method.upper() if request is not None else "GET"
-        is_safe_method = method in RouteChecks._SAFE_HTTP_METHODS
+        method: Final = request.method.upper() if request is not None else "GET"
+        is_safe_method: Final = method in RouteChecks._SAFE_HTTP_METHODS
 
         # ── Safe HTTP method: default-allow ──────────────────────────────
         if is_safe_method:

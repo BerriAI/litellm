@@ -10,7 +10,7 @@ import asyncio
 import copy
 import json
 import os
-from typing import Any, Literal, cast
+from typing import Any, Final, Literal, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
@@ -49,7 +49,7 @@ class ConfigRepository:
 
     async def get_param(self, param_name: str) -> ConfigParam | None:
         """Get a config parameter from the database."""
-        record = await self.table.find_unique(where={"param_name": param_name})
+        record: Final = await self.table.find_unique(where={"param_name": param_name})
         if record is None:
             return None
         param_value = record.param_value
@@ -59,7 +59,7 @@ class ConfigRepository:
 
     async def set_param(self, param_name: str, param_value: Any) -> ConfigParam:
         """Set a config parameter in the database."""
-        value_json = json.dumps(param_value) if not isinstance(param_value, str) else param_value
+        value_json: Final = json.dumps(param_value) if not isinstance(param_value, str) else param_value
         await self.table.upsert(
             where={"param_name": param_name},
             data={
@@ -79,8 +79,8 @@ class ConfigRepository:
 
     async def get_all_params(self) -> dict[str, Any]:
         """Get all config parameters from the database."""
-        records = await self.table.find_many()
-        result = {}
+        records: Final = await self.table.find_many()
+        result: Final = {}
         for record in records:
             param_value = record.param_value
             if isinstance(param_value, str):
@@ -94,7 +94,7 @@ class ConfigRepository:
         On conflicts, src (DB) wins, but empty lists are treated as "no value"
         and don't overwrite the destination.
         """
-        stack = [(dst, src)]
+        stack: Final = [(dst, src)]
         while stack:
             d, s = stack.pop()
             for k, v in s.items():
@@ -109,7 +109,7 @@ class ConfigRepository:
 
     def _decrypt_env_variables(self, env_vars: dict[str, Any], return_original_value: bool = True) -> dict[str, str]:
         """Decrypt environment variables from database."""
-        decrypted: dict[str, str] = {}
+        decrypted: Final[dict[str, str]] = {}
         for key, value in env_vars.items():
             if isinstance(value, str):
                 decrypted_value = decrypt_value_helper(
@@ -126,7 +126,7 @@ class ConfigRepository:
 
     def _normalize_env_variable_keys(self, env_vars: dict[str, str]) -> dict[str, str]:
         """Normalize env variable keys to include both original and uppercase versions."""
-        normalized: dict[str, str] = {}
+        normalized: Final[dict[str, str]] = {}
         for key, value in env_vars.items():
             normalized[key] = value
             upper_key = key.upper()
@@ -146,8 +146,8 @@ class ConfigRepository:
     ) -> dict:
         """Update config fields with DB values, handling the merge strategy."""
         if param_name == "environment_variables":
-            decrypted_env_vars = self._decrypt_env_variables(db_param_value, return_original_value=True)
-            merged_env_vars = self._normalize_env_variable_keys(decrypted_env_vars)
+            decrypted_env_vars: Final = self._decrypt_env_variables(db_param_value, return_original_value=True)
+            merged_env_vars: Final = self._normalize_env_variable_keys(decrypted_env_vars)
             for env_key, value in merged_env_vars.items():
                 os.environ[env_key] = value
 
@@ -187,8 +187,8 @@ class ConfigRepository:
             verbose_proxy_logger.info("'store_model_in_db' is not True, skipping db config reconciliation")
             return yaml_config
 
-        tasks = [self.get_param(k) for k in self.CONFIG_PARAMS]
-        responses = await asyncio.gather(*tasks)
+        tasks: Final = [self.get_param(k) for k in self.CONFIG_PARAMS]
+        responses: Final = await asyncio.gather(*tasks)
 
         config = copy.deepcopy(yaml_config)
         for response in responses:
@@ -197,7 +197,7 @@ class ConfigRepository:
 
             param_name = response.param_name
             param_value = response.param_value
-            verbose_proxy_logger.debug(f"param_name={param_name}, param_value={param_value}")
+            verbose_proxy_logger.debug("param_name=%s, param_value=%s", param_name, param_value)
 
             if param_name is not None and param_value is not None:
                 config = self._update_config_fields(

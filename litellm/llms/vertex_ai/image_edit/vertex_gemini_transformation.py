@@ -2,7 +2,7 @@ import base64
 import json
 import os
 from io import BufferedReader, BytesIO
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
@@ -47,15 +47,13 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         model: str,
         drop_params: bool,
     ) -> dict[str, Any]:
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
         filtered_params = {key: value for key, value in image_edit_optional_params.items() if key in supported_params}
 
-        mapped_params: dict[str, Any] = {}
+        mapped_params: Final[dict[str, Any]] = {}
 
         if "size" in filtered_params:
-            mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(
-                filtered_params["size"]  # type: ignore[arg-type]
-            )
+            mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(filtered_params["size"])
 
         return mapped_params
 
@@ -99,13 +97,13 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
 
         # If a custom api_base is provided, skip credential validation
         # This allows users to use proxies or mock endpoints without needing Vertex AI credentials
-        _api_base = litellm_params.get("api_base") or api_base
+        _api_base: Final = litellm_params.get("api_base") or api_base
         if _api_base is not None:
             return headers
 
         # First check litellm_params (where vertex_ai_project/vertex_ai_credentials are passed)
         # then fall back to environment variables and other sources
-        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
+        vertex_project: Final = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
         vertex_credentials = self.safe_get_vertex_ai_credentials(litellm_params) or self._resolve_vertex_credentials()
         access_token, _ = self._ensure_access_token(
             credentials=vertex_credentials,
@@ -135,17 +133,17 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
 
         # First check litellm_params (where vertex_ai_project/vertex_ai_location are passed)
         # then fall back to environment variables and other sources
-        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
-        vertex_location = self.safe_get_vertex_ai_location(litellm_params) or self._resolve_vertex_location()
+        vertex_project: Final = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
+        vertex_location: Final = self.safe_get_vertex_ai_location(litellm_params) or self._resolve_vertex_location()
 
         if not vertex_project or not vertex_location:
             raise ValueError("vertex_project and vertex_location are required for Vertex AI")
 
-        base_url = get_vertex_base_url(vertex_location)
+        base_url: Final = get_vertex_base_url(vertex_location)
 
         return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model_name}:generateContent"
 
-    def transform_image_edit_request(  # type: ignore[override]
+    def transform_image_edit_request(
         self,
         model: str,
         prompt: str | None,
@@ -154,25 +152,25 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> tuple[dict[str, Any], RequestFiles | None]:
-        inline_parts = self._prepare_inline_image_parts(image) if image else []
+        inline_parts: Final = self._prepare_inline_image_parts(image) if image else []
         if not inline_parts:
             raise ValueError("Vertex AI Gemini image edit requires at least one image.")
 
         # Build parts list with image and prompt (if provided)
-        parts = inline_parts.copy()
+        parts: Final = inline_parts.copy()
         if prompt is not None and prompt != "":
             parts.append({"text": prompt})
 
         # Correct format for Vertex AI Gemini image editing
-        contents = {"role": "USER", "parts": parts}
+        contents: Final = {"role": "USER", "parts": parts}
 
-        request_body: dict[str, Any] = {"contents": contents}
+        request_body: Final[dict[str, Any]] = {"contents": contents}
 
         # Generation config with proper structure for image editing
-        generation_config: dict[str, Any] = {"response_modalities": ["IMAGE"]}
+        generation_config: Final[dict[str, Any]] = {"response_modalities": ["IMAGE"]}
 
         # Add image-specific configuration
-        image_config: dict[str, Any] = {}
+        image_config: Final[dict[str, Any]] = {}
         if "aspectRatio" in image_edit_optional_request_params:
             image_config["aspect_ratio"] = image_edit_optional_request_params["aspectRatio"]
 
@@ -181,8 +179,8 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
 
         request_body["generationConfig"] = generation_config
 
-        payload: Any = json.dumps(request_body)
-        empty_files = cast(RequestFiles, [])
+        payload: Final[Any] = json.dumps(request_body)
+        empty_files: Final = cast(RequestFiles, [])
         return cast(tuple[dict[str, Any], RequestFiles | None], (payload, empty_files))
 
     def transform_image_edit_response(
@@ -191,9 +189,9 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         raw_response: httpx.Response,
         logging_obj: Any,
     ) -> ImageResponse:
-        model_response = ImageResponse()
+        model_response: Final = ImageResponse()
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
         except Exception as exc:
             raise self.get_error_class(
                 error_message=f"Error transforming image edit response: {exc}",
@@ -201,8 +199,8 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
                 headers=raw_response.headers,
             )
 
-        candidates = response_json.get("candidates", [])
-        data_list: list[ImageObject] = []
+        candidates: Final = response_json.get("candidates", [])
+        data_list: Final[list[ImageObject]] = []
 
         for candidate in candidates:
             content = candidate.get("content", {})
@@ -222,7 +220,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
 
     def _map_size_to_aspect_ratio(self, size: str) -> str:
         """Map OpenAI size format to Gemini aspect ratio format"""
-        aspect_ratio_map = {
+        aspect_ratio_map: Final = {
             "1024x1024": "1:1",
             "1792x1024": "16:9",
             "1024x1792": "9:16",
@@ -238,7 +236,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         else:
             images = [image]
 
-        inline_parts: list[dict[str, Any]] = []
+        inline_parts: Final[list[dict[str, Any]]] = []
         for img in images:
             if img is None:
                 continue
