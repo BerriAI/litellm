@@ -3,10 +3,13 @@
 
 import base64
 import json
+from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Final, List, Literal, Optional, Union, cast
+from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 import litellm
 from litellm import Router, verbose_logger
@@ -30,11 +33,14 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
+    apply_unified_file_ids,
+    ensure_batch_response_managed_file_ids,
     get_batch_id_from_unified_batch_id,
     get_content_type_from_file_object,
     get_model_id_from_unified_batch_id,
-    get_models_from_unified_file_id,
+    map_raw_file_ids_to_unified,
     normalize_mime_type_for_provider,
+    resolve_managed_output_file_model_name,
 )
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
     AllMessageValues,
@@ -60,6 +66,9 @@ if TYPE_CHECKING:
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
+    from prisma.models import (
+        LiteLLM_ManagedObjectTable as PrismaManagedObjectRow,
+    )
 
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
     from litellm.proxy.utils import PrismaClient as _PrismaClient
@@ -71,6 +80,44 @@ else:
     Span = Any
     InternalUsageCache = Any
     PrismaClient = Any
+
+
+def _sanitized_parse_error(e: Exception) -> str:
+    return (
+        str(e.errors(include_input=False, include_url=False, include_context=False))
+        if isinstance(e, ValidationError)
+        else type(e).__name__
+    )
+
+
+def _decode_json_blob(blob: object) -> object:
+    return json.loads(blob) if isinstance(blob, str) else blob
+
+
+def _parse_managed_batch_row(row: "PrismaManagedObjectRow") -> Optional[LiteLLMBatch]:
+    try:
+        batch_obj: Final = LiteLLMBatch.model_validate(_decode_json_blob(row.file_object))
+    except Exception as e:
+        verbose_logger.warning(
+            f"Failed to parse batch object {row.unified_object_id}: {_sanitized_parse_error(e)}"
+        )
+        return None
+    batch_obj.id = row.unified_object_id
+    return batch_obj
+
+
+def _parse_managed_file_object(
+    raw_file_object: object, unified_file_id: str
+) -> Optional[OpenAIFileObject]:
+    if raw_file_object is None:
+        return None
+    try:
+        return OpenAIFileObject.model_validate(raw_file_object)
+    except Exception as e:
+        verbose_logger.warning(
+            f"Failed to parse managed file object {unified_file_id}: {_sanitized_parse_error(e)}"
+        )
+        return None
 
 
 class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
@@ -215,7 +262,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
 
         if result:
-            return LiteLLM_ManagedFileTable(**result)
+            return LiteLLM_ManagedFileTable.model_validate(result)
 
         ## CHECK DB
         db_object = await self.prisma_client.db.litellm_managedfiletable.find_first(
@@ -223,7 +270,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
 
         if db_object:
-            return LiteLLM_ManagedFileTable(**db_object.model_dump())
+            return LiteLLM_ManagedFileTable.model_validate(db_object.model_dump())
         return None
 
     async def delete_unified_file_id(
@@ -327,7 +374,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     detail=f"Invalid 'after' cursor: no batch found with id '{after}'.",
                 )
 
-        page_size = limit or 20
+        page_size: Final = min(limit or 20, 100)
         cursor_args: Dict[str, Any] = (
             {"cursor": {"unified_object_id": after}, "skip": 1} if after else {}
         )
@@ -341,25 +388,60 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         has_more = len(batches) > page_size
 
-        batch_objects: List[LiteLLMBatch] = []
-        for batch in batches[:page_size]:
-            try:
-                batch_data = (
-                    json.loads(batch.file_object)
-                    if isinstance(batch.file_object, str)
-                    else batch.file_object
-                )
-                batch_obj = LiteLLMBatch(**batch_data)
-                batch_obj.id = batch.unified_object_id
-                batch_objects.append(batch_obj)
+        parsed_rows: Final = tuple(
+            (row, batch_obj)
+            for row in batches[:page_size]
+            if (batch_obj := _parse_managed_batch_row(row)) is not None
+        )
+        unified_id_by_raw_id: Final = await map_raw_file_ids_to_unified(
+            raw_file_ids=frozenset(
+                file_id
+                for _, batch_obj in parsed_rows
+                for file_id in (batch_obj.input_file_id, batch_obj.output_file_id, batch_obj.error_file_id)
+                if file_id and not _is_base64_encoded_unified_file_id(file_id)
+            ),
+            prisma_client=self.prisma_client,
+        )
+        resolved_batches: Final = [
+            await self._resolve_listed_batch(
+                row=row,
+                batch_obj=batch_obj,
+                unified_id_by_raw_id=unified_id_by_raw_id,
+                user_api_key_dict=user_api_key_dict,
+            )
+            for row, batch_obj in parsed_rows
+        ]
+        return build_list_page(
+            [batch_obj for batch_obj in resolved_batches if batch_obj is not None],
+            has_more=has_more,
+        )
 
-            except Exception as e:
-                verbose_logger.warning(
-                    f"Failed to parse batch object {batch.unified_object_id}: {e}"
-                )
-                continue
-
-        return build_list_page(batch_objects, has_more=has_more)
+    async def _resolve_listed_batch(
+        self,
+        row: "PrismaManagedObjectRow",
+        batch_obj: LiteLLMBatch,
+        unified_id_by_raw_id: Mapping[str, str],
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> Optional[LiteLLMBatch]:
+        apply_unified_file_ids(batch_obj, unified_id_by_raw_id)
+        try:
+            await ensure_batch_response_managed_file_ids(
+                response=batch_obj,
+                managed_files_obj=self,
+                prisma_client=self.prisma_client,
+                verbose_proxy_logger=verbose_logger,
+                user_api_key_dict=user_api_key_dict,
+                db_batch_object=row,
+                unified_batch_id=_is_base64_encoded_unified_file_id(
+                    row.unified_object_id
+                ),
+            )
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to resolve managed file ids for batch {row.unified_object_id}: {e}"
+            )
+            return None
+        return batch_obj
 
     async def get_user_created_file_ids(
         self, user_api_key_dict: UserAPIKeyAuth, model_object_ids: List[str]
@@ -382,7 +464,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 "flat_model_file_ids": {"hasSome": model_object_ids},
             }
         )
-        return [OpenAIFileObject(**file_object.file_object) for file_object in file_ids]
+        return [
+            parsed_file_object.model_copy(update={"id": row.unified_file_id})
+            for row in file_ids
+            if (
+                parsed_file_object := _parse_managed_file_object(
+                    row.file_object, row.unified_file_id
+                )
+            )
+            is not None
+        ]
 
     async def check_managed_file_id_access(
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth
@@ -1055,10 +1146,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     def get_unified_output_file_id(
         self, output_file_id: str, model_id: str, model_name: Optional[str]
     ) -> str:
+        deterministic_uuid: Final = uuid5(
+            uuid5(NAMESPACE_URL, model_id), output_file_id
+        )
         unified_output_file_id = (
             SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
                 "application/json",
-                str(uuid.uuid4()),
+                str(deterministic_uuid),
                 model_name or "",
                 output_file_id,
                 model_id,
@@ -1094,21 +1188,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )  # managed batch id
             model_id = cast(Optional[str], response._hidden_params.get("model_id"))
             model_name = cast(Optional[str], response._hidden_params.get("model_name"))
-            resolved_model_name = model_name
 
-            # Some providers (e.g. Vertex batch retrieve) do not set model_name on
-            # the response. In that case, recover target_model_names from the input
-            # managed file metadata so unified output IDs preserve routing metadata.
-            if not resolved_model_name and isinstance(unified_file_id, str):
-                decoded_unified_file_id = (
-                    _is_base64_encoded_unified_file_id(unified_file_id)
-                    or unified_file_id
-                )
-                target_model_names = get_models_from_unified_file_id(
-                    decoded_unified_file_id
-                )
-                if target_model_names:
-                    resolved_model_name = ",".join(target_model_names)
+            resolved_model_name = resolve_managed_output_file_model_name(
+                unified_input_file_id=unified_file_id
+                if isinstance(unified_file_id, str)
+                else response.input_file_id,
+                fallback_model_name=model_name,
+            )
             original_response_id = response.id
 
             if (unified_batch_id or unified_file_id) and model_id:

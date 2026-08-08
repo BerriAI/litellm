@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
+import type { UrlUpdateEvent } from "nuqs/adapters/testing";
 import { renderWithProviders, screen, waitFor, within } from "../../../../../tests/test-utils";
 import { ProjectsPage } from "./ProjectsPage";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
@@ -20,7 +21,12 @@ vi.mock("./ProjectModals/CreateProjectModal", () => ({
 }));
 
 vi.mock("./ProjectDetailsPage", () => ({
-  ProjectDetail: ({ projectId }: { projectId: string }) => <div data-testid="project-detail">{projectId}</div>,
+  ProjectDetail: ({ projectId, onBack }: { projectId: string; onBack: () => void }) => (
+    <div data-testid="project-detail">
+      {projectId}
+      <button onClick={onBack}>Back to projects</button>
+    </div>
+  ),
 }));
 
 const mockProjects: ProjectResponse[] = [
@@ -198,6 +204,48 @@ describe("ProjectsPage", () => {
       expect(screen.getByText("Project 01")).toBeInTheDocument();
       expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 1");
     });
+  });
+
+  it("should open the detail view directly from a ?project= deep link", () => {
+    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    renderWithProviders(<ProjectsPage />, { searchParams: "?project=proj-2" });
+
+    expect(screen.getByTestId("project-detail")).toHaveTextContent("proj-2");
+    expect(screen.queryByRole("heading", { name: /projects/i })).not.toBeInTheDocument();
+  });
+
+  it("should push ?project= as a new history entry when a project is opened", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    renderWithProviders(<ProjectsPage />, { onUrlUpdate });
+
+    await user.click(screen.getByText("proj-1"));
+
+    await waitFor(() => {
+      expect(onUrlUpdate).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          queryString: "?project=proj-1",
+          options: expect.objectContaining({ history: "push" }),
+        }),
+      );
+    });
+  });
+
+  it("should clear ?project= and return to the list when the detail view is closed", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    renderWithProviders(<ProjectsPage />, { searchParams: "?project=proj-1", onUrlUpdate });
+
+    await user.click(screen.getByRole("button", { name: /back to projects/i }));
+
+    await waitFor(() => {
+      expect(onUrlUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ queryString: "" }));
+    });
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].options.history).toBe("replace");
+    expect(screen.queryByTestId("project-detail")).not.toBeInTheDocument();
+    expect(screen.getByText("Alpha Project")).toBeInTheDocument();
   });
 
   it("should resolve team alias from the teams list in the Team column", () => {

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import List, Optional
+from typing import Final
 
 from litellm.types.utils import StandardLoggingPayload
 
@@ -20,7 +20,7 @@ def get_datadog_hostname() -> str:
     return os.getenv("HOSTNAME", "")
 
 
-def get_datadog_base_url_from_env() -> Optional[str]:
+def get_datadog_base_url_from_env() -> str | None:
     """
     Get base URL override from common DD_BASE_URL env var.
     This is useful for testing or custom endpoints.
@@ -37,8 +37,8 @@ def get_datadog_pod_name() -> str:
 
 
 def get_datadog_tags(
-    standard_logging_object: Optional[StandardLoggingPayload] = None,
-) -> List[str]:
+    standard_logging_object: StandardLoggingPayload | None = None,
+) -> list[str]:
     """Build Datadog tags as a list of individual tag strings.
 
     Returns a list of "key:value" strings suitable for Datadog LLM Observability
@@ -46,7 +46,7 @@ def get_datadog_tags(
     comma: ",".join(get_datadog_tags(...)).
     """
 
-    base_tags = {
+    base_tags: Final = {
         "env": get_datadog_env(),
         "service": get_datadog_service(),
         "version": os.getenv("DD_VERSION", "unknown"),
@@ -54,15 +54,15 @@ def get_datadog_tags(
         "POD_NAME": get_datadog_pod_name(),
     }
 
-    tags: List[str] = [f"{k}:{v}" for k, v in base_tags.items()]
+    tags: Final[list[str]] = [f"{k}:{v}" for k, v in base_tags.items()]
 
     if standard_logging_object:
-        request_tags = standard_logging_object.get("request_tags", []) or []
+        request_tags: Final = standard_logging_object.get("request_tags", []) or []
         tags.extend(f"request_tag:{tag}" for tag in request_tags)
 
         # Add Team Tag
-        metadata = standard_logging_object.get("metadata", {}) or {}
-        team_tag = (
+        metadata: Final = standard_logging_object.get("metadata", {}) or {}
+        team_tag: Final = (
             metadata.get("user_api_key_team_alias")
             or metadata.get("team_alias")
             or metadata.get("user_api_key_team_id")
