@@ -31,7 +31,9 @@ from litellm.integrations.otel.model.semconv import (
     MCP,
     Error,
     GenAI,
+    JsonRpc,
     LiteLLM,
+    RpcSystem,
     Server,
 )
 from litellm.integrations.otel.model.spans import db_system
@@ -94,11 +96,14 @@ class GenAIMapper:
 
     _MCP_ATTRS: dict[str, Callable[[MCPToolCallSpanData], AttrValue | None]] = {
         GenAI.OPERATION_NAME: lambda d: d.operation.value,
+        JsonRpc.SYSTEM: lambda d: RpcSystem.JSONRPC.value if d.server_address and d.server_port else None,
         MCP.METHOD_NAME: lambda d: d.method,
         MCP.SESSION_ID: lambda d: d.session_id,
         GenAI.TOOL_NAME: lambda d: d.tool_name or None,
         GenAI.TOOL_CALL_ARGUMENTS: lambda d: d.arguments_json,
         GenAI.TOOL_CALL_RESULT: lambda d: d.result_json,
+        Server.ADDRESS: lambda d: d.server_address,
+        Server.PORT: lambda d: d.server_port,
         LiteLLM.MCP_SERVER_NAME: lambda d: d.server_name,
         LiteLLM.CALL_ID: lambda d: d.identity.call_id or None,
         f"{LiteLLM.COST_PREFIX}total": lambda d: d.response_cost,

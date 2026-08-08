@@ -2470,6 +2470,7 @@ async def _reserve_budget_after_common_checks(
         proxy_logging_obj=proxy_logging_obj,
         end_user_id=end_user_id,
         end_user_object=end_user_object,
+        apply_user_budget_to_team_keys=general_settings.get("apply_user_budget_to_team_keys") is True,
         fail_closed_budget_enforcement=general_settings.get("fail_closed_budget_enforcement") is True,
     )
 
