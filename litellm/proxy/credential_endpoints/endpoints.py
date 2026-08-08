@@ -346,4 +346,4 @@ async def update_credential(
 
         return {"success": True, "message": "Credential updated successfully"}
     except Exception as e:
-        return handle_exception_on_proxy(e)
+        raise handle_exception_on_proxy(e)

@@ -1,4 +1,5 @@
 import json
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from typing_extensions import Required, TypedDict, override
@@ -1096,3 +1097,17 @@ class BedrockInvokeAnthropicMessagesRequest(TypedDict, total=False):
     # supported subset and strips the field entirely when nothing remains, so
     # other edit types (e.g. `clear_thinking_20251015`) never reach Bedrock.
     context_management: dict
+
+
+class BedrockBatchRecordKind(Enum):
+    """
+    Which OpenAI endpoint shape a line of a Bedrock managed-batch JSONL file
+    carries. Bedrock batch `modelInput` is always the model's InvokeModel /
+    Converse body, so every non-embedding shape is normalized to Chat
+    Completions before being handed to the per-provider transformation.
+    """
+
+    CHAT = "chat"
+    TEXT_COMPLETION = "text_completion"
+    RESPONSES = "responses"
+    EMBEDDING = "embedding"
