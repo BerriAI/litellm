@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 
@@ -10,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 from litellm.anthropic_interface import messages
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import ModelResponse
 
 
