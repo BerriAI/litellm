@@ -47,6 +47,7 @@ from .common_utils import (
     BaseOpenAILLM,
     OpenAIError,
     drop_params_from_unprocessable_entity_error,
+    try_parse_sse_response_body,
 )
 
 openaiOSeriesConfig: Final = OpenAIOSeriesConfig()
@@ -425,6 +426,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 headers = {}
             response: Final = raw_response.parse()
             if not data.get("stream") and not hasattr(response, "model_dump"):
+                recovered = try_parse_sse_response_body(
+                    getattr(raw_response, "text", None)
+                )
+                if recovered is not None:
+                    return headers, recovered
                 raise OpenAIError(
                     status_code=500,
                     message=f"Empty or invalid response from LLM endpoint. Received: {response!r}. Check the reverse proxy or model server configuration.",
@@ -461,6 +467,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 headers = {}
             response: Final = raw_response.parse()
             if not data.get("stream") and not hasattr(response, "model_dump"):
+                recovered = try_parse_sse_response_body(
+                    getattr(raw_response, "text", None)
+                )
+                if recovered is not None:
+                    return headers, recovered
                 raise OpenAIError(
                     status_code=500,
                     message=f"Empty or invalid response from LLM endpoint. Received: {response!r}. Check the reverse proxy or model server configuration.",
