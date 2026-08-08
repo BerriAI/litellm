@@ -11,7 +11,9 @@ import asyncio
 import fnmatch
 import re
 import secrets
+from collections.abc import Mapping
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Any, Final, NamedTuple, Protocol, Union, cast
 
 import fastapi
@@ -106,6 +108,9 @@ except ImportError as e:
     enterprise_custom_auth = None
 
 user_api_key_service_logger_obj: Final = ServiceLogging()  # used for tracking latency on OTEL
+
+
+_EMPTY_MAPPING: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 def _normalize_public_auth_route(route: str) -> str:
@@ -1034,22 +1039,22 @@ async def _hoist_request_destinations(request: Request, user_api_key_dict: UserA
         )
 
         destinations_raw, _backends = await _resolve_logging_exporters(user_api_key_dict)
-        destinations = tuple(
+        destinations: Final = tuple(
             OtelDestination(
                 callback_name=item.get("callback_name"),
                 endpoint=item.get("endpoint", ""),
-                headers=item.get("headers") or {},
-                resource_attributes=item.get("resource_attributes") or {},
+                headers=item.get("headers") or _EMPTY_MAPPING,
+                resource_attributes=item.get("resource_attributes") or _EMPTY_MAPPING,
                 protocol=item.get("protocol"),
             )
             for item in destinations_raw
-            if isinstance(item, dict) and item.get("endpoint")
+            if item.get("endpoint")
         )
         set_request_destinations(destinations)
         try:
             request.state.otel_destinations = destinations_raw
-        except Exception:  # noqa: BLE001  # request.state mirror is best-effort; the ContextVar is the source of truth
-            pass
+        except Exception as mirror_exc:  # noqa: BLE001  # the ContextVar is the source of truth
+            verbose_proxy_logger.debug("OTel V2: request.state mirror failed: %s", mirror_exc)
     except Exception as exc:  # noqa: BLE001  # destination hoist is best-effort telemetry setup; it must never fail auth
         verbose_proxy_logger.debug("OTel V2: hoist destination resolution failed: %s", exc)
 

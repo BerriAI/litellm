@@ -40,7 +40,7 @@ _PROPAGATOR: Final = TraceContextTextMapPropagator()
 # request task, so there is nothing to leak.
 _request_root_span: Final["ContextVar[Span | None]"] = ContextVar("litellm_otel_request_root_span", default=None)
 
-_request_destinations: 'ContextVar[tuple["OtelDestination", ...]]' = ContextVar(
+_request_destinations: Final['ContextVar[tuple["OtelDestination", ...]]'] = ContextVar(
     "litellm_otel_request_destinations", default=()
 )
 

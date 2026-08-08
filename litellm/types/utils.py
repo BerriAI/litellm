@@ -39,7 +39,7 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from typing_extensions import Required, TypedDict
+from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -3208,11 +3208,11 @@ class OtelDestinationParams(TypedDict, total=False):
     belongs to, so fan-out routes each destination to the right backend's logger.
     """
 
-    callback_name: str
-    endpoint: str
-    headers: Mapping[str, str]
-    resource_attributes: Mapping[str, str]
-    protocol: str | None
+    callback_name: ReadOnly[str]
+    endpoint: ReadOnly[str]
+    headers: ReadOnly[Mapping[str, str]]
+    resource_attributes: ReadOnly[Mapping[str, str]]
+    protocol: ReadOnly[str | None]
 
 
 class StandardCallbackDynamicParams(TypedDict, total=False):

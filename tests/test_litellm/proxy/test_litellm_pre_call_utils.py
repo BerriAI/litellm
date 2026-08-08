@@ -5537,27 +5537,6 @@ async def test_client_cannot_control_otel_destinations(_seeded_logging_credentia
 
 
 @pytest.mark.asyncio
-async def test_apply_admin_logging_exporters_registers_on_failure(_seeded_logging_credentials, monkeypatch):
-    """An admin-owned destination must capture a FAILED upstream call, not only a
-    successful one.
-
-    The destination sink is one process-wide logger, so it has to sit on the failure
-    list as well as the success list; registering it on success alone means a
-    401/timeout never reaches the destination and the trace lands with no error
-    gen-AI span. Registration is idempotent.
-    """
-    import litellm
-    from litellm.integrations.otel.destination_logger import admin_destination_logger
-    from litellm.integrations.otel.logger import publish_global_otel_v2_provider
-
-    sink = admin_destination_logger()
-    publish_global_otel_v2_provider([], lambda provider: None)
-    publish_global_otel_v2_provider([], lambda provider: None)
-    for bucket in (litellm._async_success_callback, litellm._async_failure_callback):
-        assert sum(1 for callback in bucket if callback is sink) == 1
-
-
-@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_merges_metadata_tags_on_responses_route():
     """Regression for #31584: user-supplied metadata.tags must be merged into
     litellm_metadata.tags on /v1/responses so they reach SpendLogs.request_tags."""

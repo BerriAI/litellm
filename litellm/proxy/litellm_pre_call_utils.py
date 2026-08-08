@@ -719,7 +719,7 @@ async def _effective_org_id(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     """
     if user_api_key_dict.org_id is not None:
         return user_api_key_dict.org_id
-    team_id = user_api_key_dict.team_id
+    team_id: Final = user_api_key_dict.team_id
     if team_id is None:
         return None
     from litellm.proxy import proxy_server
@@ -728,7 +728,7 @@ async def _effective_org_id(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     if proxy_server.prisma_client is None:
         return None
     try:
-        team_obj = await get_team_object(
+        team_obj: Final = await get_team_object(
             team_id=team_id,
             prisma_client=proxy_server.prisma_client,
             user_api_key_cache=proxy_server.user_api_key_cache,
@@ -769,7 +769,7 @@ async def _resolve_logging_exporters(
     if not is_otel_v2_enabled():
         return (), ()
 
-    logging_credentials = tuple(
+    logging_credentials: Final = tuple(
         (credential, info)
         for credential in litellm.credential_list
         if (info := parse_credential_info(credential.credential_info)) is not None and info.credential_type == "logging"
@@ -777,21 +777,21 @@ async def _resolve_logging_exporters(
     if not logging_credentials:
         return (), ()
 
-    team_id = user_api_key_dict.team_id
-    org_id = (
+    team_id: Final = user_api_key_dict.team_id
+    org_id: Final = (
         await _effective_org_id(user_api_key_dict)
         if any(info.access is not None and info.access.orgs for _, info in logging_credentials)
         else None
     )
     team_ids, org_ids = identity_scope(team_id, org_id)
 
-    built = tuple(
+    built: Final = tuple(
         result
         for credential, info in logging_credentials
         if access_grants(info.access, team_ids, org_ids)
         if (result := destination_for_credential(credential)) is not None
     )
-    deduped = {
+    deduped: Final = {  # mutable-ok: dedup accumulator, consumed immediately below
         (
             destination.endpoint,
             tuple(sorted(destination.headers.items())),
@@ -802,8 +802,8 @@ async def _resolve_logging_exporters(
         )
         for backend, destination in built
     }
-    destinations: tuple[OtelDestinationParams, ...] = tuple(
-        {
+    destinations: Final[tuple[OtelDestinationParams, ...]] = tuple(
+        {  # mutable-ok: OtelDestinationParams is a TypedDict, so each entry is a real dict
             "callback_name": backend,
             "endpoint": destination.endpoint,
             "headers": destination.headers,
@@ -812,7 +812,7 @@ async def _resolve_logging_exporters(
         }
         for backend, destination in deduped.values()
     )
-    backends = tuple(dict.fromkeys(backend for backend, _ in deduped.values()))
+    backends: Final = tuple(dict.fromkeys(backend for backend, _ in deduped.values()))
     return destinations, backends
 
 
@@ -883,12 +883,13 @@ async def _apply_admin_logging_exporters(
     if not is_otel_v2_enabled():
         return
     if cached_destinations is not None:
-        destinations = tuple(cached_destinations)
+        destinations = tuple(cached_destinations)  # rebind-ok: the else branch resolves it instead
     else:
         try:
-            destinations, _backends = await _resolve_logging_exporters(user_api_key_dict)
+            resolved, _backends = await _resolve_logging_exporters(user_api_key_dict)
         except Exception:  # noqa: BLE001  # best-effort telemetry setup must never break the request
             return
+        destinations = resolved  # rebind-ok: the cached branch assigns it instead
     _set_request_otel_destinations(destinations)
 
 
@@ -2206,7 +2207,7 @@ async def add_litellm_data_to_request(
             # proxy-owned field instead of the raw request kwargs.
             data[TRUSTED_CALLBACK_VARS_FIELD] = callback_settings_obj.callback_vars
 
-    cached = getattr(getattr(request, "state", None), "otel_destinations", None)
+    cached: Final = getattr(getattr(request, "state", None), "otel_destinations", None)
     await _apply_admin_logging_exporters(user_api_key_dict, cached_destinations=cached)
 
     # Add disabled callbacks from key metadata
