@@ -19,10 +19,10 @@ from litellm.proxy.route_llm_request import ProxyModelNotFoundError, route_reque
         ("atext_completion", {}),
         ("acompletion", {"messages": [{"role": "user", "content": "Hello"}]}),
         ("aembedding", {"input": "Hello"}),
-        ("aimage_generation", {}),
-        ("aspeech", {}),
+        ("aimage_generation", {"prompt": "a cat"}),
+        ("aspeech", {"input": "hello", "voice": "alloy"}),
         ("atranscription", {}),
-        ("amoderation", {}),
+        ("amoderation", {"input": "Hello"}),
         ("arerank", {}),
     ],
 )
@@ -252,7 +252,7 @@ async def test_route_request_no_model_required():
 
     for route_type in test_cases:
         # Test data without model parameter
-        data = {"input": "test input", "api_key": "test-key"}
+        data = {"input": "test input", "api_key": "test-key", "query": "test query"}
 
         llm_router = MagicMock()
         getattr(llm_router, route_type).return_value = "fake_response"
@@ -284,6 +284,7 @@ async def test_route_request_no_model_required_with_router_settings():
         data = {
             "input": "test input",
             "model": "test-model",  # Include dummy model to avoid KeyError
+            "query": "test query",
         }
 
         llm_router = MagicMock()
@@ -1068,7 +1069,8 @@ def test_raise_if_required_body_param_missing_rejects_missing_param(route_type, 
         ("atext_completion", {"model": "gpt-4o"}),
         ("aembedding", {"model": "text-embedding-3-small", "input": "hi"}),
         ("arerank", {"model": "rerank-model"}),
-        ("aimage_generation", {"model": "dall-e-3"}),
+        ("aimage_generation", {"model": "dall-e-3", "prompt": "a cat"}),
+        ("aspeech", {"model": "tts-1", "input": "hello", "voice": "alloy"}),
     ],
 )
 def test_raise_if_required_body_param_missing_allows_valid_requests(route_type, data):
@@ -1091,3 +1093,46 @@ async def test_route_request_rejects_chat_completion_without_messages():
     assert exc_info.value.status_code == 400
     assert exc_info.value.param == "messages"
     llm_router.acompletion.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "route_type, missing_param, valid_data",
+    [
+        ("amoderation", "input", {"input": "hi"}),
+        ("aimage_generation", "prompt", {"prompt": "a cat"}),
+        ("aocr", "document", {"document": {"type": "image_url"}}),
+        ("aresponses", "input", {"input": "hi"}),
+        ("anthropic_messages", "messages", {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 5}),
+        ("anthropic_messages", "max_tokens", {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 5}),
+        ("avector_store_search", "query", {"query": "q"}),
+        ("aspeech", "model", {"model": "tts-1", "input": "hello", "voice": "alloy"}),
+        ("aspeech", "input", {"model": "tts-1", "input": "hello", "voice": "alloy"}),
+        ("aspeech", "voice", {"model": "tts-1", "input": "hello", "voice": "alloy"}),
+    ],
+)
+def test_raise_if_required_body_param_missing_returns_400(route_type, missing_param, valid_data):
+    """Omitting a required body param must raise a deliberate 400, not fall through to a 500.
+
+    Regression for endpoints (moderations, images, ocr, responses, anthropic
+    messages, vector store search, speech) that previously dispatched to a router
+    method with the param as a required positional arg, producing an opaque 500.
+    """
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    data_missing = {k: v for k, v in valid_data.items() if k != missing_param}
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(route_type, data_missing)
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.param == missing_param
+
+    raise_if_required_body_param_missing(route_type, valid_data)
+
+
+def test_raise_if_required_body_param_missing_ignores_unlisted_route():
+    """Routes without a required-param contract are untouched (no behavior change)."""
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    raise_if_required_body_param_missing("asome_unlisted_route", {})
