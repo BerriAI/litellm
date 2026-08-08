@@ -617,6 +617,40 @@ class TestAutoRouterQualitySignals:
         assert response.totals.baseline is None
 
     @pytest.mark.asyncio
+    async def test_two_keys_reusing_the_same_session_id_are_not_merged(self, monkeypatch: pytest.MonkeyPatch):
+        # key-1 and key-2 both happen to send session_id="shared". key-1's own two turns
+        # under it escalate; key-2's own two turns under it do not (key-2's access to the
+        # pricey model is established by a separate "other" session so it is still eligible
+        # to escalate). Merging the two keys' rows by session_id alone would splice all four
+        # turns into one session and read key-1's escalation and key-2's non-escalation as a
+        # single, order-dependent sequence instead of two independent sessions.
+        rows = [
+            self._row("shared", self.CHEAP, 1.0, api_key="key-1"),
+            self._row("shared", self.PRICEY, 2.0, api_key="key-1"),
+            self._row("shared", self.CHEAP, 1.0, api_key="key-2"),
+            self._row("shared", self.CHEAP, 2.0, api_key="key-2"),
+            self._row("other", self.PRICEY, 1.0, api_key="key-2"),
+        ]
+        response = await self._call(rows, monkeypatch)
+        assert response.totals.routed.sessions == 2
+        assert response.totals.routed.escalation_rate_pct == 50.0
+
+    @pytest.mark.asyncio
+    async def test_reachability_is_not_pooled_across_keys_in_the_same_cohort(self, monkeypatch: pytest.MonkeyPatch):
+        # key-1 only ever calls the cheap model; key-2 reaches both. Pooling reachability
+        # across the cohort would credit key-1's session with key-2's ceiling and count it
+        # as eligible to escalate when key-1 never had a pricier model to reach for.
+        rows = [
+            self._row("k1-s1", self.CHEAP, 1.0, api_key="key-1"),
+            self._row("k1-s1", self.CHEAP, 2.0, api_key="key-1"),
+            self._row("k2-s1", self.CHEAP, 1.0, api_key="key-2"),
+            self._row("k2-s1", self.PRICEY, 2.0, api_key="key-2"),
+        ]
+        response = await self._call(rows, monkeypatch)
+        assert response.totals.routed.sessions == 1
+        assert response.totals.routed.escalation_rate_pct == 100.0
+
+    @pytest.mark.asyncio
     async def test_groups_are_reported_per_router(self, monkeypatch: pytest.MonkeyPatch):
         rows = [
             self._row("a1", self.CHEAP, 1.0, router_name="router-a"),

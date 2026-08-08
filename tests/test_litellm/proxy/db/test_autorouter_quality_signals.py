@@ -6,6 +6,8 @@ plain Turn objects and a fixed rank table, so they exercise the actual escalatio
 abandonment/eligibility rules without touching Postgres or a real Router.
 """
 
+import pytest
+
 from litellm.proxy.db.autorouter_quality_signals import (
     MIN_COHORT_SESSIONS,
     MIN_SESSION_ID_COVERAGE,
@@ -15,20 +17,44 @@ from litellm.proxy.db.autorouter_quality_signals import (
     session_escalated,
     signals_for_cohort,
 )
+from litellm.router import Router
 
 # haiku < sonnet < opus, matching how rank_models_by_cost would order real deployments
 RANKS = {"haiku": 0, "sonnet": 1, "opus": 2}
+REACHABLE_BY_KEY = {"key1": ("haiku", "sonnet", "opus")}
 
 
-def _turn(session_id="s1", model="sonnet", started_at=0.0, client_disconnected=False, has_client_session_id=True):
+def _turn(
+    session_id="s1",
+    model="sonnet",
+    started_at=0.0,
+    client_disconnected=False,
+    has_client_session_id=True,
+    api_key="key1",
+):
     return Turn(
         session_id=session_id,
+        api_key=api_key,
         model=model,
         started_at=started_at,
         client_disconnected=client_disconnected,
         router_name="auto-router",
         has_client_session_id=has_client_session_id,
     )
+
+
+class TestRankModelsByCost:
+    def test_equal_cost_models_receive_equal_rank(self, monkeypatch: pytest.MonkeyPatch):
+        import litellm.proxy.db.autorouter_quality_signals as module
+
+        def _fake_priced(router, candidate):
+            cost = {"cheap-a": 1.0, "cheap-b": 1.0, "dear": 2.0}[candidate.model]
+            return (cost, candidate)
+
+        monkeypatch.setattr("litellm.router_strategy.savings_baseline._priced", _fake_priced)
+        ranks = module.rank_models_by_cost(Router(model_list=[]), ["cheap-a", "cheap-b", "dear"])
+        assert ranks["cheap-a"] == ranks["cheap-b"], "same-cost models must share the same rank"
+        assert ranks["dear"] > ranks["cheap-a"], "costlier model must rank higher"
 
 
 class TestSessionEscalated:
@@ -110,7 +136,7 @@ class TestSignalsForCohort:
             _turn(session_id="s1", model="opus", started_at=2),
             _turn(session_id="s2", model="opus", started_at=1),
         ]
-        result = signals_for_cohort(turns, RANKS, reachable=["haiku", "sonnet", "opus"])
+        result = signals_for_cohort(turns, RANKS, REACHABLE_BY_KEY)
         assert result.sessions == 1
         assert result.escalation_rate_pct == 100.0
 
@@ -121,7 +147,7 @@ class TestSignalsForCohort:
             # s2 is on the ceiling model and ineligible; its disconnect must not be counted.
             _turn(session_id="s2", model="opus", started_at=1, client_disconnected=True),
         ]
-        result = signals_for_cohort(turns, RANKS, reachable=["haiku", "sonnet", "opus"])
+        result = signals_for_cohort(turns, RANKS, REACHABLE_BY_KEY)
         assert result.sessions == 1
         assert result.abandonment_rate_pct == 50.0
 
@@ -129,7 +155,7 @@ class TestSignalsForCohort:
         # Every session already on the ceiling model: zero would misleadingly claim
         # "no miss detected" when in fact nothing could be measured.
         turns = [_turn(session_id="s1", model="opus")]
-        result = signals_for_cohort(turns, RANKS, reachable=["haiku", "sonnet", "opus"])
+        result = signals_for_cohort(turns, RANKS, REACHABLE_BY_KEY)
         assert result.sessions == 0
         assert result.escalation_rate_pct is None
         assert result.abandonment_rate_pct is None
@@ -141,9 +167,36 @@ class TestSignalsForCohort:
             _turn(session_id="s1", model="sonnet", started_at=1),
             _turn(session_id="s1", model="haiku", started_at=2),
         ]
-        result = signals_for_cohort(turns, RANKS, reachable=["haiku", "sonnet", "opus"])
+        result = signals_for_cohort(turns, RANKS, REACHABLE_BY_KEY)
         assert result.sessions == 1
         assert result.escalation_rate_pct == 0.0
+
+    def test_same_session_id_from_two_keys_is_never_spliced_into_one_escalation(self):
+        # Two different callers' keys reuse the same session id. Splicing them into one
+        # session would read key1's haiku turn followed by key2's opus turn as one caller
+        # escalating -- an escalation neither caller ever made. Kept separate, each is its
+        # own single-turn session and neither can escalate within itself.
+        turns = [
+            _turn(session_id="shared", api_key="key1", model="haiku", started_at=1),
+            _turn(session_id="shared", api_key="key2", model="opus", started_at=2),
+        ]
+        reachable = {"key1": ("haiku", "sonnet", "opus"), "key2": ("haiku", "sonnet", "opus")}
+        result = signals_for_cohort(turns, RANKS, reachable)
+        assert result.escalation_rate_pct == 0.0
+
+    def test_reachability_is_scoped_to_each_session_own_key(self):
+        # key1 can only ever reach haiku; key2 can reach up to opus. A pooled reachable set
+        # would let key1's session borrow key2's ceiling and count as eligible when it never
+        # had anywhere to escalate to.
+        turns = [
+            _turn(session_id="s1", api_key="key1", model="haiku", started_at=1),
+            _turn(session_id="s2", api_key="key2", model="haiku", started_at=1),
+            _turn(session_id="s2", api_key="key2", model="opus", started_at=2),
+        ]
+        reachable = {"key1": ("haiku",), "key2": ("haiku", "sonnet", "opus")}
+        result = signals_for_cohort(turns, RANKS, reachable)
+        assert result.sessions == 1
+        assert result.escalation_rate_pct == 100.0
 
 
 class TestBaselineUnavailableReason:

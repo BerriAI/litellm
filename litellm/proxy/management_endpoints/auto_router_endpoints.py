@@ -495,21 +495,6 @@ class _QualityTurnRow(BaseModel):
 
 _QUALITY_TURN_ROWS: Final = TypeAdapter(list[_QualityTurnRow])
 
-# Both cohorts come from this one scan, so they cannot drift apart: same window, same
-# session grouping, same disconnect test. `router_name` is NULL for a directly-addressed
-# request, which is what separates the two populations downstream.
-#
-# Abandonment reads error_information.error_code rather than `status`, because a client
-# disconnect is still billed as a success -- partial streamed spend is deliberately charged
-# on disconnect -- so `status` cannot see it.
-#
-# session_turn_count is how many rows in the window share this session_id. There is no
-# persisted flag for "the caller supplied this id rather than the spend writer minting a
-# fallback uuid" (`_get_session_id_for_spend_log`), but a minted fallback is always unique to
-# its one request, so a session_id that repeats could only have come from the caller. Counting
-# it this way needs nothing beyond columns every deployment already writes, prompt storage on
-# or off, which a check against proxy_server_request (only persisted when prompt storage is on)
-# would not have been.
 _QUALITY_SIGNALS_SQL: Final = """
 SELECT
     session_id,
@@ -517,7 +502,7 @@ SELECT
     EXTRACT(EPOCH FROM "startTime")::float8 AS started_at,
     (metadata #>> '{routing_decision,router_model_name}') AS router_name,
     COALESCE(metadata #>> '{error_information,error_code}' = '499', false) AS client_disconnected,
-    COUNT(*) OVER (PARTITION BY session_id)::int AS session_turn_count,
+    COUNT(*) OVER (PARTITION BY api_key, session_id)::int AS session_turn_count,
     api_key
 FROM "LiteLLM_SpendLogs"
 WHERE "startTime" >= $1::timestamp AND "startTime" < $2::timestamp
@@ -539,11 +524,14 @@ def _quality_signals_for(
     restricting to keys that actually used the router keeps both sides of the comparison
     inside the same reachable-model world.
 
-    Reachability is judged against every model the key exercised anywhere in the window, not
-    against the models this one cohort happened to use. Scoping it to the cohort makes a
-    cohort that never escalated define its own ceiling, so every one of its sessions looks
-    like it had nowhere to go and the rate reads as unmeasurable rather than as zero --
-    silently deleting exactly the well-behaved traffic the comparison exists to show.
+    Each session's eligibility is judged against every model its own api_key exercised
+    anywhere in the window, not against the models this one cohort happened to use or a pool
+    shared across keys. Scoping it to the cohort would make a cohort that never escalated
+    define its own ceiling, so every one of its sessions looks like it had nowhere to go and
+    the rate reads as unmeasurable rather than as zero -- silently deleting exactly the
+    well-behaved traffic the comparison exists to show. Pooling reachability across keys would
+    let a key that cannot reach a costlier model borrow one it never had, from another key
+    that only happens to share this cohort.
     """
     from litellm.proxy.db.autorouter_quality_signals import (
         Turn,
@@ -558,26 +546,32 @@ def _quality_signals_for(
     router_keys: Final = frozenset(row.api_key for row in routed_rows)
     baseline_rows: Final = tuple(row for row in turns if row.router_name is None and row.api_key in router_keys)
 
-    reachable: Final = tuple(frozenset(row.model for row in turns if row.api_key in router_keys))
-    ranks: Final = rank_models_by_cost(llm_router, reachable) if llm_router is not None else MappingProxyType({})
+    router_key_rows: Final = tuple(row for row in turns if row.api_key in router_keys)
+    reachable_by_key: Final = MappingProxyType(
+        {
+            key: frozenset(row.model for row in router_key_rows if row.api_key == key)
+            for key in frozenset(row.api_key for row in router_key_rows)
+        }
+    )
+    reachable_models: Final = tuple(frozenset(row.model for row in router_key_rows))
+    ranks: Final = rank_models_by_cost(llm_router, reachable_models) if llm_router is not None else MappingProxyType({})
 
     def as_turns(rows: Sequence[_QualityTurnRow]) -> tuple[Turn, ...]:
         return tuple(
             Turn(
                 session_id=row.session_id,
+                api_key=row.api_key,
                 model=row.model,
                 started_at=row.started_at,
                 client_disconnected=row.client_disconnected,
                 router_name=row.router_name,
-                # A fallback uuid (_get_session_id_for_spend_log) is unique to its one
-                # request; only a caller-supplied session id repeats across rows.
                 has_client_session_id=row.session_turn_count > 1,
             )
             for row in rows
         )
 
-    routed: Final = signals_for_cohort(as_turns(routed_rows), ranks, reachable)
-    baseline: Final = signals_for_cohort(as_turns(baseline_rows), ranks, reachable)
+    routed: Final = signals_for_cohort(as_turns(routed_rows), ranks, reachable_by_key)
+    baseline: Final = signals_for_cohort(as_turns(baseline_rows), ranks, reachable_by_key)
     unavailable: Final = baseline_unavailable_reason(as_turns(baseline_rows), baseline)
     return AutoRouterQualitySignals(
         router_name=router_name,
@@ -614,8 +608,17 @@ async def get_auto_router_quality_signals(
     model mid-session, and how often they hung up mid-stream, for auto-routed traffic and for
     the same keys' directly-addressed traffic.
 
-    Reads LiteLLM_SpendLogs rather than the per-session rollup, because escalation is a
-    question about turn order and the rollup folds order away.
+    Both cohorts come from one scan of LiteLLM_SpendLogs rather than the per-session rollup,
+    so they cannot drift apart -- same window, same session grouping, same disconnect test --
+    and because escalation is a question about turn order, which the rollup folds away.
+    `router_name` is NULL for a directly-addressed request, which is what separates the two
+    populations downstream. Abandonment reads `error_information.error_code` rather than
+    `status`, because a client disconnect still bills its partial streamed spend as a success
+    and so does not show up in `status`. `session_turn_count` counts, per api_key, how many
+    rows in the window share a session_id; a fallback uuid minted by the spend writer
+    (`_get_session_id_for_spend_log`) is always unique to its one request, so a repeating
+    session_id can only have come from the caller, which needs nothing beyond columns every
+    deployment already writes, prompt storage on or off.
 
     The two cohorts self-select, so this is directional evidence and not an experiment: a
     deployment that pins its hardest prompts to one model and routes only the easy ones will

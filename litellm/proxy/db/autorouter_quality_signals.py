@@ -39,13 +39,7 @@ from litellm._logging import verbose_proxy_logger
 if TYPE_CHECKING:
     from litellm.router import Router
 
-# A cohort smaller than this is noise: one unlucky session moves the rate by whole points,
-# and a comparison drawn from it would read as fact.
 MIN_COHORT_SESSIONS: Final = 20
-
-# Below this share of turns carrying a caller-supplied session id, "sessions" in the
-# non-routed cohort are mostly one-request artefacts of the fallback uuid, and any
-# within-session signal computed over them is measuring the fallback, not the traffic.
 MIN_SESSION_ID_COVERAGE: Final = 0.8
 
 
@@ -56,12 +50,21 @@ class Turn:
     Kept as a plain object rather than a row dict so the signal functions state their inputs.
     """
 
-    __slots__ = ("session_id", "model", "started_at", "client_disconnected", "router_name", "has_client_session_id")
+    __slots__ = (
+        "session_id",
+        "api_key",
+        "model",
+        "started_at",
+        "client_disconnected",
+        "router_name",
+        "has_client_session_id",
+    )
 
     def __init__(
         self,
         *,
         session_id: str,
+        api_key: str,
         model: str,
         started_at: float,
         client_disconnected: bool,
@@ -69,6 +72,7 @@ class Turn:
         has_client_session_id: bool,
     ) -> None:
         self.session_id = session_id
+        self.api_key = api_key
         self.model = model
         self.started_at = started_at
         self.client_disconnected = client_disconnected
@@ -113,7 +117,8 @@ def rank_models_by_cost(router: "Router", models: Iterable[str]) -> Mapping[str,
         if quote is None:
             verbose_proxy_logger.debug("quality signals: cannot price %s, leaving it unranked", model)
     priced: Final = sorted((quote[0], model) for model, quote in quotes if quote is not None)
-    return MappingProxyType({model: rank for rank, (_, model) in enumerate(priced)})
+    distinct_costs: Final = tuple(dict.fromkeys(cost for cost, _ in priced))
+    return MappingProxyType({model: distinct_costs.index(cost) for cost, model in priced})
 
 
 def session_escalated(turns: Sequence[Turn], ranks: Mapping[str, int]) -> bool:
@@ -154,28 +159,32 @@ def could_escalate(turns: Sequence[Turn], ranks: Mapping[str, int], reachable: I
 
 
 def _group_by_session(turns: Iterable[Turn]) -> Mapping[str, tuple[Turn, ...]]:
-    ordered: Final = sorted(turns, key=lambda turn: turn.session_id)
+    ordered: Final = sorted(turns, key=lambda turn: (turn.api_key, turn.session_id))
     return MappingProxyType(
-        {session_id: tuple(group) for session_id, group in groupby(ordered, key=lambda turn: turn.session_id)}
+        {key: tuple(group) for key, group in groupby(ordered, key=lambda turn: (turn.api_key, turn.session_id))}
     )
 
 
 def signals_for_cohort(
     turns: Sequence[Turn],
     ranks: Mapping[str, int],
-    reachable: Iterable[str],
+    reachable_by_key: Mapping[str, Iterable[str]],
 ) -> CohortSignals:
     """Both rates over the sessions that could have escalated.
 
     Abandonment shares escalation's denominator on purpose. The two numbers sit next to each
     other in the UI and get read as one population; computing them over different sets would
     make that reading wrong in a way nothing on screen would reveal.
+
+    Reachability is looked up per session's own api_key, not pooled across every key in the
+    cohort: keys can carry different model lists, and a shared pool would make a key that
+    cannot reach a costlier model borrow one it never had, inventing escalation opportunities
+    that were never actually available to it.
     """
-    reachable_models: Final = tuple(reachable)
     eligible: Final = tuple(
         session_turns
         for session_turns in _group_by_session(turns).values()
-        if could_escalate(session_turns, ranks, reachable_models)
+        if could_escalate(session_turns, ranks, reachable_by_key.get(session_turns[0].api_key, ()))
     )
     if not eligible:
         return CohortSignals(sessions=0, escalation_rate_pct=None, abandonment_rate_pct=None)
@@ -195,7 +204,11 @@ def baseline_unavailable_reason(turns: Sequence[Turn], cohort: CohortSignals) ->
 
     Session-id coverage is checked before size because the two failures need different words:
     a deployment that never sends session ids has plenty of rows and no sessions, and telling
-    it "not enough traffic" would send it looking for volume it already has.
+    it "not enough traffic" would send it looking for volume it already has. Below
+    ``MIN_SESSION_ID_COVERAGE``, "sessions" in the non-routed cohort are mostly one-request
+    artefacts of the fallback uuid, and any within-session signal computed over them is
+    measuring the fallback, not the traffic. Below ``MIN_COHORT_SESSIONS``, one unlucky session
+    moves the rate by whole points and a comparison drawn from it would read as fact.
     """
     if turns:
         with_client_id: Final = sum(1 for turn in turns if turn.has_client_session_id)
