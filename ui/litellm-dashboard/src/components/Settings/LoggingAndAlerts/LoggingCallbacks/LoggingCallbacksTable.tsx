@@ -11,6 +11,7 @@ import {
   CallbackRow,
   callbackRowMode,
   getLoggingCallbacksTableColumns,
+  isDestination,
 } from "./LoggingCallbacksTableColumns";
 import { AlertingObject } from "./types";
 
@@ -21,7 +22,9 @@ type LoggingCallbacksProps = {
   onTest?: (callback: AlertingObject) => void | Promise<void>;
   onEdit?: (callback: AlertingObject) => void;
   onDelete?: (callback: AlertingObject) => void;
+  onEditAccess?: (callback: AlertingObject) => void;
   onAdd?: () => void;
+  readOnly?: boolean;
 };
 
 function EmptyState() {
@@ -45,26 +48,33 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
   onTest = () => {},
   onEdit = () => {},
   onDelete = () => {},
+  onEditAccess = () => {},
   onAdd = () => {},
+  readOnly = false,
 }) => {
   const columns = useMemo(() => {
-    const deps = { availableCallbacks, onTest, onEdit, onDelete };
-    return getLoggingCallbacksTableColumns(deps);
-  }, [availableCallbacks, onTest, onEdit, onDelete]);
+    // A read-only admin keeps the actions column so Test stays reachable -- that role is
+    // backend-authorized for /health/services. Dropping the column removed it entirely.
+    return getLoggingCallbacksTableColumns({ availableCallbacks, onTest, onEdit, onDelete, onEditAccess, readOnly });
+  }, [availableCallbacks, onTest, onEdit, onDelete, onEditAccess, readOnly]);
 
   return (
     <div className="mt-4 flex w-full flex-col gap-4">
       <h3 className="text-lg font-semibold tracking-tight text-foreground">Active Logging Callbacks</h3>
-      <div>
-        <Button onClick={onAdd}>
-          <Plus />
-          Add Callback
-        </Button>
-      </div>
+      {!readOnly && (
+        <div>
+          <Button onClick={onAdd}>
+            <Plus />
+            Add Callback
+          </Button>
+        </div>
+      )}
       <DataTable
         data={callbacks as CallbackRow[]}
         columns={columns}
-        getRowId={(callback, index) => `${callback.name || index}-${callbackRowMode(callback)}`}
+        getRowId={(callback, index) =>
+          `${isDestination(callback) ? "destination" : "callback"}:${callback.name || index}-${callbackRowMode(callback)}`
+        }
         isLoading={isLoading}
         loadingMessage="Loading callbacks…"
         noDataMessage={<EmptyState />}

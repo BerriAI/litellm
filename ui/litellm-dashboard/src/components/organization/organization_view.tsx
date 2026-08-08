@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 import { MoneyCell } from "@/components/shared/table_cells";
 import CopyButton from "@/components/shared/CopyButton";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -57,6 +58,11 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const { onTabChange, hasVisited } = useVisitedTabs(editOrg ? "settings" : "overview");
 
   const teamAliasMap = useMemo(() => createTeamAliasMap(teams), [teams]);
+
+  const loggingExporterBadges = useMemo(
+    () => (orgData?.resolved_logging_exporters ?? []).map((name) => ({ name })),
+    [orgData],
+  );
 
   const handleMemberAdd = async (values: any) => {
     try {
@@ -242,6 +248,23 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
               </CardContent>
             </Card>
 
+            <Card>
+              <CardContent>
+                <p className="text-sm text-muted-foreground">Logging Exporters</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {loggingExporterBadges.length > 0 ? (
+                    loggingExporterBadges.map((exporter, index) => (
+                      <Badge key={index} variant="secondary">
+                        {exporter.name}
+                      </Badge>
+                    ))
+                  ) : (
+                    <span className="text-muted-foreground">None</span>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
             <ObjectPermissionsView
               objectPermission={orgData.object_permission}
               variant="card"
@@ -324,6 +347,20 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                         : "No Limit"}
                     </div>
                     <div>Reset: {orgData.litellm_budget_table.budget_duration || "Never"}</div>
+                  </div>
+                  <div>
+                    <p className="font-medium text-foreground">Logging Exporters</p>
+                    {loggingExporterBadges.length > 0 ? (
+                      <div className="mt-1 flex flex-wrap gap-2">
+                        {loggingExporterBadges.map((exporter, index) => (
+                          <Badge key={index} variant="secondary">
+                            {exporter.name}
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-muted-foreground">None</div>
+                    )}
                   </div>
 
                   <ObjectPermissionsView
