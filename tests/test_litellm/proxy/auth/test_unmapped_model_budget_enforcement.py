@@ -162,6 +162,49 @@ class TestUnmappedModelBudgetEnforcement:
         # Subsequent call sees the new pricing and enforces budget.
         assert _is_model_cost_zero(model="ramping-model", llm_router=router) is False
 
+    def test_free_model_behind_model_group_alias_bypasses_budget(self):
+        """
+        Regression test for https://github.com/BerriAI/litellm/issues/35369:
+        an alias pointing at an explicitly free model group must bypass budget
+        checks exactly like the underlying model group does.
+        """
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "free-model",
+                    "litellm_params": {
+                        "model": "openai/nonexistent-but-free-model",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                },
+            ],
+            model_group_alias={
+                "free-alias": "free-model",
+                "free-alias-hidden": {"model": "free-model", "hidden": True},
+            },
+        )
+        assert _is_model_cost_zero(model="free-model", llm_router=router) is True
+        assert _is_model_cost_zero(model="free-alias", llm_router=router) is True
+        assert _is_model_cost_zero(model="free-alias-hidden", llm_router=router) is True
+
+    def test_paid_model_behind_model_group_alias_enforces_budget(self):
+        """An alias pointing at a paid model group must still enforce budget."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "paid-model",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-fake",
+                    },
+                },
+            ],
+            model_group_alias={"paid-alias": "paid-model"},
+        )
+        assert _is_model_cost_zero(model="paid-alias", llm_router=router) is False
+
     def test_handles_router_without_zero_cost_cache_attribute(self):
         """Tolerate router-like objects (e.g. ``MagicMock`` stand-ins) that
         do not expose ``_zero_cost_cache`` — the auth check must still
