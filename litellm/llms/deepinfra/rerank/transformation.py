@@ -52,8 +52,12 @@ class DeepinfraRerankConfig(BaseRerankConfig):
                 "Deepinfra API Base is required. api_base=None. Set in call or via `DEEPINFRA_API_BASE` env var."
             )
 
-        # Remove 'openai' from the base if present
-        api_base_clean = api_base.replace("openai", "") if "openai" in api_base else api_base
+        # Strip only a trailing '/openai' segment (DeepInfra's OpenAI-compatible base
+        # ends in '/openai'); a plain str.replace would also corrupt an api_base that
+        # contains 'openai' elsewhere, e.g. in the host or a proxy path.
+        api_base_clean = api_base.rstrip("/")
+        if api_base_clean.endswith("/openai"):
+            api_base_clean = api_base_clean[: -len("/openai")]
 
         # Remove any trailing slashes for consistency, then add one
         api_base_clean = api_base_clean.rstrip("/") + "/"
