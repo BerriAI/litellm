@@ -269,12 +269,13 @@ class ProxyClient:
 
     # ---- LLM calls ------------------------------------------------------
 
-    def chat(self, key: str, body: ChatBody) -> Result[ChatResponse]:
+    def chat(self, key: str, body: ChatBody, timeout: float | None = None) -> Result[ChatResponse]:
         return self.transport.post(
             "/chat/completions",
             headers=self.transport.bearer(key),
             json=body,
             response_type=ChatResponse,
+            timeout=timeout,
         )
 
     def chat_stream(self, key: str, body: ChatBody) -> StreamingResponse:
