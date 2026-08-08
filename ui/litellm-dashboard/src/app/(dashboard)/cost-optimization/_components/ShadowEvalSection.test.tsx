@@ -10,6 +10,30 @@ vi.mock("./useShadowEval", () => ({
   useStopShadowEval: vi.fn(),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
+  useKeys: vi.fn(() => ({
+    data: {
+      keys: [
+        { token: "hash-alpha", token_id: "id-1", key_name: "sk-...alpha", key_alias: "prod-alpha" },
+        { token: "hash-beta", token_id: "id-2", key_name: "sk-...beta", key_alias: "staging-beta" },
+      ],
+      total_count: 2,
+      current_page: 1,
+      total_pages: 1,
+    },
+    isPending: false,
+  })),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
+  useAutoRouters: vi.fn(() => ({
+    data: [
+      { model_name: "claude-auto", litellm_params: { model: "auto_router/claude-auto" } },
+      { model_name: "gpt-auto", litellm_params: { model: "auto_router/gpt-auto" } },
+    ],
+  })),
+}));
+
 import ShadowEvalSection from "./ShadowEvalSection";
 import {
   useShadowEvalJob,
@@ -52,7 +76,10 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
   cost_estimate: 45.0,
   cost_actual: 3.21,
   created_at: "2026-08-07T00:00:00Z",
+  ends_at: null,
   completed_at: null,
+  api_key_id: "hashed-key-abc",
+  team_id: null,
   ...overrides,
 });
 
@@ -68,12 +95,13 @@ const mockHooks = ({
   vi.mocked(useShadowEvalJobs).mockReturnValue({ data: jobs, error: null } as unknown as ReturnType<
     typeof useShadowEvalJobs
   >);
-  vi.mocked(useShadowEvalJob).mockImplementation(
-    (_token, jobId) =>
-      ({
-        data: detailsById ? (jobId ? detailsById[jobId] : undefined) : detail,
-      }) as unknown as ReturnType<typeof useShadowEvalJob>,
-  );
+  vi.mocked(useShadowEvalJob).mockImplementation((_token, jobId) => {
+    let data = detail;
+    if (detailsById) {
+      data = jobId ? detailsById[jobId] : undefined;
+    }
+    return { data } as unknown as ReturnType<typeof useShadowEvalJob>;
+  });
   vi.mocked(useStartShadowEval).mockReturnValue({
     mutate: vi.fn(),
     isPending: false,
@@ -131,16 +159,70 @@ describe("ShadowEvalSection", () => {
     expect(screen.getByText("Start a shadow eval")).toBeInTheDocument();
   });
 
+  it("starts a job from picked key + router with duration, submitting the key token not its alias", async () => {
+    const user = userEvent.setup();
+    const mutate = vi.fn();
+    mockHooks({ jobs: [] });
+    vi.mocked(useStartShadowEval).mockReturnValue({ mutate, isPending: false, error: null } as unknown as ReturnType<
+      typeof useStartShadowEval
+    >);
+    render(<ShadowEvalSection accessToken="token" />);
+
+    await user.click(screen.getByPlaceholderText("Search keys by alias"));
+    await user.click(await screen.findByText("prod-alpha"));
+    await user.click(screen.getByPlaceholderText("Select an auto-router"));
+    await user.click(await screen.findByText("gpt-auto"));
+    await user.click(screen.getByText("Start shadow eval"));
+
+    const expectedBody = {
+      api_key_id: "hash-alpha",
+      router_name: "gpt-auto",
+      shadow_percentage: 10,
+      duration_days: 7,
+      judge_model: "anthropic/claude-sonnet-5",
+    };
+    expect(mutate).toHaveBeenCalledWith({ body: expectedBody });
+  });
+
+  it("filters the key list as you type via the server-side alias search", async () => {
+    const user = userEvent.setup();
+    const { useKeys } = await import("@/app/(dashboard)/hooks/keys/useKeys");
+    mockHooks({ jobs: [] });
+    render(<ShadowEvalSection accessToken="token" />);
+
+    await user.type(screen.getByPlaceholderText("Search keys by alias"), "prod");
+
+    await vi.waitFor(() => {
+      const calls = vi.mocked(useKeys).mock.calls;
+      expect(calls[calls.length - 1][2]).toMatchObject({ selectedKeyAlias: "prod" });
+    });
+  });
+
+  it("explains what the judge model is for and recommends a tier", () => {
+    mockHooks({ jobs: [] });
+    render(<ShadowEvalSection accessToken="token" />);
+    expect(screen.getByText("Judge model")).toBeInTheDocument();
+    expect(screen.getByText(/mid-tier model \(Claude Sonnet or GPT-4o class\)/)).toBeInTheDocument();
+  });
+
+  it("shows when an active job will end", () => {
+    const j = job({ ends_at: new Date(Date.now() + 3 * 86_400_000).toISOString() });
+    mockHooks({ jobs: [j], detail: j });
+    render(<ShadowEvalSection accessToken="token" />);
+    expect(screen.getByText(/ends in 3 days/)).toBeInTheDocument();
+  });
+
   it("keeps an older populated job reachable when the newest job has no verdicts", async () => {
     const user = userEvent.setup();
-    const empty = job({
+    const emptyOverrides: Partial<ShadowEvalJob> = {
       job_id: "job-new",
       status: "pending",
       completed_count: 0,
       failed_count: 0,
       results: null,
       cost_actual: 0,
-    });
+    };
+    const empty = job(emptyOverrides);
     const older = job({ job_id: "job-old", status: "completed" });
     mockHooks({
       jobs: [empty, older],

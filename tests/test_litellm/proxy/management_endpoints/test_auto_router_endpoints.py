@@ -4,6 +4,8 @@ Unit tests for auto router management endpoints
 
 import os
 import sys
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -21,10 +23,11 @@ from litellm.proxy.management_endpoints.auto_router_endpoints import (
     preview_auto_router_routing,
 )
 from litellm.router import Router
-from litellm.types.utils import Choices, Message, ModelResponse
 from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterRoutingTestRequest,
+    StartShadowEvalRequest,
 )
+from litellm.types.utils import Choices, Message, ModelResponse
 
 ADMIN = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test", user_id="admin")
 
@@ -55,7 +58,7 @@ def _request(prompt: str, **config_overrides: object) -> AutoRouterRoutingTestRe
 
 
 async def _route(prompt: str, monkeypatch: pytest.MonkeyPatch, **config_overrides: object):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "llm_router", _router())
     return await preview_auto_router_routing(
@@ -119,7 +122,7 @@ async def test_tier_model_missing_from_the_proxy_is_reported(monkeypatch: pytest
 
 @pytest.mark.asyncio
 async def test_llm_classifier_call_is_billed_to_the_calling_key(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     router = _router()
     calls: list[dict] = []
@@ -164,7 +167,7 @@ async def test_llm_classifier_call_is_billed_to_the_calling_key(monkeypatch: pyt
 async def test_a_key_that_cannot_call_the_classifier_model_is_rejected_before_it_is_called(
     monkeypatch: pytest.MonkeyPatch, config_overrides: dict
 ):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     router = _router()
     calls: list[dict] = []
@@ -194,7 +197,7 @@ async def test_a_key_that_cannot_call_the_classifier_model_is_rejected_before_it
 
 @pytest.mark.asyncio
 async def test_a_key_over_its_budget_cannot_run_a_classifier_config(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     router = _router()
     calls: list[dict] = []
@@ -228,7 +231,7 @@ async def test_a_key_over_its_budget_cannot_run_a_classifier_config(monkeypatch:
 
 @pytest.mark.asyncio
 async def test_a_heuristic_config_does_not_need_a_budget(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "llm_router", _router())
 
@@ -249,7 +252,7 @@ async def test_a_heuristic_config_does_not_need_a_budget(monkeypatch: pytest.Mon
 
 @pytest.mark.asyncio
 async def test_no_llm_router_on_the_proxy_is_a_500(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "llm_router", None)
 
@@ -261,7 +264,7 @@ async def test_no_llm_router_on_the_proxy_is_a_500(monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.asyncio
 async def test_non_admin_without_a_team_is_rejected(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "llm_router", _router())
 
@@ -543,3 +546,95 @@ class TestJudgeCostEstimate:
             )
         )
         assert _estimate_judge_cost_per_call(self.JUDGE_MODEL) > stale
+
+
+class TestShadowEvalJobsAreTimeBound:
+    """A shadow eval samples ongoing traffic, so without an end date a forgotten job
+    would keep billing judge calls indefinitely. Every job gets an ends_at, and the
+    upfront estimate must price the requested window, not always one week."""
+
+    @staticmethod
+    def _start_request(**overrides: object) -> StartShadowEvalRequest:
+        return StartShadowEvalRequest.model_validate(
+            {
+                "api_key_id": "hashed-key",
+                "router_name": "claude-auto",
+                "shadow_percentage": 10.0,
+                **overrides,
+            }
+        )
+
+    @staticmethod
+    def _proxy_mocks(monkeypatch: pytest.MonkeyPatch, recent_requests: int) -> MagicMock:
+        from litellm.proxy import proxy_server
+
+        router = MagicMock()
+        router.auto_routers = {}
+        router.complexity_routers = {"claude-auto": [MagicMock()]}
+        router.adaptive_routers = {}
+        router.quality_routers = {}
+        prisma = MagicMock()
+        prisma.db.litellm_spendlogs.count = AsyncMock(return_value=recent_requests)
+        prisma.db.litellm_shadowevaljob.find_first = AsyncMock(return_value=None)
+        created = MagicMock()
+        created.id = "job-1"
+        prisma.db.litellm_shadowevaljob.create = AsyncMock(return_value=created)
+        monkeypatch.setattr(proxy_server, "llm_router", router)
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+        return prisma
+
+    def test_duration_defaults_to_a_week_and_rejects_zero_and_over_a_month(self):
+        assert self._start_request().duration_days == 7
+        with pytest.raises(ValidationError):
+            self._start_request(duration_days=0)
+        with pytest.raises(ValidationError):
+            self._start_request(duration_days=31)
+
+    @pytest.mark.asyncio
+    async def test_job_is_created_with_ends_at_duration_days_from_now(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import start_shadow_eval
+
+        prisma = self._proxy_mocks(monkeypatch, recent_requests=700)
+        before = datetime.now(timezone.utc)
+
+        await start_shadow_eval(self._start_request(duration_days=3), ADMIN)
+
+        after = datetime.now(timezone.utc)
+        ends_at = prisma.db.litellm_shadowevaljob.create.call_args.kwargs["data"]["ends_at"]
+        assert before + timedelta(days=3) <= ends_at <= after + timedelta(days=3)
+
+    @pytest.mark.asyncio
+    async def test_estimate_scales_with_duration_not_always_a_week(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import start_shadow_eval
+
+        self._proxy_mocks(monkeypatch, recent_requests=7000)
+        one_day = await start_shadow_eval(self._start_request(duration_days=1), ADMIN)
+
+        self._proxy_mocks(monkeypatch, recent_requests=7000)
+        two_weeks = await start_shadow_eval(self._start_request(duration_days=14), ADMIN)
+
+        assert one_day.estimated_request_count == 100
+        assert two_weeks.estimated_request_count == 1400
+        assert two_weeks.estimated_cost == pytest.approx(one_day.estimated_cost * 14, rel=0.02)
+
+    def test_response_surfaces_ends_at(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import _job_to_response
+
+        fields = {
+            "id": "job-1",
+            "status": "running",
+            "router_name": "claude-auto",
+            "api_key_id": "hashed-key",
+            "team_id": None,
+            "shadow_percentage": 10.0,
+            "request_count": 0,
+            "completed_count": 0,
+            "failed_count": 0,
+            "cost_estimate": 1.0,
+            "cost_actual": 0.0,
+            "created_at": datetime(2026, 8, 1, tzinfo=timezone.utc),
+            "ends_at": datetime(2026, 8, 8, tzinfo=timezone.utc),
+            "completed_at": None,
+        }
+        response = _job_to_response(type("Row", (), fields)(), None)
+        assert response.ends_at == "2026-08-08T00:00:00+00:00"

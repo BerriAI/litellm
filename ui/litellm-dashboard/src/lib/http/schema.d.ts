@@ -842,10 +842,11 @@ export interface paths {
          *     traffic through an auto-router, judge real vs. shadow responses blind, and
          *     stratify win rates by the router's tier classification.
          *
-         *     The shadow responses are never served to users. The job stays active until
-         *     stopped via /auto_router/shadow_eval/{job_id}/stop. Judge calls bill to the
-         *     proxy; the estimate returned here prices them from the key's trailing
-         *     request volume.
+         *     The shadow responses are never served to users. The job samples traffic for
+         *     duration_days (or until stopped via /auto_router/shadow_eval/{job_id}/stop),
+         *     then completes itself. Judge calls bill to the shadowed key; the estimate
+         *     returned here prices them from the key's trailing request volume scaled to
+         *     the requested duration.
          */
         post: operations["start_shadow_eval_auto_router_shadow_eval_start_post"];
         delete?: never;
@@ -25352,6 +25353,11 @@ export interface components {
             /** Created At */
             created_at: string;
             /**
+             * Ends At
+             * @description When the job stops sampling on its own; null for jobs started before durations
+             */
+            ends_at?: string | null;
+            /**
              * Failed Count
              * @description Shadow or judge calls that errored and were skipped
              */
@@ -32782,8 +32788,14 @@ export interface components {
              */
             api_key_id: string;
             /**
+             * Duration Days
+             * @description How many days the job samples traffic before stopping itself
+             * @default 7
+             */
+            duration_days: number;
+            /**
              * Judge Model
-             * @description Model used to blindly judge real vs. shadow responses
+             * @description Model used to blindly judge real vs. shadow responses. The judge only compares two answers, so a mid-tier model (Claude Sonnet or GPT-4o class) is the sweet spot: small/nano-class models produce unreliable or malformed verdicts, while frontier reasoning models add cost without changing outcomes.
              * @default anthropic/claude-sonnet-5
              */
             judge_model: string;

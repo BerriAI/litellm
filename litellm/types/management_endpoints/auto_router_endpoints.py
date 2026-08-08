@@ -172,7 +172,17 @@ class StartShadowEvalRequest(BaseModel):
     )
     judge_model: str = Field(
         default=DEFAULT_SHADOW_EVAL_JUDGE_MODEL,
-        description="Model used to blindly judge real vs. shadow responses",
+        description=(
+            "Model used to blindly judge real vs. shadow responses. The judge only compares two answers, so a "
+            "mid-tier model (Claude Sonnet or GPT-4o class) is the sweet spot: small/nano-class models produce "
+            "unreliable or malformed verdicts, while frontier reasoning models add cost without changing outcomes."
+        ),
+    )
+    duration_days: int = Field(
+        default=7,
+        ge=1,
+        le=30,
+        description="How many days the job samples traffic before stopping itself",
     )
     team_id: str | None = Field(default=None, description="Team the shadowed key belongs to, for authorization")
 
@@ -230,4 +240,7 @@ class GetShadowEvalJobResponse(BaseModel):
     cost_estimate: float | None = None
     cost_actual: float = Field(default=0.0, description="Running total of judge-call spend for this job")
     created_at: str
+    ends_at: str | None = Field(
+        default=None, description="When the job stops sampling on its own; null for jobs started before durations"
+    )
     completed_at: str | None = None

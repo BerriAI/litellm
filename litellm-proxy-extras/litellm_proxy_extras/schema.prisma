@@ -1473,6 +1473,7 @@ model LiteLLM_ShadowEvalJob {
 
   created_at          DateTime @default(now())
   created_by          String?  // user_id of the key that created this job
+  ends_at             DateTime?
   completed_at        DateTime?
 
   @@index([team_id, status])

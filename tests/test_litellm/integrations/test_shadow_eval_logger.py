@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -599,6 +600,92 @@ class TestPerJobSpendCap:
         await logger.async_log_success_event(self._success_kwargs(), MagicMock(), None, None)
 
         assert prisma.db.litellm_shadowevaljob.update_many.await_count == 1
+
+
+@pytest.mark.asyncio
+class TestJobsStopAtTheirScheduledEnd:
+    """A shadow eval samples ongoing traffic, so a job whose window has closed must
+    stop billing judge calls even if nobody remembers to stop it by hand."""
+
+    @staticmethod
+    def _job(ends_at):
+        return ActiveShadowEvalJob(
+            id="j1",
+            router_name="r",
+            shadow_percentage=100.0,
+            judge_model="m",
+            status="running",
+            cost_estimate=10.0,
+            cost_actual=0.0,
+            ends_at=ends_at,
+        )
+
+    async def test_job_past_its_end_stops_sampling_and_completes(self):
+        logger, prisma, router = _logger_with_mocks(self._job(datetime.now(timezone.utc) - timedelta(seconds=1)))
+        prisma.db.litellm_shadowevaljob.update_many = AsyncMock()
+        logger._run_shadow_eval = AsyncMock()
+
+        await logger.async_log_success_event(TestPerJobSpendCap._success_kwargs(), MagicMock(), None, None)
+        await asyncio.sleep(0)
+
+        logger._run_shadow_eval.assert_not_awaited()
+        router.acompletion.assert_not_called()
+        call_kwargs = prisma.db.litellm_shadowevaljob.update_many.call_args.kwargs
+        assert call_kwargs["where"]["id"] == "j1"
+        assert set(call_kwargs["where"]["status"]["in"]) == {"pending", "running"}
+        assert call_kwargs["data"]["status"] == "completed"
+
+    async def test_job_inside_its_window_keeps_evaluating(self):
+        logger, prisma, _ = _logger_with_mocks(self._job(datetime.now(timezone.utc) + timedelta(hours=1)))
+        prisma.db.litellm_shadowevaljob.update_many = AsyncMock()
+        logger._run_shadow_eval = AsyncMock()
+
+        await logger.async_log_success_event(TestPerJobSpendCap._success_kwargs(), MagicMock(), None, None)
+        await asyncio.sleep(0.01)
+
+        logger._run_shadow_eval.assert_awaited_once()
+        prisma.db.litellm_shadowevaljob.update_many.assert_not_awaited()
+
+    async def test_job_without_an_end_is_not_expired(self):
+        logger, prisma, _ = _logger_with_mocks(self._job(None))
+        prisma.db.litellm_shadowevaljob.update_many = AsyncMock()
+        logger._run_shadow_eval = AsyncMock()
+
+        await logger.async_log_success_event(TestPerJobSpendCap._success_kwargs(), MagicMock(), None, None)
+        await asyncio.sleep(0.01)
+
+        logger._run_shadow_eval.assert_awaited_once()
+
+    async def test_expiry_evicts_the_cached_job_so_later_requests_do_not_rewrite_it(self):
+        logger, prisma, _ = _logger_with_mocks(self._job(datetime.now(timezone.utc) - timedelta(seconds=1)))
+        prisma.db.litellm_shadowevaljob.update_many = AsyncMock()
+        prisma.db.litellm_shadowevaljob.find_first = AsyncMock(return_value=None)
+
+        await logger.async_log_success_event(TestPerJobSpendCap._success_kwargs(), MagicMock(), None, None)
+        await logger.async_log_success_event(TestPerJobSpendCap._success_kwargs(), MagicMock(), None, None)
+
+        assert prisma.db.litellm_shadowevaljob.update_many.await_count == 1
+
+    async def test_naive_db_datetime_is_treated_as_utc(self):
+        logger, prisma, _ = _logger_with_mocks()
+        record = MagicMock()
+        record.id = "j1"
+        record.router_name = "r"
+        record.shadow_percentage = 100.0
+        record.judge_model = "m"
+        record.status = "running"
+        record.cost_estimate = 10.0
+        record.cost_actual = 0.0
+        record.ends_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1)
+        prisma.db.litellm_shadowevaljob.find_first = AsyncMock(return_value=record)
+
+        job = await logger._get_active_job("key-hash")
+
+        assert job is not None
+        assert job.ends_at is not None and job.ends_at.tzinfo is not None
+        from litellm.integrations.shadow_eval_logger import _job_is_past_its_end
+
+        assert _job_is_past_its_end(job)
 
 
 class TestExtractResponseText:

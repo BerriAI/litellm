@@ -2,10 +2,16 @@
 
 import React, { useMemo, useState } from "react";
 
+import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useAutoRouters } from "@/app/(dashboard)/hooks/models/useModels";
+import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
+import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ApiError } from "@/lib/http/client";
 
@@ -20,6 +26,17 @@ import {
 } from "./useShadowEval";
 
 const pct = (value: number): string => `${value.toFixed(1)}%`;
+
+const endsIn = (endsAt: string | null | undefined): string | null => {
+  if (!endsAt) return null;
+  const remainingMs = new Date(endsAt).getTime() - Date.now();
+  if (Number.isNaN(remainingMs)) return null;
+  if (remainingMs <= 0) return "ending now";
+  const days = Math.round(remainingMs / 86_400_000);
+  if (days >= 2) return `ends in ${days} days`;
+  const hours = Math.round(remainingMs / 3_600_000);
+  return hours >= 2 ? `ends in ${hours} hours` : "ends within the hour";
+};
 
 const STATUS_STYLES: Record<string, string> = {
   pending: "bg-secondary text-muted-foreground",
@@ -91,7 +108,8 @@ const JobResults: React.FC<{
             <p className="text-xs text-muted-foreground">
               {job.completed_count.toLocaleString()} judged · {job.failed_count.toLocaleString()} failed ·{" "}
               {job.cost_actual != null ? `${usd(job.cost_actual)} judge spend` : "no judge spend yet"}
-              {job.cost_estimate != null ? ` (est. ${usd(job.cost_estimate)}/wk)` : ""}
+              {job.cost_estimate != null ? ` (est. ${usd(job.cost_estimate)})` : ""}
+              {active && endsIn(job.ends_at) ? ` · ${endsIn(job.ends_at)}` : ""}
             </p>
           </div>
         </div>
@@ -132,12 +150,60 @@ const JobResults: React.FC<{
 /** Kept in sync with DEFAULT_SHADOW_EVAL_JUDGE_MODEL on the backend. */
 const DEFAULT_JUDGE_MODEL = "anthropic/claude-sonnet-5";
 
+const DURATION_OPTIONS = [
+  { value: "1", label: "1 day" },
+  { value: "3", label: "3 days" },
+  { value: "7", label: "7 days" },
+  { value: "14", label: "14 days" },
+  { value: "30", label: "30 days" },
+] as const;
+
+const DEFAULT_DURATION_DAYS = "7";
+const KEY_PAGE_SIZE = 50;
+
+const KeySelect: React.FC<{ value: string; onChange: (token: string) => void }> = ({ value, onChange }) => {
+  const [search, setSearch] = useState("");
+  const { data, isPending } = useKeys(1, KEY_PAGE_SIZE, { selectedKeyAlias: search || null });
+  const options = useMemo<SearchSelectOption[]>(
+    () =>
+      (data?.keys ?? []).map((key) => ({
+        label: key.key_alias || key.key_name || key.token,
+        value: key.token,
+        sublabel: key.token,
+      })),
+    [data],
+  );
+  return (
+    <PaginatedSearchSelect
+      inputId="shadow-eval-key"
+      options={options}
+      value={value}
+      onValueChange={onChange}
+      onSearchChange={setSearch}
+      onLoadMore={() => {}}
+      isLoading={isPending}
+      placeholder="Search keys by alias"
+      emptyText="No matching keys"
+    />
+  );
+};
+
 const StartForm: React.FC<{ accessToken: string | null }> = ({ accessToken }) => {
   const [apiKeyId, setApiKeyId] = useState("");
   const [routerName, setRouterName] = useState("");
   const [percentage, setPercentage] = useState("10");
+  const [durationDays, setDurationDays] = useState(DEFAULT_DURATION_DAYS);
   const [judgeModel, setJudgeModel] = useState(DEFAULT_JUDGE_MODEL);
+  const { data: autoRouters } = useAutoRouters();
   const start = useStartShadowEval();
+
+  const routerOptions = useMemo<SearchSelectOption[]>(() => {
+    const names = new Set<string>();
+    for (const deployment of autoRouters ?? []) {
+      if (deployment.model_name) names.add(deployment.model_name);
+    }
+    return [...names].sort().map((name) => ({ label: name, value: name }));
+  }, [autoRouters]);
 
   const parsedPct = Number.parseFloat(percentage);
   const valid =
@@ -149,41 +215,84 @@ const StartForm: React.FC<{ accessToken: string | null }> = ({ accessToken }) =>
         <CardTitle className="text-sm font-medium text-foreground">Start a shadow eval</CardTitle>
         <p className="text-xs text-muted-foreground">
           Duplicates a sampled slice of the key&apos;s traffic through the auto-router and has an LLM judge compare both
-          answers blind. The router&apos;s answers are never served to users. Judge calls bill to the proxy — an
-          estimate is shown before anything runs.
+          answers blind. The router&apos;s answers are never served to users. Judge calls bill to the shadowed key — an
+          estimate is shown before anything runs, and the job stops itself when the duration ends.
         </p>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="grid gap-3 sm:grid-cols-3">
-          <Input
-            placeholder="Key hash (token) to shadow"
-            value={apiKeyId}
-            onChange={(e) => setApiKeyId(e.target.value)}
-          />
-          <Input
-            placeholder="Auto-router name (e.g. claude-auto)"
-            value={routerName}
-            onChange={(e) => setRouterName(e.target.value)}
-          />
-          <div className="flex items-center gap-2">
-            <Input
-              type="number"
-              min={0.1}
-              max={100}
-              step={0.1}
-              className="w-24"
-              value={percentage}
-              onChange={(e) => setPercentage(e.target.value)}
+          <div className="space-y-1.5">
+            <Label htmlFor="shadow-eval-key" className="text-xs">
+              Key to shadow
+            </Label>
+            <KeySelect value={apiKeyId} onChange={setApiKeyId} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="shadow-eval-router" className="text-xs">
+              Auto-router
+            </Label>
+            <SearchSelect
+              options={routerOptions}
+              value={routerName}
+              onValueChange={setRouterName}
+              placeholder="Select an auto-router"
+              emptyText="No auto-routers configured"
             />
-            <span className="text-sm text-muted-foreground">% of traffic</span>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="shadow-eval-pct" className="text-xs">
+              Traffic sampled
+            </Label>
+            <div className="flex items-center gap-2">
+              <Input
+                id="shadow-eval-pct"
+                type="number"
+                min={0.1}
+                max={100}
+                step={0.1}
+                className="w-24"
+                value={percentage}
+                onChange={(e) => setPercentage(e.target.value)}
+              />
+              <span className="text-sm text-muted-foreground">% of traffic</span>
+            </div>
           </div>
         </div>
         <div className="grid gap-3 sm:grid-cols-3">
-          <Input
-            placeholder={`Judge model (default: ${DEFAULT_JUDGE_MODEL})`}
-            value={judgeModel}
-            onChange={(e) => setJudgeModel(e.target.value)}
-          />
+          <div className="space-y-1.5">
+            <Label className="text-xs">Duration</Label>
+            <Select
+              value={durationDays}
+              onValueChange={(v: string | null) => setDurationDays(v ?? DEFAULT_DURATION_DAYS)}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue>{DURATION_OPTIONS.find((o) => o.value === durationDays)?.label}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {DURATION_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label htmlFor="shadow-eval-judge" className="text-xs">
+              Judge model
+            </Label>
+            <Input
+              id="shadow-eval-judge"
+              placeholder={`Default: ${DEFAULT_JUDGE_MODEL}`}
+              value={judgeModel}
+              onChange={(e) => setJudgeModel(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              The judge only compares two answers blind — a mid-tier model (Claude Sonnet or GPT-4o class) is the sweet
+              spot. Small &quot;nano/mini&quot; models give unreliable verdicts; frontier reasoning models cost more
+              without changing outcomes.
+            </p>
+          </div>
         </div>
         {start.error ? (
           <p className="text-sm text-destructive">
@@ -198,6 +307,7 @@ const StartForm: React.FC<{ accessToken: string | null }> = ({ accessToken }) =>
                 api_key_id: apiKeyId.trim(),
                 router_name: routerName.trim(),
                 shadow_percentage: parsedPct,
+                duration_days: Number.parseInt(durationDays, 10),
                 judge_model: judgeModel.trim() || DEFAULT_JUDGE_MODEL,
               },
             })

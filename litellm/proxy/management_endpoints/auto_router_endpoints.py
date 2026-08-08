@@ -607,6 +607,7 @@ class _ShadowEvalJobRow(BaseModel):
     cost_estimate: float | None = None
     cost_actual: float = 0.0
     created_at: datetime
+    ends_at: datetime | None = None
     completed_at: datetime | None = None
 
 
@@ -629,6 +630,7 @@ def _job_to_response(record: object, results: ShadowEvalResult | None) -> GetSha
         cost_estimate=row.cost_estimate,
         cost_actual=row.cost_actual,
         created_at=row.created_at.isoformat(),
+        ends_at=row.ends_at.isoformat() if row.ends_at else None,
         completed_at=row.completed_at.isoformat() if row.completed_at else None,
     )
 
@@ -649,10 +651,11 @@ async def start_shadow_eval(
     traffic through an auto-router, judge real vs. shadow responses blind, and
     stratify win rates by the router's tier classification.
 
-    The shadow responses are never served to users. The job stays active until
-    stopped via /auto_router/shadow_eval/{job_id}/stop. Judge calls bill to the
-    proxy; the estimate returned here prices them from the key's trailing
-    request volume.
+    The shadow responses are never served to users. The job samples traffic for
+    duration_days (or until stopped via /auto_router/shadow_eval/{job_id}/stop),
+    then completes itself. Judge calls bill to the shadowed key; the estimate
+    returned here prices them from the key's trailing request volume scaled to
+    the requested duration.
     """
     from litellm.proxy.proxy_server import llm_router, prisma_client
 
@@ -684,9 +687,12 @@ async def start_shadow_eval(
             "startTime": {"gte": lookback_start},  # mutable-ok: Prisma filter
         },
     )
-    weekly_sampled: Final = int(recent_requests * data.shadow_percentage / 100.0)
+    sampled: Final = int(
+        recent_requests * (data.duration_days / _ESTIMATE_LOOKBACK_DAYS) * data.shadow_percentage / 100.0
+    )
     per_call: Final = _estimate_judge_cost_per_call(data.judge_model)
-    estimated_cost: Final = round(weekly_sampled * per_call, 2)
+    estimated_cost: Final = round(sampled * per_call, 2)
+    ends_at: Final = datetime.now(timezone.utc) + timedelta(days=data.duration_days)
 
     job: Final = await prisma_client.db.litellm_shadowevaljob.create(
         data={  # mutable-ok: Prisma payload
@@ -698,12 +704,13 @@ async def start_shadow_eval(
             "status": "pending",
             "cost_estimate": estimated_cost,
             "created_by": user_api_key_dict.user_id,
+            "ends_at": ends_at,
         }
     )
     return StartShadowEvalResponse(
         job_id=job.id,
         status="pending",
-        estimated_request_count=weekly_sampled,
+        estimated_request_count=sampled,
         estimated_cost=estimated_cost,
     )
 

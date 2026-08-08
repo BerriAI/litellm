@@ -19,8 +19,9 @@ Shadow and judge calls carry ``shadow_eval_internal`` metadata so this logger
 ignores its own traffic and cannot recurse. They also carry the shadowed key's
 identity metadata, so the provider spend they incur is attributed to that key
 (and its team/org/user) and counts against every budget that key is subject to,
-including the global proxy budget. A job additionally stops itself once its judge
-spend reaches a multiple of the estimate quoted when it started.
+including the global proxy budget. A job additionally stops itself once its
+sampling window (``ends_at``) closes or its judge spend reaches a multiple of
+the estimate quoted when it started.
 """
 
 import asyncio
@@ -173,6 +174,24 @@ class ActiveShadowEvalJob:
     status: str
     cost_estimate: float | None = None
     cost_actual: float = 0.0
+    ends_at: datetime | None = None
+
+
+def _as_utc(value: object) -> datetime | None:
+    if not isinstance(value, datetime):
+        return None
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+def _job_is_past_its_end(job: ActiveShadowEvalJob) -> bool:
+    """Whether the job's sampling window has closed.
+
+    An eval is a measurement, not a service: it prices a fixed window at start
+    time, so sampling past ends_at would bill traffic the estimate never covered.
+    Jobs created before durations existed have no ends_at and only stop by hand
+    or via the spend cap.
+    """
+    return job.ends_at is not None and datetime.now(timezone.utc) >= job.ends_at
 
 
 def _job_is_over_spend_cap(job: ActiveShadowEvalJob) -> bool:
@@ -238,8 +257,14 @@ class ShadowEvalLogger(CustomLogger):
             job: Final = await self._get_active_job(api_key_hash)
             if job is None:
                 return
+            if _job_is_past_its_end(job):
+                await self._finalize_job(job, "reached its scheduled end")
+                return
             if _job_is_over_spend_cap(job):
-                await self._stop_job_over_spend_cap(job)
+                await self._finalize_job(
+                    job,
+                    f"spend ${job.cost_actual:.4f} reached the cap for its ${job.cost_estimate or 0.0:.4f} estimate",
+                )
                 return
             request_id: Final = payload.get("id") or ""
             if not request_id:
@@ -305,6 +330,7 @@ class ShadowEvalLogger(CustomLogger):
                     status=str(record.status),
                     cost_estimate=float(record.cost_estimate) if record.cost_estimate is not None else None,
                     cost_actual=float(record.cost_actual or 0.0),
+                    ends_at=_as_utc(getattr(record, "ends_at", None)),
                 )
                 if record is not None
                 else None
@@ -315,11 +341,11 @@ class ShadowEvalLogger(CustomLogger):
         self._job_cache[api_key_hash] = (now, job)
         return job
 
-    async def _stop_job_over_spend_cap(self, job: ActiveShadowEvalJob) -> None:
-        """Flip a runaway job to completed, keeping the verdicts it already produced.
+    async def _finalize_job(self, job: ActiveShadowEvalJob, reason: str) -> None:
+        """Flip a finished job to completed, keeping the verdicts it already produced.
 
-        Guarded on the job still being pending/running so two pods breaching the cap on
-        the same job cannot resurrect one an admin stopped in between.
+        Guarded on the job still being pending/running so two pods finishing the
+        same job cannot resurrect one an admin stopped in between.
         """
         prisma: Final = self._prisma_provider()
         if prisma is None:
@@ -327,12 +353,7 @@ class ShadowEvalLogger(CustomLogger):
         self._job_cache = {  # mutable-ok: TTL cache
             k: v for k, v in self._job_cache.items() if v[1] is None or v[1].id != job.id
         }
-        verbose_logger.info(
-            "shadow_eval: stopping job %s, spend $%.4f reached the cap for its $%.4f estimate",
-            job.id,
-            job.cost_actual,
-            job.cost_estimate or 0.0,
-        )
+        verbose_logger.info("shadow_eval: stopping job %s: %s", job.id, reason)
         try:
             await prisma.db.litellm_shadowevaljob.update_many(
                 where={  # mutable-ok: Prisma filter
@@ -345,7 +366,7 @@ class ShadowEvalLogger(CustomLogger):
                 },
             )
         except Exception as e:  # noqa: BLE001  # logging hooks must never fail the request
-            verbose_logger.debug("shadow_eval: failed to stop over-cap job %s: %s", job.id, e)
+            verbose_logger.debug("shadow_eval: failed to stop job %s: %s", job.id, e)
 
     async def _flush_seen_counts(self) -> None:
         prisma: Final = self._prisma_provider()

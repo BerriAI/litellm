@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS "LiteLLM_ShadowEvalJob" (
     "cost_actual" DOUBLE PRECISION NOT NULL DEFAULT 0,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "created_by" TEXT,
+    "ends_at" TIMESTAMP(3),
     "completed_at" TIMESTAMP(3),
 
     CONSTRAINT "LiteLLM_ShadowEvalJob_pkey" PRIMARY KEY ("id")
