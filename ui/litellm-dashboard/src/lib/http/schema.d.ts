@@ -23509,6 +23509,11 @@ export interface components {
              */
             enable_public_model_hub: boolean;
             /**
+             * Failed Login Window Seconds
+             * @description Fixed window in seconds over which failed Admin UI sign-in attempts are counted. The window starts at the first failure and is not extended by later ones. Configurable from config.yaml only. Defaults to 900
+             */
+            failed_login_window_seconds?: number | null;
+            /**
              * Forward Client Headers To Llm Api
              * @description If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.
              */
@@ -23547,6 +23552,11 @@ export interface components {
              * @description require a key for all calls to proxy
              */
             master_key?: string | null;
+            /**
+             * Max Failed Login Attempts
+             * @description Number of failed Admin UI sign-in attempts allowed for one username from one source address within `failed_login_window_seconds`, before further attempts are refused with 429. Configurable from config.yaml only. Defaults to 10
+             */
+            max_failed_login_attempts?: number | null;
             /**
              * Max Parallel Requests
              * @description maximum parallel requests for each api key

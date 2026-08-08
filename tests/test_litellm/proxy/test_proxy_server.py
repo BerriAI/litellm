@@ -19,6 +19,8 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
+from litellm.proxy.auth.login_throttle import LoginThrottle
+
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system-path
@@ -117,12 +119,13 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     }
     assert response.cookies.get("token") == "signed-token"
 
-    mock_authenticate_user.assert_awaited_once_with(
-        username="alice",
-        password="secret",
-        master_key="test-master-key",
-        prisma_client=mock_prisma_client,
-    )
+    mock_authenticate_user.assert_awaited_once()
+    auth_kwargs = mock_authenticate_user.call_args.kwargs
+    assert auth_kwargs["username"] == "alice"
+    assert auth_kwargs["password"] == "secret"
+    assert auth_kwargs["master_key"] == "test-master-key"
+    assert auth_kwargs["prisma_client"] is mock_prisma_client
+    assert isinstance(auth_kwargs["throttle"], LoginThrottle), "the endpoint must thread a throttle through"
     mock_create_ui_token_object.assert_called_once_with(
         login_result=mock_login_result,
         general_settings={},
@@ -11278,3 +11281,27 @@ async def test_setup_prisma_client_returns_none_when_connect_itself_fails(monkey
     assert result is None
     assert mock_client.start_db_health_watchdog_task.await_count == 0
     assert mock_client.health_check.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_login_throttle_settings_are_not_overridable_from_the_database():
+    """LIT-5285: the sign-in limits stay config.yaml only.
+
+    _update_general_settings copies an allowlist of keys out of the DB row. Adding these
+    to it would let a stored value outrank config.yaml, so an operator refused by a bad
+    value could not fix it by editing YAML and restarting.
+    """
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    original = dict(ps.general_settings)
+    try:
+        ps.general_settings.clear()
+        await ProxyConfig()._update_general_settings(
+            db_general_settings={"max_failed_login_attempts": 999, "failed_login_window_seconds": 1}
+        )
+        assert "max_failed_login_attempts" not in ps.general_settings
+        assert "failed_login_window_seconds" not in ps.general_settings
+    finally:
+        ps.general_settings.clear()
+        ps.general_settings.update(original)
