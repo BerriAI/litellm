@@ -34,11 +34,11 @@ and forwarding, and the upstream either accepts or 400s. A red cell
 here is always a proxy-side regression, not a flaky model-behavior
 artifact.
 
-Three Claude tiers are probed in sequence (count is too low to be
-worth the parallelism overhead, and HTTP probes don't compete for
-the proxy's `--num-workers` slots the way CLI subprocess runs do).
-The matrix's "all three must pass" rule still applies via the
-per-cell aggregator.
+The three Claude tiers are probed concurrently via `run_probe_cell`,
+the same way the CLI rows fan out; each probe first waits on the
+shared per-provider token bucket, so a sequential cell paid that wait
+three times before reporting. The matrix's "all three must pass" rule
+still applies via the per-cell aggregator.
 """
 
 from __future__ import annotations
@@ -46,6 +46,7 @@ from __future__ import annotations
 import pytest
 
 from claude_code._env import require_proxy_client
+from claude_code._probe_cell import run_probe_cell
 from claude_code.http_probe import (
     assert_tool_search_shape,
     probe_tool_search,
@@ -70,17 +71,12 @@ def test_tool_search_bedrock_invoke(compat_result):
     tier."""
     client, api_key = require_proxy_client(compat_result)
 
-    failures = []
-    for model in BEDROCK_INVOKE_MODELS:
-        result = probe_tool_search(client=client, api_key=api_key, model=model)
-        shape_error = assert_tool_search_shape(result)
-        if shape_error is not None:
-            error = f"[{model}] tool_search probe failed: {shape_error}"
-            compat_result.add({"status": "fail", "error": error})
-            failures.append(error)
-            continue
-
-        compat_result.add({"status": "pass"})
-
-    if failures:
-        pytest.fail("; ".join(failures), pytrace=False)
+    run_probe_cell(
+        compat_result=compat_result,
+        models=BEDROCK_INVOKE_MODELS,
+        probe=lambda model: probe_tool_search(
+            client=client, api_key=api_key, model=model
+        ),
+        check_shape=assert_tool_search_shape,
+        probe_name="tool_search",
+    )
