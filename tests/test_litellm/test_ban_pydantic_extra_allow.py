@@ -44,6 +44,26 @@ _REPO_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."
             "class Foo(BaseModel):\n    class Config:\n        extra = Extra.allow\n",
             id="legacy_inner_config_enum",
         ),
+        pytest.param(
+            'ALLOW = ConfigDict(extra="allow")\n\n\nclass Foo(BaseModel):\n    model_config = ALLOW\n',
+            id="module_constant_config_dict",
+        ),
+        pytest.param(
+            'ALLOW = {"extra": "allow"}\n\n\nclass Foo(BaseModel):\n    model_config = ALLOW\n',
+            id="module_constant_dict",
+        ),
+        pytest.param(
+            'ALLOW = {"extra": "allow"}\nALIAS = ALLOW\n\n\nclass Foo(BaseModel):\n    model_config = ALIAS\n',
+            id="module_constant_chain",
+        ),
+        pytest.param(
+            'EXTRA = "allow"\n\n\nclass Foo(BaseModel):\n    model_config = ConfigDict(extra=EXTRA)\n',
+            id="module_constant_extra_value",
+        ),
+        pytest.param(
+            'EXTRA = "allow"\n\n\nclass Foo(BaseModel, extra=EXTRA):\n    pass\n',
+            id="module_constant_class_keyword",
+        ),
     ],
 )
 def test_detects_extra_allow(source):
@@ -73,6 +93,18 @@ def test_detects_extra_allow(source):
         pytest.param(
             'def f():\n    return ConfigDict(extra="allow")\n',
             id="outside_class",
+        ),
+        pytest.param(
+            'FORBID = ConfigDict(extra="forbid")\n\n\nclass Foo(BaseModel):\n    model_config = FORBID\n',
+            id="module_constant_forbid",
+        ),
+        pytest.param(
+            "class Foo(BaseModel):\n    model_config = IMPORTED_CONFIG\n",
+            id="unresolvable_constant",
+        ),
+        pytest.param(
+            "SELF = SELF\n\n\nclass Foo(BaseModel):\n    model_config = SELF\n",
+            id="self_referencing_constant",
         ),
     ],
 )
