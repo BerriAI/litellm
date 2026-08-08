@@ -87,7 +87,8 @@ class OpenAIResponsesHandler(BaseTranslation):
             return data
 
         structured_messages = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+             await LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                model="placeholder"
                 input=input_data,
                 responses_api_request=data,
             )

@@ -808,7 +808,7 @@ class CustomGuardrail(CustomLogger):
         for key, value in vars(litellm_params).items():
             setattr(self, key, value)
 
-    def get_guardrails_messages_for_call_type(
+    async def get_guardrails_messages_for_call_type(
         self, call_type: CallTypes, data: Optional[dict] = None
     ) -> Optional[List[AllMessageValues]]:
         """
@@ -847,7 +847,8 @@ class CustomGuardrail(CustomLogger):
             if input_data is None:
                 return None
 
-            messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            messages = await LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                model="TODO placeholder",
                 input=input_data,
                 responses_api_request=data,
             )

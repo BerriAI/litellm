@@ -192,7 +192,7 @@ class LiteLLMCompletionResponsesConfig:
         return tokens
 
     @staticmethod
-    async def _transform_context_management(
+    def _transform_context_management(
         model: str,
         input: Union[str, ResponseInputParam],
         context_management: Optional[List[Dict[str, Any]]],
@@ -205,8 +205,6 @@ class LiteLLMCompletionResponsesConfig:
 
         Returns the (possibly compacted) input.
         """
-        import pdb
-        pdb.set_trace()
         pass
 
     @staticmethod
@@ -259,6 +257,7 @@ class LiteLLMCompletionResponsesConfig:
         
         litellm_completion_request: dict = {
             "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                model=model,
                 input=input,
                 responses_api_request=responses_api_request,
             ),
@@ -304,8 +303,10 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def transform_responses_api_input_to_messages(
+        model: str,
         input: Union[str, ResponseInputParam],
         responses_api_request: Union[ResponsesAPIOptionalRequestParams, dict],
+        context_management: Optional[List[Dict[str, Any]]] = None,
     ) -> List[
         Union[
             AllMessageValues,
@@ -339,6 +340,18 @@ class LiteLLMCompletionResponsesConfig:
                 input=input,
             )
         )
+
+        LiteLLMCompletionResponsesConfig._transform_context_management(model, input, context_management)
+        #messages.extend(
+            #msgs
+        #)
+
+        #if LiteLLMCompletionResponsesConfig.should_execute_compaction(
+                #LiteLLMCompletionResponsesConfig._cheap_token_counter(input),
+                #context_management
+            #):
+
+
 
         return messages
 
