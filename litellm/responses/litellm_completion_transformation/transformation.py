@@ -169,7 +169,7 @@ class LiteLLMCompletionResponsesConfig:
             {
                 "type": "message",
                 "role": "user",
-                "content": "",
+                "content": "what is your name and how do you feel about bananas",
             },
             {
                  "type": "compaction",
@@ -210,13 +210,13 @@ class LiteLLMCompletionResponsesConfig:
         Returns the (possibly compacted) input.
         """
 
-        import pdb
-        pdb.set_trace()
         if LiteLLMCompletionResponsesConfig.should_execute_compaction(LiteLLMCompletionResponsesConfig._cheap_token_counter(input),
                                                                       context_management,
                                                                       ):
 
-            return LiteLLMCompletionResponsesConfig._compact_input(model, input)
+            import asyncio
+            v = asyncio.run(LiteLLMCompletionResponsesConfig._compact_input(model, input))
+            return v 
         return input
 
     @staticmethod
@@ -227,11 +227,10 @@ class LiteLLMCompletionResponsesConfig:
         """
         Check if compaction should be executed
         """
-        #TODO handle null case of indexing.
         if not context_management: return False
         if len(context_management) != 1: return False
 
-        if input_token_size < context_management[0]["compact_threshold"]:
+        if input_token_size > context_management[0]["compact_threshold"]:
             return True
 
     @staticmethod
@@ -297,7 +296,6 @@ class LiteLLMCompletionResponsesConfig:
             "web_search_options": web_search_options,
             "response_format": response_format,
             "reasoning_effort": reasoning_effort,
-            "context_management": responses_api_request.get("context_management"),
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
@@ -349,6 +347,7 @@ class LiteLLMCompletionResponsesConfig:
             ]
         ] = []
         input: Union[str, ResponseInputParam] = LiteLLMCompletionResponsesConfig._transform_context_management(model, input, context_management)
+
         if responses_api_request.get("instructions"):
             messages.append(
                 LiteLLMCompletionResponsesConfig.transform_instructions_to_system_message(
