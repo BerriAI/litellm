@@ -9,7 +9,7 @@ store_message for backend events, store_input for client events, log_messages on
 import asyncio
 import contextlib
 import json
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from pydantic import TypeAdapter
 
@@ -20,6 +20,9 @@ from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
 from .transformation import BedrockRealtimeConfig
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
 
 _CLIENT_MODALITIES_ADAPTER: Final[TypeAdapter["list[str] | None"]] = TypeAdapter(list[str] | None)
 
@@ -49,7 +52,7 @@ class BedrockRealtime(BaseAWSLLM):
         aws_sts_endpoint: str | None = None,
         aws_bedrock_runtime_endpoint: str | None = None,
         aws_external_id: str | None = None,
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: "UserAPIKeyAuth | None" = None,
         litellm_metadata: dict | None = None,
         **kwargs,
     ):
@@ -201,6 +204,11 @@ class BedrockRealtime(BaseAWSLLM):
                     return_exceptions=True,
                 )
             finally:
+                for pending_usage_event in transformation_config.flush_pending_usage_as_response_done(
+                    session_state.get("current_response_id"),
+                    session_state.get("current_conversation_id"),
+                ):
+                    realtime_streaming.store_message(pending_usage_event)
                 await realtime_streaming.log_messages()
 
         except Exception as e:

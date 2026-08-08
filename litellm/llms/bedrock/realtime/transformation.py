@@ -36,6 +36,8 @@ from litellm.types.realtime import (
     RealtimeResponseTransformInput,
     RealtimeResponseTypedDict,
 )
+
+
 class BedrockContentEnd(BaseModel):
     stopReason: str | None = None
 
@@ -168,10 +170,28 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
     def record_usage_event(self, usage_event: dict) -> None:
         self._usage_totals = _usage_snapshot_from_event(usage_event)
 
+    def has_unbilled_usage(self) -> bool:
+        delta: Final = _usage_snapshot_delta(self._usage_totals, self._usage_at_last_response_done)
+        return any(value > 0 for value in delta.values())
+
     def consume_usage_for_response_done(self) -> dict[str, Any]:
         delta: Final = _usage_snapshot_delta(self._usage_totals, self._usage_at_last_response_done)
         self._usage_at_last_response_done = dict(self._usage_totals)
         return _openai_usage_from_snapshot(delta)
+
+    def flush_pending_usage_as_response_done(
+        self,
+        current_response_id: str | None = None,
+        current_conversation_id: str | None = None,
+    ) -> list[OpenAIRealtimeEvents]:
+        if not self.has_unbilled_usage():
+            return []
+        events, _, _, _ = self._response_done_events(
+            current_response_id,
+            current_conversation_id,
+            mint_ids_if_missing=True,
+        )
+        return events
 
     def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
         """Validate environment - no special validation needed for Bedrock."""
@@ -830,9 +850,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             output_index=0,
             event_id=f"event_{uuid.uuid4()}",
             item_id=current_output_item_id,
-            part=(
-                {"type": "text", "text": ""} if next_delta_type == "text" else {"type": "audio", "transcript": ""}
-            ),
+            part=({"type": "text", "text": ""} if next_delta_type == "text" else {"type": "audio", "transcript": ""}),
             response_id=current_response_id,
         )
         returned_messages.append(content_part_added)
@@ -1051,19 +1069,27 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             Tuple of (events, reset_output_item_id, reset_response_id, reset_delta_type)
         """
         verbose_logger.debug("Handling promptEnd")
-        return self._response_done_events(current_response_id, current_conversation_id)
+        return self._response_done_events(
+            current_response_id,
+            current_conversation_id,
+            mint_ids_if_missing=self.has_unbilled_usage(),
+        )
 
     def _response_done_events(
         self,
         current_response_id: str | None,
         current_conversation_id: str | None,
+        *,
+        mint_ids_if_missing: bool = False,
     ) -> tuple[
         list[OpenAIRealtimeEvents],
         str | None,
         str | None,
         ALL_DELTA_TYPES | None,
     ]:
-        if not current_response_id or not current_conversation_id:
+        response_id: Final = current_response_id or (f"resp_{uuid.uuid4()}" if mint_ids_if_missing else None)
+        conversation_id: Final = current_conversation_id or (f"conv_{uuid.uuid4()}" if mint_ids_if_missing else None)
+        if not response_id or not conversation_id:
             return [], None, None, None
 
         response_done: Final = OpenAIRealtimeDoneEvent(
@@ -1071,10 +1097,10 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             event_id=f"event_{uuid.uuid4()}",
             response=OpenAIRealtimeResponseDoneObject(
                 object="realtime.response",
-                id=current_response_id,
+                id=response_id,
                 status="completed",
                 output=[],
-                conversation_id=current_conversation_id,
+                conversation_id=conversation_id,
                 usage=self.consume_usage_for_response_done(),
             ),
         )
@@ -1252,6 +1278,19 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             usage_event: Final = event["usageEvent"]
             if isinstance(usage_event, dict):
                 self.record_usage_event(usage_event)
+                if current_response_id is None and self.has_unbilled_usage():
+                    (
+                        done_events,
+                        current_output_item_id,
+                        current_response_id,
+                        current_delta_type,
+                    ) = self._response_done_events(
+                        None,
+                        current_conversation_id,
+                        mint_ids_if_missing=True,
+                    )
+                    returned_messages.extend(done_events)
+                    current_delta_chunks = None
 
         elif "contentStart" in event:
             (
@@ -1297,9 +1336,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             current_delta_chunks = None
             current_delta_type = None
             current_output_item_id = None
-            if content_end.get("type") == "TOOL":
-                current_response_id = None
-            if BedrockContentEnd.model_validate(content_end).stopReason == "END_TURN":
+            is_end_turn: Final = BedrockContentEnd.model_validate(content_end).stopReason == "END_TURN"
+            if is_end_turn:
                 (
                     done_events,
                     current_output_item_id,
@@ -1308,6 +1346,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 ) = self._response_done_events(current_response_id, current_conversation_id)
                 returned_messages.extend(done_events)
                 current_delta_chunks = None
+            elif content_end.get("type") == "TOOL":
+                current_response_id = None
 
         elif "toolUse" in event:
             (

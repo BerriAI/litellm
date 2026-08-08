@@ -20,6 +20,8 @@ from .litellm_logging import Logging as LiteLLMLogging
 if TYPE_CHECKING:
     from websockets.asyncio.client import ClientConnection
 
+    from litellm.proxy._types import UserAPIKeyAuth
+
     CLIENT_CONNECTION_CLASS = ClientConnection
 else:
     CLIENT_CONNECTION_CLASS = Any
@@ -48,7 +50,7 @@ class RealTimeStreaming:
         logging_obj: LiteLLMLogging,
         provider_config: BaseRealtimeConfig | None = None,
         model: str = "",
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: "UserAPIKeyAuth | None" = None,
         request_data: dict | None = None,
         backend_uses_beta_protocol: bool | None = None,
         force_transcription_model: str | None = None,
@@ -83,7 +85,7 @@ class RealTimeStreaming:
         self.current_item_chunks: list[OpenAIRealtimeOutputItemDone] | None = None
         self.current_delta_type: ALL_DELTA_TYPES | None = None
         self.session_configuration_request: str | None = None
-        self.user_api_key_dict = user_api_key_dict
+        self.user_api_key_dict: "UserAPIKeyAuth | None" = user_api_key_dict
         self.request_data: dict = request_data or {}
         # Violation counter for end_session_after_n_fails support
         self._violation_count: int = 0

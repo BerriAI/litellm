@@ -15,7 +15,6 @@ from litellm.llms.bedrock.realtime.transformation import (
     BedrockRealtimeConfig,
 )
 from litellm.llms.bedrock.realtime.trigger_audio import ready_trigger_pcm
-from litellm.types.llms.openai import OpenAIRealtimeEventTypes
 
 
 class TestBedrockRealtimeConfig:
@@ -1355,6 +1354,125 @@ class TestBedrockRealtimeUsageAccounting:
         assert second_usage["total_tokens"] == 15
         assert second_usage["input_token_details"]["audio_tokens"] == 5
         assert second_usage["output_token_details"]["audio_tokens"] == 10
+
+    def test_late_usage_event_after_response_id_cleared_emits_response_done(self):
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_late_usage"
+        state = {
+            "session_configuration_request": json.dumps({"configured": True}),
+            "current_output_item_id": "item_1",
+            "current_response_id": "resp_1",
+            "current_conversation_id": "conv_1",
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": "audio",
+        }
+
+        end_turn = config.transform_realtime_response(
+            json.dumps({"event": {"contentEnd": {"stopReason": "END_TURN", "type": "AUDIO"}}}),
+            "amazon.nova-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input=state,
+        )
+        assert any(msg["type"] == "response.done" for msg in end_turn["response"])
+        assert end_turn["current_response_id"] is None
+        state["current_response_id"] = end_turn["current_response_id"]
+        state["current_output_item_id"] = end_turn["current_output_item_id"]
+        state["current_conversation_id"] = end_turn["current_conversation_id"]
+
+        late_usage = config.transform_realtime_response(
+            json.dumps(self._usage_event(input_speech=10, input_text=2, output_speech=20, output_text=3)),
+            "amazon.nova-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input=state,
+        )
+        done_events = [msg for msg in late_usage["response"] if msg["type"] == "response.done"]
+        assert len(done_events) == 1
+        usage = done_events[0]["response"]["usage"]
+        assert usage["input_tokens"] == 12
+        assert usage["output_tokens"] == 23
+        assert usage["total_tokens"] == 35
+        assert not config.has_unbilled_usage()
+
+    def test_tool_end_turn_emits_response_done_before_clearing_ids(self):
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_tool_end_turn"
+        state = {
+            "session_configuration_request": json.dumps({"configured": True}),
+            "current_output_item_id": "item_tool",
+            "current_response_id": "resp_tool",
+            "current_conversation_id": "conv_tool",
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        }
+
+        config.transform_realtime_response(
+            json.dumps(self._usage_event(input_speech=4, input_text=1, output_speech=0, output_text=2)),
+            "amazon.nova-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input=state,
+        )
+        tool_end = config.transform_realtime_response(
+            json.dumps({"event": {"contentEnd": {"stopReason": "END_TURN", "type": "TOOL"}}}),
+            "amazon.nova-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input=state,
+        )
+        done_events = [msg for msg in tool_end["response"] if msg["type"] == "response.done"]
+        assert len(done_events) == 1
+        assert done_events[0]["response"]["id"] == "resp_tool"
+        assert done_events[0]["response"]["usage"]["input_tokens"] == 5
+        assert done_events[0]["response"]["usage"]["output_tokens"] == 2
+        assert tool_end["current_response_id"] is None
+        assert not config.has_unbilled_usage()
+
+    def test_flush_pending_usage_on_session_close(self):
+        config = BedrockRealtimeConfig()
+        config.record_usage_event(
+            self._usage_event(input_speech=8, input_text=1, output_speech=16, output_text=2)["event"]["usageEvent"]
+        )
+        assert config.has_unbilled_usage()
+
+        flushed = config.flush_pending_usage_as_response_done(None, None)
+        assert len(flushed) == 1
+        assert flushed[0]["type"] == "response.done"
+        usage = flushed[0]["response"]["usage"]
+        assert usage["input_tokens"] == 9
+        assert usage["output_tokens"] == 18
+        assert usage["total_tokens"] == 27
+        assert not config.has_unbilled_usage()
+        assert config.flush_pending_usage_as_response_done(None, None) == []
+
+    def test_completion_end_with_unbilled_usage_mints_response_done(self):
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_completion_end"
+        config.record_usage_event(
+            self._usage_event(input_speech=3, input_text=0, output_speech=6, output_text=0)["event"]["usageEvent"]
+        )
+
+        result = config.transform_realtime_response(
+            json.dumps({"event": {"completionEnd": {}}}),
+            "amazon.nova-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input={
+                "session_configuration_request": json.dumps({"configured": True}),
+                "current_output_item_id": None,
+                "current_response_id": None,
+                "current_conversation_id": None,
+                "current_delta_chunks": None,
+                "current_item_chunks": None,
+                "current_delta_type": None,
+            },
+        )
+        done_events = [msg for msg in result["response"] if msg["type"] == "response.done"]
+        assert len(done_events) == 1
+        assert done_events[0]["response"]["usage"]["input_tokens"] == 3
+        assert done_events[0]["response"]["usage"]["output_tokens"] == 6
+        assert not config.has_unbilled_usage()
 
 
 if __name__ == "__main__":
