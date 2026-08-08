@@ -48,7 +48,7 @@ const ReasoningContent: React.FC<ReasoningContentProps> = ({ reasoningContent })
                   const match = /language-(\w+)/.exec(className || "");
                   return !inline && match ? (
                     <SyntaxHighlighter
-                      style={coy as Record<string, React.CSSProperties>}
+                      style={coy as unknown as { [key: string]: React.CSSProperties }}
                       language={match[1]}
                       PreTag="div"
                       className="my-2 rounded-md"
