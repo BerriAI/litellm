@@ -574,7 +574,7 @@ class TestShadowEvalJobsAreTimeBound:
         router.adaptive_routers = {}
         router.quality_routers = {}
         prisma = MagicMock()
-        prisma.db.litellm_spendlogs.count = AsyncMock(return_value=recent_requests)
+        prisma.db.query_raw = AsyncMock(return_value=[{"request_count": recent_requests}])
         prisma.db.litellm_shadowevaljob.find_first = AsyncMock(return_value=None)
         created = MagicMock()
         created.id = "job-1"
@@ -582,6 +582,22 @@ class TestShadowEvalJobsAreTimeBound:
         monkeypatch.setattr(proxy_server, "llm_router", router)
         monkeypatch.setattr(proxy_server, "prisma_client", prisma)
         return prisma
+
+    @pytest.mark.asyncio
+    async def test_estimate_reads_the_daily_rollup_not_the_raw_spend_log_table(self, monkeypatch: pytest.MonkeyPatch):
+        """LiteLLM_SpendLogs has no api_key index; a per-key count there scans every
+        request in the window. The estimate must come from LiteLLM_DailyUserSpend."""
+        from litellm.proxy.management_endpoints.auto_router_endpoints import start_shadow_eval
+
+        prisma = self._proxy_mocks(monkeypatch, recent_requests=700)
+
+        response = await start_shadow_eval(self._start_request(), ADMIN)
+
+        assert response.estimated_request_count == 70
+        prisma.db.litellm_spendlogs.count.assert_not_called()
+        sql = prisma.db.query_raw.call_args.args[0]
+        assert 'FROM "LiteLLM_DailyUserSpend"' in sql
+        assert "LiteLLM_SpendLogs" not in sql
 
     def test_duration_defaults_to_a_week_and_rejects_zero_and_over_a_month(self):
         assert self._start_request().duration_days == 7

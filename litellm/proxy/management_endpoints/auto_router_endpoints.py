@@ -51,6 +51,7 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
 if TYPE_CHECKING:
     from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+    from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
 else:
     try:
@@ -453,6 +454,33 @@ _JUDGE_PROMPT_TOKENS_ESTIMATE: Final = 4000
 # The estimate projects from the key's request volume over this many trailing days.
 _ESTIMATE_LOOKBACK_DAYS: Final = 7
 
+_ESTIMATE_VOLUME_SQL: Final = """
+SELECT COALESCE(SUM(api_requests), 0)::bigint AS request_count
+FROM "LiteLLM_DailyUserSpend"
+WHERE api_key = $1 AND date >= $2
+"""
+
+
+class _EstimateVolumeRow(BaseModel):
+    request_count: int
+
+
+_ESTIMATE_VOLUME_ROWS: Final = TypeAdapter(list[_EstimateVolumeRow])
+
+
+async def _recent_request_volume(prisma_client: "PrismaClient", api_key_id: str) -> int:
+    """The key's request count over the estimate lookback window.
+
+    Read from the LiteLLM_DailyUserSpend rollup, never LiteLLM_SpendLogs: the raw log
+    table has no api_key index, so a per-key count there scans every request the proxy
+    served in the window. The rollup is a handful of indexed rows per key/day and is
+    how the usage dashboards answer the same question.
+    """
+    lookback_date: Final = (datetime.now(timezone.utc) - timedelta(days=_ESTIMATE_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    raw_rows: Final = await prisma_client.db.query_raw(_ESTIMATE_VOLUME_SQL, api_key_id, lookback_date)
+    rows: Final = _ESTIMATE_VOLUME_ROWS.validate_python(raw_rows or [])
+    return rows[0].request_count if rows else 0
+
 
 def _require_admin_viewer(user_api_key_dict: UserAPIKeyAuth, action: str) -> None:
     if user_api_key_dict.user_role not in (
@@ -634,13 +662,7 @@ async def start_shadow_eval(
             detail=f"Key already has an active shadow eval job ({existing.id}). Stop it first.",
         )
 
-    lookback_start: Final = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=_ESTIMATE_LOOKBACK_DAYS)
-    recent_requests: Final = await prisma_client.db.litellm_spendlogs.count(
-        where={  # mutable-ok: Prisma filter
-            "api_key": data.api_key_id,
-            "startTime": {"gte": lookback_start},  # mutable-ok: Prisma filter
-        },
-    )
+    recent_requests: Final = await _recent_request_volume(prisma_client, data.api_key_id)
     sampled: Final = int(
         recent_requests * (data.duration_days / _ESTIMATE_LOOKBACK_DAYS) * data.shadow_percentage / 100.0
     )
