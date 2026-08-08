@@ -35400,6 +35400,10 @@ export interface components {
             base_model?: string | null;
             /** Blocked */
             blocked?: boolean | null;
+            /** Cache Creation Input Token Cost */
+            cache_creation_input_token_cost?: number | null;
+            /** Cache Read Input Token Cost */
+            cache_read_input_token_cost?: number | null;
             /** Created At */
             created_at?: string | null;
             /** Created By */
@@ -35411,6 +35415,14 @@ export interface components {
             db_model: boolean;
             /** Id */
             id: string | null;
+            /** Input Cost Per Character */
+            input_cost_per_character?: number | null;
+            /** Input Cost Per Token */
+            input_cost_per_token?: number | null;
+            /** Output Cost Per Character */
+            output_cost_per_character?: number | null;
+            /** Output Cost Per Token */
+            output_cost_per_token?: number | null;
             /** Team Id */
             team_id?: string | null;
             /** Team Public Model Name */
