@@ -34,6 +34,18 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   })),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
+  useModelCostMap: vi.fn(() => ({
+    data: {
+      "claude-sonnet-5": { litellm_provider: "anthropic", mode: "chat" },
+      "gpt-4o": { litellm_provider: "openai", mode: "chat" },
+      "gemini/gemini-2.5-pro": { litellm_provider: "gemini", mode: "chat" },
+      "gpt-4o-mini": { litellm_provider: "openai", mode: "chat" },
+      "text-embedding-3-large": { litellm_provider: "openai", mode: "embedding" },
+    },
+  })),
+}));
+
 import ShadowEvalSection from "./ShadowEvalSection";
 import {
   useShadowEvalJob,
@@ -172,6 +184,8 @@ describe("ShadowEvalSection", () => {
     await user.click(await screen.findByText("prod-alpha"));
     await user.click(screen.getByPlaceholderText("Select an auto-router"));
     await user.click(await screen.findByText("gpt-auto"));
+    await user.click(screen.getByPlaceholderText("Select a judge model"));
+    await user.click(await screen.findByRole("option", { name: /anthropic\/claude-sonnet-5/ }));
     await user.click(screen.getByText("Start shadow eval"));
 
     const expectedBody = {
@@ -198,11 +212,42 @@ describe("ShadowEvalSection", () => {
     });
   });
 
-  it("explains what the judge model is for and recommends a tier", () => {
+  it("explains what the judge model is for and recommends models across providers", () => {
     mockHooks({ jobs: [] });
     render(<ShadowEvalSection accessToken="token" />);
     expect(screen.getByText("Judge model")).toBeInTheDocument();
-    expect(screen.getByText(/mid-tier model \(Claude Sonnet or GPT-4o class\)/)).toBeInTheDocument();
+    expect(screen.getByText("anthropic/claude-sonnet-5")).toBeInTheDocument();
+    expect(screen.getByText("openai/gpt-4o")).toBeInTheDocument();
+    expect(screen.getByText("gemini/gemini-2.5-pro")).toBeInTheDocument();
+  });
+
+  it("does not send a default judge model without an explicit pick", async () => {
+    const user = userEvent.setup();
+    const mutate = vi.fn();
+    mockHooks({ jobs: [] });
+    vi.mocked(useStartShadowEval).mockReturnValue({ mutate, isPending: false, error: null } as unknown as ReturnType<
+      typeof useStartShadowEval
+    >);
+    render(<ShadowEvalSection accessToken="token" />);
+
+    await user.click(screen.getByPlaceholderText("Search keys by alias"));
+    await user.click(await screen.findByText("prod-alpha"));
+    await user.click(screen.getByPlaceholderText("Select an auto-router"));
+    await user.click(await screen.findByText("gpt-auto"));
+
+    expect(screen.getByText("Start shadow eval")).toBeDisabled();
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("offers the recommended judge models ahead of the rest of the catalog", async () => {
+    const user = userEvent.setup();
+    mockHooks({ jobs: [] });
+    render(<ShadowEvalSection accessToken="token" />);
+
+    await user.click(screen.getByPlaceholderText("Select a judge model"));
+
+    const recommended = await screen.findAllByText("Recommended");
+    expect(recommended).toHaveLength(3);
   });
 
   it("shows when an active job will end", () => {

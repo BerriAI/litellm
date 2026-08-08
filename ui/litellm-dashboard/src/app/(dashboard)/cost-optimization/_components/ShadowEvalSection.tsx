@@ -4,6 +4,7 @@ import React, { useMemo, useState } from "react";
 
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useAutoRouters } from "@/app/(dashboard)/hooks/models/useModels";
+import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
 import { Badge } from "@/components/ui/badge";
@@ -147,8 +148,38 @@ const JobResults: React.FC<{
   );
 };
 
-/** Kept in sync with DEFAULT_SHADOW_EVAL_JUDGE_MODEL on the backend. */
-const DEFAULT_JUDGE_MODEL = "anthropic/claude-sonnet-5";
+/** No default is sent — these are suggestions shown ahead of the rest of the catalog,
+ * one per provider, so a pick doesn't depend on having one provider configured. */
+const RECOMMENDED_JUDGE_MODELS = ["anthropic/claude-sonnet-5", "openai/gpt-4o", "gemini/gemini-2.5-pro"] as const;
+
+interface CostMapEntry {
+  litellm_provider?: string;
+  mode?: string;
+}
+
+const useJudgeModelOptions = (): SearchSelectOption[] => {
+  const { data: costMap } = useModelCostMap();
+  return useMemo(() => {
+    if (!costMap) return [];
+    const seen = new Set<string>();
+    const options: SearchSelectOption[] = [];
+    for (const recommended of RECOMMENDED_JUDGE_MODELS) {
+      seen.add(recommended);
+      options.push({ label: recommended, value: recommended, sublabel: "Recommended" });
+    }
+    const rest: SearchSelectOption[] = [];
+    for (const [key, value] of Object.entries(costMap as Record<string, CostMapEntry>)) {
+      const provider = value?.litellm_provider;
+      if (value?.mode !== "chat" || !provider) continue;
+      const model = key.startsWith(`${provider}/`) ? key : `${provider}/${key}`;
+      if (seen.has(model)) continue;
+      seen.add(model);
+      rest.push({ label: model, value: model });
+    }
+    rest.sort((a, b) => a.label.localeCompare(b.label));
+    return [...options, ...rest];
+  }, [costMap]);
+};
 
 const DURATION_OPTIONS = [
   { value: "1", label: "1 day" },
@@ -193,8 +224,9 @@ const StartForm: React.FC<{ accessToken: string | null }> = ({ accessToken }) =>
   const [routerName, setRouterName] = useState("");
   const [percentage, setPercentage] = useState("10");
   const [durationDays, setDurationDays] = useState(DEFAULT_DURATION_DAYS);
-  const [judgeModel, setJudgeModel] = useState(DEFAULT_JUDGE_MODEL);
+  const [judgeModel, setJudgeModel] = useState("");
   const { data: autoRouters } = useAutoRouters();
+  const judgeModelOptions = useJudgeModelOptions();
   const start = useStartShadowEval();
 
   const routerOptions = useMemo<SearchSelectOption[]>(() => {
@@ -206,8 +238,9 @@ const StartForm: React.FC<{ accessToken: string | null }> = ({ accessToken }) =>
   }, [autoRouters]);
 
   const parsedPct = Number.parseFloat(percentage);
-  const valid =
-    Boolean(accessToken) && apiKeyId.trim() !== "" && routerName.trim() !== "" && parsedPct > 0 && parsedPct <= 100;
+  const percentageValid = parsedPct > 0 && parsedPct <= 100;
+  const requiredFieldsPicked = apiKeyId.trim() !== "" && routerName.trim() !== "" && judgeModel.trim() !== "";
+  const valid = Boolean(accessToken) && requiredFieldsPicked && percentageValid;
 
   return (
     <Card size="sm">
@@ -281,16 +314,19 @@ const StartForm: React.FC<{ accessToken: string | null }> = ({ accessToken }) =>
             <Label htmlFor="shadow-eval-judge" className="text-xs">
               Judge model
             </Label>
-            <Input
-              id="shadow-eval-judge"
-              placeholder={`Default: ${DEFAULT_JUDGE_MODEL}`}
+            <SearchSelect
+              options={judgeModelOptions}
               value={judgeModel}
-              onChange={(e) => setJudgeModel(e.target.value)}
+              onValueChange={setJudgeModel}
+              placeholder="Select a judge model"
+              emptyText="No chat models available"
             />
             <p className="text-xs text-muted-foreground">
-              The judge only compares two answers blind — a mid-tier model (Claude Sonnet or GPT-4o class) is the sweet
-              spot. Small &quot;nano/mini&quot; models give unreliable verdicts; frontier reasoning models cost more
-              without changing outcomes.
+              The judge only compares two answers blind — a mid-tier model is the sweet spot. Recommended:{" "}
+              <span className="font-mono">anthropic/claude-sonnet-5</span>,{" "}
+              <span className="font-mono">openai/gpt-4o</span>, or{" "}
+              <span className="font-mono">gemini/gemini-2.5-pro</span>. Small &quot;nano/mini&quot; models give
+              unreliable verdicts; frontier reasoning models cost more without changing outcomes.
             </p>
           </div>
         </div>
@@ -308,7 +344,7 @@ const StartForm: React.FC<{ accessToken: string | null }> = ({ accessToken }) =>
                 router_name: routerName.trim(),
                 shadow_percentage: parsedPct,
                 duration_days: Number.parseInt(durationDays, 10),
-                judge_model: judgeModel.trim() || DEFAULT_JUDGE_MODEL,
+                judge_model: judgeModel,
               },
             })
           }
