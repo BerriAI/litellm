@@ -14,6 +14,7 @@ import base64
 import os
 import sys
 from contextlib import ExitStack
+from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -78,10 +79,31 @@ class FakeRequest:
         return {}
 
 
+@dataclass(frozen=True)
+class ManagedResourceAccessCheckerStub:
+    file_access: bool = True
+    object_access: bool = True
+
+    async def can_user_call_unified_file_id(
+        self,
+        unified_file_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> bool:
+        return self.file_access
+
+    async def can_user_call_unified_object_id(
+        self,
+        unified_object_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> bool:
+        return self.object_access
+
+
 class Seams:
-    def __init__(self, router: MagicMock, litellm_calls: dict[str, AsyncMock]):
+    def __init__(self, router: MagicMock, litellm_calls: dict[str, AsyncMock], logging: MagicMock):
         self.router = router
         self.litellm_calls = litellm_calls
+        self.logging = logging
 
     def assert_no_provider_call(self) -> None:
         for name, mock in self.litellm_calls.items():
@@ -126,7 +148,7 @@ def seams():
         stack.enter_context(patch.object(proxy_server, "proxy_config", MagicMock()))
         stack.enter_context(patch.object(proxy_server, "version", "test-version"))
         stack.enter_context(patch.object(endpoints, "fine_tuning_config", [{"custom_llm_provider": "openai"}]))
-        yield Seams(router=router, litellm_calls=litellm_calls)
+        yield Seams(router=router, litellm_calls=litellm_calls, logging=logging)
 
 
 async def _create(training_file: str, validation_file: str | None = None):
@@ -176,6 +198,8 @@ async def test_create__raw_training_file_rejected_when_managed_files_required(se
 async def test_create__raw_validation_file_rejected_when_managed_files_required(seams):
     """The validation file is uploaded and readable exactly like the training file,
     so a managed training_file must not smuggle a raw validation_file past the guard."""
+    seams.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub()
+
     with patch.object(litellm, "require_managed_files", True):
         with pytest.raises(ProxyException) as exc:
             await _create(_unified_file_id(), validation_file=RAW_FILE_ID)
@@ -186,10 +210,24 @@ async def test_create__raw_validation_file_rejected_when_managed_files_required(
 
 @pytest.mark.asyncio
 async def test_create__unified_training_file_allowed_when_managed_files_required(seams):
+    seams.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub()
+
     with patch.object(litellm, "require_managed_files", True):
         await _create(_unified_file_id())
 
     assert seams.router.acreate_fine_tuning_job.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_create__other_teams_unified_training_file_rejected(seams):
+    seams.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub(file_access=False)
+
+    with patch.object(litellm, "require_managed_files", True):
+        with pytest.raises(ProxyException) as exc:
+            await _create(_unified_file_id())
+
+    assert exc.value.code == "403"
+    seams.assert_no_provider_call()
 
 
 @pytest.mark.asyncio
@@ -212,6 +250,8 @@ async def test_retrieve__raw_job_id_rejected_when_managed_files_required(seams):
 
 @pytest.mark.asyncio
 async def test_retrieve__unified_job_id_allowed_when_managed_files_required(seams):
+    seams.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub()
+
     with patch.object(litellm, "require_managed_files", True):
         await _retrieve(_unified_job_id())
 
@@ -230,6 +270,8 @@ async def test_cancel__raw_job_id_rejected_when_managed_files_required(seams):
 
 @pytest.mark.asyncio
 async def test_cancel__unified_job_id_allowed_when_managed_files_required(seams):
+    seams.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub()
+
     with patch.object(litellm, "require_managed_files", True):
         await _cancel(_unified_job_id())
 
