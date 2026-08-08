@@ -6,7 +6,7 @@ import RouterSettingsForm, { RouterSettingsFormValue } from "../router_settings/
 import { Fallbacks } from "../Settings/RouterSettings/Fallbacks/AddFallbacks";
 import { FallbackSelectionForm } from "../Settings/RouterSettings/Fallbacks/FallbackSelectionForm";
 import { FallbackGroup } from "../Settings/RouterSettings/Fallbacks/FallbackGroupConfig";
-import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
+import { fetchAvailableModels, fetchAvailableModelsForTeam, ModelGroup } from "@/components/llm_calls/fetch_models";
 
 export interface RouterSettingsAccordionValue {
   router_settings: {
@@ -30,6 +30,7 @@ interface RouterSettingsAccordionProps {
   value?: RouterSettingsAccordionValue;
   onChange?: (value: RouterSettingsAccordionValue) => void;
   modelData?: any;
+  teamId?: string | null;
 }
 
 export interface RouterSettingsAccordionRef {
@@ -39,7 +40,7 @@ export interface RouterSettingsAccordionRef {
 const PROPAGATE_WAIT_MS = 100;
 
 const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSettingsAccordionProps>(
-  ({ accessToken, value, onChange, modelData }, ref) => {
+  ({ accessToken, value, onChange, modelData, teamId }, ref) => {
     const [formValue, setFormValue] = useState<RouterSettingsFormValue>({
       routerSettings: {},
       selectedStrategy: null,
@@ -180,16 +181,24 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
       if (!accessToken) {
         return;
       }
+      let stale = false;
       const loadModels = async () => {
         try {
-          const uniqueModels = await fetchAvailableModels(accessToken);
-          setModelInfo(uniqueModels);
+          const uniqueModels = teamId
+            ? await fetchAvailableModelsForTeam(accessToken, teamId)
+            : await fetchAvailableModels(accessToken);
+          if (!stale) {
+            setModelInfo(uniqueModels);
+          }
         } catch (error) {
           console.error("Error fetching model info for fallbacks:", error);
         }
       };
       loadModels();
-    }, [accessToken]);
+      return () => {
+        stale = true;
+      };
+    }, [accessToken, teamId]);
 
     // Helper function to build router_settings from current state
     const buildRouterSettings = (): RouterSettingsAccordionValue["router_settings"] => {

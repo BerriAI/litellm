@@ -1,7 +1,8 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RouterSettingsFormValue } from "../router_settings/RouterSettingsForm";
+import { fetchAvailableModels, fetchAvailableModelsForTeam } from "@/components/llm_calls/fetch_models";
 import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "./RouterSettingsAccordion";
 
 vi.mock("../networking", () => ({
@@ -9,11 +10,14 @@ vi.mock("../networking", () => ({
 }));
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
-  fetchAvailableModels: vi.fn().mockResolvedValue([]),
+  fetchAvailableModels: vi.fn().mockResolvedValue([{ model_group: "global-model" }]),
+  fetchAvailableModelsForTeam: vi.fn().mockResolvedValue([{ model_group: "openai/*" }, { model_group: "gpt-5" }]),
 }));
 
 vi.mock("../Settings/RouterSettings/Fallbacks/FallbackSelectionForm", () => ({
-  FallbackSelectionForm: () => null,
+  FallbackSelectionForm: ({ availableModels }: { availableModels: string[] }) => (
+    <div data-testid="available-models">{availableModels.join(",")}</div>
+  ),
 }));
 
 vi.mock("@tremor/react", () => ({
@@ -41,7 +45,8 @@ vi.mock("../router_settings/RouterSettingsForm", () => ({
 
 describe("RouterSettingsAccordion", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
+    vi.clearAllMocks();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
   });
 
   afterEach(() => {
@@ -79,6 +84,46 @@ describe("RouterSettingsAccordion", () => {
     });
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange.mock.calls[0][0].router_settings.routing_strategy).toBe("usage-based-routing");
+  });
+
+  it("offers the team's own models, including team-scoped BYOK ones, when a teamId is given", async () => {
+    render(<RouterSettingsAccordion accessToken="test-token" teamId="team-123" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("available-models")).toHaveTextContent("gpt-5,openai/*");
+    });
+    expect(fetchAvailableModelsForTeam).toHaveBeenCalledWith("test-token", "team-123");
+    expect(fetchAvailableModels).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the proxy-wide model listing when no teamId is given", async () => {
+    render(<RouterSettingsAccordion accessToken="test-token" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("available-models")).toHaveTextContent("global-model");
+    });
+    expect(fetchAvailableModelsForTeam).not.toHaveBeenCalled();
+  });
+
+  it("ignores a stale team's model response that resolves after a newer team was selected", async () => {
+    const resolvers: ((models: { model_group: string }[]) => void)[] = [];
+    vi.mocked(fetchAvailableModelsForTeam).mockImplementation(
+      () => new Promise((resolve) => resolvers.push(resolve)) as Promise<{ model_group: string }[]>,
+    );
+
+    const { rerender } = render(<RouterSettingsAccordion accessToken="test-token" teamId="team-slow" />);
+    await waitFor(() => expect(resolvers).toHaveLength(1));
+
+    rerender(<RouterSettingsAccordion accessToken="test-token" teamId="team-fast" />);
+    await waitFor(() => expect(resolvers).toHaveLength(2));
+
+    await act(async () => {
+      resolvers[1]([{ model_group: "fast-team-model" }]);
+      resolvers[0]([{ model_group: "slow-team-model" }]);
+    });
+
+    expect(screen.getByTestId("available-models")).toHaveTextContent("fast-team-model");
+    expect(screen.getByTestId("available-models")).not.toHaveTextContent("slow-team-model");
   });
 
   it("does not call onChange when unmounted mid-wait", async () => {
