@@ -103,6 +103,7 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
                     messages=messages,
                     data=data,
                     api_base=api_base,
+                    custom_llm_provider=custom_llm_provider,
                     custom_prompt_dict=custom_prompt_dict,
                     model_response=model_response,
                     print_verbose=print_verbose,

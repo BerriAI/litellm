@@ -2319,8 +2319,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         speed: str | None = None,
         tool_name_reverse_map: dict[str, str] | None = None,
     ):
-        _hidden_params: Final[dict] = {}
-        _hidden_params["additional_headers"] = process_anthropic_headers(dict(raw_response.headers))
         if "error" in completion_response:
             response_headers: Final = getattr(raw_response, "headers", None)
             raise AnthropicError(
@@ -2394,7 +2392,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             _message = json_mode_message
 
         model_response.choices[0].message = _message
-        model_response._hidden_params["original_response"] = completion_response["content"]
         model_response.choices[0].finish_reason = cast(
             OpenAIChatCompletionFinishReason,
             map_finish_reason(completion_response["stop_reason"]),
@@ -2411,8 +2408,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model_response.created = int(time.time())
         model_response.model = completion_response["model"]
 
-        _hidden_params["provider_specific_fields"] = provider_specific_fields
-        model_response._hidden_params = _hidden_params
+        model_response._hidden_params = {
+            **model_response._hidden_params,
+            "additional_headers": process_anthropic_headers(dict(raw_response.headers)),
+            "original_response": completion_response["content"],
+            "provider_specific_fields": provider_specific_fields,
+        }
         return model_response
 
     def get_prefix_prompt(self, messages: list[AllMessageValues]) -> str | None:
