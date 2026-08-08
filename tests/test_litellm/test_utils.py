@@ -4515,6 +4515,16 @@ _FIREWORKS_MODELS = [
         False,
         True,
     ),
+    (
+        "accounts/fireworks/models/kimi-k3",
+        3e-06,
+        1.5e-05,
+        3e-07,
+        1048576,
+        131072,
+        True,
+        True,
+    ),
 ]
 
 _FIREWORKS_SHORT_FORMS = [
@@ -4525,6 +4535,7 @@ _FIREWORKS_SHORT_FORMS = [
     "minimax-m2p7",
     "kimi-k2p7-code",
     "kimi-k2p6",
+    "kimi-k3",
     "gpt-oss-120b",
     "gpt-oss-20b",
     "deepseek-v4-pro",
