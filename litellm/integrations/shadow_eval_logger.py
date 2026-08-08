@@ -54,6 +54,10 @@ _MAX_CONCURRENT_SHADOW_TASKS: Final = 16
 # Truncation bound for text handed to the judge, to keep judge calls affordable.
 _MAX_JUDGE_CHARS: Final = 16_000
 
+# request_count is display-only, so it is buffered in memory and flushed at most
+# once per interval instead of one UPDATE per request on the shadowed key.
+_SEEN_FLUSH_INTERVAL_SECONDS: Final = 10.0
+
 PAIRWISE_JUDGE_SYSTEM_PROMPT: Final = """You are an impartial quality judge comparing two responses to the same conversation.
 
 The responses are labeled A and B in random order. You do not know which system produced which.
@@ -137,6 +141,10 @@ class ShadowEvalLogger(CustomLogger):
         # api_key_hash -> (fetched_at_monotonic, job_record_or_None)
         self._job_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
         self._semaphore = asyncio.Semaphore(_MAX_CONCURRENT_SHADOW_TASKS)
+        # job_id -> requests seen since last flush. Flushed opportunistically so a
+        # high-traffic key costs one UPDATE per flush interval, not one per request.
+        self._pending_seen: dict[str, int] = {}
+        self._last_seen_flush: float = 0.0
 
     #### hook ####
 
@@ -159,8 +167,13 @@ class ShadowEvalLogger(CustomLogger):
             if not request_id:
                 return
             # The job tracks every request it saw, sampled or not, so the UI can
-            # show "N of M requests shadowed".
-            asyncio.create_task(self._record_request_seen(job["id"]))
+            # show "N of M requests shadowed". Buffered: one UPDATE per flush
+            # interval, not one per request.
+            self._pending_seen[job["id"]] = self._pending_seen.get(job["id"], 0) + 1
+            now: Final = asyncio.get_event_loop().time()
+            if now - self._last_seen_flush >= _SEEN_FLUSH_INTERVAL_SECONDS:
+                self._last_seen_flush = now
+                asyncio.create_task(self._flush_seen_counts())
             if not _sample_hits(request_id, job["id"], float(job["shadow_percentage"])):
                 return
             if payload.get("call_type") not in (None, "completion", "acompletion", "chat_completion"):
@@ -207,17 +220,21 @@ class ShadowEvalLogger(CustomLogger):
         self._job_cache[api_key_hash] = (now, job)
         return job
 
-    async def _record_request_seen(self, job_id: str) -> None:
+    async def _flush_seen_counts(self) -> None:
+        """Write buffered request-seen counts, one UPDATE per job with pending counts."""
         prisma: Final = self._prisma_provider()
         if prisma is None:
             return
-        try:
-            await prisma.db.litellm_shadowevaljob.update(
-                where={"id": job_id},
-                data={"request_count": {"increment": 1}},
-            )
-        except Exception as e:  # noqa: BLE001  # counter drift is acceptable; failing the loop is not
-            verbose_logger.debug("shadow_eval: request_count increment failed: %s", e)
+        pending: Final = self._pending_seen
+        self._pending_seen = {}
+        for job_id, count in pending.items():
+            try:
+                await prisma.db.litellm_shadowevaljob.update(
+                    where={"id": job_id},
+                    data={"request_count": {"increment": count}},
+                )
+            except Exception as e:  # noqa: BLE001  # counter drift is acceptable; failing the loop is not
+                verbose_logger.debug("shadow_eval: request_count flush failed: %s", e)
 
     #### the shadow pipeline ####
 
@@ -373,7 +390,10 @@ class ShadowEvalLogger(CustomLogger):
         except (TypeError, ValueError):
             confidence = 0.5
         reasoning: Final = str(verdict.get("reasoning", ""))
-        cost: Final = litellm.completion_cost(completion_response=response) or 0.0
+        try:
+            cost = litellm.completion_cost(completion_response=response) or 0.0
+        except Exception:  # noqa: BLE001  # unmapped judge model: verdict still counts, cost stays 0
+            cost = 0.0
         return preference, confidence, reasoning, cost
 
     @staticmethod

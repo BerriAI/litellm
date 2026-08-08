@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/http/client";
 
 vi.mock("./useAutoRouterBenchmarks", () => ({ useAutoRouterBenchmarks: vi.fn() }));
+// ShadowEvalSection needs a QueryClientProvider; it has its own test file.
+vi.mock("./ShadowEvalSection", () => ({ default: () => null }));
 
 import AutoRouterBenchmarksTab from "./AutoRouterBenchmarksTab";
 import type {

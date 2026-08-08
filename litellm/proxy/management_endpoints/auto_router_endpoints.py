@@ -473,12 +473,31 @@ _FALLBACK_JUDGE_COST_PER_CALL: Final = 0.01
 _ESTIMATE_LOOKBACK_DAYS: Final = 7
 
 
-def _require_admin(user_api_key_dict: UserAPIKeyAuth, action: str) -> None:
+def _require_admin_viewer(user_api_key_dict: UserAPIKeyAuth, action: str) -> None:
     if user_api_key_dict.user_role not in (
         LitellmUserRoles.PROXY_ADMIN,
         LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
     ):
         raise HTTPException(status_code=403, detail=f"Only proxy admin roles can {action}")
+
+
+def _require_admin_writer(user_api_key_dict: UserAPIKeyAuth, action: str) -> None:
+    """Starting or stopping a shadow eval spends money (judge calls); view-only admins may not."""
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(status_code=403, detail=f"Only a proxy admin can {action}")
+
+
+def _is_configured_pre_routing_strategy(llm_router: "Router", router_name: str) -> bool:
+    """True when `router_name` is any configured pre-routing strategy (auto, complexity, adaptive, quality)."""
+    return any(
+        router_name in registry
+        for registry in (
+            llm_router.auto_routers,
+            llm_router.complexity_routers,
+            llm_router.adaptive_routers,
+            llm_router.quality_routers,
+        )
+    )
 
 
 def _estimate_judge_cost_per_call(judge_model: str) -> float:
@@ -586,10 +605,10 @@ async def start_shadow_eval(
     """
     from litellm.proxy.proxy_server import llm_router, prisma_client
 
-    _require_admin(user_api_key_dict, "manage shadow evals")
+    _require_admin_writer(user_api_key_dict, "start a shadow eval")
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
-    if llm_router is None or data.router_name not in llm_router.auto_routers:
+    if llm_router is None or not _is_configured_pre_routing_strategy(llm_router, data.router_name):
         raise HTTPException(
             status_code=400,
             detail=f"'{data.router_name}' is not a configured auto-router",
@@ -645,7 +664,7 @@ async def list_shadow_eval_jobs(
     """List shadow eval jobs, newest first. Results are omitted; fetch a single job for them."""
     from litellm.proxy.proxy_server import prisma_client
 
-    _require_admin(user_api_key_dict, "view shadow evals")
+    _require_admin_viewer(user_api_key_dict, "view shadow evals")
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
@@ -669,7 +688,7 @@ async def get_shadow_eval_job(
     """Status, counters, and per-tier stratified results of one shadow eval job."""
     from litellm.proxy.proxy_server import prisma_client
 
-    _require_admin(user_api_key_dict, "view shadow evals")
+    _require_admin_viewer(user_api_key_dict, "view shadow evals")
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
@@ -695,7 +714,7 @@ async def stop_shadow_eval_job(
     """Stop an active shadow eval job. Existing verdicts are kept; sampling halts within ~30s."""
     from litellm.proxy.proxy_server import prisma_client
 
-    _require_admin(user_api_key_dict, "manage shadow evals")
+    _require_admin_writer(user_api_key_dict, "stop a shadow eval")
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 

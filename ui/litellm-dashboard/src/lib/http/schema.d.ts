@@ -32766,7 +32766,7 @@ export interface components {
             /**
              * Judge Model
              * @description Model used to blindly judge real vs. shadow responses
-             * @default claude-3-5-sonnet-20241022
+             * @default anthropic/claude-sonnet-5
              */
             judge_model: string;
             /**

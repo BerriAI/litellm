@@ -141,7 +141,7 @@ class AutoRouterBenchmarksResponse(BaseModel):
 ShadowEvalStatus = Literal["pending", "running", "completed", "failed"]
 JudgePreference = Literal["real", "shadow", "tie"]
 
-DEFAULT_SHADOW_EVAL_JUDGE_MODEL: Final[str] = "claude-3-5-sonnet-20241022"
+DEFAULT_SHADOW_EVAL_JUDGE_MODEL: Final[str] = "anthropic/claude-sonnet-5"
 
 
 class StartShadowEvalRequest(BaseModel):

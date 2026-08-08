@@ -129,10 +129,14 @@ const JobResults: React.FC<{
   );
 };
 
+/** Kept in sync with DEFAULT_SHADOW_EVAL_JUDGE_MODEL on the backend. */
+const DEFAULT_JUDGE_MODEL = "anthropic/claude-sonnet-5";
+
 const StartForm: React.FC<{ accessToken: string | null }> = ({ accessToken }) => {
   const [apiKeyId, setApiKeyId] = useState("");
   const [routerName, setRouterName] = useState("");
   const [percentage, setPercentage] = useState("10");
+  const [judgeModel, setJudgeModel] = useState(DEFAULT_JUDGE_MODEL);
   const start = useStartShadowEval();
 
   const parsedPct = Number.parseFloat(percentage);
@@ -173,6 +177,13 @@ const StartForm: React.FC<{ accessToken: string | null }> = ({ accessToken }) =>
             <span className="text-sm text-muted-foreground">% of traffic</span>
           </div>
         </div>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Input
+            placeholder={`Judge model (default: ${DEFAULT_JUDGE_MODEL})`}
+            value={judgeModel}
+            onChange={(e) => setJudgeModel(e.target.value)}
+          />
+        </div>
         {start.error ? (
           <p className="text-sm text-destructive">
             {start.error instanceof ApiError ? start.error.message : "Failed to start shadow eval"}
@@ -182,7 +193,12 @@ const StartForm: React.FC<{ accessToken: string | null }> = ({ accessToken }) =>
           disabled={!valid || start.isPending}
           onClick={() =>
             start.mutate({
-              body: { api_key_id: apiKeyId.trim(), router_name: routerName.trim(), shadow_percentage: parsedPct },
+              body: {
+                api_key_id: apiKeyId.trim(),
+                router_name: routerName.trim(),
+                shadow_percentage: parsedPct,
+                judge_model: judgeModel.trim() || DEFAULT_JUDGE_MODEL,
+              },
             })
           }
         >
