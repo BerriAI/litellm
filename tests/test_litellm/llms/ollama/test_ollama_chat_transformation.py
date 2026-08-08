@@ -618,6 +618,91 @@ class TestOllamaFinishReasonLength:
         ), f"Expected 'stop' for natural finish, got '{result.choices[0].finish_reason}'"
 
 
+class TestOllamaStreamingToolCallIndex:
+    """Streaming: parallel tool calls must preserve Ollama's per-call function.index."""
+
+    def test_parallel_tool_calls_preserve_distinct_index(self):
+        """
+        Ollama streams one tool call per chunk with the correct index nested at
+        function.index (0, then 1). Previously LiteLLM dropped it and every delta
+        was emitted with index=0, so clients that accumulate arguments by index
+        merged parallel calls into one malformed tool call.
+        """
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        first_chunk = {
+            "model": "qwen3:14b",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "index": 0,
+                            "name": "read_file",
+                            "arguments": {"path": "a.rs"},
+                        }
+                    }
+                ],
+            },
+            "done": False,
+        }
+        second_chunk = {
+            "model": "qwen3:14b",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "index": 1,
+                            "name": "read_file",
+                            "arguments": {"path": "b.rs"},
+                        }
+                    }
+                ],
+            },
+            "done": False,
+        }
+
+        first_result = iterator.chunk_parser(first_chunk)
+        second_result = iterator.chunk_parser(second_chunk)
+
+        assert first_result.choices[0].delta.tool_calls[0].index == 0
+        assert second_result.choices[0].delta.tool_calls[0].index == 1
+
+    def test_missing_function_index_falls_back_to_positional(self):
+        """When Ollama omits function.index, Delta still assigns a positional index."""
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        chunk = {
+            "model": "qwen3:14b",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "read_file",
+                            "arguments": {"path": "a.rs"},
+                        }
+                    }
+                ],
+            },
+            "done": False,
+        }
+
+        result = iterator.chunk_parser(chunk)
+
+        assert result.choices[0].delta.tool_calls[0].index == 0
+
+
 class TestOllamaReasoningContentStreaming:
     """Test that reasoning_content is properly extracted from all thinking chunks."""
 
