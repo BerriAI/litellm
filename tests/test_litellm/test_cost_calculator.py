@@ -42,6 +42,68 @@ def test_cost_per_token_duplicate_openai_prefix_matches_model_cost(monkeypatch):
     assert prompt_usd + completion_usd > 0
 
 
+def test_cost_per_token_bedrock_mantle_inherits_bedrock_regional_pricing(monkeypatch):
+    """
+    A bedrock_mantle deployment has no price-map key of its own for models that
+    are also served over bedrock-runtime, so it must inherit the bedrock regional
+    rate instead of falling back to the bare (US) entry. Regression for #35953.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    eu_key = "bedrock/eu-north-1/moonshotai.kimi-k2.5"
+    us_key = "moonshotai.kimi-k2.5"
+    eu_in = litellm.model_cost[eu_key]["input_cost_per_token"]
+    eu_out = litellm.model_cost[eu_key]["output_cost_per_token"]
+    us_in = litellm.model_cost[us_key]["input_cost_per_token"]
+    assert eu_in != us_in  # otherwise the test cannot distinguish the bug
+
+    prompt_usd, completion_usd = cost_per_token(
+        model="moonshotai.kimi-k2.5",
+        prompt_tokens=1_000_000,
+        completion_tokens=1_000_000,
+        custom_llm_provider="bedrock_mantle",
+        region_name="eu-north-1",
+    )
+
+    assert prompt_usd == pytest.approx(eu_in * 1_000_000)
+    assert completion_usd == pytest.approx(eu_out * 1_000_000)
+
+    bedrock_prompt_usd, bedrock_completion_usd = cost_per_token(
+        model="moonshotai.kimi-k2.5",
+        prompt_tokens=1_000_000,
+        completion_tokens=1_000_000,
+        custom_llm_provider="bedrock",
+        region_name="eu-north-1",
+    )
+    assert (prompt_usd, completion_usd) == (bedrock_prompt_usd, bedrock_completion_usd)
+
+
+def test_cost_per_token_bedrock_mantle_keeps_its_own_pricing(monkeypatch):
+    """
+    The bedrock fallback must not override a model that has its own
+    bedrock_mantle price-map entry (e.g. mantle-exclusive gpt-oss). Guards the
+    #35953 fallback from becoming over-broad.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    mantle_key = "bedrock_mantle/openai.gpt-oss-120b"
+    mantle_in = litellm.model_cost[mantle_key]["input_cost_per_token"]
+    mantle_out = litellm.model_cost[mantle_key]["output_cost_per_token"]
+
+    prompt_usd, completion_usd = cost_per_token(
+        model="openai.gpt-oss-120b",
+        prompt_tokens=1_000_000,
+        completion_tokens=1_000_000,
+        custom_llm_provider="bedrock_mantle",
+        region_name="eu-north-1",
+    )
+
+    assert prompt_usd == pytest.approx(mantle_in * 1_000_000)
+    assert completion_usd == pytest.approx(mantle_out * 1_000_000)
+
+
 def test_cost_per_token_non_string_model_does_not_hang():
     """
     The provider-prefix dedup loop must not spin forever when `model` is a
