@@ -87,6 +87,7 @@ from litellm.types.responses.main import (
     OutputCodeInterpreterCall,
     OutputFunctionToolCall,
     OutputImageGenerationCall,
+    CompactionResponseOutputItem,
 )
 
 FileContent = Union[IO[bytes], bytes, PathLike]
@@ -1261,6 +1262,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
                 OutputCodeInterpreterCall,
                 OutputFunctionToolCall,
                 OutputImageGenerationCall,
+                CompactionResponseOutputItem,
                 ResponseFunctionToolCall,
             ]
         ],

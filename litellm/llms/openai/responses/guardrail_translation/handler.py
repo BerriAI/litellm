@@ -86,8 +86,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         if input_data is None:
             return data
 
-        structured_messages = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        compaction, structured_messages = (
+             LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 model="placeholder"
                 input=input_data,
                 responses_api_request=data,
@@ -186,6 +186,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         verbose_proxy_logger.debug(
             "OpenAI Responses API: Processed input messages: %s", input_data
         )
+
 
         return data
 
