@@ -10,11 +10,14 @@ from typing import Final, Literal, Protocol, TypeVar, assert_never
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     GLOBAL_PROXY_SPEND_CACHE_KEY,
     LITELLM_PROXY_BUDGET_NAME,
     RESET_BUDGET_JOB_BATCH_SIZE,
+    RESET_BUDGET_JOB_LOCK_TTL_SECONDS,
     RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN,
+    RESET_BUDGET_JOB_NAME,
 )
 from litellm.proxy._types import (
     LiteLLM_BudgetTableFull,
@@ -28,6 +31,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     compute_budget_reset_at,
     get_budget_reset_settings,
 )
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import ReadOnlyTable, SpendLinkedTable
@@ -150,6 +154,44 @@ _EMPTY_CASCADE: Final = _BudgetCascade()
 
 
 @dataclass(frozen=True, slots=True)
+class _LeaderLockHeld:
+    manager: PodLockManager
+
+
+@dataclass(frozen=True, slots=True)
+class _LeaderLockUnavailable:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _LeaderLockUnguarded:
+    """No election happened: either no Redis is configured, or Redis could not
+    be reached. Both fall back to what every pod did before the lock existed."""
+
+
+_LeaderLock = _LeaderLockHeld | _LeaderLockUnavailable | _LeaderLockUnguarded
+
+
+async def _leader_lock_after_failed_acquire(redis_cache: RedisCache) -> _LeaderLock:
+    """A failed acquire is either real contention or a broken Redis, and
+    acquire_lock() reports both as False. Only an actual holder proves another
+    pod is running, so anything else runs unguarded rather than letting a Redis
+    outage stop budgets from resetting fleet-wide."""
+    try:
+        holder: Final = await redis_cache.async_get_cache(PodLockManager.get_redis_lock_key(RESET_BUDGET_JOB_NAME))
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            "Budget reset: could not read the '%s' lock holder (%s), running unguarded.",
+            RESET_BUDGET_JOB_NAME,
+            e,
+        )
+        return _LeaderLockUnguarded()
+    if holder is None:
+        return _LeaderLockUnguarded()
+    return _LeaderLockUnavailable()
+
+
+@dataclass(frozen=True, slots=True)
 class _ChunkOutcome:
     """One chunk of a reset phase: rows read, and rows whose new budget_reset_at
     cleared the due cutoff. Anything else is still due and would come straight
@@ -211,10 +253,46 @@ class ResetBudgetJob:
         proxy_logging_obj: ProxyLogging,
         prisma_client: PrismaClient,
         reset_settings: BudgetResetSettings | None = None,
+        pod_lock_manager: PodLockManager | None = None,
     ):
         self.proxy_logging_obj: ProxyLogging = proxy_logging_obj
         self.prisma_client: PrismaClient = prisma_client
         self.reset_settings: BudgetResetSettings = reset_settings or get_budget_reset_settings()
+        self.pod_lock_manager: PodLockManager | None = pod_lock_manager
+
+    async def _acquire_leader_lock(self) -> _LeaderLock:
+        """Elect one runner per reset tick.
+
+        Without Redis there is nothing to elect on, so every pod keeps running
+        the job as it always has.
+        """
+        manager: Final = self.pod_lock_manager
+        if manager is None:
+            return _LeaderLockUnguarded()
+        redis_cache: Final = manager.redis_cache
+        if redis_cache is None:
+            return _LeaderLockUnguarded()
+        acquired: Final = await manager.acquire_lock(
+            cronjob_id=RESET_BUDGET_JOB_NAME,
+            ttl=RESET_BUDGET_JOB_LOCK_TTL_SECONDS,
+        )
+        if acquired is True:
+            return _LeaderLockHeld(manager=manager)
+        return await _leader_lock_after_failed_acquire(redis_cache)
+
+    @staticmethod
+    async def _still_leads(lock: _LeaderLock) -> bool:
+        """Re-assert the lock between phases so a run that outlives the TTL stops
+        instead of working alongside the pod that took over."""
+        if not isinstance(lock, _LeaderLockHeld):
+            return True
+        return (
+            await lock.manager.acquire_lock(
+                cronjob_id=RESET_BUDGET_JOB_NAME,
+                ttl=RESET_BUDGET_JOB_LOCK_TTL_SECONDS,
+            )
+            is True
+        )
 
     async def reset_budget(
         self,
@@ -225,15 +303,43 @@ class ResetBudgetJob:
         Resets their spend
 
         Updates db
+
+        Only one pod runs a given tick when Redis is configured: every worker
+        firing these queries at the same calendar boundary is what piles up
+        lock contention on the budget tables.
         """
         if self.prisma_client is None:
             return
 
-        await self.reset_budget_for_litellm_keys()
-        await self.reset_budget_for_litellm_users()
-        await self.reset_budget_for_litellm_teams()
-        await self.reset_budget_for_litellm_budget_table()
-        await self.reset_budget_windows()
+        lock: Final = await self._acquire_leader_lock()
+        if isinstance(lock, _LeaderLockUnavailable):
+            verbose_proxy_logger.info(
+                "Budget reset: another pod holds the '%s' lock, skipping this cycle.",
+                RESET_BUDGET_JOB_NAME,
+            )
+            return
+
+        phases: Final = (
+            self.reset_budget_for_litellm_keys,
+            self.reset_budget_for_litellm_users,
+            self.reset_budget_for_litellm_teams,
+            self.reset_budget_for_litellm_budget_table,
+            self.reset_budget_windows,
+        )
+        try:
+            for phase in phases:
+                await phase()
+                if not await self._still_leads(lock):
+                    verbose_proxy_logger.warning(
+                        "Budget reset: lost the '%s' lock after %s, stopping this run. "
+                        "The remaining phases run on the next tick.",
+                        RESET_BUDGET_JOB_NAME,
+                        phase.__name__,
+                    )
+                    return
+        finally:
+            if isinstance(lock, _LeaderLockHeld):
+                await lock.manager.release_lock(cronjob_id=RESET_BUDGET_JOB_NAME)
 
     @staticmethod
     async def _invalidate_spend_counter(counter_key: str) -> None:

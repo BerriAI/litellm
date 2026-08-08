@@ -30,10 +30,19 @@ else
 end
 """
 
+    _COMPARE_AND_EXPIRE_LOCK_SCRIPT = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("expire", KEYS[1], ARGV[2])
+else
+    return 0
+end
+"""
+
     def __init__(self, redis_cache: RedisCache | None = None):
         self.pod_id = str(uuid.uuid4())
         self.redis_cache = redis_cache
         self._release_lock_script: Any | None = None
+        self._extend_lock_script: Any | None = None
 
     @staticmethod
     def get_redis_lock_key(cronjob_id: str) -> str:
@@ -94,6 +103,7 @@ end
                             self.pod_id,
                             cronjob_id,
                         )
+                        await self._compare_and_extend_lock(lock_key=lock_key, ttl=lock_ttl)
                         self._emit_acquired_lock_event(cronjob_id, self.pod_id)
                         return True
                     else:
@@ -149,6 +159,41 @@ end
                 )
         except Exception as e:
             verbose_proxy_logger.error("Error releasing Redis lock for %s: %s", cronjob_id, e)
+
+    async def _compare_and_extend_lock(self, lock_key: str, ttl: int) -> None:
+        """Renew the lease on a lock this pod already holds.
+
+        The SET NX in acquire_lock cannot refresh an existing key, so a job that
+        keeps re-acquiring its own lock would run past the original expiry while
+        another pod is free to take over. Extending on the same-owner path keeps
+        the lease alive for as long as the holder keeps checking in.
+
+        Failure only costs the renewal, never the caller's ownership, which was
+        already established: every path here logs and returns. The plain SET
+        fallback re-asserts a lock this pod was just seen to hold, which is why
+        the compare-and-expire script is preferred where scripting is available.
+        """
+        redis_cache: Final = self.redis_cache
+        if redis_cache is None:
+            return
+        script_register: Final = getattr(redis_cache, "async_register_script", None)
+        if callable(script_register):
+            try:
+                if self._extend_lock_script is None:
+                    self._extend_lock_script = script_register(self._COMPARE_AND_EXPIRE_LOCK_SCRIPT)
+                await self._extend_lock_script(keys=[lock_key], args=[json.dumps(self.pod_id), ttl])
+                return
+            except Exception:
+                self._extend_lock_script = None
+                verbose_proxy_logger.warning(
+                    "Lua compare-and-expire failed for lock_key=%s, falling back to SET",
+                    lock_key,
+                )
+
+        try:
+            await redis_cache.async_set_cache(lock_key, self.pod_id, ttl=ttl)
+        except Exception as e:
+            verbose_proxy_logger.warning("Error extending Redis lock %s: %s", lock_key, e)
 
     async def _compare_and_delete_lock(self, lock_key: str) -> int:
         """
