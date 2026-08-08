@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { ArrowLeftOutlined, CopyOutlined, CheckOutlined, LinkOutlined } from "@ant-design/icons";
-import { buildMarketplaceSettingsSnippet, formatInstallCommand } from "./helpers";
+import { buildMarketplaceSettingsSnippet, formatInstallCommand, getSourceLink } from "./helpers";
 import { Plugin } from "./types";
 
 interface SkillDetailProps {
@@ -21,13 +21,17 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
+  const sourceLink = getSourceLink(skill.source);
   const sourceUrl = (() => {
     const src = skill.source;
-    if (src.source === "github" && src.repo) return `https://github.com/${src.repo}`;
-    if (src.source === "git-subdir" && src.url) return src.path ? `${src.url}/tree/main/${src.path}` : src.url;
-    if (src.source === "url" && src.url) return src.url;
-    return null;
+    if (sourceLink && src.source === "git-subdir" && src.path) {
+      return `${sourceLink}/tree/main/${src.path}`;
+    }
+    return sourceLink;
   })();
+  const sourceText = skill.source.url
+    ? `${skill.source.url}${skill.source.path ? ` @ ${skill.source.path}` : ""}`
+    : sourceUrl;
 
   const installCommand = formatInstallCommand(skill);
 
@@ -146,7 +150,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
               </span>
             </div>
 
-            {sourceUrl && (
+            {sourceUrl ? (
               <div style={{ marginBottom: 24 }}>
                 <div style={{ fontSize: 12, color: "#5f6368", marginBottom: 4 }}>Source</div>
                 <a
@@ -166,6 +170,13 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
                   <LinkOutlined style={{ fontSize: 11, flexShrink: 0 }} />
                 </a>
               </div>
+            ) : (
+              sourceText && (
+                <div style={{ marginBottom: 24 }}>
+                  <div style={{ fontSize: 12, color: "#5f6368", marginBottom: 4 }}>Source</div>
+                  <div style={{ fontSize: 13, color: "#3c4043", wordBreak: "break-all" }}>{sourceText}</div>
+                </div>
+              )
             )}
 
             {skill.keywords && skill.keywords.length > 0 && (
