@@ -40,6 +40,7 @@ const FILTER_LABELS: Record<string, string> = {
   team_id: "Team",
   org_id: "Organization",
   user_id: "User ID",
+  key_alias: "Key Alias",
   key_hash: "Key ID",
 };
 
@@ -71,7 +72,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const keyListOptions = {
     teamID: getFilterValue("team_id"),
     organizationID: getFilterValue("org_id"),
-    selectedKeyAlias: searchQuery.trim() || undefined,
+    selectedKeyAlias: getFilterValue("key_alias") || searchQuery.trim() || undefined,
     userID: getFilterValue("user_id"),
     keyHash: getFilterValue("key_hash"),
     sortBy,
@@ -245,6 +246,13 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
                       value={(get("user_id") as string) ?? ""}
                       onChange={(event) => set("user_id", event.target.value)}
                       placeholder="Enter User ID…"
+                    />
+                  </DataTableFilterField>
+                  <DataTableFilterField label="Key Alias">
+                    <Input
+                      value={(get("key_alias") as string) ?? ""}
+                      onChange={(event) => set("key_alias", event.target.value)}
+                      placeholder="Enter key alias…"
                     />
                   </DataTableFilterField>
                   <DataTableFilterField label="Key ID">
