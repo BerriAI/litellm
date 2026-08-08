@@ -387,3 +387,45 @@ describe("Add Callback dropdown", () => {
     expect(screen.getByText("Arize (scoped destination)")).toBeInTheDocument();
   });
 });
+
+describe("Settings read-only admin", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    credentialsFixture = { credentials: [] };
+    vi.mocked(getCallbacksCall).mockResolvedValue({ callbacks: [], available_callbacks: [], alerts: [] });
+    vi.mocked(getCallbackConfigsCall).mockResolvedValue([]);
+    vi.mocked(alertingSettingsCall).mockResolvedValue([]);
+  });
+
+  it("gives a view-only session no write affordances even though its role reads as Admin", async () => {
+    // Regression: proxy_admin_viewer is mapped to the effective role "Admin" so it gets
+    // read parity, and the write restriction travels separately on isViewOnly. Deriving
+    // write access from the role alone handed the viewer Add, Edit scope and Delete.
+    const { queryByText } = renderSettings({
+      accessToken: "token",
+      userRole: "Admin",
+      userID: "viewer-1",
+      premiumUser: false,
+      isViewOnly: true,
+    } as never);
+
+    await waitFor(() => {
+      expect(queryByText("Active Logging Callbacks")).toBeInTheDocument();
+    });
+    expect(queryByText("Add Callback")).not.toBeInTheDocument();
+  });
+
+  it("keeps the write affordances for a real proxy admin", async () => {
+    const { queryByText } = renderSettings({
+      accessToken: "token",
+      userRole: "Admin",
+      userID: "admin-1",
+      premiumUser: false,
+    });
+
+    await waitFor(() => {
+      expect(queryByText("Active Logging Callbacks")).toBeInTheDocument();
+    });
+    expect(queryByText("Add Callback")).toBeInTheDocument();
+  });
+});

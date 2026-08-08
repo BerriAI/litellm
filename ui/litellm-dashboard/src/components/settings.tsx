@@ -57,6 +57,7 @@ interface SettingsPageProps {
   userRole: string | null;
   userID: string | null;
   premiumUser: boolean;
+  isViewOnly?: boolean;
 }
 
 const assetsLogoFolder = "/ui/assets/logos/";
@@ -215,7 +216,7 @@ const buildCallbackPayload = (formValues: Record<string, any>, callbackName: str
   };
 };
 
-const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, premiumUser }) => {
+const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, premiumUser, isViewOnly = false }) => {
   const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
   const [isLoadingCallbacks, setIsLoadingCallbacks] = useState(true);
   const [alerts, setAlerts] = useState<any[]>([]);
@@ -253,7 +254,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   // credential_type=logging; they share the one Active Logging Callbacks table as
   // rows alongside config callbacks. Only a proxy admin (or admin-viewer, read-only)
   // may read them, so non-admins skip the fetch entirely.
-  const isProxyAdmin = userRole != null && isProxyAdminRole(userRole);
+  const isProxyAdmin = !isViewOnly && userRole != null && isProxyAdminRole(userRole);
   const { data: credentialData, refetch: refetchCredentials } = useCredentials(canReadCredentialsRole(userRole));
   const { data: teamsData } = useTeams();
   const { data: orgsData } = useOrganizations();
