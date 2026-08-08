@@ -8439,6 +8439,67 @@ def stream_chunk_builder_text_completion(chunks: list, messages: list | None = N
     return TextCompletionResponse(**response)
 
 
+def _streaming_choice_index(choice: Any) -> int | None:
+    index = choice.get("index") if isinstance(choice, dict) else getattr(choice, "index", None)
+    return index if isinstance(index, int) else None
+
+
+def _streaming_chunk_choices(chunk: Any) -> list[Any]:
+    choices = chunk.get("choices") if isinstance(chunk, dict) else getattr(chunk, "choices", None)
+    return choices or []
+
+
+def _distinct_streaming_choice_indices(chunks: list[Any]) -> list[int]:
+    indices: Final = {
+        _streaming_choice_index(choice) for chunk in chunks for choice in _streaming_chunk_choices(chunk)
+    }
+    return sorted(index for index in indices if index is not None)
+
+
+def _replace_chunk_choices(chunk: Any, choices: list[Any]) -> Any:
+    if not choices:
+        return chunk
+    if isinstance(chunk, dict):
+        return {**chunk, "choices": choices}
+    return chunk.model_copy(update={"choices": choices})
+
+
+def _chunks_for_streaming_choice_index(chunks: list[Any], index: int) -> list[Any]:
+    matched: Final = (
+        (chunk, [c for c in _streaming_chunk_choices(chunk) if _streaming_choice_index(c) == index])
+        for chunk in chunks
+    )
+    return [
+        _replace_chunk_choices(chunk, choices)
+        for chunk, choices in matched
+        if choices or not _streaming_chunk_choices(chunk)
+    ]
+
+
+def _build_streaming_choices_per_index(
+    chunks: list[Any],
+    indices: list[int],
+    messages: list | None,
+    start_time,
+    end_time,
+) -> list[Choices] | None:
+    built: Final = [
+        stream_chunk_builder(
+            chunks=_chunks_for_streaming_choice_index(chunks, index),
+            messages=messages,
+            start_time=start_time,
+            end_time=end_time,
+        )
+        for index in indices
+    ]
+    if any(not isinstance(response, ModelResponse) or not response.choices for response in built):
+        return None
+    return [
+        cast(Choices, cast(ModelResponse, response).choices[0]).model_copy(update={"index": index})
+        for index, response in zip(indices, built)
+    ]
+
+
 def stream_chunk_builder(
     chunks: list,
     messages: list | None = None,
@@ -8469,6 +8530,13 @@ def stream_chunk_builder(
             first_chunk_with_choices["choices"][0], litellm.utils.TextChoices
         ):  # route to the text completion logic
             return stream_chunk_builder_text_completion(chunks=chunks, messages=messages)
+
+        choice_indices: Final = _distinct_streaming_choice_indices(chunks)
+        per_choice: Final = (
+            _build_streaming_choices_per_index(chunks, choice_indices, messages, start_time, end_time)
+            if len(choice_indices) > 1
+            else None
+        )
 
         model: Final = chunks[0]["model"]
         # Initialize the response dictionary
@@ -8520,6 +8588,9 @@ def stream_chunk_builder(
                 reasoning_tokens=0,
             )
             setattr(response, "usage", usage)
+
+            if per_choice is not None:
+                response.choices = per_choice
 
             # Propagate provider_specific_fields from chunk hidden params when present.
             for chunk in reversed(chunks):
@@ -8693,6 +8764,9 @@ def stream_chunk_builder(
         )
 
         setattr(response, "usage", usage)
+
+        if per_choice is not None:
+            response.choices = per_choice
 
         # Propagate provider_specific_fields from the last chunk (contains provider
         # metadata like traffic_type set during streaming)
