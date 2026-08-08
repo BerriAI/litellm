@@ -501,9 +501,7 @@ MAX_QUALITY_SIGNAL_ROWS: Final = 100_000
 
 QUALITY_SIGNALS_CACHE_TTL_SECONDS: Final = 3600
 
-_quality_signals_cache: Final = InMemoryCache(
-    max_size_in_memory=64, default_ttl=QUALITY_SIGNALS_CACHE_TTL_SECONDS
-)
+_quality_signals_cache: Final = InMemoryCache(max_size_in_memory=64, default_ttl=QUALITY_SIGNALS_CACHE_TTL_SECONDS)
 
 _QUALITY_SIGNALS_SQL: Final = """
 SELECT
@@ -564,7 +562,9 @@ def _quality_signals_for(
         if row.api_key not in reachable_by_key_dict:
             reachable_by_key_dict[row.api_key] = set()
         reachable_by_key_dict[row.api_key].add(row.model)
-    reachable_by_key: Final = MappingProxyType({key: frozenset(models) for key, models in reachable_by_key_dict.items()})
+    reachable_by_key: Final = MappingProxyType(
+        {key: frozenset(models) for key, models in reachable_by_key_dict.items()}
+    )
     reachable_models: Final = tuple(frozenset(row.model for row in router_key_rows))
     ranks: Final = rank_models_by_cost(llm_router, reachable_models) if llm_router is not None else MappingProxyType({})
 

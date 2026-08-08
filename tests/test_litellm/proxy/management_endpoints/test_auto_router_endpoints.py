@@ -567,9 +567,7 @@ class TestAutoRouterQualitySignals:
         assert err.value.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_a_window_over_the_row_cap_is_rejected_not_silently_truncated(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
+    async def test_a_window_over_the_row_cap_is_rejected_not_silently_truncated(self, monkeypatch: pytest.MonkeyPatch):
         from litellm.proxy.management_endpoints.auto_router_endpoints import (
             MAX_QUALITY_SIGNAL_ROWS,
         )
@@ -705,9 +703,7 @@ class TestAutoRouterQualitySignals:
         assert response.totals.routed.abandonment_rate_pct == 50.0
 
     @pytest.mark.asyncio
-    async def test_disconnect_before_first_token_is_excluded_from_abandonment(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
+    async def test_disconnect_before_first_token_is_excluded_from_abandonment(self, monkeypatch: pytest.MonkeyPatch):
         # Same shape as the test above, but the disconnect delivered nothing: the caller
         # never saw a response to judge, so it must not read as abandonment.
         rows = [
@@ -721,9 +717,7 @@ class TestAutoRouterQualitySignals:
         assert response.totals.routed.abandonment_rate_pct == 0.0
 
     @pytest.mark.asyncio
-    async def test_a_repeated_window_is_served_from_cache_without_a_second_scan(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
+    async def test_a_repeated_window_is_served_from_cache_without_a_second_scan(self, monkeypatch: pytest.MonkeyPatch):
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.auto_router_endpoints import (
             get_auto_router_quality_signals,
@@ -750,9 +744,7 @@ class TestAutoRouterQualitySignals:
         assert scans == 1
         assert second == first
 
-        await get_auto_router_quality_signals(
-            user_api_key_dict=ADMIN, start_date="2026-08-01", end_date="2026-08-03"
-        )
+        await get_auto_router_quality_signals(user_api_key_dict=ADMIN, start_date="2026-08-01", end_date="2026-08-03")
         assert scans == 2
 
     @pytest.mark.asyncio
