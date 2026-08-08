@@ -8,11 +8,12 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 import certifi
 import httpx
-from aiohttp import ClientSession, TCPConnector
+from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 from httpx._types import RequestFiles
 
@@ -142,6 +143,15 @@ def _handler_may_close_client(client_refcount: int, owns_client: bool) -> bool:
     refcount at the call site, since binding the client to a parameter would inflate it.
     """
     return owns_client and client_refcount <= _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER
+
+
+def blocked_cookie_jar() -> CookieJar:
+    """A jar that stores no response cookie and sends none, for httpx clients.
+
+    LiteLLM's outbound clients are pooled and shared by every caller, so a cookie one
+    upstream sets would be replayed to every other upstream on a matching domain.
+    """
+    return CookieJar(policy=DefaultCookiePolicy(allowed_domains=()))
 
 
 _STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS: Final = 5.0
@@ -587,6 +597,7 @@ class AsyncHTTPHandler:
             verify=ssl_config,
             cert=cert,
             headers=default_headers,
+            cookies=blocked_cookie_jar(),
             follow_redirects=True,
         )
 
@@ -1063,6 +1074,7 @@ class AsyncHTTPHandler:
         def session_factory() -> ClientSession:
             return ClientSession(
                 connector=TCPConnector(**transport_connector_kwargs),
+                cookie_jar=DummyCookieJar(),
                 trust_env=trust_env,
             )
 
@@ -1132,6 +1144,7 @@ class HTTPHandler:
             verify=ssl_config,
             cert=cert,
             headers=default_headers,
+            cookies=blocked_cookie_jar(),
             follow_redirects=True,
         )
 
