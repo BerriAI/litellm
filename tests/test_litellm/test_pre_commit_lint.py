@@ -31,6 +31,9 @@ MAKE_STUB = """#!/bin/sh
 . "$STUB_BIN/barrier.sh"
 [ -n "${STUB_MAKE_LOG:-}" ] && echo "$*" >> "$STUB_MAKE_LOG"
 case "$*" in
+    bootstrap-dashboard)
+        [ "${STUB_FAIL:-}" = "bootstrap-dashboard" ] && exit 1
+        ;;
     lint)
         [ "${STUB_FAIL:-}" = "make-lint" ] && exit 1
         [ -n "${STUB_BARRIER_DIR:-}" ] && barrier_sync python "dashboard genapi"
@@ -173,6 +176,24 @@ def test_the_dashboard_is_provisioned_once_when_both_node_blocks_run(tmp_path: P
     repo, bin_dir = _sandbox(tmp_path)
     invocations = _make_invocations(tmp_path, repo, bin_dir)
     assert invocations.count("bootstrap-dashboard") == 1
+
+
+def test_failed_dashboard_provisioning_skips_the_node_blocks_rather_than_running_them(tmp_path: Path) -> None:
+    """A failed `make bootstrap-dashboard` must not fall through into the node blocks.
+
+    They would run against a stale or absent node_modules and report a second,
+    misleading failure ("format with npm run format") on top of the real cause,
+    which is the one a reader needs. The Python block shares nothing with the node
+    toolchain, so it still has to run."""
+    repo, bin_dir = _sandbox(tmp_path)
+    proc = _run(repo, bin_dir, {"STUB_FAIL": "bootstrap-dashboard"})
+    combined = proc.stdout + proc.stderr
+    assert proc.returncode == 1
+    assert "make bootstrap-dashboard failed" in combined
+    assert "linting dashboard" not in combined
+    assert "API types" not in combined
+    assert "Dashboard lint failed" not in combined
+    assert "linting Python" in combined
 
 
 def test_full_output_is_saved_to_a_log_file_in_the_git_dir(tmp_path: Path) -> None:

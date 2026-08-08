@@ -157,9 +157,14 @@ if [ -n "$e2e_py_files" ]; then
         || { echo "✗ Raw HTTP client import in tests/e2e. Route the call through tests/e2e/e2e_http.py, then re-run make pre-commit." >&2; status=1; }
 fi
 
+dashboard_ready=1
 if [ -n "$ui_prettier_files" ] || [ -n "$ui_eslint_files" ] || [ -n "$spec_files" ]; then
     echo "pre-commit: provisioning the dashboard toolchain (make bootstrap-dashboard)"
-    make bootstrap-dashboard || status=1
+    if ! make bootstrap-dashboard; then
+        echo "✗ make bootstrap-dashboard failed, so the dashboard lint and API-type checks are skipped rather than run against an unprovisioned toolchain. Fix the error above, then re-run make pre-commit." >&2
+        status=1
+        dashboard_ready=""
+    fi
 fi
 
 dashboard_checks() {
@@ -172,7 +177,7 @@ dashboard_checks() {
     lint_dashboard || { echo "✗ Dashboard lint failed. See above; format with: (cd ui/litellm-dashboard && npm run format)." >&2; return 1; }
 }
 
-if [ -n "$ui_prettier_files" ] || [ -n "$ui_eslint_files" ]; then
+if [ -n "$dashboard_ready" ] && { [ -n "$ui_prettier_files" ] || [ -n "$ui_eslint_files" ]; }; then
     dash_log=$(mktemp)
     set -m
     dashboard_checks > "$dash_log" 2>&1 &
@@ -210,7 +215,7 @@ genapi_checks() {
     return $status
 }
 
-if [ -n "$spec_files" ]; then
+if [ -n "$dashboard_ready" ] && [ -n "$spec_files" ]; then
     gen_log=$(mktemp)
     set -m
     genapi_checks > "$gen_log" 2>&1 &
