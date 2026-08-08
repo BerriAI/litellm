@@ -19523,6 +19523,9 @@ export interface paths {
          *             Sort order ('asc' or 'desc')
          *         status: Optional[str]
          *             Filter by status. Currently supports "deleted" to query deleted teams.
+         *         include_model_table: bool
+         *             When True, load each team's litellm_model_table relation (team-level
+         *             model aliases). Defaults to False, leaving the response unchanged.
          */
         get: operations["list_team_v2_v2_team_list_get"];
         put?: never;
@@ -60126,6 +60129,8 @@ export interface operations {
                 sort_order?: string;
                 /** @description Filter by status (e.g. 'deleted') */
                 status?: string | null;
+                /** @description Include the team's litellm_model_table relation (team-level model aliases) in each result. */
+                include_model_table?: boolean;
             };
             header?: never;
             path?: never;

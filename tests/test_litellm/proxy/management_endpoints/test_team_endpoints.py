@@ -11008,3 +11008,98 @@ def test_validate_member_user_id_provisioning_caps_the_ids_it_echoes_back():
     assert f"u{_MAX_REPORTED_UNKNOWN_USER_IDS}" not in detail
     assert f"and {500 - _MAX_REPORTED_UNKNOWN_USER_IDS} more" in detail
     assert len(detail) < 1000
+
+
+def _list_team_v2_mock_ctx(mock_repo_instance):
+    """Patches shared by the include_model_table tests: bypass auth/where/keys
+    aggregation and route the paginated fetch through mock_repo_instance."""
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    return (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch.object(team_endpoints, "TeamRepository", return_value=mock_repo_instance),
+        patch.object(
+            team_endpoints,
+            "_enforce_list_team_v2_access",
+            AsyncMock(return_value=(None, None)),
+        ),
+        patch.object(
+            team_endpoints,
+            "_build_team_list_where_conditions",
+            AsyncMock(return_value={}),
+        ),
+        patch.object(team_endpoints, "_get_keys_count_by_team", AsyncMock(return_value={})),
+    )
+
+
+async def _call_list_team_v2(*, include_model_table: bool):
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+
+    return await list_team_v2(
+        http_request=MagicMock(spec=Request),
+        user_id=None,
+        organization_id=None,
+        team_id=None,
+        team_alias=None,
+        search=None,
+        page=1,
+        page_size=10,
+        sort_by=None,
+        sort_order="asc",
+        status=None,
+        include_model_table=include_model_table,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_team_v2_include_model_table_true_loads_relation():
+    """
+    include_model_table=True must fetch the litellm_model_table relation and
+    surface it in each result, matching legacy /team/list behaviour.
+    """
+    team_row = LiteLLM_TeamTable(
+        team_id="team-1",
+        litellm_model_table=LiteLLM_ModelTable(
+            created_by="u",
+            updated_by="u",
+            model_aliases={"gpt-4o": "openai/gpt-4o"},
+        ),
+    )
+
+    mock_repo_instance = MagicMock()
+    mock_repo_instance.table.find_many = AsyncMock(return_value=[team_row])
+    mock_repo_instance.table.count = AsyncMock(return_value=1)
+
+    ctx = _list_team_v2_mock_ctx(mock_repo_instance)
+    with ctx[0], ctx[1], ctx[2], ctx[3], ctx[4], ctx[5], ctx[6]:
+        response = await _call_list_team_v2(include_model_table=True)
+
+    assert mock_repo_instance.table.find_many.await_args.kwargs["include"] == {"litellm_model_table": True}
+    returned_team = response["teams"][0]
+    assert returned_team.litellm_model_table is not None
+    assert returned_team.litellm_model_table.model_aliases == {"gpt-4o": "openai/gpt-4o"}
+
+
+@pytest.mark.asyncio
+async def test_list_team_v2_include_model_table_defaults_off():
+    """
+    Default (include_model_table=False) must not request the relation, so the
+    response is unchanged from before the flag existed (relation stays null).
+    """
+    team_row = LiteLLM_TeamTable(team_id="team-1")
+
+    mock_repo_instance = MagicMock()
+    mock_repo_instance.table.find_many = AsyncMock(return_value=[team_row])
+    mock_repo_instance.table.count = AsyncMock(return_value=1)
+
+    ctx = _list_team_v2_mock_ctx(mock_repo_instance)
+    with ctx[0], ctx[1], ctx[2], ctx[3], ctx[4], ctx[5], ctx[6]:
+        response = await _call_list_team_v2(include_model_table=False)
+
+    assert mock_repo_instance.table.find_many.await_args.kwargs["include"] is None
+    assert response["teams"][0].litellm_model_table is None

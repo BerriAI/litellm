@@ -4663,6 +4663,10 @@ async def list_team_v2(
     ),
     sort_order: str = fastapi.Query(default="asc", description="Sort order ('asc' or 'desc')"),
     status: str | None = fastapi.Query(default=None, description="Filter by status (e.g. 'deleted')"),
+    include_model_table: bool = fastapi.Query(
+        default=False,
+        description="Include the team's litellm_model_table relation (team-level model aliases) in each result.",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -4687,6 +4691,9 @@ async def list_team_v2(
             Sort order ('asc' or 'desc')
         status: Optional[str]
             Filter by status. Currently supports "deleted" to query deleted teams.
+        include_model_table: bool
+            When True, load each team's litellm_model_table relation (team-level
+            model aliases). Defaults to False, leaving the response unchanged.
     """
     from litellm.proxy.proxy_server import (
         prisma_client,
@@ -4765,11 +4772,13 @@ async def list_team_v2(
         # Get total count for pagination
         total_count = await _deleted_team_db(prisma_client).count(where=where_conditions)
     else:
+        model_table_include: dict[str, bool] | None = {"litellm_model_table": True} if include_model_table else None
         teams = await _team_db(prisma_client).find_many(
             where=where_conditions,
             skip=skip,
             take=page_size,
             order=order_by if order_by else {"created_at": "desc"},  # Default sort
+            include=model_table_include,
         )
         # Get total count for pagination
         total_count = await _team_db(prisma_client).count(where=where_conditions)
