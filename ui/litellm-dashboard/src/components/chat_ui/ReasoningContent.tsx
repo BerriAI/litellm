@@ -48,13 +48,13 @@ const ReasoningContent: React.FC<ReasoningContentProps> = ({ reasoningContent })
                   const match = /language-(\w+)/.exec(className || "");
                   return !inline && match ? (
                     <SyntaxHighlighter
-                      style={coy as unknown as { [key: string]: React.CSSProperties }}
                       language={match[1]}
                       PreTag="div"
                       className="my-2 rounded-md"
                       wrapLines={true}
                       wrapLongLines={true}
                       {...props}
+                      style={coy as { [key: string]: React.CSSProperties }}
                     >
                       {String(children).replace(/\n$/, "")}
                     </SyntaxHighlighter>
