@@ -77,6 +77,7 @@ from .custom_tools import (
     is_custom_tool_call,
     unwrap_custom_tool_arguments,
 )
+from .namespace_tools import flatten_namespace_tools
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE: Final = InMemoryCache()
@@ -1278,7 +1279,7 @@ class LiteLLMCompletionResponsesConfig:
             return [], None
         chat_completion_tools: Final[list[ChatCompletionToolParam | OpenAIMcpServerTool]] = []
         web_search_options: OpenAIWebSearchOptions | None = None
-        for tool in tools:
+        for tool in flatten_namespace_tools(tools):
             if tool.get("type") == "mcp":
                 chat_completion_tools.append(cast(OpenAIMcpServerTool, tool))
             elif tool.get("type") == "web_search_preview" or tool.get("type") == "web_search":
@@ -1323,7 +1324,7 @@ class LiteLLMCompletionResponsesConfig:
                     chat_completion_tools.append(converted)
             else:
                 _tool_type = tool.get("type")
-                if _tool_type in ("computer_use", "image_generation", "namespace", "shell"):
+                if _tool_type in ("computer_use", "image_generation", "shell"):
                     # Drop unsupported Responses-API-only tool types that have no
                     # Chat Completions equivalent. Passing them through verbatim
                     # causes providers to reject the request with "'function' is a
