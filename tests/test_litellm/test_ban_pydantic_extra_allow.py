@@ -68,7 +68,7 @@ _REPO_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."
         pytest.param(
             'ALLOW = ConfigDict(extra="forbid")\nALLOW = ConfigDict(extra="allow")\n\n\n'
             "class Foo(BaseModel):\n    model_config = ALLOW\n",
-            id="constant_rebound_to_allow_before_the_class",
+            id="constant_rebound_to_allow_above_the_class",
         ),
         pytest.param(
             'EXTRA = "allow"\n\n\nclass Foo(BaseModel):\n'
@@ -120,6 +120,11 @@ def test_detects_extra_allow(source):
         pytest.param(
             "SELF = SELF\n\n\nclass Foo(BaseModel):\n    model_config = SELF\n",
             id="self_referencing_constant",
+        ),
+        pytest.param(
+            'ALLOW = ConfigDict(extra="forbid")\n\n\nclass Foo(BaseModel):\n'
+            '    model_config = ALLOW\n\n\nALLOW = ConfigDict(extra="allow")\n',
+            id="constant_only_becomes_allow_below_the_class",
         ),
     ],
 )

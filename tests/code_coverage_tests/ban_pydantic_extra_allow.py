@@ -93,47 +93,47 @@ def _assigned_names(statement: ast.stmt) -> tuple[tuple[str, ast.expr], ...]:
     return tuple((target.id, value) for target in targets if isinstance(target, ast.Name))
 
 
-def _module_constants(body: Sequence[ast.stmt]) -> Mapping[str, tuple[ast.expr, ...]]:
-    """Every module-level ``NAME = value`` binding, keyed by name, so a config held in a
-    constant is still seen and rebinding the name later can't hide an earlier one.
+def _bindings(body: Sequence[ast.stmt]) -> tuple[tuple[int, str, ast.expr], ...]:
+    """Module-level ``NAME = value`` bindings in source order, with the line each one lands on."""
+    return tuple((statement.lineno, name, value) for statement in body for name, value in _assigned_names(statement))
+
+
+def _constants_before(bindings: Sequence[tuple[int, str, ast.expr]], line: int) -> Mapping[str, ast.expr]:
+    """The value each name holds just above ``line``, so a config kept in a constant is still
+    seen and rebinding that name later neither hides nor invents an opt-in.
     """
-    bindings: Final = tuple(binding for statement in body for binding in _assigned_names(statement))
-    return MappingProxyType({name: tuple(value for bound, value in bindings if bound == name) for name, _ in bindings})
+    return MappingProxyType({name: value for lineno, name, value in bindings if lineno < line})
 
 
-def _resolve(
-    node: ast.expr, constants: Mapping[str, tuple[ast.expr, ...]], seen: frozenset[str] = frozenset()
-) -> tuple[ast.expr, ...]:
+def _resolve(node: ast.expr, constants: Mapping[str, ast.expr], seen: frozenset[str] = frozenset()) -> ast.expr:
     if isinstance(node, ast.Name) and node.id in constants and node.id not in seen:
-        return tuple(
-            candidate for value in constants[node.id] for candidate in _resolve(value, constants, seen | {node.id})
-        )
-    return (node,)
+        return _resolve(constants[node.id], constants, seen | {node.id})
+    return node
 
 
-def _is_allow_literal(node: ast.expr, constants: Mapping[str, tuple[ast.expr, ...]]) -> bool:
-    return any(
-        resolved.value == "allow" if isinstance(resolved, ast.Constant) else _is_allow_attribute(resolved)
-        for resolved in _resolve(node, constants)
-    )
+def _is_allow_literal(node: ast.expr, constants: Mapping[str, ast.expr]) -> bool:
+    resolved: Final = _resolve(node, constants)
+    if isinstance(resolved, ast.Constant):
+        return resolved.value == "allow"
+    return _is_allow_attribute(resolved)
 
 
 def _is_allow_attribute(node: ast.expr) -> bool:
     return isinstance(node, ast.Attribute) and node.attr == "allow"
 
 
-def _is_extra_allow_keyword(keyword: ast.keyword, constants: Mapping[str, tuple[ast.expr, ...]]) -> bool:
+def _is_extra_allow_keyword(keyword: ast.keyword, constants: Mapping[str, ast.expr]) -> bool:
     return keyword.arg == "extra" and _is_allow_literal(keyword.value, constants)
 
 
-def _mapping_sets_extra_allow(node: ast.Dict, constants: Mapping[str, tuple[ast.expr, ...]]) -> bool:
+def _mapping_sets_extra_allow(node: ast.Dict, constants: Mapping[str, ast.expr]) -> bool:
     return any(
         isinstance(key, ast.Constant) and key.value == "extra" and _is_allow_literal(value, constants)
         for key, value in zip(node.keys, node.values)
     )
 
 
-def _config_sets_extra_allow(node: ast.expr, constants: Mapping[str, tuple[ast.expr, ...]]) -> bool:
+def _config_sets_extra_allow(node: ast.expr, constants: Mapping[str, ast.expr]) -> bool:
     if isinstance(node, ast.Call):
         return any(_is_extra_allow_keyword(keyword, constants) for keyword in node.keywords)
     if isinstance(node, ast.Dict):
@@ -141,20 +141,18 @@ def _config_sets_extra_allow(node: ast.expr, constants: Mapping[str, tuple[ast.e
     return False
 
 
-def _is_extra_allow_value(node: ast.expr, constants: Mapping[str, tuple[ast.expr, ...]]) -> bool:
-    return any(_config_sets_extra_allow(resolved, constants) for resolved in _resolve(node, constants))
+def _is_extra_allow_value(node: ast.expr, constants: Mapping[str, ast.expr]) -> bool:
+    return _config_sets_extra_allow(_resolve(node, constants), constants)
 
 
-def _assigns_extra_allow(
-    statement: ast.stmt, target_names: Sequence[str], constants: Mapping[str, tuple[ast.expr, ...]]
-) -> bool:
+def _assigns_extra_allow(statement: ast.stmt, target_names: Sequence[str], constants: Mapping[str, ast.expr]) -> bool:
     return any(
         name in set(target_names) and _is_extra_allow_value(value, constants)
         for name, value in _assigned_names(statement)
     )
 
 
-def _legacy_config_sets_extra_allow(class_def: ast.ClassDef, constants: Mapping[str, tuple[ast.expr, ...]]) -> bool:
+def _legacy_config_sets_extra_allow(class_def: ast.ClassDef, constants: Mapping[str, ast.expr]) -> bool:
     return any(
         isinstance(statement, ast.ClassDef)
         and statement.name == "Config"
@@ -168,7 +166,7 @@ def _legacy_config_sets_extra_allow(class_def: ast.ClassDef, constants: Mapping[
     )
 
 
-def _class_allows_extra(class_def: ast.ClassDef, constants: Mapping[str, tuple[ast.expr, ...]]) -> bool:
+def _class_allows_extra(class_def: ast.ClassDef, constants: Mapping[str, ast.expr]) -> bool:
     if any(_is_extra_allow_keyword(keyword, constants) for keyword in class_def.keywords):
         return True
     if any(_assigns_extra_allow(statement, ["model_config"], constants) for statement in class_def.body):
@@ -185,12 +183,12 @@ def _iter_classes(body: Sequence[ast.stmt], prefix: str = "") -> Iterator[tuple[
 
 
 def find_violations_in_source(source: str, relative_path: str) -> tuple[Violation, ...]:
-    tree = ast.parse(source, filename=relative_path)
-    constants = _module_constants(tree.body)
+    tree: Final = ast.parse(source, filename=relative_path)
+    bindings: Final = _bindings(tree.body)
     return tuple(
         Violation(file=relative_path, line=class_def.lineno, model=qualified)
         for qualified, class_def in _iter_classes(tree.body)
-        if _class_allows_extra(class_def, constants)
+        if _class_allows_extra(class_def, _constants_before(bindings, class_def.lineno))
     )
 
 
