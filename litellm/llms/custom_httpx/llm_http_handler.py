@@ -2189,6 +2189,10 @@ class BaseLLMHTTPHandler:
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
                 kwargs={**kwargs, "api_key": api_key} if api_key else kwargs,
+                hold_back=self._should_hold_back_stream(
+                    logging_obj=logging_obj,
+                    tools=anthropic_messages_optional_request_params.get("tools"),
+                ),
             )
             return AnthropicMessagesStreamingResponse(
                 completion_stream=initial_response,
@@ -5032,6 +5036,25 @@ class BaseLLMHTTPHandler:
             if getattr(cb_func, "__func__", cb_func) is not getattr(base_func, "__func__", base_func):
                 return True
         return False
+
+    @staticmethod
+    def _should_hold_back_stream(logging_obj: LiteLLMLoggingObj, tools: object) -> bool:
+        """
+        True when the request carries a tool that a registered callback fulfills
+        server-side (e.g. ``headroom_retrieve``). The model's tool_use for such a
+        tool must never reach the client, which cannot execute it: the agentic
+        loop replaces the whole message with a follow-up response, so the stream
+        is buffered (with ping keepalives) instead of forwarded live.
+        """
+        if not isinstance(tools, list) or not tools:
+            return False
+        from litellm.litellm_core_utils.prompt_templates.factory import has_tool_with_name
+
+        return any(
+            has_tool_with_name(tools, name)
+            for cb in _custom_logger_callbacks(logging_obj)
+            for name in getattr(cb, "server_fulfilled_tool_names", frozenset())
+        )
 
     @staticmethod
     def _check_agentic_loop_safety(
