@@ -54,6 +54,7 @@ from models import (
     ModelNewBody,
     ModelNewResponse,
     ModelsListResponse,
+    ModelUpdateBody,
     OcrBody,
     OcrResponse,
     SpendLogRow,
@@ -69,6 +70,7 @@ from e2e_config import (
     POLL_TIMEOUT,
     PROXY_BASE_URL,
     REQUEST_TIMEOUT,
+    settle_propagation,
 )
 from transport import HttpTransport, SplitTransport, Transport
 
@@ -160,13 +162,18 @@ class ProxyClient:
         """Register a deployment under `model_name` and return its proxy-assigned
         model_id, once the model is actually servable on the data plane.
 
-        /model/new is a control-plane route; in a split control/data-plane
-        deployment the gateway (data plane, which serves /chat, /ocr, ...) only
-        picks the new model up on its next DB reload, so a call issued the instant
-        this returns can race the reload and 400 with "Invalid model name passed".
-        We therefore poll the data-plane /v1/models until the model appears before
-        handing back, so callers can invoke it immediately. In the monolithic case
-        it is already present on the first poll, so this adds one request."""
+        /model/new is a control-plane route; the data plane (which serves /chat,
+        /ocr, ...) only picks the new model up on its next DB reload, so a call
+        issued the instant this returns can race the reload and 400 with "Invalid
+        model name passed". We poll the data-plane /v1/models until the model
+        appears, then settle for the remainder of the propagation budget.
+
+        Both steps are needed, and the second is the one that matters at >1 replica.
+        The poll proves *a* replica is serving the model; it cannot prove they all
+        are, because every request opens a fresh connection and a load-balanced
+        Service routes each one independently -- so the caller's next request
+        re-rolls and can land on a replica that has not reloaded yet. Waiting out
+        PROPAGATION_TIMEOUT is what makes the model safe to use anywhere."""
         model_id = unwrap(
             self.transport.post(
                 "/model/new",
@@ -179,7 +186,9 @@ class ProxyClient:
                 response_type=ModelNewResponse,
             )
         ).model_id
+        written_at = time.monotonic()
         self._await_model_servable(model_name)
+        settle_propagation(written_at)
         return model_id
 
     def _await_model_servable(self, model_name: str) -> None:
@@ -209,6 +218,23 @@ class ProxyClient:
             f"model {model_name!r} was created but never became servable on the data "
             f"plane within {self.poll_timeout}s of /model/new (control/data-plane "
             f"propagation or STORE_MODEL_IN_DB reload issue){last_error}"
+        )
+
+    def update_model(self, model_id: str, litellm_params: LiteLLMParamsBody) -> None:
+        """Merge `litellm_params` over the deployment `model_id`'s stored params via
+        POST /model/update. The proxy overlays only the non-null fields and clears
+        its model cache, so a later /model/info read reflects the change (eventually,
+        after the reload)."""
+        unwrap(
+            self.transport.post(
+                "/model/update",
+                headers=self.transport.master,
+                json=ModelUpdateBody(
+                    litellm_params=litellm_params,
+                    model_info=ModelInfoBody(id=model_id),
+                ),
+                response_type=NoBody,
+            )
         )
 
     def delete_model(self, model_id: str) -> None:

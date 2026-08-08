@@ -45,9 +45,10 @@ def _build_managed_files_mock(unified_id: str = "file-bWFuYWdlZF9vdXRwdXRfaWQ=")
     return mock
 
 
-def _build_prisma_mock():
+def _build_prisma_mock(db_batch_object=None):
     mock = MagicMock()
     mock.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
+    mock.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=db_batch_object)
     mock.db.litellm_managedobjecttable.update = AsyncMock()
     return mock
 
@@ -87,6 +88,103 @@ async def test_update_batch_in_database_stores_unified_output_file_id():
     )
     assert stored["output_file_id"] == unified_output_file_id
     assert stored["output_file_id"] != raw_output_file_id
+
+
+@pytest.mark.asyncio
+async def test_cancel_path_registers_output_file_under_batch_owner():
+    unified_id = "file-bWFuYWdlZF9vdXRwdXRfaWQ="
+    db_batch_object = SimpleNamespace(
+        created_by="batch-owner", team_id="batch-team", status="in_progress"
+    )
+    response = _build_batch_response(
+        status="cancelling",
+        output_file_id="file-raw-output",
+        hidden_params={"model_id": "my-model", "model_name": "openai/gpt-4o"},
+    )
+    mock_managed_files = _build_managed_files_mock(unified_id=unified_id)
+    mock_prisma = _build_prisma_mock(db_batch_object=db_batch_object)
+
+    await update_batch_in_database(
+        batch_id="batch_managed_ids_test",
+        unified_batch_id="litellm_proxy;model_id:my-model;llm_batch_id:batch_managed_ids_test",
+        response=response,
+        managed_files_obj=mock_managed_files,
+        prisma_client=mock_prisma,
+        verbose_proxy_logger=MagicMock(),
+        operation="cancel",
+    )
+
+    forwarded_auth = mock_managed_files.store_unified_file_id.call_args.kwargs[
+        "user_api_key_dict"
+    ]
+    assert forwarded_auth.user_id == "batch-owner"
+    assert forwarded_auth.team_id == "batch-team"
+    stored = json.loads(
+        mock_prisma.db.litellm_managedobjecttable.update.call_args.kwargs["data"][
+            "file_object"
+        ]
+    )
+    assert stored["output_file_id"] == unified_id
+
+
+@pytest.mark.asyncio
+async def test_update_batch_skips_lookup_when_db_batch_object_supplied():
+    unified_id = "file-bWFuYWdlZF9vdXRwdXRfaWQ="
+    caller_row = SimpleNamespace(
+        created_by="caller-owner", team_id="caller-team", status="in_progress"
+    )
+    decoy_row = SimpleNamespace(
+        created_by="decoy-owner", team_id="decoy-team", status="in_progress"
+    )
+    response = _build_batch_response(
+        status="cancelling",
+        output_file_id="file-raw-output",
+        hidden_params={"model_id": "my-model", "model_name": "openai/gpt-4o"},
+    )
+    mock_managed_files = _build_managed_files_mock(unified_id=unified_id)
+    mock_prisma = _build_prisma_mock(db_batch_object=decoy_row)
+
+    await update_batch_in_database(
+        batch_id="batch_managed_ids_test",
+        unified_batch_id="litellm_proxy;model_id:my-model;llm_batch_id:batch_managed_ids_test",
+        response=response,
+        managed_files_obj=mock_managed_files,
+        prisma_client=mock_prisma,
+        verbose_proxy_logger=MagicMock(),
+        db_batch_object=caller_row,
+        operation="retrieve",
+    )
+
+    mock_prisma.db.litellm_managedobjecttable.find_first.assert_not_called()
+    forwarded_auth = mock_managed_files.store_unified_file_id.call_args.kwargs[
+        "user_api_key_dict"
+    ]
+    assert forwarded_auth.user_id == "caller-owner"
+    assert forwarded_auth.team_id == "caller-team"
+
+
+@pytest.mark.asyncio
+async def test_update_batch_derives_model_id_from_unified_batch_id():
+    unified_id = "file-bWFuYWdlZF9vdXRwdXRfaWQ="
+    response = _build_batch_response(output_file_id="file-raw-output", hidden_params={})
+    mock_managed_files = _build_managed_files_mock(unified_id=unified_id)
+    mock_prisma = _build_prisma_mock()
+
+    await update_batch_in_database(
+        batch_id="batch_managed_ids_test",
+        unified_batch_id="litellm_proxy;model_id:model-from-batch-id;llm_batch_id:batch_managed_ids_test",
+        response=response,
+        managed_files_obj=mock_managed_files,
+        prisma_client=mock_prisma,
+        verbose_proxy_logger=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-abc"),
+    )
+
+    assert (
+        mock_managed_files.get_unified_output_file_id.call_args.kwargs["model_id"]
+        == "model-from-batch-id"
+    )
+    assert response.output_file_id == unified_id
 
 
 @pytest.mark.asyncio

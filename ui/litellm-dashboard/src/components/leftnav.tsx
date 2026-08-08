@@ -64,6 +64,7 @@ import {
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { cn } from "@/lib/cva.config";
+import { rolesWithCapability } from "../utils/capabilities";
 import {
   all_admin_roles,
   internalUserRoles,
@@ -167,7 +168,13 @@ const menuGroups: MenuGroup[] = [
         children: [
           { key: "search-tools", page: "search-tools", label: "Search Tools", icon: <Search {...ICON} /> },
           { key: "vector-stores", page: "vector-stores", label: "Vector Stores", icon: <Database {...ICON} /> },
-          { key: "tool-policies", page: "tool-policies", label: "Tool Policies", icon: <ShieldCheck {...ICON} /> },
+          {
+            key: "tool-policies",
+            page: "tool-policies",
+            label: "Tool Policies",
+            icon: <ShieldCheck {...ICON} />,
+            roles: rolesWithCapability("viewToolPolicies"),
+          },
         ],
       },
     ],
@@ -187,7 +194,11 @@ const menuGroups: MenuGroup[] = [
         page: "cost-optimization",
         icon: <PiggyBank {...ICON} />,
         roles: [...all_admin_roles, ...internalUserRoles],
-        label: "Cost Optimization",
+        label: (
+          <span className="flex items-center gap-2">
+            Cost Optimization <BetaBadge />
+          </span>
+        ),
       },
       { key: "logs", page: "logs", label: "Logs", icon: <Activity {...ICON} /> },
       {
@@ -244,7 +255,13 @@ const menuGroups: MenuGroup[] = [
         icon: <BookOpen {...ICON} />,
         external_url: "https://models.litellm.ai/cookbook",
       },
-      { key: "caching", page: "caching", label: "Caching", icon: <Database {...ICON} />, roles: all_admin_roles },
+      {
+        key: "caching",
+        page: "caching",
+        label: "Response Cache",
+        icon: <Database {...ICON} />,
+        roles: all_admin_roles,
+      },
       {
         key: "experimental",
         page: "experimental",
@@ -348,8 +365,6 @@ const findMenuItemKey = (page: string): string => {
   return "api-keys";
 };
 
-const labelText = (item: MenuItem): string => (typeof item.label === "string" ? item.label : item.key);
-
 const SECTION_DISPLAY: Record<string, string> = {
   "AI GATEWAY": "AI Gateway",
   OBSERVABILITY: "Observability",
@@ -363,6 +378,8 @@ const prettify = (key: string): string =>
     .split(/[-_]/)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
+
+const labelText = (item: MenuItem): string => (typeof item.label === "string" ? item.label : prettify(item.key));
 
 // Breadcrumb ("Section" / "Page") for the top bar, derived from the same nav config.
 export const getBreadcrumb = (page: string): { section: string | null; title: string } => {
@@ -390,7 +407,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   disableVectorStoresForInternalUsers,
   allowVectorStoresForTeamAdmins,
 }) => {
-  const { userId, accessToken, userRole } = useAuthorized();
+  const { userId, accessToken, userRole, isViewOnly } = useAuthorized();
   const { data: organizations } = useOrganizations();
   const { data: teams } = useTeams();
   const { logoUrl } = useTheme();
@@ -432,6 +449,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
     return items
       .map((item) => ({ ...item, children: item.children ? filterItemsByRole(item.children) : undefined }))
       .filter((item) => {
+        if (item.key === "llm-playground" && isViewOnly) return false;
         if (item.key === "organizations" || item.key === "users") {
           const hasRoleAccess = !item.roles || item.roles.includes(userRole) || isOrgAdmin;
           if (!hasRoleAccess) return false;
@@ -572,7 +590,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
       <SidebarHeader className="h-14 border-b border-border group-data-[collapsed=true]/sidebar:h-auto">
         <div className="flex items-center justify-between gap-2 group-data-[collapsed=true]/sidebar:flex-col">
           <div className="flex min-w-0 items-center gap-2">
-            <Link href={baseUrl || "/"} className="flex min-w-0 items-center" aria-label="LiteLLM home">
+            <Link href={migratedHref("")} className="flex min-w-0 items-center" aria-label="LiteLLM home">
               <img
                 src={logoSrc}
                 alt="LiteLLM"

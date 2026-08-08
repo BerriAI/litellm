@@ -27,6 +27,7 @@ import litellm
 import litellm.proxy.proxy_server as proxy_server_module
 from litellm.caching.caching import RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
+from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -127,11 +128,15 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
         general_settings={},
         premium_user=False,
     )
-    mock_jwt_encode.assert_called_once_with(
-        {"user_id": "test-user"},
-        "test-master-key",
-        algorithm="HS256",
-    )
+    mock_jwt_encode.assert_called_once()
+    payload, secret = mock_jwt_encode.call_args.args
+    # The UI session token carries a bounded-lifetime `exp` claim (dynamic timestamp), alongside
+    # the user_id; assert its presence rather than an exact expiry value.
+    assert payload["user_id"] == "test-user"
+    assert isinstance(payload.get("exp"), int) and payload["exp"] > 0
+    assert set(payload.keys()) == {"user_id", "exp"}
+    assert secret == "test-master-key"
+    assert mock_jwt_encode.call_args.kwargs == {"algorithm": "HS256"}
 
 
 def test_login_v2_returns_json_on_proxy_exception(monkeypatch):
@@ -752,6 +757,139 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_periodic_reload_job_scheduled_without_store_model_in_db(monkeypatch):
+    """
+    Regression (LIT-4882): reload schedules configured from the Admin UI live in the DB and
+    must fire even without store_model_in_db, which used to gate the job that ran them
+    """
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+    scheduler = AsyncIOScheduler()
+
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", False),
+            patch("litellm.proxy.proxy_server.get_secret_bool", return_value=False),
+            patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=scheduler),
+        ):
+            await ProxyStartupEvent.initialize_scheduled_background_jobs(
+                general_settings={},
+                prisma_client=mock_prisma_client,
+                proxy_budget_rescheduler_min_time=1,
+                proxy_budget_rescheduler_max_time=2,
+                proxy_batch_write_at=5,
+                proxy_logging_obj=mock_proxy_logging,
+            )
+
+        assert scheduler.get_job("periodic_reload_job") is not None
+        assert scheduler.get_job("add_deployment_job") is None
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
+async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(monkeypatch):
+    """
+    The DB config-reload jobs (add_deployment, get_credentials) that keep multi-pod
+    deployments in sync must be scheduled at the configured
+    proxy_config_reload_interval_seconds, not a hardcoded value.
+    """
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+    mock_scheduler = MagicMock()
+
+    configured_interval = 47
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=True),
+        patch(
+            "litellm.proxy.proxy_server.proxy_config_reload_interval_seconds",
+            configured_interval,
+        ),
+        patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=mock_scheduler),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+    scheduled_seconds = {
+        job_call.kwargs["id"]: job_call.kwargs.get("seconds")
+        for job_call in mock_scheduler.add_job.call_args_list
+        if "id" in job_call.kwargs
+    }
+    assert scheduled_seconds["add_deployment_job"] == configured_interval
+    assert scheduled_seconds["get_credentials_job"] == configured_interval
+
+
+@pytest.mark.asyncio
+async def test_initialize_scheduled_jobs_rejects_non_positive_config_reload_interval(monkeypatch):
+    """
+    A non-positive proxy_config_reload_interval_seconds (misconfig via env/config/DB) would
+    make APScheduler reject the job and crash startup, so the scheduler must fall back to the
+    30s default instead of forwarding the bad value.
+    """
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+    mock_scheduler = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=True),
+        patch("litellm.proxy.proxy_server.proxy_config_reload_interval_seconds", 0),
+        patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=mock_scheduler),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+    scheduled_seconds = {
+        job_call.kwargs["id"]: job_call.kwargs.get("seconds")
+        for job_call in mock_scheduler.add_job.call_args_list
+        if "id" in job_call.kwargs
+    }
+    assert scheduled_seconds["add_deployment_job"] == 30
+    assert scheduled_seconds["get_credentials_job"] == 30
+
+
+@pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_hydrates_mcp_when_store_model_in_db_false(monkeypatch):
     """
     Regression (LIT-4128): MCP servers created via the UI are persisted to the DB
@@ -924,6 +1062,102 @@ def test_get_config_custom_callback_api_env_vars(monkeypatch):
     }
 
 
+@patch(
+    "litellm.proxy.common_utils.callback_utils.CustomLogger.get_callback_env_vars",
+    return_value=["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST"],
+)
+def test_get_config_callbacks_fall_back_to_process_env(mock_env_vars, monkeypatch):
+    """A callback configured purely via process env vars is surfaced.
+
+    An IaC deployment sets LANGFUSE_* on the gateway and never touches the UI,
+    so nothing is stored in the config environment_variables overlay. The read
+    endpoint must still report the live values instead of blanks.
+    """
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-env-only")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-env-only")
+    monkeypatch.setenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+
+    config_data = {
+        "litellm_settings": {"success_callback": ["langfuse"]},
+        "general_settings": {},
+        "environment_variables": {},
+    }
+    mock_router = MagicMock()
+    mock_router.get_settings.return_value = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+    )
+
+    client = TestClient(app)
+    try:
+        response = client.get("/get/config/callbacks")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    langfuse_cb = next(
+        (cb for cb in response.json()["callbacks"] if cb["name"] == "langfuse"), None
+    )
+    assert langfuse_cb is not None
+    assert langfuse_cb["variables"] == {
+        "LANGFUSE_PUBLIC_KEY": "pk-env-only",
+        "LANGFUSE_SECRET_KEY": "sk-env-only",
+        "LANGFUSE_HOST": "https://cloud.langfuse.com",
+    }
+
+
+@patch(
+    "litellm.proxy.common_utils.callback_utils.CustomLogger.get_callback_env_vars",
+    return_value=["LANGFUSE_SECRET_KEY", "LANGFUSE_HOST"],
+)
+def test_get_config_callback_env_secrets_redacted_for_non_admin(mock_env_vars, monkeypatch):
+    """Surfacing env vars must not widen who can read secret values.
+
+    The callback role gate redacts sensitive keys for anyone below full admin,
+    and that must hold whether the value came from the stored config or the
+    process env. A non-secret var (LANGFUSE_HOST) still resolves for context.
+    """
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-env-only-secret")
+    monkeypatch.setenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+
+    config_data = {
+        "litellm_settings": {"success_callback": ["langfuse"]},
+        "general_settings": {},
+        "environment_variables": {},
+    }
+    mock_router = MagicMock()
+    mock_router.get_settings.return_value = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-user"
+    )
+
+    client = TestClient(app)
+    try:
+        response = client.get("/get/config/callbacks")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    langfuse_cb = next(
+        (cb for cb in response.json()["callbacks"] if cb["name"] == "langfuse"), None
+    )
+    assert langfuse_cb is not None
+    assert langfuse_cb["variables"]["LANGFUSE_SECRET_KEY"] == "REDACTED"
+    assert langfuse_cb["variables"]["LANGFUSE_HOST"] == "https://cloud.langfuse.com"
+
+
 def test_get_config_returns_email_settings(monkeypatch):
     """
     Regression for https://github.com/BerriAI/litellm/issues/19221
@@ -985,6 +1219,113 @@ def test_get_config_returns_email_settings(monkeypatch):
     assert variables["SMTP_PASSWORD"] is not None
     assert variables["SMTP_PASSWORD"] != smtp_password
     assert "*" in variables["SMTP_PASSWORD"]
+
+
+def _get_email_alert_variables(monkeypatch, config_data):
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    mock_router = MagicMock()
+    mock_router.get_settings.return_value = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+    )
+
+    client = TestClient(app)
+    try:
+        response = client.get("/get/config/callbacks")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    email_alert = next((a for a in response.json()["alerts"] if a["name"] == "email"), None)
+    assert email_alert is not None
+    return email_alert["variables"]
+
+
+def test_get_config_returns_email_settings_set_only_in_process_env(monkeypatch):
+    """
+    Regression for LIT-4165.
+
+    SMTP supplied purely as process env vars (helm/terraform, no UI writes) is
+    live at runtime because litellm/proxy/utils.py::send_email resolves every
+    field from os.getenv. The /get/config/callbacks email block only read the
+    config/DB environment_variables overlay though, so those deployments saw an
+    empty Email Server Settings page and could not tell SMTP was configured.
+    The slack block one branch above already fell back to os.getenv.
+    """
+    smtp_password = "env-only-app-password"
+    monkeypatch.setenv("SMTP_HOST", "smtp.env-host.com")
+    monkeypatch.setenv("SMTP_PORT", "2525")
+    monkeypatch.setenv("SMTP_TLS", "False")
+    monkeypatch.setenv("SMTP_USERNAME", "env-user")
+    monkeypatch.setenv("SMTP_PASSWORD", smtp_password)
+    monkeypatch.setenv("SMTP_SENDER_EMAIL", "alerts@env-host.com")
+    monkeypatch.setenv("TEST_EMAIL_ADDRESS", "admin@env-host.com")
+
+    variables = _get_email_alert_variables(
+        monkeypatch,
+        {
+            "litellm_settings": {},
+            "general_settings": {"alerting": ["email"]},
+            "environment_variables": {},
+        },
+    )
+
+    # Every one of these was None before the fix, despite SMTP working.
+    assert variables["SMTP_HOST"] == "smtp.env-host.com"
+    assert variables["SMTP_PORT"] == "2525"
+    assert variables["SMTP_TLS"] == "False"
+    assert variables["SMTP_USERNAME"] == "env-user"
+    assert variables["SMTP_SENDER_EMAIL"] == "alerts@env-host.com"
+    assert variables["TEST_EMAIL_ADDRESS"] == "admin@env-host.com"
+
+    # An env-sourced secret is masked exactly like a stored one.
+    assert variables["SMTP_PASSWORD"] not in (None, smtp_password)
+    assert "*" in variables["SMTP_PASSWORD"]
+
+
+def test_get_config_email_settings_prefer_stored_over_process_env(monkeypatch):
+    """
+    Stored environment_variables win over the process environment, matching the
+    load order in ProxyConfig.get_config, which pushes stored values into
+    os.environ. Only a field with no stored entry falls back to os.getenv.
+    """
+    monkeypatch.setenv("SMTP_HOST", "smtp.env-host.com")
+    monkeypatch.setenv("SMTP_SENDER_EMAIL", "alerts@env-host.com")
+
+    variables = _get_email_alert_variables(
+        monkeypatch,
+        {
+            "litellm_settings": {},
+            "general_settings": {"alerting": ["email"]},
+            "environment_variables": {"SMTP_HOST": "smtp.stored-host.com"},
+        },
+    )
+
+    assert variables["SMTP_HOST"] == "smtp.stored-host.com"
+    assert variables["SMTP_SENDER_EMAIL"] == "alerts@env-host.com"
+
+
+def test_get_config_email_settings_absent_everywhere_stay_none(monkeypatch):
+    """A field set in neither source is reported unset rather than invented."""
+    for var in ("SMTP_HOST", "SMTP_PORT", "SMTP_TLS", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_SENDER_EMAIL"):
+        monkeypatch.delenv(var, raising=False)
+
+    variables = _get_email_alert_variables(
+        monkeypatch,
+        {
+            "litellm_settings": {},
+            "general_settings": {"alerting": ["email"]},
+            "environment_variables": {},
+        },
+    )
+
+    assert variables["SMTP_HOST"] is None
+    assert variables["SMTP_PASSWORD"] is None
 
 
 def test_get_config_returns_slack_webhook(monkeypatch):
@@ -1206,50 +1547,6 @@ def test_team_info_masking():
     assert "public-test-key" not in str(exc_info.value)
 
 
-def test_embedding_input_array_of_tokens(client_no_auth):
-    """
-    Test to bypass decoding input as array of tokens for selected providers
-
-    Ref: https://github.com/BerriAI/litellm/issues/10113
-    """
-    from litellm.proxy import proxy_server
-
-    # The client_no_auth fixture should initialize the router
-    # Assert this to catch any router initialization regressions
-    assert proxy_server.llm_router is not None, (
-        "llm_router is None after client_no_auth fixture initialized. "
-        "This indicates a router initialization issue that should be investigated."
-    )
-
-    try:
-        with mock.patch.object(
-            proxy_server.llm_router,
-            "aembedding",
-            return_value=example_embedding_result,
-        ) as mock_aembedding:
-            test_data = {
-                "model": "vllm_embed_model",
-                "input": [[2046, 13269, 158208]],
-            }
-
-            response = client_no_auth.post("/v1/embeddings", json=test_data)
-
-            # Assert that aembedding was called, and that input was not modified
-            mock_aembedding.assert_called_once()
-            call_args, call_kwargs = mock_aembedding.call_args
-            assert call_kwargs["model"] == "vllm_embed_model"
-            assert call_kwargs["input"] == [[2046, 13269, 158208]]
-
-            assert response.status_code == 200
-            result = response.json()
-            print(len(result["data"][0]["embedding"]))
-            assert (
-                len(result["data"][0]["embedding"]) > 10
-            )  # this usually has len==1536 so
-    except Exception as e:
-        pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
-
-
 @pytest.mark.asyncio
 async def test_get_all_team_models():
     """
@@ -1317,14 +1614,14 @@ async def test_get_all_team_models():
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
         # Configure the mock class to return proper instances
-        def mock_team_table_constructor(**kwargs):
+        def mock_team_table_constructor(data):
             mock_instance = MagicMock()
-            mock_instance.team_id = kwargs["team_id"]
-            mock_instance.models = kwargs["models"]
-            mock_instance.access_group_ids = kwargs.get("access_group_ids")
+            mock_instance.team_id = data["team_id"]
+            mock_instance.models = data["models"]
+            mock_instance.access_group_ids = data.get("access_group_ids")
             return mock_instance
 
-        mock_team_table_class.side_effect = mock_team_table_constructor
+        mock_team_table_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams="*",
@@ -1353,7 +1650,7 @@ async def test_get_all_team_models():
     mock_litellm_teamtable.find_many.return_value = [mock_team1]
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
-        mock_team_table_class.side_effect = mock_team_table_constructor
+        mock_team_table_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams=["team1"],
@@ -1404,7 +1701,7 @@ async def test_get_all_team_models():
     mock_router.get_model_list.side_effect = mock_get_model_list_with_none
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
-        mock_team_table_class.side_effect = mock_team_table_constructor
+        mock_team_table_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams=["team1"],
@@ -2119,14 +2416,14 @@ async def test_get_all_team_models_with_access_groups():
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_tt_class:
 
-        def mock_team_table_constructor(**kwargs):
+        def mock_team_table_constructor(data):
             mock_instance = MagicMock()
-            mock_instance.team_id = kwargs["team_id"]
-            mock_instance.models = kwargs["models"]
-            mock_instance.access_group_ids = kwargs.get("access_group_ids")
+            mock_instance.team_id = data["team_id"]
+            mock_instance.models = data["models"]
+            mock_instance.access_group_ids = data.get("access_group_ids")
             return mock_instance
 
-        mock_tt_class.side_effect = mock_team_table_constructor
+        mock_tt_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams=["team1"],
@@ -2205,13 +2502,11 @@ async def test_delete_deployment_type_mismatch():
         patch("litellm.proxy.proxy_server.user_config_file_path", "test_config.yaml"),
     ):
         # Call the function under test
-        deleted_count = await pc._delete_deployment(db_models=[])
+        still_desired = await pc._delete_deployment(db_models=[])
 
     # The two SHA-hash models have no corresponding entry in combined_id_list
     # and must be evicted.
-    assert (
-        deleted_count == 2
-    ), f"Expected 2 deletions (SHA-hash models), got {deleted_count}"
+    assert len(deleted_ids) == 2, f"Expected 2 deletions (SHA-hash models), got {deleted_ids}"
     assert (
         "a96e12e76b36a57cfae57a41288eb41567629cac89b4828c6f7074afc3534695"
         in deleted_ids
@@ -2230,6 +2525,12 @@ async def test_delete_deployment_type_mismatch():
     assert (
         "12345679" not in deleted_ids
     ), f"Model 12345679 should NOT be deleted. Deleted IDs: {deleted_ids}"
+
+    assert still_desired is not None
+    assert {"12345678", "12345679"} <= still_desired, (
+        "the int-keyed config models must come back as strings in the desired set, so a "
+        f"caller judging its own reload reads them as wanted rather than evicted; got {still_desired}"
+    )
 
 
 @pytest.mark.asyncio
@@ -2388,6 +2689,11 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
 
     This validates that generate_key_helper_fn is called with table_name="user"
     which should prevent key creation in LiteLLM_VerificationToken table.
+
+    Also guards the row identity: the budget must land on the proxy-wide
+    aggregate row "litellm-proxy-budget" (the one the spend writer increments
+    per request), not the admin user's own row ("default_user_id"). Budgeting
+    the admin row leaves the global budget without a resettable counter.
     """
     from unittest.mock import AsyncMock, patch
 
@@ -2416,7 +2722,7 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
         "litellm.proxy.proxy_server.generate_key_helper_fn", mock_generate_key_helper
     ):
         # Call the function under test
-        ProxyStartupEvent._add_proxy_budget_to_db(litellm_proxy_budget_name)
+        ProxyStartupEvent._add_proxy_budget_to_db()
 
         # Allow async task to complete
         import asyncio
@@ -2442,9 +2748,13 @@ async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
     Test that _upsert_proxy_budget_with_reset_at_backfill issues a conditional
     update_many with `WHERE budget_reset_at IS NULL` to backfill the column on
     rows that pre-existed without a reset schedule. Without this, the proxy
-    admin row stays at NULL and reset_budget_for_litellm_users never matches
+    budget row stays at NULL and reset_budget_for_litellm_users never matches
     it (NULL < now() is unknown in SQL), so the global proxy budget never
     resets.
+
+    The same conditional update must zero spend: a row that was never on a
+    reset schedule holds lifetime accrual, which must not gate the first
+    duration window.
     """
     from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2475,9 +2785,7 @@ async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
         ),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
     ):
-        await ProxyStartupEvent._upsert_proxy_budget_with_reset_at_backfill(
-            litellm_proxy_budget_name
-        )
+        await ProxyStartupEvent._upsert_proxy_budget_with_reset_at_backfill()
 
     # Upsert ran with the configured budget
     mock_generate_key_helper.assert_called_once()
@@ -2495,6 +2803,8 @@ async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
     backfilled_reset_at = backfill_call.kwargs["data"]["budget_reset_at"]
     assert isinstance(backfilled_reset_at, datetime)
     assert backfilled_reset_at > datetime.now(timezone.utc)
+
+    assert backfill_call.kwargs["data"]["spend"] == 0
 
 
 @pytest.mark.asyncio
@@ -2586,6 +2896,69 @@ async def test_load_config_max_budget_env_var_coerced_to_float(tmp_path, monkeyp
         assert litellm.max_budget > 0
     finally:
         litellm.max_budget = original_max_budget
+
+
+def test_max_ui_session_budget_default_is_one_dollar():
+    """LIT-4662: the dashboard session budget default is a product decision; the
+    old 0.25 default locked admins out of auto router Test Connection and the
+    playground mid-session with an error that looked like a hardcoded cap."""
+    assert litellm.max_ui_session_budget == 1.0
+
+
+@pytest.mark.asyncio
+async def test_load_config_max_ui_session_budget_applied_and_coerced(tmp_path, monkeypatch):
+    """
+    max_ui_session_budget configured via os.environ resolves to a string;
+    load_config must coerce it to float so every dashboard session key is
+    minted with a numeric max_budget.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("UI_SESSION_BUDGET", "2.5")
+    test_config = {
+        "model_list": [],
+        "litellm_settings": {"max_ui_session_budget": "os.environ/UI_SESSION_BUDGET"},
+    }
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump(test_config))
+
+    original_budget = litellm.max_ui_session_budget
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(
+            router=MagicMock(), config_file_path=str(config_file)
+        )
+        assert isinstance(litellm.max_ui_session_budget, float)
+        assert litellm.max_ui_session_budget == 2.5
+    finally:
+        litellm.max_ui_session_budget = original_budget
+
+
+@pytest.mark.asyncio
+async def test_load_config_max_ui_session_budget_none_disables_cap(tmp_path):
+    """
+    max_ui_session_budget: null in config disables the dashboard session cap
+    entirely (session keys minted with no max_budget); load_config must pass
+    None through instead of raising on float(None).
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    test_config = {
+        "model_list": [],
+        "litellm_settings": {"max_ui_session_budget": None},
+    }
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump(test_config))
+
+    original_budget = litellm.max_ui_session_budget
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(
+            router=MagicMock(), config_file_path=str(config_file)
+        )
+        assert litellm.max_ui_session_budget is None
+    finally:
+        litellm.max_ui_session_budget = original_budget
 
 
 @pytest.mark.asyncio
@@ -3266,6 +3639,20 @@ async def test_chat_completion_result_no_nested_none_values():
 # ============================================================================
 
 
+def _reload_schedule_row(
+    param_value: dict,
+    *,
+    reload_revision: int = 0,
+    last_run_at: datetime | None = None,
+) -> types.SimpleNamespace:
+    """LiteLLM_Config row shape: admin-owned interval in param_value, run state in dedicated columns"""
+    return types.SimpleNamespace(
+        param_value=param_value,
+        reload_revision=reload_revision,
+        last_run_at=last_run_at,
+    )
+
+
 class TestPriceDataReloadAPI:
     """Test cases for price data reload API endpoints"""
 
@@ -3292,20 +3679,23 @@ class TestPriceDataReloadAPI:
         # Save the original model_cost so the endpoint's direct assignment
         # (litellm.model_cost = new_model_cost_map) does not contaminate
         # subsequent tests running in the same worker process.
+        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
+
         original_model_cost = litellm.model_cost.copy()
         try:
             with patch(
-                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
-            ) as mock_get_map:
-                mock_get_map.return_value = {
-                    "gpt-3.5-turbo": {"input_cost_per_token": 0.001}
-                }
+                "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+                new=AsyncMock(
+                    return_value=ModelCostMapReloaded(
+                        model_cost_map={"gpt-3.5-turbo": {"input_cost_per_token": 0.001}}
+                    )
+                ),
+            ):
                 # Mock the database connection
                 with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
-                    mock_prisma.db.litellm_config.find_unique = AsyncMock(
-                        return_value=None
+                    mock_prisma.db.litellm_config.upsert = AsyncMock(
+                        return_value=_reload_schedule_row({}, reload_revision=1)
                     )
-                    mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
 
                     response = client_with_auth.post("/reload/model_cost_map")
 
@@ -3354,28 +3744,29 @@ class TestPriceDataReloadAPI:
     def test_reload_model_cost_map_error_handling(self, client_with_auth):
         """Test error handling in the reload endpoint"""
         with patch(
-            "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
-        ) as mock_get_map:
-            mock_get_map.side_effect = Exception("Network error")
-
+            "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+            new=AsyncMock(side_effect=Exception("Network error")),
+        ):
             # Mock the database connection
             with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
                 mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
-                mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+                mock_prisma.db.litellm_config.upsert = AsyncMock(
+                    return_value=_reload_schedule_row({}, reload_revision=1)
+                )
 
                 response = client_with_auth.post("/reload/model_cost_map")
 
                 assert (
                     response.status_code == 500
-                )  # The new implementation immediately reloads and fails on error
+                )  # An unexpected exception still maps to 500
                 data = response.json()
                 assert "Failed to reload model cost map" in data["detail"]
 
     def test_schedule_model_cost_map_reload_admin_access(self, client_with_auth):
-        """Test that admin users can schedule periodic reload"""
+        """Admin schedule write owns param_value only, so it can't clobber the job-owned run columns"""
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
             # Mock database upsert
-            mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+            mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=_reload_schedule_row({}, reload_revision=1))
 
             response = client_with_auth.post("/schedule/model_cost_map_reload?hours=6")
 
@@ -3385,6 +3776,15 @@ class TestPriceDataReloadAPI:
             assert data["interval_hours"] == 6
             assert "message" in data
             assert "timestamp" in data
+
+            call_args = mock_prisma.db.litellm_config.upsert.call_args
+            assert call_args[1]["where"] == {"param_name": "model_cost_map_reload_config"}
+            update_payload = call_args[1]["data"]["update"]
+            assert set(update_payload.keys()) == {"param_value"}
+            assert json.loads(update_payload["param_value"]) == {"interval_hours": 6}
+            create_payload = call_args[1]["data"]["create"]
+            assert set(create_payload.keys()) == {"param_name", "param_value"}
+            assert json.loads(create_payload["param_value"]) == {"interval_hours": 6}
 
     def test_schedule_model_cost_map_reload_non_admin_access(self, client_with_auth):
         """Test that non-admin users cannot schedule periodic reload"""
@@ -3411,7 +3811,7 @@ class TestPriceDataReloadAPI:
     def test_cancel_model_cost_map_reload_admin_access(self, client_with_auth):
         """Test that admin users can cancel periodic reload"""
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
-            # Mock database delete
+            mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=1)
             mock_prisma.db.litellm_config.delete = AsyncMock(return_value=None)
 
             response = client_with_auth.delete("/schedule/model_cost_map_reload")
@@ -3421,6 +3821,10 @@ class TestPriceDataReloadAPI:
             assert data["status"] == "success"
             assert "message" in data
             assert "timestamp" in data
+            assert json.loads(mock_prisma.db.litellm_config.update_many.await_args.kwargs["data"]["param_value"]) == {
+                "interval_hours": None
+            }
+            mock_prisma.db.litellm_config.delete.assert_not_called()
 
     def test_cancel_model_cost_map_reload_non_admin_access(self, client_with_auth):
         """Test that non-admin users cannot cancel periodic reload"""
@@ -3437,35 +3841,28 @@ class TestPriceDataReloadAPI:
         assert "Admin role required" in data["detail"]
 
     def test_get_model_cost_map_reload_status_admin_access(self, client_with_auth):
-        """Test that admin users can get reload status"""
+        """
+        Regression (LIT-4882): status is served purely from the DB row, so a restarted pod
+        (whose in-memory clock only knows its own boot) still reports the real last/next run
+        """
+        proxy_server_module.proxy_config.model_cost_map_loaded_at = datetime(2030, 6, 1, tzinfo=timezone.utc)
+
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
-            # Mock database config record
-            mock_config = MagicMock()
-            mock_config.param_value = {"interval_hours": 6, "force_reload": False}
             mock_prisma.db.litellm_config.find_unique = AsyncMock(
-                return_value=mock_config
+                return_value=_reload_schedule_row(
+                    {"interval_hours": 6},
+                    last_run_at=datetime(2024, 1, 1, 6, 0, tzinfo=timezone.utc),
+                )
             )
 
-            # Mock the last reload time and current time
-            with patch(
-                "litellm.proxy.proxy_server.last_model_cost_map_reload",
-                "2024-01-01T06:00:00",
-            ):
-                with patch("litellm.proxy.proxy_server.datetime") as mock_datetime:
-                    # Mock current time to be 1 hour after last reload
-                    mock_datetime.utcnow.return_value = datetime(2024, 1, 1, 7, 0, 0)
-                    mock_datetime.fromisoformat = datetime.fromisoformat
+            response = client_with_auth.get("/schedule/model_cost_map_reload/status")
 
-                    response = client_with_auth.get(
-                        "/schedule/model_cost_map_reload/status"
-                    )
-
-                    assert response.status_code == 200
-                    data = response.json()
-                    assert data["scheduled"] == True
-                    assert data["interval_hours"] == 6
-                    assert data["last_run"] == "2024-01-01T06:00:00"
-                    assert data["next_run"] == "2024-01-01T12:00:00"
+            assert response.status_code == 200
+            data = response.json()
+            assert data["scheduled"] is True
+            assert data["interval_hours"] == 6
+            assert data["last_run"] == "2024-01-01T06:00:00+00:00"
+            assert data["next_run"] == "2024-01-01T12:00:00+00:00"
 
     def test_get_model_cost_map_reload_status_non_admin_access(self, client_with_auth):
         """Test that non-admin users cannot get reload status"""
@@ -3496,35 +3893,43 @@ class TestPriceDataReloadAPI:
             assert data["next_run"] == None
 
     def test_get_model_cost_map_reload_status_no_interval(self, client_with_auth):
-        """Test that status returns not scheduled when no interval is configured"""
+        """A row left behind by a manual reload (no interval) must not read as scheduled"""
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
-            # Mock config with no interval
-            mock_config = MagicMock()
-            mock_config.param_value = {"interval_hours": None, "force_reload": False}
             mock_prisma.db.litellm_config.find_unique = AsyncMock(
-                return_value=mock_config
+                return_value=_reload_schedule_row(
+                    {"interval_hours": None},
+                    reload_revision=3,
+                )
             )
 
             response = client_with_auth.get("/schedule/model_cost_map_reload/status")
 
             assert response.status_code == 200
             data = response.json()
-            assert data["scheduled"] == False
-            assert data["interval_hours"] == None
-            assert data["last_run"] == None
-            assert data["next_run"] == None
+            assert data["scheduled"] is False
+            assert data["interval_hours"] is None
+            assert data["last_run"] is None
+            assert data["next_run"] is None
+
+    def test_get_model_cost_map_reload_status_before_first_run(self, client_with_auth):
+        """Scheduled but never executed: no last_run_at means no next_run can be computed"""
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.db.litellm_config.find_unique = AsyncMock(
+                return_value=_reload_schedule_row({"interval_hours": 6})
+            )
+
+            response = client_with_auth.get("/schedule/model_cost_map_reload/status")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["scheduled"] is True
+            assert data["interval_hours"] == 6
+            assert data["last_run"] is None
+            assert data["next_run"] is None
 
 
 class TestPriceDataReloadIntegration:
     """Integration tests for the complete price data reload feature"""
-
-    @pytest.fixture(autouse=True)
-    def _flush_litellm_config_cache(self):
-        from litellm.proxy.utils import litellm_config_cache
-
-        litellm_config_cache.flush_cache()
-        yield
-        litellm_config_cache.flush_cache()
 
     @pytest.fixture
     def client_with_auth(self):
@@ -3555,19 +3960,21 @@ class TestPriceDataReloadIntegration:
             "gpt-4": {"input_cost_per_token": 0.03, "output_cost_per_token": 0.06},
         }
 
+        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
+
         original_model_cost = litellm.model_cost.copy()
         try:
             with patch(
-                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
-            ) as mock_get_map:
-                mock_get_map.return_value = mock_cost_map
-
+                "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+                new=AsyncMock(
+                    return_value=ModelCostMapReloaded(model_cost_map=mock_cost_map)
+                ),
+            ):
                 # Mock the database connection
                 with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
-                    mock_prisma.db.litellm_config.find_unique = AsyncMock(
-                        return_value=None
+                    mock_prisma.db.litellm_config.upsert = AsyncMock(
+                        return_value=_reload_schedule_row({}, reload_revision=1)
                     )
-                    mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
 
                     # Test reload endpoint
                     response = client_with_auth.post("/reload/model_cost_map")
@@ -3580,123 +3987,427 @@ class TestPriceDataReloadIntegration:
             litellm.model_cost = original_model_cost
             _invalidate_model_cost_lowercase_map()
 
-    def test_distributed_reload_check_function(self):
-        """Test the _check_and_reload_model_cost_map function"""
+    def test_pod_data_clock_seeded_from_actual_cost_map_load(self):
+        """Regression: seeding from ProxyConfig construction time instead of the real
+        import-time fetch let a manual request stamped during startup be skipped"""
+        from datetime import datetime, timezone
+
         from litellm.proxy.proxy_server import ProxyConfig
-        from litellm.proxy.utils import litellm_config_cache
 
-        proxy_config = ProxyConfig()
-
-        # Mock prisma client
-        mock_prisma = MagicMock()
-
-        # Test case 1: No config in database
-        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
-        # _check_and_reload_model_cost_map routes through get_config_param,
-        # which calls prisma.get_generic_data on a cache miss.
-        mock_prisma.get_generic_data = AsyncMock(return_value=None)
-
-        # Should return early without reloading
-        asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
-
-        # Test case 2: Config with interval but not time to reload
-        litellm_config_cache.flush_cache()
-        mock_config = MagicMock()
-        mock_config.param_value = {"interval_hours": 6, "force_reload": False}
-        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
-        mock_prisma.get_generic_data = AsyncMock(return_value=mock_config)
-
-        # Mock current time and last reload time
+        fetch_time = datetime(2024, 1, 1, 6, 0, tzinfo=timezone.utc)
         with patch(
-            "litellm.proxy.proxy_server.last_model_cost_map_reload",
-            "2024-01-01T06:00:00",
+            "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map_loaded_at",
+            return_value=fetch_time,
         ):
-            with patch("litellm.proxy.proxy_server.datetime") as mock_datetime:
-                mock_datetime.utcnow.return_value = datetime(
-                    2024, 1, 1, 7, 0, 0
-                )  # 1 hour later
+            assert ProxyConfig().model_cost_map_loaded_at == fetch_time
 
-                # Should not reload (only 1 hour passed, need 6)
-                asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
-
-        # Test case 3: Config with force reload
-        litellm_config_cache.flush_cache()
-        mock_config.param_value = {"interval_hours": 6, "force_reload": True}
-        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
-        mock_prisma.get_generic_data = AsyncMock(return_value=mock_config)
-        mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
-
-        original_model_cost = litellm.model_cost.copy()
-        try:
-            with patch(
-                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
-            ) as mock_get_map:
-                mock_get_map.return_value = {
-                    "gpt-3.5-turbo": {"input_cost_per_token": 0.001}
-                }
-
-                # Should reload due to force flag
-                asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
-
-                # Verify force_reload was reset to False
-                mock_prisma.db.litellm_config.upsert.assert_called()
-                call_args = mock_prisma.db.litellm_config.upsert.call_args
-                # The param_value is now a JSON string, so we need to parse it
-                param_value_json = call_args[1]["data"]["update"]["param_value"]
-                param_value_dict = json.loads(param_value_json)
-                assert param_value_dict["force_reload"] == False
-                assert param_value_dict.get("interval_hours") == 6
-        finally:
-            litellm.model_cost = original_model_cost
-            _invalidate_model_cost_lowercase_map()
-
-    def test_distributed_reload_preserves_interval_hours(self):
-        """Test that _check_and_reload_model_cost_map preserves interval_hours after reload.
-
-        Regression test: the update branch of the upsert was previously dropping
-        interval_hours, causing scheduled reloads to self-destruct after first execution.
+    def test_distributed_reload_check_function(self):
+        """
+        A revision this pod has not applied takes effect here even one minute into a 6h
+        interval; a missing row is a no-op
         """
         from litellm.proxy.proxy_server import ProxyConfig
 
         proxy_config = ProxyConfig()
         mock_prisma = MagicMock()
+        mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=_reload_schedule_row({}, reload_revision=1))
+        mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
-        # Set up config with interval_hours=24 and force_reload=True to trigger reload
-        mock_config = MagicMock()
-        mock_config.param_value = {"interval_hours": 24, "force_reload": True}
-        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
-        # _check_and_reload_model_cost_map now reads through get_generic_data.
-        mock_prisma.get_generic_data = AsyncMock(return_value=mock_config)
-        mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+        boot_loaded_at = proxy_config.model_cost_map_loaded_at
+        asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+
+        mock_prisma.db.litellm_config.update_many.assert_not_called()
+        assert proxy_config.model_cost_map_loaded_at == boot_loaded_at
+
+        frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(
+            return_value=_reload_schedule_row(
+                {"interval_hours": 6},
+                reload_revision=4,
+                last_run_at=datetime(2024, 1, 1, 6, 59, 30, tzinfo=timezone.utc),
+            )
+        )
+        proxy_config.model_cost_map_loaded_at = frozen_now - timedelta(minutes=1)
+        proxy_config.model_cost_map_applied_revision = 3
+
+        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 
         original_model_cost = litellm.model_cost.copy()
         try:
-            with patch(
-                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
-            ) as mock_get_map:
-                mock_get_map.return_value = {"gpt-4": {"input_cost_per_token": 0.001}}
+            with (
+                patch("litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map", new_callable=AsyncMock) as mock_get_map,
+                patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
+            ):
+                mock_get_map.return_value = ModelCostMapReloaded(model_cost_map={"gpt-3.5-turbo": {"input_cost_per_token": 0.001}})
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
-                # Verify the upsert update branch preserves interval_hours
-                mock_prisma.db.litellm_config.upsert.assert_called()
-                call_args = mock_prisma.db.litellm_config.upsert.call_args
-                param_value_json = call_args[1]["data"]["update"]["param_value"]
-                param_value_dict = json.loads(param_value_json)
-                assert param_value_dict["force_reload"] == False
-                assert param_value_dict["interval_hours"] == 24, (
-                    "interval_hours must be preserved in the update branch; "
-                    "dropping it causes the schedule to self-destruct"
-                )
+                assert litellm.model_cost["gpt-3.5-turbo"] == {"input_cost_per_token": 0.001}
+                assert proxy_config.model_cost_map_loaded_at == frozen_now
+                assert mock_prisma.db.litellm_config.update_many.call_args[1] == {
+                    "data": {"last_run_at": frozen_now},
+                    "where": {"param_name": "model_cost_map_reload_config"},
+                }
+                mock_prisma.db.litellm_config.upsert.assert_not_called()
+                assert proxy_config.model_cost_map_applied_revision == 4
         finally:
             litellm.model_cost = original_model_cost
             _invalidate_model_cost_lowercase_map()
 
-    def test_manual_reload_preserves_interval_hours(self):
-        """Test that manual reload via /reload/model_cost_map preserves existing interval_hours.
+    def test_distributed_reload_ignores_already_applied_request(self):
+        """
+        A revision this pod already applied must not re-trigger on every job tick for the
+        rest of the interval
+        """
+        from litellm.proxy.proxy_server import ProxyConfig
 
-        Regression test: the manual reload endpoint was overwriting param_value with
-        only force_reload=True, dropping any existing interval_hours schedule.
+        proxy_config = ProxyConfig()
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(
+            return_value=_reload_schedule_row(
+                {"interval_hours": 6},
+                reload_revision=4,
+                last_run_at=datetime(2024, 1, 1, 6, 0, tzinfo=timezone.utc),
+            )
+        )
+        frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
+        pod_data_loaded_at = frozen_now - timedelta(minutes=1)
+        proxy_config.model_cost_map_loaded_at = pod_data_loaded_at
+        proxy_config.model_cost_map_applied_revision = 4
+
+        original_model_cost = litellm.model_cost.copy()
+        try:
+            with (
+                patch("litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map", new_callable=AsyncMock) as mock_get_map,
+                patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
+            ):
+                asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+
+                mock_get_map.assert_not_called()
+                mock_prisma.db.litellm_config.update_many.assert_not_called()
+                assert proxy_config.model_cost_map_loaded_at == pod_data_loaded_at
+        finally:
+            litellm.model_cost = original_model_cost
+            _invalidate_model_cost_lowercase_map()
+
+    def test_periodic_reload_uses_pod_local_data_age(self):
+        """
+        Each pod decides from the age of its own data, so a pod holding a stale copy
+        refreshes even when the shared row was just stamped by another pod, and stays
+        put while its copy is inside the interval
+        """
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(
+            return_value=_reload_schedule_row(
+                {"interval_hours": 6},
+                last_run_at=datetime(2024, 1, 1, 6, 59, tzinfo=timezone.utc),
+            )
+        )
+        mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
+        frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
+        proxy_config.model_cost_map_loaded_at = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+
+        original_model_cost = litellm.model_cost.copy()
+        try:
+            with (
+                patch("litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map", new_callable=AsyncMock) as mock_get_map,
+                patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
+            ):
+                mock_get_map.return_value = ModelCostMapReloaded(model_cost_map={"gpt-4-test": {"input_cost_per_token": 0.5}})
+
+                asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+
+                assert litellm.model_cost["gpt-4-test"] == {"input_cost_per_token": 0.5}
+                assert proxy_config.model_cost_map_loaded_at == frozen_now
+                assert mock_prisma.db.litellm_config.update_many.call_args[1]["data"] == {"last_run_at": frozen_now}
+
+                mock_get_map.reset_mock()
+                mock_prisma.db.litellm_config.update_many.reset_mock()
+                proxy_config.model_cost_map_loaded_at = frozen_now - timedelta(hours=1)
+
+                asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+
+                mock_get_map.assert_not_called()
+                mock_prisma.db.litellm_config.update_many.assert_not_called()
+                assert proxy_config.model_cost_map_loaded_at == frozen_now - timedelta(hours=1)
+        finally:
+            litellm.model_cost = original_model_cost
+            _invalidate_model_cost_lowercase_map()
+
+    def test_every_pod_applies_a_manual_revision_exactly_once(self):
+        """The fleet property: no pod clears the revision, so each one reloads on the tick
+        after it is published and then stops, whatever order the pods poll in"""
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        pods = [ProxyConfig(), ProxyConfig(), ProxyConfig()]
+        frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=_reload_schedule_row({}, reload_revision=1))
+        for pod in pods:
+            pod.model_cost_map_applied_revision = 0
+            pod.model_cost_map_loaded_at = frozen_now
+
+        original_model_cost = litellm.model_cost.copy()
+        try:
+            with (
+                patch("litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map", new_callable=AsyncMock) as mock_get_map,
+                patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
+            ):
+                mock_get_map.return_value = ModelCostMapReloaded(model_cost_map={"gpt-4": {"input_cost_per_token": 0.001}})
+
+                for _ in range(3):
+                    for pod in pods:
+                        asyncio.run(pod._check_and_reload_model_cost_map(mock_prisma))
+
+                assert mock_get_map.call_count == len(pods)
+                assert all(p.model_cost_map_applied_revision == 1 for p in pods)
+        finally:
+            litellm.model_cost = original_model_cost
+            _invalidate_model_cost_lowercase_map()
+
+    @pytest.mark.parametrize(
+        "published_revision, expect_reload",
+        [(4, True), (0, False)],
+    )
+    def test_booting_pod_serves_an_outstanding_request_once(self, published_revision, expect_reload):
+        """
+        Regression: a manual reload published while this pod was starting must still be
+        served. The pod cannot prove its import-time fetch already covers that request, so
+        it applies it on the first poll and adopts the revision, leaving later polls quiet.
+        A row nobody has ever reloaded (revision 0) costs the pod nothing
+        """
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+        frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
+        proxy_config.model_cost_map_loaded_at = frozen_now
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(
+            return_value=_reload_schedule_row({}, reload_revision=published_revision)
+        )
+
+        original_model_cost = litellm.model_cost.copy()
+        try:
+            with (
+                patch("litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map", new_callable=AsyncMock) as mock_get_map,
+                patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
+            ):
+                mock_get_map.return_value = ModelCostMapReloaded(model_cost_map={"gpt-4": {"input_cost_per_token": 0.001}})
+
+                asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+                asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+
+                assert mock_get_map.call_count == (1 if expect_reload else 0)
+                assert proxy_config.model_cost_map_applied_revision == published_revision
+        finally:
+            litellm.model_cost = original_model_cost
+            _invalidate_model_cost_lowercase_map()
+
+    def test_distributed_reload_stamps_last_run_without_creating_row(self):
+        """
+        Regression: the job's write carries neither param_value (which would clobber the
+        admin-configured interval) nor a create branch (which would resurrect a schedule
+        a concurrent cancel just deleted)
+        """
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=_reload_schedule_row({"interval_hours": 24}))
+        mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=_reload_schedule_row({}, reload_revision=1))
+        mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
+        frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
+
+        original_model_cost = litellm.model_cost.copy()
+        try:
+            with (
+                patch("litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map", new_callable=AsyncMock) as mock_get_map,
+                patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
+            ):
+                mock_get_map.return_value = ModelCostMapReloaded(model_cost_map={"gpt-4": {"input_cost_per_token": 0.001}})
+
+                asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+
+                assert mock_prisma.db.litellm_config.update_many.call_args[1] == {
+                    "data": {"last_run_at": frozen_now},
+                    "where": {"param_name": "model_cost_map_reload_config"},
+                }
+                mock_prisma.db.litellm_config.upsert.assert_not_called()
+                mock_prisma.db.litellm_config.create.assert_not_called()
+        finally:
+            litellm.model_cost = original_model_cost
+            _invalidate_model_cost_lowercase_map()
+
+    def test_distributed_reload_leaves_request_unserved_when_status_write_fails(self):
+        """
+        A run that never reached the row must not be recorded as served. Adopting the
+        revision here would leave the card reporting the previous run until someone clicks
+        again, because a manual request is published once and never republished
+        """
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+        frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
+        proxy_config.model_cost_map_loaded_at = frozen_now - timedelta(hours=9)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(
+            return_value=_reload_schedule_row({"interval_hours": 6}, reload_revision=7)
+        )
+        mock_prisma.db.litellm_config.update_many = AsyncMock(side_effect=Exception("connection reset"))
+
+        original_model_cost = litellm.model_cost.copy()
+        try:
+            with (
+                patch(
+                    "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+                    new_callable=AsyncMock,
+                ) as mock_get_map,
+                patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
+            ):
+                mock_get_map.return_value = ModelCostMapReloaded(model_cost_map={"gpt-4": {"input_cost_per_token": 0.1}})
+
+                asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+
+                assert proxy_config.model_cost_map_applied_revision == 0
+        finally:
+            litellm.model_cost = original_model_cost
+            _invalidate_model_cost_lowercase_map()
+
+    def test_distributed_reload_keeps_current_map_when_fetch_fails(self):
+        """Fetch failure during a periodic reload must not downgrade the pod or count the
+        request as served.
+
+        Regression: a 429/network failure used to silently replace litellm.model_cost with
+        the stale packaged backup and stamp last_run. Adopting the revision here would be
+        the same bug one level up: a manual request is published once and never republished,
+        so a pod that records it as applied without the data stays mispriced until someone
+        clicks again
+        """
+        from litellm.litellm_core_utils.get_model_cost_map import (
+            ModelCostMapReloadUnavailable,
+        )
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+        frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
+        pod_data_loaded_at = frozen_now - timedelta(hours=9)
+        proxy_config.model_cost_map_loaded_at = pod_data_loaded_at
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(
+            return_value=_reload_schedule_row({"interval_hours": 6}, reload_revision=7)
+        )
+        mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+
+        original_model_cost = litellm.model_cost
+        with (
+            patch(
+                "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+                new=AsyncMock(return_value=ModelCostMapReloadUnavailable(reason="HTTP 429 from upstream")),
+            ),
+            patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
+        ):
+            asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+
+        assert litellm.model_cost is original_model_cost, (
+            "a failed reload must keep the currently loaded cost map, "
+            "not swap in the packaged backup"
+        )
+        assert proxy_config.model_cost_map_loaded_at == pod_data_loaded_at, (
+            "a failed reload must not stamp the pod's data age, otherwise the retry waits a full interval"
+        )
+        assert proxy_config.model_cost_map_applied_revision == 0, (
+            "a failed reload must leave the revision unapplied so the next poll retries it"
+        )
+        mock_prisma.db.litellm_config.update_many.assert_not_called()
+        mock_prisma.db.litellm_config.upsert.assert_not_called()
+
+    def test_scheduled_reload_replays_runtime_registrations(self):
+        """The scheduled reload is the trigger a pod hits on its own, so it must
+        both preserve runtime-registered model metadata and run to completion.
+        The swap happens early in the handler, so a failure in the bookkeeping
+        after it is swallowed by the surrounding except and would otherwise
+        leave the metadata correct while the path is quietly broken"""
+        from litellm import utils as litellm_utils
+        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+        frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
+        proxy_config.model_cost_map_loaded_at = frozen_now - timedelta(hours=9)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(
+            return_value=_reload_schedule_row({"interval_hours": 6}, reload_revision=7)
+        )
+        mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
+
+        original_model_cost = litellm.model_cost
+        original_registry = dict(litellm_utils._runtime_registered_model_cost)
+        try:
+            litellm.register_model(
+                model_cost={"custom/deployment-model": {"litellm_provider": "custom", "max_input_tokens": 4321}}
+            )
+
+            with (
+                patch(
+                    "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+                    new=AsyncMock(
+                        return_value=ModelCostMapReloaded(
+                            model_cost_map={"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}}
+                        )
+                    ),
+                ),
+                patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
+                patch("litellm.proxy.proxy_server.verbose_proxy_logger") as mock_logger,
+            ):
+                asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+
+            mock_logger.exception.assert_not_called()
+            assert litellm.model_cost["custom/deployment-model"]["max_input_tokens"] == 4321
+            assert "gpt-4o" in litellm.model_cost
+            assert proxy_config.model_cost_map_applied_revision == 7
+        finally:
+            litellm.model_cost = original_model_cost
+            litellm_utils._runtime_registered_model_cost.clear()
+            litellm_utils._runtime_registered_model_cost.update(original_registry)
+            _invalidate_model_cost_lowercase_map()
+
+    def test_swap_in_model_cost_map_counts_the_fetched_catalog_only(self):
+        """The count the reload endpoints report describes the price data, so it
+        is taken before the runtime registrations are written back into the same
+        dict. Counting after would inflate it by however many deployments and
+        overrides this pod happens to be carrying"""
+        from litellm import utils as litellm_utils
+        from litellm.proxy.proxy_server import _swap_in_model_cost_map
+
+        original_model_cost = litellm.model_cost
+        original_registry = dict(litellm_utils._runtime_registered_model_cost)
+        try:
+            litellm.register_model(
+                model_cost={"custom/deployment-model": {"litellm_provider": "custom", "max_input_tokens": 4321}}
+            )
+
+            models_count = _swap_in_model_cost_map({"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}})
+
+            assert models_count == 1
+            assert litellm.model_cost["custom/deployment-model"]["max_input_tokens"] == 4321
+        finally:
+            litellm.model_cost = original_model_cost
+            litellm_utils._runtime_registered_model_cost.clear()
+            litellm_utils._runtime_registered_model_cost.update(original_registry)
+            _invalidate_model_cost_lowercase_map()
+
+    def test_manual_reload_preserves_interval_hours(self):
+        """
+        Regression: manual reload owns only the run columns, so it never reads or rewrites
+        param_value and cannot destroy an existing schedule
         """
         from litellm.proxy._types import LitellmUserRoles
         from litellm.proxy.proxy_server import cleanup_router_config_variables
@@ -3710,39 +4421,40 @@ class TestPriceDataReloadIntegration:
         mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
         app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
         client = TestClient(app)
+        frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
+
+        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 
         original_model_cost = litellm.model_cost.copy()
         try:
-            with patch(
-                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
-            ) as mock_get_map:
-                mock_get_map.return_value = {"gpt-4": {"input_cost_per_token": 0.001}}
+            with (
+                patch("litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map", new_callable=AsyncMock) as mock_get_map,
+                patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+                patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
+            ):
+                mock_get_map.return_value = ModelCostMapReloaded(model_cost_map={"gpt-4": {"input_cost_per_token": 0.001}})
+                mock_prisma.db.litellm_config.upsert = AsyncMock(
+                    return_value=_reload_schedule_row({}, reload_revision=9)
+                )
 
-                with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
-                    # Simulate existing config with a schedule
-                    mock_existing = MagicMock()
-                    mock_existing.param_value = {
-                        "interval_hours": 12,
-                        "force_reload": False,
-                    }
-                    mock_prisma.db.litellm_config.find_unique = AsyncMock(
-                        return_value=mock_existing
-                    )
-                    mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+                response = client.post("/reload/model_cost_map")
+                assert response.status_code == 200
 
-                    response = client.post("/reload/model_cost_map")
-                    assert response.status_code == 200
-
-                    # Verify interval_hours was preserved in the upsert
-                    mock_prisma.db.litellm_config.upsert.assert_called()
-                    call_args = mock_prisma.db.litellm_config.upsert.call_args
-                    param_value_json = call_args[1]["data"]["update"]["param_value"]
-                    param_value_dict = json.loads(param_value_json)
-                    assert param_value_dict["force_reload"] == True
-                    assert param_value_dict["interval_hours"] == 12, (
-                        "interval_hours must be preserved when manual reload sets force_reload; "
-                        "dropping it destroys any existing schedule"
-                    )
+                mock_prisma.db.litellm_config.find_unique.assert_not_called()
+                call_args = mock_prisma.db.litellm_config.upsert.call_args
+                assert call_args[1]["data"]["update"] == {
+                    "last_run_at": frozen_now,
+                    "reload_revision": {"increment": 1},
+                }
+                assert call_args[1]["data"]["create"] == {
+                    "param_name": "model_cost_map_reload_config",
+                    "last_run_at": frozen_now,
+                    "reload_revision": 1,
+                }
+                assert proxy_server_module.proxy_config.model_cost_map_loaded_at == frozen_now
+                assert proxy_server_module.proxy_config.model_cost_map_applied_revision == 9, (
+                    "the serving pod must adopt the revision it published, not reload again"
+                )
         finally:
             litellm.model_cost = original_model_cost
             _invalidate_model_cost_lowercase_map()
@@ -3754,7 +4466,9 @@ class TestPriceDataReloadIntegration:
         identical to the model cost map bug.
         """
         from litellm.proxy.proxy_server import ProxyConfig
+        from litellm.proxy.utils import litellm_config_cache
 
+        litellm_config_cache.flush_cache()
         proxy_config = ProxyConfig()
         mock_prisma = MagicMock()
 
@@ -3764,7 +4478,7 @@ class TestPriceDataReloadIntegration:
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
         # _check_and_reload_anthropic_beta_headers now reads through get_generic_data.
         mock_prisma.get_generic_data = AsyncMock(return_value=mock_config)
-        mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=_reload_schedule_row({}, reload_revision=1))
 
         with patch(
             "litellm.anthropic_beta_headers_manager.reload_beta_headers_config"
@@ -3814,10 +4528,10 @@ class TestPriceDataReloadIntegration:
                 # Simulate existing config with a schedule
                 mock_existing = MagicMock()
                 mock_existing.param_value = {"interval_hours": 8, "force_reload": False}
-                mock_prisma.db.litellm_config.find_unique = AsyncMock(
-                    return_value=mock_existing
+                mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_existing)
+                mock_prisma.db.litellm_config.upsert = AsyncMock(
+                    return_value=_reload_schedule_row({}, reload_revision=1)
                 )
-                mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
 
                 response = client.post("/reload/anthropic_beta_headers")
                 assert response.status_code == 200
@@ -3860,64 +4574,6 @@ model_list:
         # Verify models are present
         assert "model_list" in config
         assert len(config["model_list"]) == 2
-
-    def test_database_config_storage(self):
-        """Test that configuration is properly stored in database"""
-        # Mock prisma client
-        mock_prisma = MagicMock()
-
-        # Test the database upsert call that would be made by the schedule endpoint
-        mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
-
-        # Simulate the database call that the schedule endpoint would make
-        asyncio.run(
-            mock_prisma.db.litellm_config.upsert(
-                where={"param_name": "model_cost_map_reload_config"},
-                data={
-                    "create": {
-                        "param_name": "model_cost_map_reload_config",
-                        "param_value": {"interval_hours": 6, "force_reload": False},
-                    },
-                    "update": {
-                        "param_value": {"interval_hours": 6, "force_reload": False}
-                    },
-                },
-            )
-        )
-
-        # Verify database upsert was called with correct data
-        mock_prisma.db.litellm_config.upsert.assert_called_once()
-        call_args = mock_prisma.db.litellm_config.upsert.call_args
-        assert call_args[1]["where"]["param_name"] == "model_cost_map_reload_config"
-        assert call_args[1]["data"]["create"]["param_value"]["interval_hours"] == 6
-        assert call_args[1]["data"]["create"]["param_value"]["force_reload"] == False
-
-    def test_manual_reload_force_flag(self):
-        """Test that manual reload sets force flag correctly"""
-        # Mock prisma client
-        mock_prisma = MagicMock()
-
-        # Test the database upsert call that would be made by the manual reload endpoint
-        mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
-
-        # Simulate the database call that the manual reload endpoint would make
-        asyncio.run(
-            mock_prisma.db.litellm_config.upsert(
-                where={"param_name": "model_cost_map_reload_config"},
-                data={
-                    "create": {
-                        "param_name": "model_cost_map_reload_config",
-                        "param_value": {"interval_hours": None, "force_reload": True},
-                    },
-                    "update": {"param_value": {"force_reload": True}},
-                },
-            )
-        )
-
-        # Verify force_reload flag was set
-        mock_prisma.db.litellm_config.upsert.assert_called_once()
-        call_args = mock_prisma.db.litellm_config.upsert.call_args
-        assert call_args[1]["data"]["update"]["param_value"]["force_reload"] == True
 
 
 @pytest.mark.asyncio
@@ -6388,6 +7044,39 @@ async def test_update_general_settings_store_model_in_db_false():
 
 
 @pytest.mark.asyncio
+async def test_update_general_settings_propagates_apply_user_budget_to_team_keys():
+    """The Admin UI toggle writes to the DB config, so the flag has to be in the
+    runtime propagation allowlist. The reverted skip_user_budget_on_team_key was
+    exposed in /config/list but never propagated, so its toggle did nothing."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        await proxy_config._update_general_settings(db_general_settings={"apply_user_budget_to_team_keys": "true"})
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["apply_user_budget_to_team_keys"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_apply_user_budget_to_team_keys_yaml_wins():
+    """A DB value must not silently override an explicit YAML setting on reload."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._yaml_general_settings_keys = {"apply_user_budget_to_team_keys"}
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"apply_user_budget_to_team_keys": True}):
+        await proxy_config._update_general_settings(db_general_settings={"apply_user_budget_to_team_keys": False})
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["apply_user_budget_to_team_keys"] is True
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "db_value,expected",
     [(True, True), (False, False), ("true", True), ("false", False), (None, None)],
@@ -8640,7 +9329,9 @@ def test_realtime_websocket_route_aliases_registered():
             f"{expected!r} missing from LiteLLMRoutes.openai_routes; "
             f"non-admin / team / key-scoped users will get 403 on this path."
         )
-        assert API_ROUTE_TO_CALL_TYPES.get(expected) == [CallTypes.arealtime], (
+        assert tuple(API_ROUTE_TO_CALL_TYPES.get(expected) or ()) == (
+            CallTypes.arealtime,
+        ), (
             f"{expected!r} missing from API_ROUTE_TO_CALL_TYPES; call-type "
             f"resolution will return None and break call-type-aware features."
         )
@@ -8793,10 +9484,13 @@ class TestDeleteDeploymentSync:
             with patch.object(
                 proxy_config, "get_config", AsyncMock(return_value={"model_list": []})
             ):
-                count = await proxy_config._delete_deployment(db_models=[])
+                still_desired = await proxy_config._delete_deployment(db_models=[])
 
         mock_router.delete_deployment.assert_called_once_with(id="model-id-to-evict")
-        assert count == 1
+        assert still_desired == frozenset(), (
+            "an empty db and an empty config want nothing, which must stay distinct from "
+            f"the None returned when no reconcile ran at all; got {still_desired}"
+        )
 
     @pytest.mark.asyncio
     async def test_update_llm_router_skips_update_on_db_fetch_failure(self):
@@ -8875,10 +9569,10 @@ def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
         app.dependency_overrides.clear()
 
 
-def test_get_config_list_includes_skip_user_budget_on_team_key(monkeypatch):
-    """Related to #12905: the opt-out flag must be discoverable via /config/list so
-    it renders as a Boolean toggle on the Admin UI General Settings table. This
-    requires both the ConfigGeneralSettings field and the allowed_args entry."""
+def test_get_config_list_includes_apply_user_budget_to_team_keys(monkeypatch):
+    """Related to #12905: the opt-in must be discoverable via /config/list so it
+    renders as a Boolean toggle on the Admin UI General Settings table. This needs
+    both the ConfigGeneralSettings field and the allowed_args entry."""
     import types
     from unittest.mock import AsyncMock, MagicMock
 
@@ -8901,8 +9595,8 @@ def test_get_config_list_includes_skip_user_budget_on_team_key(monkeypatch):
         resp = client.get("/config/list", params={"config_type": "general_settings"})
         assert resp.status_code == 200, resp.text
         fields = {item["field_name"]: item for item in resp.json()}
-        assert "skip_user_budget_on_team_key" in fields
-        assert fields["skip_user_budget_on_team_key"]["field_type"] == "Boolean"
+        assert "apply_user_budget_to_team_keys" in fields
+        assert fields["apply_user_budget_to_team_keys"]["field_type"] == "Boolean"
     finally:
         app.dependency_overrides.clear()
 
@@ -9046,6 +9740,85 @@ def test_general_settings_ui_fields_are_db_overridable():
         f"UI-editable litellm_settings fields missing from LITELLM_SETTINGS_SAFE_DB_OVERRIDES: {sorted(missing)}. "
         "Add them, or they will not propagate to other workers when changed from the UI."
     )
+
+
+@pytest.mark.asyncio
+async def test_update_config_field_max_ui_session_budget_sets_live_value(monkeypatch):
+    """LIT-4662: the dashboard session budget is editable from the Admin UI General tab.
+    A Dollar field must accept values above 1 (the old Float type capped at 1, which cannot
+    express a dollar budget), apply live via setattr, and persist under litellm_settings."""
+    from unittest.mock import MagicMock
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import (
+        ConfigFieldUpdate,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    saved: dict = {}
+
+    async def fake_get_config():
+        return {"litellm_settings": {}}
+
+    async def fake_save_config(new_config=None):
+        saved.update(new_config or {})
+
+    monkeypatch.setattr(ps.proxy_config, "get_config", fake_get_config)
+    monkeypatch.setattr(ps.proxy_config, "save_config", fake_save_config)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+    monkeypatch.setattr(litellm, "max_ui_session_budget", 1.0)
+
+    admin = UserAPIKeyAuth(api_key="k", user_id="a", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="max_ui_session_budget",
+            field_value=25.0,
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+
+    assert litellm.max_ui_session_budget == 25.0
+    assert saved["litellm_settings"]["max_ui_session_budget"] == 25.0
+
+
+@pytest.mark.parametrize("bad_value", [True, "abc", -1, 0, [2.5]])
+def test_validate_max_ui_session_budget_rejects_malformed(bad_value):
+    """A Dollar field accepts only positive numbers; zero would block every dashboard
+    LLM call at mint and non-numerics would break session key generation."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.proxy_server import _validate_general_settings_ui_litellm_value
+
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_general_settings_ui_litellm_value("max_ui_session_budget", bad_value)
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize("empty_value", [None, ""])
+def test_validate_max_ui_session_budget_empty_restores_default(empty_value):
+    """Clearing the field in the UI restores the shipped $1 default rather than None;
+    None would silently remove the session spend guardrail (unlimited budget), which
+    must stay a deliberate config.yaml act (max_ui_session_budget: null)."""
+    from litellm.proxy.proxy_server import _validate_general_settings_ui_litellm_value
+
+    assert _validate_general_settings_ui_litellm_value("max_ui_session_budget", empty_value) == 1.0
+
+
+def test_general_settings_ui_defaults_unchanged_for_existing_fields():
+    """The spec-default mechanism added for max_ui_session_budget must not change what
+    clearing the pre-existing fields restores (None for Float/Select, False for Boolean)."""
+    from litellm.proxy.proxy_server import (
+        _GENERAL_SETTINGS_UI_LITELLM_FIELDS,
+        _general_settings_ui_litellm_default,
+    )
+
+    assert _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS["budget_exceeded_throttle_percentage"]) is None
+    assert _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS["enable_anthropic_prompt_caching"]) is False
+    assert _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS["anthropic_prompt_caching_ttl"]) is None
 
 
 @pytest.mark.parametrize(
@@ -10199,3 +10972,309 @@ async def test_startup_survives_database_read_failure_for_coordination_redis():
         )
 
     assert result is None
+
+
+def _stream_usage_test_chunks():
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
+
+    content_chunk = ModelResponseStream(
+        model="gpt-5.4-nano",
+        choices=[StreamingChoices(delta=Delta(content="pong"))],
+    )
+    finish_chunk = ModelResponseStream(
+        model="gpt-5.4-nano",
+        choices=[StreamingChoices(finish_reason="stop")],
+    )
+    usage_chunk = ModelResponseStream(model="gpt-5.4-nano", choices=[])
+    usage_chunk.usage = Usage(prompt_tokens=50, completion_tokens=188, total_tokens=238)
+    return content_chunk, finish_chunk, usage_chunk
+
+
+def _stream_usage_generator_chunks():
+    from litellm.types.utils import ModelResponseStream
+
+    content_chunk, finish_chunk, usage_chunk = _stream_usage_test_chunks()
+    prompt_filter_chunk = ModelResponseStream(model="gpt-5.4-nano", choices=[])
+    return prompt_filter_chunk, content_chunk, finish_chunk, usage_chunk
+
+
+def test_is_injected_stream_usage_artifact():
+    from litellm.proxy.proxy_server import _is_injected_stream_usage_artifact
+    from litellm.types.utils import ModelResponseStream, Usage
+
+    content_chunk, finish_chunk, empty_choices_usage_chunk = _stream_usage_test_chunks()
+    assert _is_injected_stream_usage_artifact(empty_choices_usage_chunk) is True
+
+    synthetic_final_chunk = ModelResponseStream(model="gpt-5.4-nano")
+    synthetic_final_chunk.usage = Usage(prompt_tokens=50, completion_tokens=188, total_tokens=238)
+    assert _is_injected_stream_usage_artifact(synthetic_final_chunk) is True
+
+    azure_prompt_filter_chunk = ModelResponseStream(model="gpt-5.4-nano", choices=[])
+    assert _is_injected_stream_usage_artifact(azure_prompt_filter_chunk) is True
+
+    assert _is_injected_stream_usage_artifact(content_chunk) is False
+    assert _is_injected_stream_usage_artifact(finish_chunk) is False
+
+    content_chunk_with_usage, finish_chunk_with_usage, _ = _stream_usage_test_chunks()
+    content_chunk_with_usage.usage = Usage(prompt_tokens=50, completion_tokens=188, total_tokens=238)
+    finish_chunk_with_usage.usage = Usage(prompt_tokens=50, completion_tokens=188, total_tokens=238)
+    assert _is_injected_stream_usage_artifact(content_chunk_with_usage) is False
+    assert _is_injected_stream_usage_artifact(finish_chunk_with_usage) is False
+
+    assert _is_injected_stream_usage_artifact({"usage": {"prompt_tokens": 1}}) is False
+
+
+async def _collect_async_data_generator_frames(request_data: dict) -> list:
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    chunks = _stream_usage_generator_chunks()
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            for chunk in chunks:
+                yield chunk
+
+        async def aclose(self):
+            pass
+
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        with patch.object(proxy_server_module.ProxyLogging, "_fire_deferred_stream_logging"):
+            return [
+                frame.decode("utf-8") if isinstance(frame, bytes) else frame
+                async for frame in async_data_generator(
+                    MockStream(), MagicMock(spec=UserAPIKeyAuth), request_data
+                )
+            ]
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_strips_injected_usage_chunk():
+    frames = await _collect_async_data_generator_frames(
+        {"model": "gpt-5.4-nano", "_litellm_strip_stream_usage": True}
+    )
+
+    data_frames = [frame for frame in frames if frame.startswith("data: {")]
+    assert len(data_frames) == 2
+    assert any("pong" in frame for frame in data_frames)
+    assert any("finish_reason" in frame for frame in data_frames)
+    assert not any('"usage"' in frame for frame in data_frames)
+    assert frames[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_forwards_usage_chunk_without_strip_marker():
+    frames = await _collect_async_data_generator_frames({"model": "gpt-5.4-nano"})
+
+    data_frames = [frame for frame in frames if frame.startswith("data: {")]
+    assert len(data_frames) == 4
+    assert any('"usage"' in frame and '"completion_tokens":188' in frame.replace(" ", "") for frame in data_frames)
+    assert frames[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_config_field_update_rejects_mock_testing_flag():
+    """The mock-testing opt-in is deliberately absent from
+    ``ConfigGeneralSettings`` so that ``/config/field/update`` refuses it. If
+    someone later adds the field for tidiness, this test fails and tells them
+    they have just opened an API write path into a config-file-only setting."""
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import update_config_general_settings
+    from litellm.proxy.route_llm_request import MOCK_TESTING_CONFIG_KEY
+
+    admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-test",
+    )
+
+    with patch.object(proxy_server_module, "prisma_client", MagicMock()):
+        with pytest.raises(HTTPException) as exc_info:
+            await update_config_general_settings(
+                data=ConfigFieldUpdate(
+                    field_name=MOCK_TESTING_CONFIG_KEY,
+                    field_value=True,
+                    config_type="general_settings",
+                ),
+                user_api_key_dict=admin,
+            )
+
+    assert exc_info.value.status_code == 400
+
+
+def test_config_update_body_drops_mock_testing_flag():
+    """``/config/update`` parses its body as ``ConfigYAML``, whose
+    ``general_settings`` is a ``ConfigGeneralSettings``. Undeclared keys are
+    dropped on parse, so the flag never reaches the DB by that route either."""
+    from litellm.proxy._types import ConfigYAML
+    from litellm.proxy.route_llm_request import MOCK_TESTING_CONFIG_KEY
+
+    parsed = ConfigYAML.model_validate({"general_settings": {MOCK_TESTING_CONFIG_KEY: True}})
+
+    assert parsed.general_settings is not None
+    assert MOCK_TESTING_CONFIG_KEY not in parsed.general_settings.model_dump(exclude_none=True)
+
+
+def test_startup_warns_when_mock_testing_params_enabled(caplog):
+    """Enabling the opt-in must announce itself, naming every param it
+    unlocks — the config key says ``mock_testing`` but the gate also covers
+    ``mock_timeout`` and ``mock_delay``, so coverage cannot be inferred from
+    the name alone."""
+    import logging
+
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.route_llm_request import (
+        GATED_MOCK_PARAM_NAMES,
+        MOCK_TESTING_CONFIG_KEY,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent._warn_if_mock_testing_params_enabled(
+            general_settings={MOCK_TESTING_CONFIG_KEY: True}
+        )
+
+    assert MOCK_TESTING_CONFIG_KEY in caplog.text
+    for param_name in GATED_MOCK_PARAM_NAMES:
+        assert param_name in caplog.text
+
+
+def test_startup_is_silent_when_mock_testing_params_disabled(caplog):
+    """A proxy that never set the opt-in must not emit the warning."""
+    import logging
+
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.route_llm_request import MOCK_TESTING_CONFIG_KEY
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent._warn_if_mock_testing_params_enabled(general_settings={})
+
+    assert MOCK_TESTING_CONFIG_KEY not in caplog.text
+
+
+def _mock_startup_prisma_client(health_check_error=None, connect_error=None):
+    client = MagicMock()
+    client.connect = AsyncMock(side_effect=connect_error)
+    client.db.start_token_refresh_task = AsyncMock()
+    client.check_view_exists = AsyncMock()
+    client._set_spend_logs_row_count_in_proxy_state = AsyncMock()
+    client.start_db_health_watchdog_task = AsyncMock()
+    client.health_check = AsyncMock(side_effect=health_check_error)
+    return client
+
+
+async def _run_setup_prisma_client(mock_client):
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    with patch.object(proxy_server_module, "PrismaClient", return_value=mock_client):
+        result = await ProxyStartupEvent._setup_prisma_client(
+            database_url="postgresql://litellm:litellm@localhost:5432/litellm",
+            proxy_logging_obj=MagicMock(),
+            user_api_key_cache=DualCache(),
+        )
+    await asyncio.sleep(0.05)
+    return result
+
+
+@pytest.mark.asyncio
+async def test_setup_prisma_client_retains_connected_client_when_startup_health_check_fails(
+    monkeypatch,
+):
+    """A transient failure of the startup ``SELECT 1`` must not discard a client
+    whose ``connect()`` already succeeded.
+
+    Discarding it assigns ``None`` to the module-level ``prisma_client`` for the
+    life of the process, so a database that came back a second later is never
+    used again until the proxy is restarted."""
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "False")
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+
+    mock_client = _mock_startup_prisma_client(
+        health_check_error=httpx.ReadTimeout("startup health check timed out")
+    )
+    result = await _run_setup_prisma_client(mock_client)
+
+    assert mock_client.connect.await_count == 1
+    assert mock_client.health_check.await_count == 1
+    assert result is mock_client
+
+
+@pytest.mark.asyncio
+async def test_setup_prisma_client_arms_health_watchdog_before_startup_health_check(
+    monkeypatch,
+):
+    """The health watchdog is the only thing that reconnects a dropped DB, so it
+    has to be armed before the startup health check can fail.
+
+    Armed after, the single failure it exists to recover from is exactly the one
+    that skips it, and recovery never happens."""
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "False")
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+
+    mock_client = _mock_startup_prisma_client(
+        health_check_error=httpx.ReadTimeout("startup health check timed out")
+    )
+    call_order = MagicMock()
+    call_order.attach_mock(mock_client.start_db_health_watchdog_task, "watchdog")
+    call_order.attach_mock(mock_client.health_check, "health_check")
+
+    await _run_setup_prisma_client(mock_client)
+
+    assert mock_client.start_db_health_watchdog_task.await_count == 1
+    assert [call[0] for call in call_order.mock_calls] == ["watchdog", "health_check"]
+
+
+@pytest.mark.asyncio
+async def test_setup_prisma_client_raises_when_db_unavailable_is_not_allowed(monkeypatch):
+    """Without ``allow_requests_on_db_unavailable`` a failed startup health check
+    must still hard-fail startup. Retaining the client is a fallback for
+    operators who opted into serving traffic without a database, never a way to
+    boot a proxy whose DB never answered."""
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "False")
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": False},
+    )
+
+    mock_client = _mock_startup_prisma_client(
+        health_check_error=httpx.ReadTimeout("startup health check timed out")
+    )
+    with pytest.raises(httpx.ReadTimeout):
+        await _run_setup_prisma_client(mock_client)
+
+
+@pytest.mark.asyncio
+async def test_setup_prisma_client_returns_none_when_connect_itself_fails(monkeypatch):
+    """Retaining only ever applies to a client that connected. If ``connect()``
+    failed there is no usable client and no watchdog to recover it, so the caller
+    must still get ``None``."""
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "False")
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+
+    mock_client = _mock_startup_prisma_client(connect_error=httpx.ConnectError("connection refused"))
+    result = await _run_setup_prisma_client(mock_client)
+
+    assert result is None
+    assert mock_client.start_db_health_watchdog_task.await_count == 0
+    assert mock_client.health_check.await_count == 0

@@ -11,6 +11,7 @@ interface OrganizationDropdownProps {
   disabled?: boolean;
   loading?: boolean;
   style?: React.CSSProperties;
+  placeholder?: string;
 }
 
 const OrganizationDropdown: React.FC<OrganizationDropdownProps> = ({
@@ -20,11 +21,12 @@ const OrganizationDropdown: React.FC<OrganizationDropdownProps> = ({
   disabled,
   loading,
   style,
+  placeholder = "All Organizations",
 }) => {
   return (
     <Select
       showSearch
-      placeholder="All Organizations"
+      placeholder={placeholder}
       value={value}
       onChange={onChange}
       disabled={disabled}

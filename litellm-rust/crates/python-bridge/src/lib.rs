@@ -1,10 +1,14 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use litellm_ai_gateway::io::messages::{messages as run_messages, MessagesRequest};
-use litellm_ai_gateway::io::ocr::{ocr as run_ocr, OcrRequest};
+use litellm_ai_gateway::io::audio_transcription::{
+    AudioTranscriptionRequest, audio_transcription as run_audio_transcription,
+};
+use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
 use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use litellm_core::error::CoreError;
+use litellm_core::messages::messages as run_messages;
+use litellm_core::messages::types::{AnthropicMessagesResponse, MessagesRequest};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
@@ -30,6 +34,15 @@ fn json_to_py(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>> {
     let encoded =
         serde_json::to_string(&value).map_err(|err| PyValueError::new_err(err.to_string()))?;
     Ok(json.call_method1("loads", (encoded,))?.unbind())
+}
+
+fn messages_response_to_py(
+    py: Python<'_>,
+    response: AnthropicMessagesResponse,
+) -> PyResult<Py<PyAny>> {
+    let value =
+        serde_json::to_value(response).map_err(|err| PyValueError::new_err(err.to_string()))?;
+    json_to_py(py, value)
 }
 
 fn core_error_to_pyerr(err: CoreError) -> PyErr {
@@ -244,6 +257,93 @@ fn aocr(
     })
 }
 
+#[pyfunction]
+#[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
+#[allow(clippy::too_many_arguments)]
+fn transcription(
+    py: Python<'_>,
+    model: String,
+    audio: Py<PyAny>,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    extra_headers: Option<Py<PyAny>>,
+    optional_params: Option<Py<PyAny>>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<Py<PyAny>> {
+    let audio = py_to_json(py, audio.bind(py))?;
+    let extra_headers = match extra_headers {
+        Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
+        None => None,
+    };
+    let optional_params = optional_object_to_map(py, "optional_params", optional_params)?;
+    let timeout = optional_timeout(timeout_seconds);
+    let result = gil::release_gil(py, || {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(run_audio_transcription(
+            AudioTranscriptionRequest {
+                model: &model,
+                audio,
+                api_key: api_key.as_deref(),
+                api_base: api_base.as_deref(),
+                custom_llm_provider: custom_llm_provider.as_deref(),
+                extra_headers,
+                optional_params,
+                timeout,
+                callbacks: Vec::new(),
+                guardrails: Vec::new(),
+                request_metadata: Default::default(),
+                litellm_call_id: None,
+            },
+        ))
+    });
+    match result {
+        Ok(value) => json_to_py(py, value),
+        Err(err) => Err(core_error_to_pyerr(err)),
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
+#[allow(clippy::too_many_arguments)]
+fn atranscription(
+    py: Python<'_>,
+    model: String,
+    audio: Py<PyAny>,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    extra_headers: Option<Py<PyAny>>,
+    optional_params: Option<Py<PyAny>>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<Bound<'_, PyAny>> {
+    let audio = py_to_json(py, audio.bind(py))?;
+    let extra_headers = match extra_headers {
+        Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
+        None => None,
+    };
+    let optional_params = optional_object_to_map(py, "optional_params", optional_params)?;
+    let timeout = optional_timeout(timeout_seconds);
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let value = run_audio_transcription(AudioTranscriptionRequest {
+            model: &model,
+            audio,
+            api_key: api_key.as_deref(),
+            api_base: api_base.as_deref(),
+            custom_llm_provider: custom_llm_provider.as_deref(),
+            extra_headers,
+            optional_params,
+            timeout,
+            callbacks: Vec::new(),
+            guardrails: Vec::new(),
+            request_metadata: Default::default(),
+            litellm_call_id: None,
+        })
+        .await
+        .map_err(core_error_to_pyerr)?;
+        Python::attach(|py| json_to_py(py, value))
+    })
+}
+
 type MarshaledMessagesInputs = (Value, Option<Map<String, Value>>, Option<Duration>);
 
 fn marshal_messages_inputs(
@@ -292,7 +392,7 @@ fn messages(
     });
 
     match result {
-        Ok(value) => json_to_py(py, value),
+        Ok(response) => messages_response_to_py(py, response),
         Err(err) => Err(core_error_to_pyerr(err)),
     }
 }
@@ -314,7 +414,7 @@ fn amessages(
         marshal_messages_inputs(py, body, extra_headers, timeout_seconds)?;
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let value = run_messages(MessagesRequest {
+        let response = run_messages(MessagesRequest {
             model: &model,
             body,
             api_key: api_key.as_deref(),
@@ -326,7 +426,7 @@ fn amessages(
         .await
         .map_err(core_error_to_pyerr)?;
 
-        Python::attach(|py| json_to_py(py, value))
+        Python::attach(|py| messages_response_to_py(py, response))
     })
 }
 
@@ -341,6 +441,8 @@ fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ocr, module)?)?;
     module.add_function(wrap_pyfunction!(aocr, module)?)?;
+    module.add_function(wrap_pyfunction!(transcription, module)?)?;
+    module.add_function(wrap_pyfunction!(atranscription, module)?)?;
     module.add_function(wrap_pyfunction!(messages, module)?)?;
     module.add_function(wrap_pyfunction!(amessages, module)?)?;
     module.add_class::<ResponsesWebSocketConnection>()?;

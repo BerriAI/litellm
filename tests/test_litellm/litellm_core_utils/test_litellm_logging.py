@@ -11,6 +11,9 @@ sys.path.insert(
 
 import time
 
+import httpx
+from openai._legacy_response import HttpxBinaryResponseContent
+
 import litellm
 from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 from litellm.integrations.custom_logger import CustomLogger
@@ -522,6 +525,26 @@ class TestUpdateFromKwargs:
             litellm_params={"litellm_call_id": "call-empty"},
         )
         assert logging_obj.litellm_params["litellm_call_id"] == "call-empty"
+
+    @pytest.mark.parametrize("caller_metadata", [None, "not-a-dict", 42])
+    def test_non_dict_caller_metadata_does_not_break_the_merge(self, logging_obj, caller_metadata):
+        logging_obj.update_from_kwargs(
+            kwargs={"metadata": caller_metadata, "litellm_metadata": {"user_api_key_hash": "hashed"}},
+            litellm_params={"metadata": {"user_api_key_hash": "hashed", "litellm_api_version": "1.0"}},
+        )
+
+        assert logging_obj.litellm_params["metadata"]["user_api_key_hash"] == "hashed"
+
+    def test_does_not_mutate_caller_metadata_dict(self, logging_obj):
+        caller_metadata: dict = {}
+
+        logging_obj.update_from_kwargs(
+            kwargs={"metadata": caller_metadata, "litellm_metadata": {"user_api_key_hash": "hashed"}},
+            litellm_params={"metadata": {"user_api_key_hash": "hashed", "litellm_api_version": "1.0"}},
+        )
+
+        assert caller_metadata == {}
+        assert logging_obj.litellm_params["metadata"]["user_api_key_hash"] == "hashed"
 
 
 def test_logging_prevent_double_logging(logging_obj):
@@ -1111,6 +1134,171 @@ async def test_dispatch_success_handlers_invokes_async_callback_for_pass_through
         litellm._async_success_callback = original_async_callbacks
 
 
+@pytest.mark.asyncio
+async def test_dispatch_failure_handlers_prefer_async_does_not_submit_sync_handler(
+    logging_obj,
+):
+    """prefer_async_handlers must await async_failure_handler and never submit the sync failure_handler.
+
+    Submitting the sync ``failure_handler`` while awaiting ``async_failure_handler``
+    lets both mutate the shared logging_obj at once, which is the concurrent-mutation
+    crash this dispatch guard exists to prevent.
+    """
+    exception = ValueError("boom")
+    traceback_exception = "traceback"
+
+    logging_obj.model_call_details["litellm_params"] = {}
+
+    with (
+        patch.object(
+            logging_obj, "async_failure_handler", new_callable=AsyncMock
+        ) as mock_async,
+        patch.object(
+            logging_obj, "failure_handler", new_callable=MagicMock
+        ) as mock_sync,
+        patch.object(
+            logging_obj,
+            "_should_run_sync_failure_callbacks_for_async_calls",
+            return_value=False,
+        ),
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.executor.submit"
+        ) as mock_submit,
+    ):
+        await logging_obj.dispatch_failure_handlers(
+            exception,
+            traceback_exception,
+            prefer_async_handlers=True,
+        )
+
+    mock_async.assert_awaited_once_with(exception, traceback_exception)
+    mock_sync.assert_not_called()
+    mock_submit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_failure_handlers_async_completes_before_sync_submit(
+    logging_obj,
+):
+    """The async failure handler must fully finish before the legacy sync handler is scheduled.
+
+    Ordering proves there is no window where both handlers touch the shared
+    logging_obj concurrently: the sync submit only happens after the await returns.
+    """
+    exception = ValueError("boom")
+    traceback_exception = "traceback"
+    events: list[str] = []
+
+    async def _async_failure(exc, tb, **kwargs):
+        events.append("async_start")
+        await asyncio.sleep(0)
+        events.append("async_end")
+
+    def _submit(*args, **kwargs):
+        events.append("sync_submit")
+
+    logging_obj.model_call_details["litellm_params"] = {}
+
+    with (
+        patch.object(logging_obj, "async_failure_handler", side_effect=_async_failure),
+        patch.object(logging_obj, "failure_handler", new_callable=MagicMock),
+        patch.object(
+            logging_obj,
+            "_should_run_sync_failure_callbacks_for_async_calls",
+            return_value=True,
+        ),
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.executor.submit",
+            side_effect=_submit,
+        ),
+    ):
+        await logging_obj.dispatch_failure_handlers(
+            exception,
+            traceback_exception,
+            prefer_async_handlers=True,
+        )
+
+    assert events == ["async_start", "async_end", "sync_submit"]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_failure_handlers_submits_sync_handler_for_failure_only_callbacks(
+    logging_obj,
+):
+    """A sync failure callback must still run when only failure callbacks are configured.
+
+    The legacy thread-based path always submitted the sync failure_handler, so gating it on
+    the success callback list would silently drop failure logging for any deployment that
+    registers only failure callbacks and no success callbacks. This drives the real predicate
+    (unmocked), so gating the sync failure handler on the success list fails this test.
+    """
+    exception = ValueError("boom")
+    traceback_exception = "traceback"
+
+    def _sync_failure_callback(*args, **kwargs):
+        return None
+
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.dynamic_success_callbacks = None
+    logging_obj.dynamic_failure_callbacks = None
+
+    with (
+        patch.object(litellm, "success_callback", []),
+        patch.object(litellm, "failure_callback", [_sync_failure_callback]),
+        patch.object(logging_obj, "async_failure_handler", new_callable=AsyncMock),
+        patch.object(
+            logging_obj, "failure_handler", new_callable=MagicMock
+        ) as mock_sync,
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.executor.submit"
+        ) as mock_submit,
+    ):
+        await logging_obj.dispatch_failure_handlers(
+            exception,
+            traceback_exception,
+            prefer_async_handlers=True,
+        )
+
+    mock_submit.assert_called_once_with(mock_sync, exception, traceback_exception)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_failure_handlers_sync_sdk_shortcut_runs_sync_handler_inline(
+    logging_obj,
+):
+    """A sync-SDK request (prefer_async_handlers=False) runs failure_handler inline.
+
+    ``async for`` over a stream from ``completion()`` passes prefer_async_handlers=True; a
+    plain sync request leaves it False, so the legacy sync handler runs directly and the
+    async handler is never awaited, matching dispatch_success_handlers.
+    """
+    exception = ValueError("boom")
+    traceback_exception = "traceback"
+
+    logging_obj.model_call_details["litellm_params"] = {}
+
+    with (
+        patch.object(
+            logging_obj, "async_failure_handler", new_callable=AsyncMock
+        ) as mock_async,
+        patch.object(
+            logging_obj, "failure_handler", new_callable=MagicMock
+        ) as mock_sync,
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.executor.submit"
+        ) as mock_submit,
+    ):
+        await logging_obj.dispatch_failure_handlers(
+            exception,
+            traceback_exception,
+            prefer_async_handlers=False,
+        )
+
+    mock_sync.assert_called_once_with(exception, traceback_exception)
+    mock_async.assert_not_awaited()
+    mock_submit.assert_not_called()
+
+
 def test_success_handler_skips_guardrail_logging_hook_when_disabled(logging_obj):
     """Ensure CustomGuardrail logging_hook is skipped when should_run_guardrail is False."""
     import datetime
@@ -1604,6 +1792,60 @@ def test_response_cost_calculator_does_not_transform_non_generate_content_dict()
         result={"usageMetadata": {"promptTokenCount": 1000, "candidatesTokenCount": 500}}
     )
     assert not cost
+
+
+def _file_content_logging_obj(call_type: str) -> LitellmLogging:
+    logging_obj = LitellmLogging(
+        model="gemini-3-flash-preview",
+        messages="default-message-value",
+        stream=False,
+        call_type=call_type,
+        start_time=time.time(),
+        litellm_call_id=f"file-content-{call_type}",
+        function_id=f"file-content-{call_type}",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "vertex_ai"
+    logging_obj.model_call_details["input"] = "default-message-value"
+    logging_obj.optional_params = {}
+    return logging_obj
+
+
+@pytest.mark.parametrize("call_type", ["afile_content", "file_content"])
+def test_file_content_call_is_not_billed(call_type):
+    """
+    Regression for #35130: file content retrieval has no token usage, but ``function_setup``
+    stores the ``"default-message-value"`` placeholder as the logged input, which the cost
+    calculator then token-priced, billing every call at exactly 3 * input_cost_per_token.
+    """
+    result = HttpxBinaryResponseContent(httpx.Response(status_code=200, content=b"file contents"))
+
+    cost = _file_content_logging_obj(call_type)._response_cost_calculator(result=result)
+
+    assert cost == 0.0
+
+
+@pytest.mark.parametrize("call_type", ["aspeech", "speech"])
+def test_speech_call_is_still_priced_from_input_characters(call_type):
+    """tts bills per input character, so speech call types must keep passing the input along."""
+    logging_obj = LitellmLogging(
+        model="tts-1",
+        messages="the quick brown fox jumped over the lazy dogs",
+        stream=False,
+        call_type=call_type,
+        start_time=time.time(),
+        litellm_call_id=f"speech-{call_type}",
+        function_id=f"speech-{call_type}",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+    logging_obj.model_call_details["input"] = "the quick brown fox jumped over the lazy dogs"
+    logging_obj.optional_params = {}
+
+    result = HttpxBinaryResponseContent(httpx.Response(status_code=200, content=b"audio bytes"))
+
+    cost = logging_obj._response_cost_calculator(result=result)
+
+    assert cost is not None
+    assert cost > 0
 
 
 def test_sentry_event_scrubber_initialization(monkeypatch):
@@ -2825,6 +3067,58 @@ def test_function_setup_litellm_metadata_populates_metadata():
     assert (
         metadata is not litellm_metadata
     ), "litellm_params['metadata'] should be a copy, not the same object"
+
+
+def test_function_setup_litellm_metadata_guardrail_writes_visible_after_setup():
+    """
+    Regression test for LIT-4512: guardrail writes into the request's
+    "litellm_metadata" bucket that happen AFTER function_setup (the proxy
+    initializes the logging object before pre-call guardrails run) must be
+    visible to the logging object and survive merge_litellm_metadata, so
+    /v1/messages spend logs carry guardrail_information and
+    applied_guardrails just like /v1/chat/completions.
+    """
+    import litellm
+    from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    kwargs = {
+        "model": "claude-3-5-sonnet",
+        "messages": [{"role": "user", "content": "hello"}],
+        "litellm_call_id": "test-call-id-lit4512",
+        "litellm_metadata": {
+            "user_api_key_hash": "sk-hashed-lit4512",
+            "guardrails": ["pam-ethical-request"],
+        },
+    }
+
+    logging_obj, returned_kwargs = litellm.utils.function_setup(
+        original_function="anthropic_messages",
+        rules_obj=litellm.utils.Rules(),
+        start_time=time.time(),
+        **kwargs,
+    )
+
+    guardrail_entry = {
+        "guardrail_name": "pam-ethical-request",
+        "guardrail_mode": "pre_call",
+        "guardrail_status": "success",
+    }
+    _, metadata_bucket = get_or_create_metadata_bucket(returned_kwargs)
+    metadata_bucket["standard_logging_guardrail_information"] = [guardrail_entry]
+    metadata_bucket["applied_guardrails"] = ["pam-ethical-request"]
+
+    litellm_params = logging_obj.model_call_details.get("litellm_params", {})
+    litellm_metadata = litellm_params.get("litellm_metadata")
+    assert litellm_metadata is not None
+    assert litellm_metadata.get("standard_logging_guardrail_information") == [
+        guardrail_entry
+    ], "guardrail writes after function_setup must be visible to the logging object"
+    assert litellm_metadata.get("applied_guardrails") == ["pam-ethical-request"]
+
+    merged = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+    assert merged.get("standard_logging_guardrail_information") == [guardrail_entry]
+    assert merged.get("applied_guardrails") == ["pam-ethical-request"]
 
 
 def test_function_setup_metadata_takes_precedence_over_litellm_metadata():

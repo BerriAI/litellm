@@ -278,3 +278,31 @@ class TestReviewFindings:
         chunks = [c async for c in wrapper]
         assert chunks[-1]["type"] == "message_stop"
         assert [c["type"] for c in chunks].count("message_stop") == 1
+
+
+class TestResponseCompletedUsage:
+    """The Anthropic ``message_delta`` usage must report cache reads/writes and
+    exclude them from ``input_tokens``, so spend is not billed at the uncached
+    input rate."""
+
+    def test_response_completed_usage_carries_cache_tokens(self):
+        from litellm.types.llms.openai import ResponseAPIUsage
+
+        response = SimpleNamespace(
+            status="completed",
+            output=[],
+            usage=ResponseAPIUsage(
+                input_tokens=4017,
+                input_tokens_details={"cached_tokens": 4004, "cache_write_tokens": 10},
+                output_tokens=5,
+                total_tokens=4022,
+            ),
+        )
+        chunks = _process_all([{"type": "response.completed", "response": response}])
+        message_delta = next(c for c in chunks if c["type"] == "message_delta")
+        assert message_delta["usage"] == {
+            "input_tokens": 3,
+            "output_tokens": 5,
+            "cache_creation_input_tokens": 10,
+            "cache_read_input_tokens": 4004,
+        }
