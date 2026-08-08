@@ -46381,5 +46381,61 @@
                 }
             }
         ]
+    },
+    "amazon.nova-sonic-v1:0": {
+        "input_cost_per_audio_token": 3.4e-06,
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 300000,
+        "max_output_tokens": 10000,
+        "max_tokens": 10000,
+        "mode": "realtime",
+        "output_cost_per_audio_token": 1.36e-05,
+        "output_cost_per_token": 2.4e-07,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "amazon.nova-2-sonic-v1:0": {
+        "input_cost_per_audio_token": 3e-06,
+        "input_cost_per_token": 3.3e-07,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "realtime",
+        "output_cost_per_audio_token": 1.2e-05,
+        "output_cost_per_token": 2.75e-06,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
     }
 }

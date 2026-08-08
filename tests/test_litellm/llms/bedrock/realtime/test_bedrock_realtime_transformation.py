@@ -571,6 +571,266 @@ class TestBedrockRealtimeResponseTransformation:
         args = json.loads(function_call["arguments"])
         assert args["location"] == "San Francisco"
 
+    def test_transform_tool_use_response_with_content_field(self):
+        """Test toolUse response transformation with Nova 2 Sonic `content` field"""
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_123"
+
+        tool_use_message = {
+            "event": {
+                "toolUse": {
+                    "toolUseId": "tool_call_123",
+                    "toolName": "get_weather",
+                    "content": json.dumps({"location": "San Francisco"}),
+                }
+            }
+        }
+
+        result = config.transform_realtime_response(
+            json.dumps(tool_use_message),
+            "amazon.nova-2-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input={
+                "session_configuration_request": json.dumps({"configured": True}),
+                "current_output_item_id": "item_123",
+                "current_response_id": "resp_123",
+                "current_conversation_id": "conv_123",
+                "current_delta_chunks": [],
+                "current_item_chunks": [],
+                "current_delta_type": "text",
+            },
+        )
+
+        # Check for function call event
+        assert len(result["response"]) == 1
+        function_call = result["response"][0]
+        assert function_call["type"] == "response.function_call_arguments.done"
+        assert function_call["call_id"] == "tool_call_123"
+        assert function_call["name"] == "get_weather"
+
+        # Verify arguments are properly formatted
+        args = json.loads(function_call["arguments"])
+        assert args["location"] == "San Francisco"
+
+    def test_transform_tool_use_event_directly(self):
+        """Test transform_tool_use_event directly for input parsing and missing IDs"""
+        config = BedrockRealtimeConfig()
+
+        # Missing IDs still emit a function call (Nova Sonic starts tools with role=TOOL)
+        events, tool_call_id, tool_name, item_id, response_id = config.transform_tool_use_event(
+            {
+                "toolUse": {
+                    "toolUseId": "tool_call_no_ids",
+                    "toolName": "get_weather",
+                    "content": json.dumps({"location": "Seattle"}),
+                }
+            },
+            None,
+            None,
+        )
+        assert len(events) == 1
+        assert events[0]["type"] == "response.function_call_arguments.done"
+        assert events[0]["call_id"] == "tool_call_no_ids"
+        assert events[0]["name"] == "get_weather"
+        assert response_id.startswith("resp_")
+        assert item_id.startswith("item_")
+        assert events[0]["response_id"] == response_id
+        assert events[0]["item_id"] == item_id
+        assert json.loads(events[0]["arguments"]) == {"location": "Seattle"}
+        assert tool_call_id == "tool_call_no_ids"
+        assert tool_name == "get_weather"
+
+        # JSON string content is parsed and converted to a function call event
+        events, tool_call_id, tool_name, item_id, response_id = config.transform_tool_use_event(
+            {
+                "toolUse": {
+                    "toolUseId": "tool_call_123",
+                    "toolName": "get_weather",
+                    "content": json.dumps({"location": "San Francisco"}),
+                }
+            },
+            "item_123",
+            "resp_123",
+        )
+        assert len(events) == 1
+        assert events[0]["type"] == "response.function_call_arguments.done"
+        assert events[0]["call_id"] == "tool_call_123"
+        assert events[0]["name"] == "get_weather"
+        assert response_id == "resp_123"
+        assert item_id == "item_123"
+        assert events[0]["response_id"] == "resp_123"
+        assert events[0]["item_id"] == "item_123"
+        assert json.loads(events[0]["arguments"]) == {"location": "San Francisco"}
+
+        # Invalid JSON content falls back to empty arguments
+        events, _, _, _, _ = config.transform_tool_use_event(
+            {
+                "toolUse": {
+                    "toolUseId": "tool_call_124",
+                    "toolName": "get_weather",
+                    "content": "not valid json",
+                }
+            },
+            "item_123",
+            "resp_123",
+        )
+        assert len(events) == 1
+        assert json.loads(events[0]["arguments"]) == {}
+
+    def test_transform_realtime_response_persists_minted_tool_ids(self):
+        """TOOL-first turns must write minted response/item ids into session state"""
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_123"
+
+        state = {
+            "session_configuration_request": json.dumps({"configured": True}),
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": "conv_123",
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        }
+
+        content_start_result = config.transform_realtime_response(
+            json.dumps({"event": {"contentStart": {"role": "TOOL", "type": "TOOL"}}}),
+            "amazon.nova-2-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input=state,
+        )
+        assert content_start_result["response"] == []
+        assert content_start_result["current_delta_type"] is None
+        state.update(
+            {
+                "current_output_item_id": content_start_result["current_output_item_id"],
+                "current_response_id": content_start_result["current_response_id"],
+                "current_conversation_id": content_start_result["current_conversation_id"],
+                "current_delta_chunks": content_start_result["current_delta_chunks"],
+                "current_item_chunks": content_start_result["current_item_chunks"],
+                "current_delta_type": content_start_result["current_delta_type"],
+            }
+        )
+
+        tool_use_message = {
+            "event": {
+                "toolUse": {
+                    "toolUseId": "tool_call_state",
+                    "toolName": "get_weather",
+                    "content": json.dumps({"location": "Seattle"}),
+                }
+            }
+        }
+
+        result = config.transform_realtime_response(
+            json.dumps(tool_use_message),
+            "amazon.nova-2-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input=state,
+        )
+
+        assert len(result["response"]) == 1
+        function_call = result["response"][0]
+        assert function_call["type"] == "response.function_call_arguments.done"
+        assert result["current_response_id"] is not None
+        assert result["current_output_item_id"] is not None
+        assert result["current_response_id"].startswith("resp_")
+        assert result["current_output_item_id"].startswith("item_")
+        assert function_call["response_id"] == result["current_response_id"]
+        assert function_call["item_id"] == result["current_output_item_id"]
+        assert json.loads(function_call["arguments"]) == {"location": "Seattle"}
+
+        content_end_message = {
+            "event": {
+                "contentEnd": {
+                    "stopReason": "TOOL_USE",
+                    "type": "TOOL",
+                }
+            }
+        }
+        follow_up = config.transform_realtime_response(
+            json.dumps(content_end_message),
+            "amazon.nova-2-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input={
+                "session_configuration_request": result["session_configuration_request"],
+                "current_output_item_id": result["current_output_item_id"],
+                "current_response_id": result["current_response_id"],
+                "current_conversation_id": result["current_conversation_id"],
+                "current_delta_chunks": result["current_delta_chunks"],
+                "current_item_chunks": result["current_item_chunks"],
+                "current_delta_type": result["current_delta_type"],
+            },
+        )
+        assert follow_up["current_response_id"] is None
+        assert follow_up["current_output_item_id"] is None
+        assert follow_up["current_delta_type"] is None
+        assert follow_up["response"] == []
+        assert all(msg["type"] != "response.output_item.done" for msg in follow_up["response"])
+
+        post_tool_state = {
+            "session_configuration_request": follow_up["session_configuration_request"],
+            "current_output_item_id": follow_up["current_output_item_id"],
+            "current_response_id": follow_up["current_response_id"],
+            "current_conversation_id": follow_up["current_conversation_id"],
+            "current_delta_chunks": follow_up["current_delta_chunks"],
+            "current_item_chunks": follow_up["current_item_chunks"],
+            "current_delta_type": follow_up["current_delta_type"],
+        }
+        assistant_start = config.transform_realtime_response(
+            json.dumps({"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}}),
+            "amazon.nova-2-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input=post_tool_state,
+        )
+        tool_response_id = result["current_response_id"]
+        tool_item_id = result["current_output_item_id"]
+        assert assistant_start["current_response_id"] is not None
+        assert assistant_start["current_output_item_id"] is not None
+        assert assistant_start["current_response_id"] != tool_response_id
+        assert assistant_start["current_output_item_id"] != tool_item_id
+        created = [msg for msg in assistant_start["response"] if msg["type"] == "response.created"][0]
+        added = [msg for msg in assistant_start["response"] if msg["type"] == "response.output_item.added"][0]
+        assert created["response"]["id"] == assistant_start["current_response_id"]
+        assert added["item"]["id"] == assistant_start["current_output_item_id"]
+        assert created["response"]["id"] != function_call["response_id"]
+        assert added["item"]["id"] != function_call["item_id"]
+
+    def test_tool_content_end_does_not_emit_message_output_item_done(self):
+        """Minted tool ids must not unlock unpaired message output_item.done on TOOL contentEnd"""
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_123"
+
+        content_end_message = {
+            "event": {
+                "contentEnd": {
+                    "stopReason": "TOOL_USE",
+                    "type": "TOOL",
+                }
+            }
+        }
+        result = config.transform_realtime_response(
+            json.dumps(content_end_message),
+            "amazon.nova-2-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input={
+                "session_configuration_request": json.dumps({"configured": True}),
+                "current_output_item_id": "item_minted_for_tool",
+                "current_response_id": "resp_minted_for_tool",
+                "current_conversation_id": "conv_123",
+                "current_delta_chunks": [],
+                "current_item_chunks": [],
+                "current_delta_type": "text",
+            },
+        )
+
+        assert result["response"] == []
+        assert result["current_response_id"] is None
+        assert result["current_output_item_id"] is None
+        assert result["current_delta_type"] is None
+
     def test_transform_content_end_text(self):
         """Test contentEnd for text response"""
         config = BedrockRealtimeConfig()
@@ -828,6 +1088,273 @@ class TestBedrockRealtimeSessionEvents:
     def test_session_updated_defaults_modalities_when_unspecified(self):
         event = BedrockRealtimeConfig().session_updated_event("amazon.nova-sonic-v1:0", self._logging())
         assert event["session"]["modalities"] == ["text", "audio"]
+
+
+class TestBedrockRealtimeContentBlockLifecycle:
+    """
+    Bedrock streams discrete content blocks. Session state must follow block
+    boundaries so text/audio/tool blocks cannot leak into each other.
+    """
+
+    def _state(self, **overrides):
+        base = {
+            "session_configuration_request": json.dumps({"configured": True}),
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": "conv_1",
+            "current_delta_chunks": None,
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        }
+        base.update(overrides)
+        return base
+
+    def _apply(self, config, logging_obj, state, message):
+        result = config.transform_realtime_response(
+            json.dumps(message),
+            "amazon.nova-2-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input=state,
+        )
+        state.update(
+            {
+                "current_output_item_id": result["current_output_item_id"],
+                "current_response_id": result["current_response_id"],
+                "current_conversation_id": result["current_conversation_id"],
+                "current_delta_chunks": result["current_delta_chunks"],
+                "current_item_chunks": result["current_item_chunks"],
+                "current_delta_type": result["current_delta_type"],
+            }
+        )
+        return result
+
+    def test_tool_block_does_not_leak_prior_text_into_next_assistant_turn(self):
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_123"
+        state = self._state()
+
+        self._apply(config, logging_obj, state, {"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}})
+        first_response_id = state["current_response_id"]
+        self._apply(
+            config,
+            logging_obj,
+            state,
+            {"event": {"textOutput": {"content": "I will check the weather."}}},
+        )
+        assert state["current_delta_chunks"] is not None
+        assert len(state["current_delta_chunks"]) == 1
+
+        self._apply(
+            config,
+            logging_obj,
+            state,
+            {"event": {"contentEnd": {"stopReason": "PARTIAL_TURN", "type": "TEXT"}}},
+        )
+        assert state["current_delta_chunks"] is None
+        assert state["current_delta_type"] is None
+        assert state["current_output_item_id"] is None
+        assert state["current_response_id"] == first_response_id
+
+        self._apply(config, logging_obj, state, {"event": {"contentStart": {"role": "TOOL", "type": "TOOL"}}})
+        assert state["current_delta_chunks"] is None
+        assert state["current_response_id"] == first_response_id
+
+        tool_result = self._apply(
+            config,
+            logging_obj,
+            state,
+            {
+                "event": {
+                    "toolUse": {
+                        "toolUseId": "tool_1",
+                        "toolName": "get_weather",
+                        "content": json.dumps({"location": "Seattle"}),
+                    }
+                }
+            },
+        )
+        assert tool_result["response"][0]["type"] == "response.function_call_arguments.done"
+        assert state["current_delta_chunks"] is None
+        assert state["current_delta_type"] is None
+
+        self._apply(
+            config,
+            logging_obj,
+            state,
+            {"event": {"contentEnd": {"stopReason": "TOOL_USE", "type": "TOOL"}}},
+        )
+        assert state["current_response_id"] is None
+        assert state["current_output_item_id"] is None
+        assert state["current_delta_chunks"] is None
+        assert state["current_delta_type"] is None
+
+        post_tool = self._apply(
+            config,
+            logging_obj,
+            state,
+            {"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}},
+        )
+        assert state["current_response_id"] != first_response_id
+        assert state["current_delta_chunks"] is None
+        assert [msg["type"] for msg in post_tool["response"]].count("response.created") == 1
+
+        self._apply(
+            config,
+            logging_obj,
+            state,
+            {"event": {"textOutput": {"content": "It is sunny in Seattle."}}},
+        )
+        done = self._apply(
+            config,
+            logging_obj,
+            state,
+            {"event": {"contentEnd": {"stopReason": "END_TURN", "type": "TEXT"}}},
+        )
+        text_done = [msg for msg in done["response"] if msg["type"] == "response.text.done"][0]
+        assert text_done["text"] == "It is sunny in Seattle."
+        assert "I will check the weather." not in text_done["text"]
+        assert any(msg["type"] == "response.done" for msg in done["response"])
+        assert state["current_response_id"] is None
+        assert state["current_delta_chunks"] is None
+
+    def test_second_assistant_content_block_reuses_response_not_item(self):
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_123"
+        state = self._state()
+
+        first = self._apply(
+            config, logging_obj, state, {"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}}
+        )
+        response_id = state["current_response_id"]
+        first_item = state["current_output_item_id"]
+        assert sum(1 for msg in first["response"] if msg["type"] == "response.created") == 1
+
+        self._apply(
+            config,
+            logging_obj,
+            state,
+            {"event": {"contentEnd": {"stopReason": "PARTIAL_TURN", "type": "TEXT"}}},
+        )
+        second = self._apply(
+            config, logging_obj, state, {"event": {"contentStart": {"role": "ASSISTANT", "type": "AUDIO"}}}
+        )
+        assert state["current_response_id"] == response_id
+        assert state["current_output_item_id"] != first_item
+        assert sum(1 for msg in second["response"] if msg["type"] == "response.created") == 0
+        assert sum(1 for msg in second["response"] if msg["type"] == "response.output_item.added") == 1
+
+
+class TestBedrockRealtimeUsageAccounting:
+    def _usage_event(
+        self,
+        *,
+        input_speech: int,
+        input_text: int,
+        output_speech: int,
+        output_text: int,
+        total_input: int | None = None,
+        total_output: int | None = None,
+        total: int | None = None,
+    ) -> dict:
+        resolved_input = total_input if total_input is not None else input_speech + input_text
+        resolved_output = total_output if total_output is not None else output_speech + output_text
+        resolved_total = total if total is not None else resolved_input + resolved_output
+        return {
+            "event": {
+                "usageEvent": {
+                    "completionId": "completion_1",
+                    "details": {
+                        "total": {
+                            "input": {"speechTokens": input_speech, "textTokens": input_text},
+                            "output": {"speechTokens": output_speech, "textTokens": output_text},
+                        }
+                    },
+                    "promptName": "prompt_1",
+                    "sessionId": "session_1",
+                    "totalInputTokens": resolved_input,
+                    "totalOutputTokens": resolved_output,
+                    "totalTokens": resolved_total,
+                }
+            }
+        }
+
+    def test_usage_event_fills_response_done_turn_delta(self):
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_123"
+        state = {
+            "session_configuration_request": json.dumps({"configured": True}),
+            "current_output_item_id": "item_1",
+            "current_response_id": "resp_1",
+            "current_conversation_id": "conv_1",
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": "audio",
+        }
+
+        config.transform_realtime_response(
+            json.dumps(self._usage_event(input_speech=10, input_text=2, output_speech=20, output_text=3)),
+            "amazon.nova-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input=state,
+        )
+        first_done = config.transform_realtime_response(
+            json.dumps({"event": {"contentEnd": {"stopReason": "END_TURN", "type": "AUDIO"}}}),
+            "amazon.nova-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input=state,
+        )
+        done_events = [msg for msg in first_done["response"] if msg["type"] == "response.done"]
+        assert len(done_events) == 1
+        usage = done_events[0]["response"]["usage"]
+        assert usage["input_tokens"] == 12
+        assert usage["output_tokens"] == 23
+        assert usage["total_tokens"] == 35
+        assert usage["input_token_details"]["audio_tokens"] == 10
+        assert usage["input_token_details"]["text_tokens"] == 2
+        assert usage["output_token_details"]["audio_tokens"] == 20
+        assert usage["output_token_details"]["text_tokens"] == 3
+
+        config.transform_realtime_response(
+            json.dumps(
+                self._usage_event(
+                    input_speech=15,
+                    input_text=2,
+                    output_speech=30,
+                    output_text=3,
+                    total_input=17,
+                    total_output=33,
+                    total=50,
+                )
+            ),
+            "amazon.nova-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input={
+                **state,
+                "current_output_item_id": "item_2",
+                "current_response_id": "resp_2",
+            },
+        )
+        second_done = config.transform_realtime_response(
+            json.dumps({"event": {"contentEnd": {"stopReason": "END_TURN", "type": "AUDIO"}}}),
+            "amazon.nova-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input={
+                **state,
+                "current_output_item_id": "item_2",
+                "current_response_id": "resp_2",
+            },
+        )
+        second_usage = [msg for msg in second_done["response"] if msg["type"] == "response.done"][0]["response"][
+            "usage"
+        ]
+        assert second_usage["input_tokens"] == 5
+        assert second_usage["output_tokens"] == 10
+        assert second_usage["total_tokens"] == 15
+        assert second_usage["input_token_details"]["audio_tokens"] == 5
+        assert second_usage["output_token_details"]["audio_tokens"] == 10
 
 
 if __name__ == "__main__":
