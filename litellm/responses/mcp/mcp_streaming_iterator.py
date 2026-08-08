@@ -274,6 +274,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         # Streaming state management
         self.phase = "initial_response"  # initial_response -> mcp_discovery -> (continue_initial_response <-> tool_execution) -> finished
         self.finished = False
+        self.completed_response: Any | None = None
 
         # Event queues and generation flags
         self.mcp_discovery_events: list[ResponsesAPIStreamingResponse] = (

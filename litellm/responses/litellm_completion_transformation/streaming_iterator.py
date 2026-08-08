@@ -72,6 +72,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         # repeated Pydantic attribute access in end-of-stream assembly.
         self.collected_chat_completion_chunks: list[dict[str, Any]] = []
         self.finished: bool = False
+        self.completed_response: Any | None = None
         self.litellm_logging_obj = litellm_custom_stream_wrapper.logging_obj
         self.sent_response_created_event: bool = False
         self.sent_response_in_progress_event: bool = False
