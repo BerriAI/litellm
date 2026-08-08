@@ -19,6 +19,9 @@ import { useWorker } from "@/hooks/useWorker";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
+import { Switch } from "@/components/ui/switch";
+import { useTheme } from "@/contexts/ThemeContext";
+import { Moon, Sun } from "lucide-react";
 
 interface DashboardHeaderProps {
   page: string;
@@ -31,6 +34,7 @@ export function DashboardHeader({ page }: DashboardHeaderProps) {
   const { isControlPlane, selectedWorker } = useWorker();
   const showWorkerSwitch = isControlPlane && selectedWorker !== null;
   const hideCommunityLinks = useDisableShowPrompts();
+  const { isDarkMode, toggleDarkMode } = useTheme();
 
   const handleWorkerSwitch = (workerId: string) => {
     clearTokenCookies();
@@ -73,6 +77,17 @@ export function DashboardHeader({ page }: DashboardHeaderProps) {
         <BlogDropdown />
         {!hideCommunityLinks && <CommunityEngagementButtons />}
         <ToolbarSeparator />
+        <div className="flex items-center gap-1.5 px-1">
+          <Sun className="size-3.5 text-muted-foreground" aria-hidden />
+          <Switch
+            data-testid="dark-mode-toggle"
+            checked={isDarkMode}
+            onCheckedChange={() => toggleDarkMode()}
+            aria-label={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
+            size="sm"
+          />
+          <Moon className="size-3.5 text-muted-foreground" aria-hidden />
+        </div>
         <NotificationsBell />
       </div>
     </header>

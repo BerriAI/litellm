@@ -468,93 +468,231 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const agentColumns = useMemo(() => getPublicAgentHubColumns({ onAgentClick: showAgentModal }), [showAgentModal]);
   const mcpColumns = useMemo(() => getPublicMCPHubColumns({ onServerClick: showMcpModal }), [showMcpModal]);
 
-  return (
-    <ThemeProvider accessToken={accessToken}>
-      <div className={isEmbedded ? "w-full" : "min-h-screen bg-white"}>
-        {/* Navigation - only show when not embedded */}
-        {!isEmbedded && <Navbar accessToken={accessToken || null} isPublicPage={true} />}
+  // When embedded in the dashboard, the outer shell already owns ThemeProvider.
+  // Nesting another provider creates independent dark-mode state that goes stale
+  // when the navbar toggle updates the parent context / document class.
+  const content = (
+    <div className={isEmbedded ? "w-full" : "min-h-screen bg-white dark:bg-[#0e0e0e]"}>
+      {/* Navigation - only show when not embedded */}
+      {!isEmbedded && <Navbar accessToken={accessToken || null} isPublicPage={true} />}
 
-        <div className={isEmbedded ? "w-full p-6" : "w-full px-8 py-12"}>
-          {/* Embedded Explainer - only shown when embedded in dashboard */}
-          {isEmbedded && (
-            <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-              <p className="text-sm text-gray-700">
-                These are models, agents, and MCP servers your proxy admin has indicated are available in your company.
-              </p>
+      <div className={isEmbedded ? "w-full p-6" : "w-full px-8 py-12"}>
+        {/* Embedded Explainer - only shown when embedded in dashboard */}
+        {isEmbedded && (
+          <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+            <p className="text-sm text-gray-700">
+              These are models, agents, and MCP servers your proxy admin has indicated are available in your company.
+            </p>
+          </div>
+        )}
+
+        {/* About Section - only shown when not embedded */}
+        {!isEmbedded && (
+          <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-xs">
+            <Title className="text-2xl font-semibold mb-6 text-gray-900">About</Title>
+            <p className="text-gray-700 mb-6 text-base leading-relaxed">
+              {customDocsDescription ? customDocsDescription : "Proxy Server to call 100+ LLMs in the OpenAI format."}
+            </p>
+            <div className="flex items-center space-x-3 text-sm text-gray-600">
+              <span className="flex items-center">
+                <span className="w-4 h-4 mr-2">🔧</span>
+                Built with litellm: v{litellmVersion}
+              </span>
             </div>
-          )}
+          </Card>
+        )}
 
-          {/* About Section - only shown when not embedded */}
-          {!isEmbedded && (
-            <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-xs">
-              <Title className="text-2xl font-semibold mb-6 text-gray-900">About</Title>
-              <p className="text-gray-700 mb-6 text-base leading-relaxed">
-                {customDocsDescription ? customDocsDescription : "Proxy Server to call 100+ LLMs in the OpenAI format."}
-              </p>
-              <div className="flex items-center space-x-3 text-sm text-gray-600">
-                <span className="flex items-center">
-                  <span className="w-4 h-4 mr-2">🔧</span>
-                  Built with litellm: v{litellmVersion}
-                </span>
+        {/* Useful Links - only shown when not embedded */}
+        {usefulLinks && Object.keys(usefulLinks).length > 0 && (
+          <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-xs">
+            <Title className="text-2xl font-semibold mb-6 text-gray-900">Useful Links</Title>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {Object.entries(usefulLinks || {})
+                .map(([title, value]) => {
+                  // Handle both old format (string) and new format ({url, index})
+                  const url = typeof value === "string" ? value : value.url;
+                  const index = typeof value === "string" ? 0 : value.index ?? 0;
+                  return { title, url, index };
+                })
+                .sort((a, b) => a.index - b.index)
+                .map(({ title, url }) => (
+                  <button
+                    key={title}
+                    onClick={() => window.open(url, "_blank")}
+                    className="flex items-center space-x-3 text-blue-600 hover:text-blue-800 transition-colors p-3 rounded-lg hover:bg-blue-50 border border-gray-200"
+                  >
+                    <ExternalLinkIcon className="w-4 h-4" />
+                    <Text className="text-sm font-medium">{title}</Text>
+                  </button>
+                ))}
+            </div>
+          </Card>
+        )}
+
+        {/* Health and Endpoint Status - only shown when not embedded */}
+        {!isEmbedded && (
+          <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-xs">
+            <Title className="text-2xl font-semibold mb-6 text-gray-900">Health and Endpoint Status</Title>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <Text className="text-green-600 font-medium text-sm">Service status: {serviceStatus}</Text>
+            </div>
+          </Card>
+        )}
+
+        {/* Tabs for Models and Agents */}
+        <Card className="p-8 bg-white border border-gray-200 rounded-lg shadow-xs">
+          <Tabs activeKey={activeTab} onChange={setActiveTab} size="large" className="public-hub-tabs">
+            {/* Models Tab */}
+            <TabPane tab="Model Hub" key="models">
+              <div className="flex justify-between items-center mb-8">
+                <Title className="text-2xl font-semibold text-gray-900">Available Models</Title>
               </div>
-            </Card>
-          )}
 
-          {/* Useful Links - only shown when not embedded */}
-          {usefulLinks && Object.keys(usefulLinks).length > 0 && (
-            <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-xs">
-              <Title className="text-2xl font-semibold mb-6 text-gray-900">Useful Links</Title>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {Object.entries(usefulLinks || {})
-                  .map(([title, value]) => {
-                    // Handle both old format (string) and new format ({url, index})
-                    const url = typeof value === "string" ? value : value.url;
-                    const index = typeof value === "string" ? 0 : value.index ?? 0;
-                    return { title, url, index };
-                  })
-                  .sort((a, b) => a.index - b.index)
-                  .map(({ title, url }) => (
-                    <button
-                      key={title}
-                      onClick={() => window.open(url, "_blank")}
-                      className="flex items-center space-x-3 text-blue-600 hover:text-blue-800 transition-colors p-3 rounded-lg hover:bg-blue-50 border border-gray-200"
+              {/* Filters */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
+                <div>
+                  <div className="flex items-center space-x-2 mb-3">
+                    <Text className="text-sm font-medium text-gray-700">Search Models:</Text>
+                    <Tooltip
+                      title="Smart search with relevance ranking - finds models containing your search terms, ranked by relevance. Try searching 'xai grok-4', 'claude-4', 'gpt-4', or 'sonnet'"
+                      placement="top"
                     >
-                      <ExternalLinkIcon className="w-4 h-4" />
-                      <Text className="text-sm font-medium">{title}</Text>
-                    </button>
-                  ))}
+                      <Info className="w-4 h-4 text-gray-400 cursor-help" />
+                    </Tooltip>
+                  </div>
+                  <div className="relative">
+                    <SearchIcon className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Search model names... (smart search enabled)"
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Text className="text-sm font-medium mb-3 text-gray-700">Provider:</Text>
+                  <Select
+                    mode="multiple"
+                    value={selectedProviders}
+                    onChange={(values) => setSelectedProviders(values)}
+                    placeholder="Select providers"
+                    className="w-full"
+                    size="large"
+                    allowClear
+                    optionRender={(option) => {
+                      const { logo } = getProviderLogoAndName(option.value as string);
+                      return (
+                        <div className="flex items-center space-x-2">
+                          {logo && (
+                            <img
+                              src={logo}
+                              alt={option.label as string}
+                              className="w-5 h-5 shrink-0 object-contain"
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).style.display = "none";
+                              }}
+                            />
+                          )}
+                          <span className="capitalize">{option.label}</span>
+                        </div>
+                      );
+                    }}
+                  >
+                    {modelHubData &&
+                      Array.isArray(modelHubData) &&
+                      getUniqueProviders(modelHubData).map((provider) => (
+                        <Select.Option key={provider} value={provider}>
+                          {provider}
+                        </Select.Option>
+                      ))}
+                  </Select>
+                </div>
+                <div>
+                  <Text className="text-sm font-medium mb-3 text-gray-700">Mode:</Text>
+                  <Select
+                    mode="multiple"
+                    value={selectedModes}
+                    onChange={(values) => setSelectedModes(values)}
+                    placeholder="Select modes"
+                    className="w-full"
+                    size="large"
+                    allowClear
+                  >
+                    {modelHubData &&
+                      Array.isArray(modelHubData) &&
+                      getUniqueModes(modelHubData).map((mode) => (
+                        <Select.Option key={mode} value={mode}>
+                          {mode}
+                        </Select.Option>
+                      ))}
+                  </Select>
+                </div>
+                <div>
+                  <Text className="text-sm font-medium mb-3 text-gray-700">Features:</Text>
+                  <Select
+                    mode="multiple"
+                    value={selectedFeatures}
+                    onChange={(values) => setSelectedFeatures(values)}
+                    placeholder="Select features"
+                    className="w-full"
+                    size="large"
+                    allowClear
+                  >
+                    {modelHubData &&
+                      Array.isArray(modelHubData) &&
+                      getUniqueFeatures(modelHubData).map((feature) => (
+                        <Select.Option key={feature} value={feature}>
+                          {feature}
+                        </Select.Option>
+                      ))}
+                  </Select>
+                </div>
               </div>
-            </Card>
-          )}
 
-          {/* Health and Endpoint Status - only shown when not embedded */}
-          {!isEmbedded && (
-            <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-xs">
-              <Title className="text-2xl font-semibold mb-6 text-gray-900">Health and Endpoint Status</Title>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <Text className="text-green-600 font-medium text-sm">Service status: {serviceStatus}</Text>
+              <DataTable
+                data={filteredData}
+                columns={modelColumns}
+                getRowId={(model, index) => model.model_group || String(index)}
+                sortingMode="client"
+                sorting={modelSorting}
+                onSortingChange={setModelSorting}
+                isLoading={loading}
+                loadingMessage="Loading models…"
+                noDataMessage={
+                  <PublicHubEmptyState
+                    title={modelHubData?.length ? "No matching models" : "No models available"}
+                    body={
+                      modelHubData?.length
+                        ? "Adjust the search or filters to see more models."
+                        : "Models made public by the proxy admin will appear here."
+                    }
+                  />
+                }
+                size="compact"
+              />
+
+              <div className="mt-8 text-center">
+                <Text className="text-sm text-gray-600">
+                  Showing {filteredData.length} of {modelHubData?.length || 0} models
+                </Text>
               </div>
-            </Card>
-          )}
+            </TabPane>
 
-          {/* Tabs for Models and Agents */}
-          <Card className="p-8 bg-white border border-gray-200 rounded-lg shadow-xs">
-            <Tabs activeKey={activeTab} onChange={setActiveTab} size="large" className="public-hub-tabs">
-              {/* Models Tab */}
-              <TabPane tab="Model Hub" key="models">
+            {/* Agents Tab */}
+            {agentHubData && Array.isArray(agentHubData) && agentHubData.length > 0 && (
+              <TabPane tab="Agent Hub" key="agents">
                 <div className="flex justify-between items-center mb-8">
-                  <Title className="text-2xl font-semibold text-gray-900">Available Models</Title>
+                  <Title className="text-2xl font-semibold text-gray-900">Available Agents</Title>
                 </div>
 
                 {/* Filters */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
                   <div>
                     <div className="flex items-center space-x-2 mb-3">
-                      <Text className="text-sm font-medium text-gray-700">Search Models:</Text>
-                      <Tooltip
-                        title="Smart search with relevance ranking - finds models containing your search terms, ranked by relevance. Try searching 'xai grok-4', 'claude-4', 'gpt-4', or 'sonnet'"
-                        placement="top"
-                      >
+                      <Text className="text-sm font-medium text-gray-700">Search Agents:</Text>
+                      <Tooltip title="Search agents by name or description" placement="top">
                         <Info className="w-4 h-4 text-gray-400 cursor-help" />
                       </Tooltip>
                     </div>
@@ -562,87 +700,29 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       <SearchIcon className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
                       <input
                         type="text"
-                        placeholder="Search model names... (smart search enabled)"
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
+                        placeholder="Search agent names or descriptions..."
+                        value={agentSearchTerm}
+                        onChange={(e) => setAgentSearchTerm(e.target.value)}
                         className="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
                       />
                     </div>
                   </div>
                   <div>
-                    <Text className="text-sm font-medium mb-3 text-gray-700">Provider:</Text>
+                    <Text className="text-sm font-medium mb-3 text-gray-700">Skills:</Text>
                     <Select
                       mode="multiple"
-                      value={selectedProviders}
-                      onChange={(values) => setSelectedProviders(values)}
-                      placeholder="Select providers"
-                      className="w-full"
-                      size="large"
-                      allowClear
-                      optionRender={(option) => {
-                        const { logo } = getProviderLogoAndName(option.value as string);
-                        return (
-                          <div className="flex items-center space-x-2">
-                            {logo && (
-                              <img
-                                src={logo}
-                                alt={option.label as string}
-                                className="w-5 h-5 shrink-0 object-contain"
-                                onError={(e) => {
-                                  (e.target as HTMLImageElement).style.display = "none";
-                                }}
-                              />
-                            )}
-                            <span className="capitalize">{option.label}</span>
-                          </div>
-                        );
-                      }}
-                    >
-                      {modelHubData &&
-                        Array.isArray(modelHubData) &&
-                        getUniqueProviders(modelHubData).map((provider) => (
-                          <Select.Option key={provider} value={provider}>
-                            {provider}
-                          </Select.Option>
-                        ))}
-                    </Select>
-                  </div>
-                  <div>
-                    <Text className="text-sm font-medium mb-3 text-gray-700">Mode:</Text>
-                    <Select
-                      mode="multiple"
-                      value={selectedModes}
-                      onChange={(values) => setSelectedModes(values)}
-                      placeholder="Select modes"
+                      value={selectedAgentSkills}
+                      onChange={(values) => setSelectedAgentSkills(values)}
+                      placeholder="Select skills"
                       className="w-full"
                       size="large"
                       allowClear
                     >
-                      {modelHubData &&
-                        Array.isArray(modelHubData) &&
-                        getUniqueModes(modelHubData).map((mode) => (
-                          <Select.Option key={mode} value={mode}>
-                            {mode}
-                          </Select.Option>
-                        ))}
-                    </Select>
-                  </div>
-                  <div>
-                    <Text className="text-sm font-medium mb-3 text-gray-700">Features:</Text>
-                    <Select
-                      mode="multiple"
-                      value={selectedFeatures}
-                      onChange={(values) => setSelectedFeatures(values)}
-                      placeholder="Select features"
-                      className="w-full"
-                      size="large"
-                      allowClear
-                    >
-                      {modelHubData &&
-                        Array.isArray(modelHubData) &&
-                        getUniqueFeatures(modelHubData).map((feature) => (
-                          <Select.Option key={feature} value={feature}>
-                            {feature}
+                      {agentHubData &&
+                        Array.isArray(agentHubData) &&
+                        getUniqueAgentSkills(agentHubData).map((skill) => (
+                          <Select.Option key={skill} value={skill}>
+                            {skill}
                           </Select.Option>
                         ))}
                     </Select>
@@ -650,22 +730,18 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                 </div>
 
                 <DataTable
-                  data={filteredData}
-                  columns={modelColumns}
-                  getRowId={(model, index) => model.model_group || String(index)}
+                  data={filteredAgentData}
+                  columns={agentColumns}
+                  getRowId={(agent, index) => agent.name || String(index)}
                   sortingMode="client"
-                  sorting={modelSorting}
-                  onSortingChange={setModelSorting}
-                  isLoading={loading}
-                  loadingMessage="Loading models…"
+                  sorting={agentSorting}
+                  onSortingChange={setAgentSorting}
+                  isLoading={agentLoading}
+                  loadingMessage="Loading agents…"
                   noDataMessage={
                     <PublicHubEmptyState
-                      title={modelHubData?.length ? "No matching models" : "No models available"}
-                      body={
-                        modelHubData?.length
-                          ? "Adjust the search or filters to see more models."
-                          : "Models made public by the proxy admin will appear here."
-                      }
+                      title="No matching agents"
+                      body="Adjust the search or skill filter to see more agents."
                     />
                   }
                   size="compact"
@@ -673,553 +749,477 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
                 <div className="mt-8 text-center">
                   <Text className="text-sm text-gray-600">
-                    Showing {filteredData.length} of {modelHubData?.length || 0} models
+                    Showing {filteredAgentData.length} of {agentHubData?.length || 0} agents
                   </Text>
                 </div>
               </TabPane>
+            )}
 
-              {/* Agents Tab */}
-              {agentHubData && Array.isArray(agentHubData) && agentHubData.length > 0 && (
-                <TabPane tab="Agent Hub" key="agents">
-                  <div className="flex justify-between items-center mb-8">
-                    <Title className="text-2xl font-semibold text-gray-900">Available Agents</Title>
-                  </div>
+            {/* MCP Servers Tab */}
+            {mcpHubData && Array.isArray(mcpHubData) && mcpHubData.length > 0 && (
+              <TabPane tab="MCP Hub" key="mcp">
+                <div className="flex justify-between items-center mb-8">
+                  <Title className="text-2xl font-semibold text-gray-900">Available MCP Servers</Title>
+                </div>
 
-                  {/* Filters */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
-                    <div>
-                      <div className="flex items-center space-x-2 mb-3">
-                        <Text className="text-sm font-medium text-gray-700">Search Agents:</Text>
-                        <Tooltip title="Search agents by name or description" placement="top">
-                          <Info className="w-4 h-4 text-gray-400 cursor-help" />
-                        </Tooltip>
-                      </div>
-                      <div className="relative">
-                        <SearchIcon className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
-                        <input
-                          type="text"
-                          placeholder="Search agent names or descriptions..."
-                          value={agentSearchTerm}
-                          onChange={(e) => setAgentSearchTerm(e.target.value)}
-                          className="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
-                        />
-                      </div>
+                {/* Filters */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
+                  <div>
+                    <div className="flex items-center space-x-2 mb-3">
+                      <Text className="text-sm font-medium text-gray-700">Search MCP Servers:</Text>
+                      <Tooltip title="Search MCP servers by name or description" placement="top">
+                        <Info className="w-4 h-4 text-gray-400 cursor-help" />
+                      </Tooltip>
                     </div>
-                    <div>
-                      <Text className="text-sm font-medium mb-3 text-gray-700">Skills:</Text>
-                      <Select
-                        mode="multiple"
-                        value={selectedAgentSkills}
-                        onChange={(values) => setSelectedAgentSkills(values)}
-                        placeholder="Select skills"
-                        className="w-full"
-                        size="large"
-                        allowClear
-                      >
-                        {agentHubData &&
-                          Array.isArray(agentHubData) &&
-                          getUniqueAgentSkills(agentHubData).map((skill) => (
-                            <Select.Option key={skill} value={skill}>
-                              {skill}
-                            </Select.Option>
-                          ))}
-                      </Select>
-                    </div>
-                  </div>
-
-                  <DataTable
-                    data={filteredAgentData}
-                    columns={agentColumns}
-                    getRowId={(agent, index) => agent.name || String(index)}
-                    sortingMode="client"
-                    sorting={agentSorting}
-                    onSortingChange={setAgentSorting}
-                    isLoading={agentLoading}
-                    loadingMessage="Loading agents…"
-                    noDataMessage={
-                      <PublicHubEmptyState
-                        title="No matching agents"
-                        body="Adjust the search or skill filter to see more agents."
+                    <div className="relative">
+                      <SearchIcon className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="Search MCP server names or descriptions..."
+                        value={mcpSearchTerm}
+                        onChange={(e) => setMcpSearchTerm(e.target.value)}
+                        className="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
                       />
-                    }
-                    size="compact"
-                  />
-
-                  <div className="mt-8 text-center">
-                    <Text className="text-sm text-gray-600">
-                      Showing {filteredAgentData.length} of {agentHubData?.length || 0} agents
-                    </Text>
-                  </div>
-                </TabPane>
-              )}
-
-              {/* MCP Servers Tab */}
-              {mcpHubData && Array.isArray(mcpHubData) && mcpHubData.length > 0 && (
-                <TabPane tab="MCP Hub" key="mcp">
-                  <div className="flex justify-between items-center mb-8">
-                    <Title className="text-2xl font-semibold text-gray-900">Available MCP Servers</Title>
-                  </div>
-
-                  {/* Filters */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
-                    <div>
-                      <div className="flex items-center space-x-2 mb-3">
-                        <Text className="text-sm font-medium text-gray-700">Search MCP Servers:</Text>
-                        <Tooltip title="Search MCP servers by name or description" placement="top">
-                          <Info className="w-4 h-4 text-gray-400 cursor-help" />
-                        </Tooltip>
-                      </div>
-                      <div className="relative">
-                        <SearchIcon className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
-                        <input
-                          type="text"
-                          placeholder="Search MCP server names or descriptions..."
-                          value={mcpSearchTerm}
-                          onChange={(e) => setMcpSearchTerm(e.target.value)}
-                          className="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <Text className="text-sm font-medium mb-3 text-gray-700">Transport:</Text>
-                      <Select
-                        mode="multiple"
-                        value={selectedMcpTransports}
-                        onChange={(values) => setSelectedMcpTransports(values)}
-                        placeholder="Select transport types"
-                        className="w-full"
-                        size="large"
-                        allowClear
-                      >
-                        {mcpHubData &&
-                          Array.isArray(mcpHubData) &&
-                          getUniqueMcpTransports(mcpHubData).map((transport) => (
-                            <Select.Option key={transport} value={transport}>
-                              {transport}
-                            </Select.Option>
-                          ))}
-                      </Select>
                     </div>
                   </div>
-
-                  <DataTable
-                    data={filteredMcpData}
-                    columns={mcpColumns}
-                    getRowId={(server, index) => server.server_id || String(index)}
-                    sortingMode="client"
-                    sorting={mcpSorting}
-                    onSortingChange={setMcpSorting}
-                    isLoading={mcpLoading}
-                    loadingMessage="Loading MCP servers…"
-                    noDataMessage={
-                      <PublicHubEmptyState
-                        title="No matching MCP servers"
-                        body="Adjust the search or transport filter to see more servers."
-                      />
-                    }
-                    size="compact"
-                  />
-
-                  <div className="mt-8 text-center">
-                    <Text className="text-sm text-gray-600">
-                      Showing {filteredMcpData.length} of {mcpHubData?.length || 0} MCP servers
-                    </Text>
+                  <div>
+                    <Text className="text-sm font-medium mb-3 text-gray-700">Transport:</Text>
+                    <Select
+                      mode="multiple"
+                      value={selectedMcpTransports}
+                      onChange={(values) => setSelectedMcpTransports(values)}
+                      placeholder="Select transport types"
+                      className="w-full"
+                      size="large"
+                      allowClear
+                    >
+                      {mcpHubData &&
+                        Array.isArray(mcpHubData) &&
+                        getUniqueMcpTransports(mcpHubData).map((transport) => (
+                          <Select.Option key={transport} value={transport}>
+                            {transport}
+                          </Select.Option>
+                        ))}
+                    </Select>
                   </div>
-                </TabPane>
-              )}
+                </div>
 
-              {/* Skill Hub Tab */}
-              <TabPane tab="Skill Hub" key="skills">
-                <SkillHubDashboard skills={skillHubData} isLoading={skillLoading} publicPage={true} />
+                <DataTable
+                  data={filteredMcpData}
+                  columns={mcpColumns}
+                  getRowId={(server, index) => server.server_id || String(index)}
+                  sortingMode="client"
+                  sorting={mcpSorting}
+                  onSortingChange={setMcpSorting}
+                  isLoading={mcpLoading}
+                  loadingMessage="Loading MCP servers…"
+                  noDataMessage={
+                    <PublicHubEmptyState
+                      title="No matching MCP servers"
+                      body="Adjust the search or transport filter to see more servers."
+                    />
+                  }
+                  size="compact"
+                />
+
+                <div className="mt-8 text-center">
+                  <Text className="text-sm text-gray-600">
+                    Showing {filteredMcpData.length} of {mcpHubData?.length || 0} MCP servers
+                  </Text>
+                </div>
               </TabPane>
-            </Tabs>
-          </Card>
-        </div>
+            )}
 
-        {/* Model Details Modal */}
-        <Modal
-          title={
-            <div className="flex items-center space-x-2">
-              <span>{selectedModel?.model_group || "Model Details"}</span>
-              {selectedModel && (
-                <Tooltip title="Copy model name">
-                  <Copy
-                    onClick={() => copyToClipboard(selectedModel.model_group)}
-                    className="cursor-pointer text-gray-500 hover:text-blue-500 w-4 h-4"
-                  />
-                </Tooltip>
-              )}
-            </div>
-          }
-          width={1000}
-          open={isModalVisible}
-          footer={null}
-          onOk={handleModalOk}
-          onCancel={handleModalCancel}
-        >
-          {selectedModel && (
-            <div className="space-y-6">
-              {/* Model Overview */}
-              <div>
-                <Text className="text-lg font-semibold mb-4">Model Overview</Text>
-                <div className="grid grid-cols-2 gap-4 mb-4">
-                  <div>
-                    <Text className="font-medium">Model Name:</Text>
-                    <Text>{selectedModel.model_group}</Text>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Mode:</Text>
-                    <Text>{selectedModel.mode || "Not specified"}</Text>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Providers:</Text>
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {(selectedModel.providers ?? []).map((provider) => {
-                        const { logo } = getProviderLogoAndName(provider);
-                        return (
-                          <Tag key={provider} color="blue">
-                            <div className="flex items-center space-x-1">
-                              {logo && (
-                                <img
-                                  src={logo}
-                                  alt={provider}
-                                  className="w-3 h-3 shrink-0 object-contain"
-                                  onError={(e) => {
-                                    (e.target as HTMLImageElement).style.display = "none";
-                                  }}
-                                />
-                              )}
-                              <span className="capitalize">{provider}</span>
-                            </div>
-                          </Tag>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
+            {/* Skill Hub Tab */}
+            <TabPane tab="Skill Hub" key="skills">
+              <SkillHubDashboard skills={skillHubData} isLoading={skillLoading} publicPage={true} />
+            </TabPane>
+          </Tabs>
+        </Card>
+      </div>
 
-                {/* Wildcard Routing Note */}
-                {selectedModel.model_group.includes("*") && (
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
-                    <div className="flex items-start space-x-2">
-                      <Info className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
-                      <div>
-                        <Text className="font-medium text-blue-900 mb-2">Wildcard Routing</Text>
-                        <Text className="text-sm text-blue-800 mb-2">
-                          This model uses wildcard routing. You can pass any value where you see the{" "}
-                          <code className="bg-blue-100 px-1 py-0.5 rounded-sm text-xs">*</code> symbol.
-                        </Text>
-                        <Text className="text-sm text-blue-800">
-                          For example, with{" "}
-                          <code className="bg-blue-100 px-1 py-0.5 rounded-sm text-xs">
-                            {selectedModel.model_group}
-                          </code>
-                          , you can use any string (
-                          <code className="bg-blue-100 px-1 py-0.5 rounded-sm text-xs">
-                            {selectedModel.model_group.replaceAll("*", "my-custom-value")}
-                          </code>
-                          ) that matches this pattern.
-                        </Text>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Token and Cost Information */}
-              <div>
-                <Text className="text-lg font-semibold mb-4">Token & Cost Information</Text>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Text className="font-medium">Max Input Tokens:</Text>
-                    <Text>{selectedModel.max_input_tokens?.toLocaleString() || "Not specified"}</Text>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Max Output Tokens:</Text>
-                    <Text>{selectedModel.max_output_tokens?.toLocaleString() || "Not specified"}</Text>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Input Cost per 1M Tokens:</Text>
-                    <Text>
-                      {selectedModel.input_cost_per_token
-                        ? formatCost(selectedModel.input_cost_per_token)
-                        : "Not specified"}
-                    </Text>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Output Cost per 1M Tokens:</Text>
-                    <Text>
-                      {selectedModel.output_cost_per_token
-                        ? formatCost(selectedModel.output_cost_per_token)
-                        : "Not specified"}
-                    </Text>
-                  </div>
-                </div>
-              </div>
-
-              {/* Capabilities */}
-              <div>
-                <Text className="text-lg font-semibold mb-4">Capabilities</Text>
-                <div className="flex flex-wrap gap-2">
-                  {(() => {
-                    const capabilities = getModelCapabilities(selectedModel);
-                    const colors = ["green", "blue", "purple", "orange", "red", "yellow"];
-
-                    if (capabilities.length === 0) {
-                      return <Text className="text-gray-500">No special capabilities listed</Text>;
-                    }
-
-                    return capabilities.map((capability, index) => (
-                      <Tag key={capability} color={colors[index % colors.length]}>
-                        {formatCapabilityName(capability)}
-                      </Tag>
-                    ));
-                  })()}
-                </div>
-              </div>
-
-              {/* Rate Limits */}
-              {(selectedModel.tpm || selectedModel.rpm) && (
+      {/* Model Details Modal */}
+      <Modal
+        title={
+          <div className="flex items-center space-x-2">
+            <span>{selectedModel?.model_group || "Model Details"}</span>
+            {selectedModel && (
+              <Tooltip title="Copy model name">
+                <Copy
+                  onClick={() => copyToClipboard(selectedModel.model_group)}
+                  className="cursor-pointer text-gray-500 hover:text-blue-500 w-4 h-4"
+                />
+              </Tooltip>
+            )}
+          </div>
+        }
+        width={1000}
+        open={isModalVisible}
+        footer={null}
+        onOk={handleModalOk}
+        onCancel={handleModalCancel}
+      >
+        {selectedModel && (
+          <div className="space-y-6">
+            {/* Model Overview */}
+            <div>
+              <Text className="text-lg font-semibold mb-4">Model Overview</Text>
+              <div className="grid grid-cols-2 gap-4 mb-4">
                 <div>
-                  <Text className="text-lg font-semibold mb-4">Rate Limits</Text>
-                  <div className="grid grid-cols-2 gap-4">
-                    {selectedModel.tpm && (
-                      <div>
-                        <Text className="font-medium">Tokens per Minute:</Text>
-                        <Text>{selectedModel.tpm.toLocaleString()}</Text>
-                      </div>
-                    )}
-                    {selectedModel.rpm && (
-                      <div>
-                        <Text className="font-medium">Requests per Minute:</Text>
-                        <Text>{selectedModel.rpm.toLocaleString()}</Text>
-                      </div>
-                    )}
-                  </div>
+                  <Text className="font-medium">Model Name:</Text>
+                  <Text>{selectedModel.model_group}</Text>
                 </div>
-              )}
-
-              {/* Supported OpenAI Parameters */}
-              {selectedModel.supported_openai_params && selectedModel.supported_openai_params.length > 0 && (
                 <div>
-                  <Text className="text-lg font-semibold mb-4">Supported OpenAI Parameters</Text>
-                  <div className="flex flex-wrap gap-2">
-                    {selectedModel.supported_openai_params.map((param) => (
-                      <Tag key={param} color="green">
-                        {param}
-                      </Tag>
-                    ))}
+                  <Text className="font-medium">Mode:</Text>
+                  <Text>{selectedModel.mode || "Not specified"}</Text>
+                </div>
+                <div>
+                  <Text className="font-medium">Providers:</Text>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {(selectedModel.providers ?? []).map((provider) => {
+                      const { logo } = getProviderLogoAndName(provider);
+                      return (
+                        <Tag key={provider} color="blue">
+                          <div className="flex items-center space-x-1">
+                            {logo && (
+                              <img
+                                src={logo}
+                                alt={provider}
+                                className="w-3 h-3 shrink-0 object-contain"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).style.display = "none";
+                                }}
+                              />
+                            )}
+                            <span className="capitalize">{provider}</span>
+                          </div>
+                        </Tag>
+                      );
+                    })}
                   </div>
-                </div>
-              )}
-
-              {/* Usage Example */}
-              <div>
-                <Text className="text-lg font-semibold mb-4">Usage Example</Text>
-                <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
-                  <pre className="text-sm">
-                    {(() => {
-                      const codeSnippet = generateCodeSnippet({
-                        apiKeySource: "custom",
-                        accessToken: null,
-                        apiKey: "your_api_key",
-                        inputMessage: "Hello, how are you?",
-                        chatHistory: [{ role: "user", content: "Hello, how are you?", isImage: false } as MessageType],
-                        selectedTags: [],
-                        selectedVectorStores: [],
-                        selectedGuardrails: [],
-                        selectedPolicies: [],
-                        selectedMCPServers: [],
-                        endpointType: getEndpointType(selectedModel.mode || "chat"),
-                        selectedModel: selectedModel.model_group,
-                        selectedSdk: "openai",
-                      });
-                      return codeSnippet;
-                    })()}
-                  </pre>
-                </div>
-                <div className="mt-2 text-right">
-                  <button
-                    onClick={() => {
-                      const codeSnippet = generateCodeSnippet({
-                        apiKeySource: "custom",
-                        accessToken: null,
-                        apiKey: "your_api_key",
-                        inputMessage: "Hello, how are you?",
-                        chatHistory: [{ role: "user", content: "Hello, how are you?", isImage: false } as MessageType],
-                        selectedTags: [],
-                        selectedVectorStores: [],
-                        selectedGuardrails: [],
-                        selectedPolicies: [],
-                        selectedMCPServers: [],
-                        endpointType: getEndpointType(selectedModel.mode || "chat"),
-                        selectedModel: selectedModel.model_group,
-                        selectedSdk: "openai",
-                      });
-                      copyToClipboard(codeSnippet);
-                    }}
-                    className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer"
-                  >
-                    Copy to clipboard
-                  </button>
                 </div>
               </div>
-            </div>
-          )}
-        </Modal>
 
-        {/* Agent Details Modal */}
-        <Modal
-          title={
-            <div className="flex items-center space-x-2">
-              <span>{selectedAgent?.name || "Agent Details"}</span>
-              {selectedAgent && (
-                <Tooltip title="Copy agent name">
-                  <Copy
-                    onClick={() => copyToClipboard(selectedAgent.name)}
-                    className="cursor-pointer text-gray-500 hover:text-blue-500 w-4 h-4"
-                  />
-                </Tooltip>
-              )}
-            </div>
-          }
-          width={1000}
-          open={isAgentModalVisible}
-          footer={null}
-          onOk={handleAgentModalOk}
-          onCancel={handleAgentModalCancel}
-        >
-          {selectedAgent && (
-            <div className="space-y-6">
-              {/* Agent Overview */}
-              <div>
-                <Text className="text-lg font-semibold mb-4">Agent Overview</Text>
-                <div className="grid grid-cols-2 gap-4 mb-4">
-                  <div>
-                    <Text className="font-medium">Name:</Text>
-                    <Text>{selectedAgent.name}</Text>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Version:</Text>
-                    <Text>{selectedAgent.version}</Text>
-                  </div>
-                  <div className="col-span-2">
-                    <Text className="font-medium">Description:</Text>
-                    <Text>{selectedAgent.description}</Text>
-                  </div>
-                  {selectedAgent.url && (
+              {/* Wildcard Routing Note */}
+              {selectedModel.model_group.includes("*") && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                  <div className="flex items-start space-x-2">
+                    <Info className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
                     <div>
-                      <Text className="font-medium">URL:</Text>
-                      <a
-                        href={selectedAgent.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-600 hover:text-blue-800 text-sm break-all"
-                      >
-                        {selectedAgent.url}
-                      </a>
+                      <Text className="font-medium text-blue-900 mb-2">Wildcard Routing</Text>
+                      <Text className="text-sm text-blue-800 mb-2">
+                        This model uses wildcard routing. You can pass any value where you see the{" "}
+                        <code className="bg-blue-100 px-1 py-0.5 rounded-sm text-xs">*</code> symbol.
+                      </Text>
+                      <Text className="text-sm text-blue-800">
+                        For example, with{" "}
+                        <code className="bg-blue-100 px-1 py-0.5 rounded-sm text-xs">{selectedModel.model_group}</code>,
+                        you can use any string (
+                        <code className="bg-blue-100 px-1 py-0.5 rounded-sm text-xs">
+                          {selectedModel.model_group.replaceAll("*", "my-custom-value")}
+                        </code>
+                        ) that matches this pattern.
+                      </Text>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Token and Cost Information */}
+            <div>
+              <Text className="text-lg font-semibold mb-4">Token & Cost Information</Text>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Text className="font-medium">Max Input Tokens:</Text>
+                  <Text>{selectedModel.max_input_tokens?.toLocaleString() || "Not specified"}</Text>
+                </div>
+                <div>
+                  <Text className="font-medium">Max Output Tokens:</Text>
+                  <Text>{selectedModel.max_output_tokens?.toLocaleString() || "Not specified"}</Text>
+                </div>
+                <div>
+                  <Text className="font-medium">Input Cost per 1M Tokens:</Text>
+                  <Text>
+                    {selectedModel.input_cost_per_token
+                      ? formatCost(selectedModel.input_cost_per_token)
+                      : "Not specified"}
+                  </Text>
+                </div>
+                <div>
+                  <Text className="font-medium">Output Cost per 1M Tokens:</Text>
+                  <Text>
+                    {selectedModel.output_cost_per_token
+                      ? formatCost(selectedModel.output_cost_per_token)
+                      : "Not specified"}
+                  </Text>
+                </div>
+              </div>
+            </div>
+
+            {/* Capabilities */}
+            <div>
+              <Text className="text-lg font-semibold mb-4">Capabilities</Text>
+              <div className="flex flex-wrap gap-2">
+                {(() => {
+                  const capabilities = getModelCapabilities(selectedModel);
+                  const colors = ["green", "blue", "purple", "orange", "red", "yellow"];
+
+                  if (capabilities.length === 0) {
+                    return <Text className="text-gray-500">No special capabilities listed</Text>;
+                  }
+
+                  return capabilities.map((capability, index) => (
+                    <Tag key={capability} color={colors[index % colors.length]}>
+                      {formatCapabilityName(capability)}
+                    </Tag>
+                  ));
+                })()}
+              </div>
+            </div>
+
+            {/* Rate Limits */}
+            {(selectedModel.tpm || selectedModel.rpm) && (
+              <div>
+                <Text className="text-lg font-semibold mb-4">Rate Limits</Text>
+                <div className="grid grid-cols-2 gap-4">
+                  {selectedModel.tpm && (
+                    <div>
+                      <Text className="font-medium">Tokens per Minute:</Text>
+                      <Text>{selectedModel.tpm.toLocaleString()}</Text>
+                    </div>
+                  )}
+                  {selectedModel.rpm && (
+                    <div>
+                      <Text className="font-medium">Requests per Minute:</Text>
+                      <Text>{selectedModel.rpm.toLocaleString()}</Text>
                     </div>
                   )}
                 </div>
               </div>
+            )}
 
-              {/* Capabilities */}
-              {selectedAgent.capabilities && (
-                <div>
-                  <Text className="text-lg font-semibold mb-4">Capabilities</Text>
-                  <div className="flex flex-wrap gap-2">
-                    {Object.entries(selectedAgent.capabilities)
-                      .filter(([_, value]) => value === true)
-                      .map(([key]) => (
-                        <Tag key={key} color="green" className="capitalize">
-                          {key}
-                        </Tag>
-                      ))}
-                  </div>
+            {/* Supported OpenAI Parameters */}
+            {selectedModel.supported_openai_params && selectedModel.supported_openai_params.length > 0 && (
+              <div>
+                <Text className="text-lg font-semibold mb-4">Supported OpenAI Parameters</Text>
+                <div className="flex flex-wrap gap-2">
+                  {selectedModel.supported_openai_params.map((param) => (
+                    <Tag key={param} color="green">
+                      {param}
+                    </Tag>
+                  ))}
                 </div>
-              )}
+              </div>
+            )}
 
-              {/* Skills */}
-              {selectedAgent.skills && selectedAgent.skills.length > 0 && (
+            {/* Usage Example */}
+            <div>
+              <Text className="text-lg font-semibold mb-4">Usage Example</Text>
+              <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
+                <pre className="text-sm">
+                  {(() => {
+                    const codeSnippet = generateCodeSnippet({
+                      apiKeySource: "custom",
+                      accessToken: null,
+                      apiKey: "your_api_key",
+                      inputMessage: "Hello, how are you?",
+                      chatHistory: [{ role: "user", content: "Hello, how are you?", isImage: false } as MessageType],
+                      selectedTags: [],
+                      selectedVectorStores: [],
+                      selectedGuardrails: [],
+                      selectedPolicies: [],
+                      selectedMCPServers: [],
+                      endpointType: getEndpointType(selectedModel.mode || "chat"),
+                      selectedModel: selectedModel.model_group,
+                      selectedSdk: "openai",
+                    });
+                    return codeSnippet;
+                  })()}
+                </pre>
+              </div>
+              <div className="mt-2 text-right">
+                <button
+                  onClick={() => {
+                    const codeSnippet = generateCodeSnippet({
+                      apiKeySource: "custom",
+                      accessToken: null,
+                      apiKey: "your_api_key",
+                      inputMessage: "Hello, how are you?",
+                      chatHistory: [{ role: "user", content: "Hello, how are you?", isImage: false } as MessageType],
+                      selectedTags: [],
+                      selectedVectorStores: [],
+                      selectedGuardrails: [],
+                      selectedPolicies: [],
+                      selectedMCPServers: [],
+                      endpointType: getEndpointType(selectedModel.mode || "chat"),
+                      selectedModel: selectedModel.model_group,
+                      selectedSdk: "openai",
+                    });
+                    copyToClipboard(codeSnippet);
+                  }}
+                  className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer"
+                >
+                  Copy to clipboard
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Agent Details Modal */}
+      <Modal
+        title={
+          <div className="flex items-center space-x-2">
+            <span>{selectedAgent?.name || "Agent Details"}</span>
+            {selectedAgent && (
+              <Tooltip title="Copy agent name">
+                <Copy
+                  onClick={() => copyToClipboard(selectedAgent.name)}
+                  className="cursor-pointer text-gray-500 hover:text-blue-500 w-4 h-4"
+                />
+              </Tooltip>
+            )}
+          </div>
+        }
+        width={1000}
+        open={isAgentModalVisible}
+        footer={null}
+        onOk={handleAgentModalOk}
+        onCancel={handleAgentModalCancel}
+      >
+        {selectedAgent && (
+          <div className="space-y-6">
+            {/* Agent Overview */}
+            <div>
+              <Text className="text-lg font-semibold mb-4">Agent Overview</Text>
+              <div className="grid grid-cols-2 gap-4 mb-4">
                 <div>
-                  <Text className="text-lg font-semibold mb-4">Skills</Text>
-                  <div className="space-y-4">
-                    {selectedAgent.skills.map((skill, index) => (
-                      <div key={index} className="border border-gray-200 rounded-lg p-4">
-                        <div className="flex items-start justify-between mb-2">
-                          <div>
-                            <Text className="font-medium text-base">{skill.name}</Text>
-                            <Text className="text-sm text-gray-600">{skill.description}</Text>
-                          </div>
+                  <Text className="font-medium">Name:</Text>
+                  <Text>{selectedAgent.name}</Text>
+                </div>
+                <div>
+                  <Text className="font-medium">Version:</Text>
+                  <Text>{selectedAgent.version}</Text>
+                </div>
+                <div className="col-span-2">
+                  <Text className="font-medium">Description:</Text>
+                  <Text>{selectedAgent.description}</Text>
+                </div>
+                {selectedAgent.url && (
+                  <div>
+                    <Text className="font-medium">URL:</Text>
+                    <a
+                      href={selectedAgent.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:text-blue-800 text-sm break-all"
+                    >
+                      {selectedAgent.url}
+                    </a>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Capabilities */}
+            {selectedAgent.capabilities && (
+              <div>
+                <Text className="text-lg font-semibold mb-4">Capabilities</Text>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(selectedAgent.capabilities)
+                    .filter(([_, value]) => value === true)
+                    .map(([key]) => (
+                      <Tag key={key} color="green" className="capitalize">
+                        {key}
+                      </Tag>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {/* Skills */}
+            {selectedAgent.skills && selectedAgent.skills.length > 0 && (
+              <div>
+                <Text className="text-lg font-semibold mb-4">Skills</Text>
+                <div className="space-y-4">
+                  {selectedAgent.skills.map((skill, index) => (
+                    <div key={index} className="border border-gray-200 rounded-lg p-4">
+                      <div className="flex items-start justify-between mb-2">
+                        <div>
+                          <Text className="font-medium text-base">{skill.name}</Text>
+                          <Text className="text-sm text-gray-600">{skill.description}</Text>
                         </div>
-                        {skill.tags && skill.tags.length > 0 && (
-                          <div className="flex flex-wrap gap-1 mt-2">
-                            {skill.tags.map((tag) => (
-                              <Tag key={tag} color="purple" className="text-xs">
-                                {tag}
-                              </Tag>
-                            ))}
-                          </div>
-                        )}
                       </div>
+                      {skill.tags && skill.tags.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-2">
+                          {skill.tags.map((tag) => (
+                            <Tag key={tag} color="purple" className="text-xs">
+                              {tag}
+                            </Tag>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Input/Output Modes */}
+            <div>
+              <Text className="text-lg font-semibold mb-4">Input/Output Modes</Text>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Text className="font-medium">Input Modes:</Text>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {(selectedAgent.defaultInputModes ?? []).map((mode) => (
+                      <Tag key={mode} color="blue">
+                        {mode}
+                      </Tag>
                     ))}
                   </div>
                 </div>
-              )}
-
-              {/* Input/Output Modes */}
-              <div>
-                <Text className="text-lg font-semibold mb-4">Input/Output Modes</Text>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Text className="font-medium">Input Modes:</Text>
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {(selectedAgent.defaultInputModes ?? []).map((mode) => (
-                        <Tag key={mode} color="blue">
-                          {mode}
-                        </Tag>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Output Modes:</Text>
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {(selectedAgent.defaultOutputModes ?? []).map((mode) => (
-                        <Tag key={mode} color="blue">
-                          {mode}
-                        </Tag>
-                      ))}
-                    </div>
+                <div>
+                  <Text className="font-medium">Output Modes:</Text>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {(selectedAgent.defaultOutputModes ?? []).map((mode) => (
+                      <Tag key={mode} color="blue">
+                        {mode}
+                      </Tag>
+                    ))}
                   </div>
                 </div>
               </div>
+            </div>
 
-              {/* Documentation */}
-              {selectedAgent.documentationUrl && (
-                <div>
-                  <Text className="text-lg font-semibold mb-4">Documentation</Text>
-                  <a
-                    href={selectedAgent.documentationUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-600 hover:text-blue-800 flex items-center space-x-2"
-                  >
-                    <ExternalLinkIcon className="w-4 h-4" />
-                    <span>View Documentation</span>
-                  </a>
-                </div>
-              )}
-
-              {/* A2A Usage Example */}
+            {/* Documentation */}
+            {selectedAgent.documentationUrl && (
               <div>
-                <Text className="text-lg font-semibold mb-4">Usage Example (A2A Protocol)</Text>
+                <Text className="text-lg font-semibold mb-4">Documentation</Text>
+                <a
+                  href={selectedAgent.documentationUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:text-blue-800 flex items-center space-x-2"
+                >
+                  <ExternalLinkIcon className="w-4 h-4" />
+                  <span>View Documentation</span>
+                </a>
+              </div>
+            )}
 
-                {/* Step 1: Retrieve Agent Card */}
-                <div className="mb-4">
-                  <Text className="text-sm font-medium mb-2 text-gray-700">Step 1: Retrieve Agent Card</Text>
-                  <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
-                    <pre className="text-xs">
-                      {`base_url = '${selectedAgent.url}'
+            {/* A2A Usage Example */}
+            <div>
+              <Text className="text-lg font-semibold mb-4">Usage Example (A2A Protocol)</Text>
+
+              {/* Step 1: Retrieve Agent Card */}
+              <div className="mb-4">
+                <Text className="text-sm font-medium mb-2 text-gray-700">Step 1: Retrieve Agent Card</Text>
+                <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
+                  <pre className="text-xs">
+                    {`base_url = '${selectedAgent.url}'
 
 resolver = A2ACardResolver(
     httpx_client=httpx_client,
@@ -1251,12 +1251,12 @@ if _public_card.supports_authenticated_extended_card:
             f'Failed to fetch extended agent card: {e_extended}. Will proceed with public card.',
             exc_info=True,
         )`}
-                    </pre>
-                  </div>
-                  <div className="mt-2 text-right">
-                    <button
-                      onClick={() => {
-                        const codeSnippet = `from a2a.client import A2ACardResolver, A2AClient
+                  </pre>
+                </div>
+                <div className="mt-2 text-right">
+                  <button
+                    onClick={() => {
+                      const codeSnippet = `from a2a.client import A2ACardResolver, A2AClient
 from a2a.types import (
     AgentCard,
     MessageSendParams,
@@ -1300,21 +1300,21 @@ if _public_card.supports_authenticated_extended_card:
             f'Failed to fetch extended agent card: {e_extended}. Will proceed with public card.',
             exc_info=True,
         )`;
-                        copyToClipboard(codeSnippet);
-                      }}
-                      className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer"
-                    >
-                      Copy to clipboard
-                    </button>
-                  </div>
+                      copyToClipboard(codeSnippet);
+                    }}
+                    className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer"
+                  >
+                    Copy to clipboard
+                  </button>
                 </div>
+              </div>
 
-                {/* Step 2: Call the Agent */}
-                <div>
-                  <Text className="text-sm font-medium mb-2 text-gray-700">Step 2: Call the Agent</Text>
-                  <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
-                    <pre className="text-xs">
-                      {`client = A2AClient(
+              {/* Step 2: Call the Agent */}
+              <div>
+                <Text className="text-sm font-medium mb-2 text-gray-700">Step 2: Call the Agent</Text>
+                <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
+                  <pre className="text-xs">
+                    {`client = A2AClient(
     httpx_client=httpx_client, agent_card=final_agent_card_to_use
 )
 
@@ -1333,12 +1333,12 @@ request = SendMessageRequest(
 
 response = await client.send_message(request)
 print(response.model_dump(mode='json', exclude_none=True))`}
-                    </pre>
-                  </div>
-                  <div className="mt-2 text-right">
-                    <button
-                      onClick={() => {
-                        const codeSnippet = `client = A2AClient(
+                  </pre>
+                </div>
+                <div className="mt-2 text-right">
+                  <button
+                    onClick={() => {
+                      const codeSnippet = `client = A2AClient(
     httpx_client=httpx_client, agent_card=final_agent_card_to_use
 )
 
@@ -1357,89 +1357,89 @@ request = SendMessageRequest(
 
 response = await client.send_message(request)
 print(response.model_dump(mode='json', exclude_none=True))`;
-                        copyToClipboard(codeSnippet);
-                      }}
-                      className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer"
-                    >
-                      Copy to clipboard
-                    </button>
-                  </div>
+                      copyToClipboard(codeSnippet);
+                    }}
+                    className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer"
+                  >
+                    Copy to clipboard
+                  </button>
                 </div>
               </div>
             </div>
-          )}
-        </Modal>
+          </div>
+        )}
+      </Modal>
 
-        {/* MCP Server Details Modal */}
-        <Modal
-          title={
-            <div className="flex items-center space-x-2">
-              <span>{selectedMcpServer?.server_name || "MCP Server Details"}</span>
-              {selectedMcpServer && (
-                <Tooltip title="Copy server name">
-                  <Copy
-                    onClick={() => copyToClipboard(selectedMcpServer.server_name)}
-                    className="cursor-pointer text-gray-500 hover:text-blue-500 w-4 h-4"
-                  />
-                </Tooltip>
-              )}
-            </div>
-          }
-          width={1000}
-          open={isMcpModalVisible}
-          footer={null}
-          onOk={handleMcpModalOk}
-          onCancel={handleMcpModalCancel}
-        >
-          {selectedMcpServer && (
-            <div className="space-y-6">
-              {/* Server Overview */}
-              <div>
-                <Text className="text-lg font-semibold mb-4">Server Overview</Text>
-                <div className="grid grid-cols-2 gap-4 mb-4">
-                  <div>
-                    <Text className="font-medium">Server Name:</Text>
-                    <Text>{selectedMcpServer.server_name}</Text>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Transport:</Text>
-                    <Tag color="blue">{selectedMcpServer.transport}</Tag>
-                  </div>
-                  {selectedMcpServer.alias && (
-                    <div>
-                      <Text className="font-medium">Alias:</Text>
-                      <Text>{selectedMcpServer.alias}</Text>
-                    </div>
-                  )}
-                  <div>
-                    <Text className="font-medium">Auth Type:</Text>
-                    <Tag color={selectedMcpServer.auth_type === "none" ? "gray" : "green"}>
-                      {selectedMcpServer.auth_type}
-                    </Tag>
-                  </div>
-                  <div className="col-span-2">
-                    <Text className="font-medium">Description:</Text>
-                    <Text>{selectedMcpServer.mcp_info?.description || "-"}</Text>
-                  </div>
-                </div>
-              </div>
-
-              {/* Additional Info */}
-              {selectedMcpServer.mcp_info && Object.keys(selectedMcpServer.mcp_info).length > 0 && (
+      {/* MCP Server Details Modal */}
+      <Modal
+        title={
+          <div className="flex items-center space-x-2">
+            <span>{selectedMcpServer?.server_name || "MCP Server Details"}</span>
+            {selectedMcpServer && (
+              <Tooltip title="Copy server name">
+                <Copy
+                  onClick={() => copyToClipboard(selectedMcpServer.server_name)}
+                  className="cursor-pointer text-gray-500 hover:text-blue-500 w-4 h-4"
+                />
+              </Tooltip>
+            )}
+          </div>
+        }
+        width={1000}
+        open={isMcpModalVisible}
+        footer={null}
+        onOk={handleMcpModalOk}
+        onCancel={handleMcpModalCancel}
+      >
+        {selectedMcpServer && (
+          <div className="space-y-6">
+            {/* Server Overview */}
+            <div>
+              <Text className="text-lg font-semibold mb-4">Server Overview</Text>
+              <div className="grid grid-cols-2 gap-4 mb-4">
                 <div>
-                  <Text className="text-lg font-semibold mb-4">Additional Information</Text>
-                  <div className="bg-gray-50 p-4 rounded-lg">
-                    <pre className="text-xs overflow-x-auto">{JSON.stringify(selectedMcpServer.mcp_info, null, 2)}</pre>
-                  </div>
+                  <Text className="font-medium">Server Name:</Text>
+                  <Text>{selectedMcpServer.server_name}</Text>
                 </div>
-              )}
+                <div>
+                  <Text className="font-medium">Transport:</Text>
+                  <Tag color="blue">{selectedMcpServer.transport}</Tag>
+                </div>
+                {selectedMcpServer.alias && (
+                  <div>
+                    <Text className="font-medium">Alias:</Text>
+                    <Text>{selectedMcpServer.alias}</Text>
+                  </div>
+                )}
+                <div>
+                  <Text className="font-medium">Auth Type:</Text>
+                  <Tag color={selectedMcpServer.auth_type === "none" ? "gray" : "green"}>
+                    {selectedMcpServer.auth_type}
+                  </Tag>
+                </div>
+                <div className="col-span-2">
+                  <Text className="font-medium">Description:</Text>
+                  <Text>{selectedMcpServer.mcp_info?.description || "-"}</Text>
+                </div>
+              </div>
+            </div>
 
-              {/* Usage Example */}
+            {/* Additional Info */}
+            {selectedMcpServer.mcp_info && Object.keys(selectedMcpServer.mcp_info).length > 0 && (
               <div>
-                <Text className="text-lg font-semibold mb-4">Usage Example</Text>
-                <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
-                  <pre className="text-sm">
-                    {`# Using MCP Server with Python FastMCP
+                <Text className="text-lg font-semibold mb-4">Additional Information</Text>
+                <div className="bg-gray-50 p-4 rounded-lg">
+                  <pre className="text-xs overflow-x-auto">{JSON.stringify(selectedMcpServer.mcp_info, null, 2)}</pre>
+                </div>
+              </div>
+            )}
+
+            {/* Usage Example */}
+            <div>
+              <Text className="text-lg font-semibold mb-4">Usage Example</Text>
+              <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
+                <pre className="text-sm">
+                  {`# Using MCP Server with Python FastMCP
 
 from fastmcp import Client
 import asyncio
@@ -1474,12 +1474,12 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())`}
-                  </pre>
-                </div>
-                <div className="mt-2 text-right">
-                  <button
-                    onClick={() => {
-                      const codeSnippet = `# Using MCP Server with Python FastMCP
+                </pre>
+              </div>
+              <div className="mt-2 text-right">
+                <button
+                  onClick={() => {
+                    const codeSnippet = `# Using MCP Server with Python FastMCP
 
 from fastmcp import Client
 import asyncio
@@ -1514,20 +1514,25 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())`;
-                      copyToClipboard(codeSnippet);
-                    }}
-                    className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer"
-                  >
-                    Copy to clipboard
-                  </button>
-                </div>
+                    copyToClipboard(codeSnippet);
+                  }}
+                  className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer"
+                >
+                  Copy to clipboard
+                </button>
               </div>
             </div>
-          )}
-        </Modal>
-      </div>
-    </ThemeProvider>
+          </div>
+        )}
+      </Modal>
+    </div>
   );
+
+  if (isEmbedded) {
+    return content;
+  }
+
+  return <ThemeProvider accessToken={accessToken}>{content}</ThemeProvider>;
 };
 
 export default PublicModelHub;
