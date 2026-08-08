@@ -25,17 +25,19 @@ def _cost_reported_by_xai(usage: "Usage") -> float | None:
 
     That figure is the total for the whole request, tokens and every server-side
     tool invocation together, so whoever consumes it must not add anything on top.
-    It is documented as an integer but arrives on an untyped extra field, so a
-    value that will not convert yields None and the caller prices the request from
-    tokens instead.
+
+    It arrives on an untyped extra field, from a response body that a caller able to
+    set api_base controls, so only the documented shape is trusted: a non-negative
+    integer. Anything else yields None and the caller prices the request from tokens
+    instead, which keeps a hostile endpoint from returning a negative amount to
+    subtract from its own recorded spend.
     """
-    ticks: Final[int | None] = getattr(usage, "cost_in_usd_ticks", None)
-    if ticks is None:
+    ticks: Final[object] = getattr(usage, "cost_in_usd_ticks", None)
+    if not isinstance(ticks, int) or isinstance(ticks, bool):
         return None
-    try:
-        return int(ticks) / USD_TICKS_PER_DOLLAR
-    except (TypeError, ValueError):
+    if ticks < 0:
         return None
+    return ticks / USD_TICKS_PER_DOLLAR
 
 
 def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:

@@ -493,7 +493,7 @@ class TestXAICostCalculator:
         assert completion_cost > 0.0
 
     def test_malformed_reported_cost_falls_back_to_token_math(self):
-        """A junk value must not fail the request -- fall back to calculating."""
+        """A junk value must not fail the request, fall back to calculating."""
         usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
         setattr(usage, "cost_in_usd_ticks", "not-a-number")
 
@@ -501,6 +501,31 @@ class TestXAICostCalculator:
 
         assert prompt_cost > 0.0
         assert completion_cost > 0.0
+
+    def test_negative_reported_cost_is_rejected(self):
+        """A negative amount must never reach spend tracking.
+
+        A caller who can set api_base controls the response body, so trusting a
+        negative figure would let them subtract from their own recorded spend and
+        slip past a budget. Fall back to token pricing instead, and keep charging
+        the web search surcharge, since no trustworthy total was reported.
+        """
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=200,
+            total_tokens=300,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=100,
+                web_search_requests=3,
+            ),
+        )
+        setattr(usage, "cost_in_usd_ticks", -37756000)
+
+        prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+
+        assert prompt_cost > 0.0
+        assert completion_cost > 0.0
+        assert cost_per_web_search_request(usage=usage, model_info={}) > 0.0
 
     def test_zero_reported_cost_is_honoured(self):
         """A reported zero is a real answer, not a missing value."""
