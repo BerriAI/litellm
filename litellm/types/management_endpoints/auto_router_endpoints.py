@@ -3,7 +3,7 @@ Types for auto-router management endpoints
 """
 
 from collections.abc import Mapping
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -149,8 +149,8 @@ class AutoRouterBenchmarksResponse(BaseModel):
 # router would have fared without ever serving its answer to a real user.
 # ---------------------------------------------------------------------------
 
-ShadowEvalStatus = Literal["pending", "running", "completed", "failed"]
-JudgePreference = Literal["real", "shadow", "tie"]
+ShadowEvalStatus: TypeAlias = Literal["pending", "running", "completed", "failed"]
+JudgePreference: TypeAlias = Literal["real", "shadow", "tie"]
 
 DEFAULT_SHADOW_EVAL_JUDGE_MODEL: Final[str] = "anthropic/claude-sonnet-5"
 

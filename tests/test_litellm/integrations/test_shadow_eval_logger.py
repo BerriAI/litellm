@@ -8,6 +8,7 @@ import pytest
 
 from litellm.integrations.shadow_eval_logger import (
     SHADOW_EVAL_INTERNAL_MARKER,
+    ActiveShadowEvalJob,
     ShadowEvalLogger,
     _parse_pairwise_verdict,
     _sample_hits,
@@ -60,16 +61,16 @@ class TestUnmaskPreference:
 class TestParsePairwiseVerdict:
     def test_plain_json(self):
         v = _parse_pairwise_verdict('{"preference": "A", "confidence": 0.9, "reasoning": "clearer"}')
-        assert v["preference"] == "A"
-        assert v["confidence"] == 0.9
+        assert v.preference == "A"
+        assert v.confidence == 0.9
 
     def test_fenced_json(self):
         raw = 'Here is my verdict:\n```json\n{"preference": "B", "confidence": 0.7, "reasoning": "x"}\n```\nDone.'
-        assert _parse_pairwise_verdict(raw)["preference"] == "B"
+        assert _parse_pairwise_verdict(raw).preference == "B"
 
     def test_json_with_surrounding_prose(self):
         raw = 'Verdict: {"preference": "tie", "confidence": 0.5, "reasoning": "same"} — final.'
-        assert _parse_pairwise_verdict(raw)["preference"] == "tie"
+        assert _parse_pairwise_verdict(raw).preference == "tie"
 
     def test_non_object_raises(self):
         with pytest.raises(ValueError):
@@ -99,10 +100,14 @@ class TestSuccessHookSkipPaths:
         prisma.db.litellm_shadowevaljob.find_first.assert_not_called()
 
     async def test_skips_own_internal_traffic(self):
-        job = {"id": "j1", "router_name": "r", "shadow_percentage": 100.0, "judge_model": "m", "status": "running"}
+        job = ActiveShadowEvalJob(id="j1", router_name="r", shadow_percentage=100.0, judge_model="m", status="running")
         logger, prisma, _ = _logger_with_mocks(job)
         kwargs = {
-            "standard_logging_object": {"id": "req-1", "model": "gpt-4o", "metadata": {"user_api_key_hash": "key-hash"}},
+            "standard_logging_object": {
+                "id": "req-1",
+                "model": "gpt-4o",
+                "metadata": {"user_api_key_hash": "key-hash"},
+            },
             "litellm_params": {"metadata": {SHADOW_EVAL_INTERNAL_MARKER: True}},
             "messages": [{"role": "user", "content": "hi"}],
         }
@@ -113,7 +118,11 @@ class TestSuccessHookSkipPaths:
         logger, prisma, _ = _logger_with_mocks()
         prisma.db.litellm_shadowevaljob.find_first = AsyncMock(return_value=None)
         kwargs = {
-            "standard_logging_object": {"id": "req-1", "model": "gpt-4o", "metadata": {"user_api_key_hash": "key-hash"}},
+            "standard_logging_object": {
+                "id": "req-1",
+                "model": "gpt-4o",
+                "metadata": {"user_api_key_hash": "key-hash"},
+            },
             "litellm_params": {"metadata": {}},
             "messages": [{"role": "user", "content": "hi"}],
         }
@@ -121,7 +130,7 @@ class TestSuccessHookSkipPaths:
         assert logger._pending_seen == {}
 
     async def test_counts_seen_for_active_job(self):
-        job = {"id": "j1", "router_name": "r", "shadow_percentage": 0.0, "judge_model": "m", "status": "running"}
+        job = ActiveShadowEvalJob(id="j1", router_name="r", shadow_percentage=0.0, judge_model="m", status="running")
         logger, _, _ = _logger_with_mocks(job)
         kwargs = {
             "standard_logging_object": {
@@ -177,7 +186,7 @@ class TestCallRouterShadowForwardsParameters:
 @pytest.mark.asyncio
 class TestInflightTaskBacklog:
     async def test_drops_sample_when_at_capacity(self):
-        job = {"id": "j1", "router_name": "r", "shadow_percentage": 100.0, "judge_model": "m", "status": "running"}
+        job = ActiveShadowEvalJob(id="j1", router_name="r", shadow_percentage=100.0, judge_model="m", status="running")
         logger, _, _ = _logger_with_mocks(job)
         logger._inflight_shadow_tasks = 999999  # simulate saturation regardless of the real cap
 
@@ -197,7 +206,7 @@ class TestInflightTaskBacklog:
         assert logger._inflight_shadow_tasks == before
 
     async def test_schedules_and_decrements_when_under_capacity(self):
-        job = {"id": "j1", "router_name": "r", "shadow_percentage": 100.0, "judge_model": "m", "status": "running"}
+        job = ActiveShadowEvalJob(id="j1", router_name="r", shadow_percentage=100.0, judge_model="m", status="running")
         logger, _, router = _logger_with_mocks(job)
         router.acompletion = AsyncMock(side_effect=asyncio.sleep(0))  # keep the task alive briefly
 
@@ -243,7 +252,7 @@ class TestStoppedJobCannotBeReactivated:
         logger._call_router_shadow = AsyncMock(return_value=("shadow text", "shadow-model", "SIMPLE", 10))
         logger._call_judge = AsyncMock(return_value=("real", 0.9, "clearer", 0.01))
 
-        job = {"id": "j1", "router_name": "r", "judge_model": "m", "shadow_percentage": 100.0, "status": "running"}
+        job = ActiveShadowEvalJob(id="j1", router_name="r", judge_model="m", shadow_percentage=100.0, status="running")
         await logger._run_shadow_eval(
             job=job,
             request_id="req-1",
@@ -279,7 +288,7 @@ class TestVerdictWriteAccumulatesCost:
         logger._call_router_shadow = AsyncMock(return_value=("shadow text", "shadow-model", "SIMPLE", 10))
         logger._call_judge = AsyncMock(return_value=("real", 0.9, "clearer", 0.05))
 
-        job = {"id": "j1", "router_name": "r", "judge_model": "m", "shadow_percentage": 100.0, "status": "running"}
+        job = ActiveShadowEvalJob(id="j1", router_name="r", judge_model="m", shadow_percentage=100.0, status="running")
         await logger._run_shadow_eval(
             job=job,
             request_id="req-1",

@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BudgetExceededError
@@ -40,6 +40,7 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     GetShadowEvalJobResponse,
     RequestComplexityRouterConfig,
     ShadowEvalResult,
+    ShadowEvalStatus,
     ShadowEvalTierResult,
     StartShadowEvalRequest,
     StartShadowEvalResponse,
@@ -91,7 +92,7 @@ async def _authorize_routing_test(user_api_key_dict: UserAPIKeyAuth, team_id: st
         )
 
     team_row: Final = await TeamRepository(prisma_client).table.find_unique(
-        where={"team_id": team_id},  # mutable-ok: Prisma query filters are dict-shaped
+        where={"team_id": team_id},  # mutable-ok: Prisma filter
     )
     if team_row is None:
         raise HTTPException(
@@ -236,7 +237,7 @@ async def preview_auto_router_routing(
             model=data.router_name,
             request_kwargs=request_kwargs,
             messages=[  # mutable-ok: the routing hook's signature takes a list of message dicts
-                {"role": "user", "content": data.prompt},  # mutable-ok: a message is dict-shaped
+                {"role": "user", "content": data.prompt},  # mutable-ok: SDK message
             ],
         )
     except Exception as e:  # noqa: BLE001 -- surfaces any classifier/plugin failure to the caller as a 400 instead of a 500, since the config under test is caller input
@@ -531,8 +532,8 @@ def _estimate_judge_cost_per_call(judge_model: str) -> float:
         estimated: Final = prompt_cost + completion_cost
         if estimated > 0:
             return estimated
-    except Exception:  # noqa: BLE001  # unknown judge model: fall back to a flat per-call figure
-        pass
+    except Exception as e:  # noqa: BLE001  # unknown judge model: fall back to a flat per-call figure
+        verbose_proxy_logger.debug("shadow_eval: judge cost lookup failed for %s: %s", judge_model, e)
     return _FALLBACK_JUDGE_COST_PER_CALL
 
 
@@ -585,20 +586,42 @@ def _shadow_eval_results(rows: Sequence[_VerdictAggRow]) -> ShadowEvalResult | N
     )
 
 
+class _ShadowEvalJobRow(BaseModel):
+    """The prisma job record, validated into concrete types at the response boundary."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    status: ShadowEvalStatus
+    router_name: str
+    shadow_percentage: float
+    request_count: int
+    completed_count: int
+    failed_count: int
+    cost_estimate: float | None = None
+    cost_actual: float = 0.0
+    created_at: datetime
+    completed_at: datetime | None = None
+
+
+_SHADOW_EVAL_JOB_ROW: Final = TypeAdapter(_ShadowEvalJobRow)
+
+
 def _job_to_response(record: object, results: ShadowEvalResult | None) -> GetShadowEvalJobResponse:
+    row: Final = _SHADOW_EVAL_JOB_ROW.validate_python(record, from_attributes=True)
     return GetShadowEvalJobResponse(
-        job_id=record.id,  # type: ignore[attr-defined]
-        status=record.status,  # type: ignore[attr-defined]
-        router_name=record.router_name,  # type: ignore[attr-defined]
-        shadow_percentage=record.shadow_percentage,  # type: ignore[attr-defined]
-        request_count=record.request_count,  # type: ignore[attr-defined]
-        completed_count=record.completed_count,  # type: ignore[attr-defined]
-        failed_count=record.failed_count,  # type: ignore[attr-defined]
+        job_id=row.id,
+        status=row.status,
+        router_name=row.router_name,
+        shadow_percentage=row.shadow_percentage,
+        request_count=row.request_count,
+        completed_count=row.completed_count,
+        failed_count=row.failed_count,
         results=results,
-        cost_estimate=record.cost_estimate,  # type: ignore[attr-defined]
-        cost_actual=record.cost_actual,  # type: ignore[attr-defined]
-        created_at=record.created_at.isoformat(),  # type: ignore[attr-defined]
-        completed_at=record.completed_at.isoformat() if record.completed_at else None,  # type: ignore[attr-defined]
+        cost_estimate=row.cost_estimate,
+        cost_actual=row.cost_actual,
+        created_at=row.created_at.isoformat(),
+        completed_at=row.completed_at.isoformat() if row.completed_at else None,
     )
 
 
@@ -635,7 +658,10 @@ async def start_shadow_eval(
         )
 
     existing: Final = await prisma_client.db.litellm_shadowevaljob.find_first(
-        where={"api_key_id": data.api_key_id, "status": {"in": ["pending", "running"]}},
+        where={  # mutable-ok: Prisma filter
+            "api_key_id": data.api_key_id,
+            "status": {"in": ["pending", "running"]},  # mutable-ok: Prisma filter
+        },
     )
     if existing is not None:
         raise HTTPException(
@@ -645,14 +671,17 @@ async def start_shadow_eval(
 
     lookback_start: Final = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=_ESTIMATE_LOOKBACK_DAYS)
     recent_requests: Final = await prisma_client.db.litellm_spendlogs.count(
-        where={"api_key": data.api_key_id, "startTime": {"gte": lookback_start}},
+        where={  # mutable-ok: Prisma filter
+            "api_key": data.api_key_id,
+            "startTime": {"gte": lookback_start},  # mutable-ok: Prisma filter
+        },
     )
     weekly_sampled: Final = int(recent_requests * data.shadow_percentage / 100.0)
     per_call: Final = _estimate_judge_cost_per_call(data.judge_model)
     estimated_cost: Final = round(weekly_sampled * per_call, 2)
 
     job: Final = await prisma_client.db.litellm_shadowevaljob.create(
-        data={
+        data={  # mutable-ok: Prisma payload
             "api_key_id": data.api_key_id,
             "router_name": data.router_name,
             "shadow_percentage": data.shadow_percentage,
@@ -688,11 +717,13 @@ async def list_shadow_eval_jobs(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    where: Final = {"api_key_id": api_key_id} if api_key_id else {}
+    where: Final = {"api_key_id": api_key_id} if api_key_id else {}  # mutable-ok: Prisma filter
     records: Final = await prisma_client.db.litellm_shadowevaljob.find_many(
-        where=where, order={"created_at": "desc"}, take=50
+        where=where,
+        order={"created_at": "desc"},  # mutable-ok: Prisma order
+        take=50,  # mutable-ok: Prisma order
     )
-    return [_job_to_response(record, results=None) for record in records or ()]
+    return [_job_to_response(record, results=None) for record in records or ()]  # mutable-ok: FastAPI response_model
 
 
 @router.get(
@@ -712,7 +743,9 @@ async def get_shadow_eval_job(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    record: Final = await prisma_client.db.litellm_shadowevaljob.find_unique(where={"id": job_id})
+    record: Final = await prisma_client.db.litellm_shadowevaljob.find_unique(
+        where={"id": job_id}  # mutable-ok: Prisma filter
+    )
     if record is None:
         raise HTTPException(status_code=404, detail=f"No shadow eval job {job_id}")
 
@@ -738,15 +771,20 @@ async def stop_shadow_eval_job(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    record: Final = await prisma_client.db.litellm_shadowevaljob.find_unique(where={"id": job_id})
+    record: Final = await prisma_client.db.litellm_shadowevaljob.find_unique(
+        where={"id": job_id}  # mutable-ok: Prisma filter
+    )
     if record is None:
         raise HTTPException(status_code=404, detail=f"No shadow eval job {job_id}")
     if record.status not in ("pending", "running"):
         raise HTTPException(status_code=400, detail=f"Job {job_id} is already {record.status}")
 
     updated: Final = await prisma_client.db.litellm_shadowevaljob.update(
-        where={"id": job_id},
-        data={"status": "completed", "completed_at": datetime.now(timezone.utc)},
+        where={"id": job_id},  # mutable-ok: Prisma filter
+        data={  # mutable-ok: Prisma payload
+            "status": "completed",
+            "completed_at": datetime.now(timezone.utc),
+        },
     )
     raw_rows: Final = await prisma_client.db.query_raw(_VERDICT_AGG_SQL, job_id)
     rows: Final = _VERDICT_AGG_ROWS.validate_python(raw_rows or ())
