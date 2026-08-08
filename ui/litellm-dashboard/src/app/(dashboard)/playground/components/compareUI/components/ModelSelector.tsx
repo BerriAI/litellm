@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { Select } from "antd";
 import { TextInput } from "@tremor/react";
+import { isSubmitEnterKey } from "@/utils/keyboardUtils";
 interface ModelSelectorProps {
   value: string;
   onChange: (value: string) => void;
@@ -74,7 +75,7 @@ export function ModelSelector({ value, onChange, models, loading, disabled }: Mo
           value={customValue}
           onValueChange={setCustomValue}
           onKeyDown={(event) => {
-            if (event.key === "Enter") {
+            if (isSubmitEnterKey(event)) {
               event.preventDefault();
               commitCustomValue();
             }

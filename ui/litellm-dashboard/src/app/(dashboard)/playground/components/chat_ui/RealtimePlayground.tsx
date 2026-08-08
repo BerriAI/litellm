@@ -4,6 +4,7 @@ import { AudioMutedOutlined, AudioOutlined, CloseCircleOutlined, SendOutlined, S
 import { Button, Input, Select, Typography } from "antd";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { getProxyBaseUrl } from "@/components/networking";
+import { isSubmitEnterKey } from "@/utils/keyboardUtils";
 import { OPEN_AI_VOICE_SELECT_OPTIONS } from "./chatConstants";
 
 const { Text } = Typography;
@@ -446,7 +447,11 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
               placeholder="Type a message or use the mic..."
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              onPressEnter={sendTextMessage}
+              onPressEnter={(e) => {
+                if (isSubmitEnterKey(e)) {
+                  sendTextMessage();
+                }
+              }}
               className="flex-1"
               size="large"
             />

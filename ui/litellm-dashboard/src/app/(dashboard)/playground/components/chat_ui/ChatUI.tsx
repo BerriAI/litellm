@@ -66,6 +66,7 @@ import { MessageType } from "@/components/chat_ui/types";
 import { useCodeInterpreter } from "../../hooks/useCodeInterpreter";
 import { useChatHistory } from "../../hooks/useChatHistory";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
+import { isSubmitEnterKey } from "@/utils/keyboardUtils";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 
 const { TextArea } = Input;
@@ -478,7 +479,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
   }, [chatHistory]);
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && !event.shiftKey) {
+    // Skip while IME is composing (CJK candidate confirm also sends Enter)
+    if (isSubmitEnterKey(event)) {
       event.preventDefault(); // Prevent default to avoid newline
       handleSendMessage();
     }
