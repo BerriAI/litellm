@@ -1,5 +1,6 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RouterSettingsFormValue } from "../router_settings/RouterSettingsForm";
 import { fetchAvailableModels, fetchAvailableModelsForTeam } from "@/components/llm_calls/fetch_models";
@@ -43,6 +44,15 @@ vi.mock("../router_settings/RouterSettingsForm", () => ({
   ),
 }));
 
+const renderWithQueryClient = (ui: ReactElement) => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(ui, {
+    wrapper: ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+};
+
 describe("RouterSettingsAccordion", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -63,7 +73,7 @@ describe("RouterSettingsAccordion", () => {
 
   it("debounces propagation and calls onChange once with the last value", async () => {
     const onChange = vi.fn<(value: RouterSettingsAccordionValue) => void>();
-    render(<RouterSettingsAccordion accessToken="test-token" onChange={onChange} />);
+    renderWithQueryClient(<RouterSettingsAccordion accessToken="test-token" onChange={onChange} />);
     await flushInitialPropagation(onChange);
 
     fireEvent.click(screen.getByText("set-least-busy"));
@@ -87,7 +97,7 @@ describe("RouterSettingsAccordion", () => {
   });
 
   it("offers the team's own models, including team-scoped BYOK ones, when a teamId is given", async () => {
-    render(<RouterSettingsAccordion accessToken="test-token" teamId="team-123" />);
+    renderWithQueryClient(<RouterSettingsAccordion accessToken="test-token" teamId="team-123" />);
 
     await waitFor(() => {
       expect(screen.getByTestId("available-models")).toHaveTextContent("gpt-5,openai/*");
@@ -97,7 +107,7 @@ describe("RouterSettingsAccordion", () => {
   });
 
   it("falls back to the proxy-wide model listing when no teamId is given", async () => {
-    render(<RouterSettingsAccordion accessToken="test-token" />);
+    renderWithQueryClient(<RouterSettingsAccordion accessToken="test-token" />);
 
     await waitFor(() => {
       expect(screen.getByTestId("available-models")).toHaveTextContent("global-model");
@@ -111,7 +121,7 @@ describe("RouterSettingsAccordion", () => {
       () => new Promise((resolve) => resolvers.push(resolve)) as Promise<{ model_group: string }[]>,
     );
 
-    const { rerender } = render(<RouterSettingsAccordion accessToken="test-token" teamId="team-slow" />);
+    const { rerender } = renderWithQueryClient(<RouterSettingsAccordion accessToken="test-token" teamId="team-slow" />);
     await waitFor(() => expect(resolvers).toHaveLength(1));
 
     rerender(<RouterSettingsAccordion accessToken="test-token" teamId="team-fast" />);
@@ -122,13 +132,15 @@ describe("RouterSettingsAccordion", () => {
       resolvers[0]([{ model_group: "slow-team-model" }]);
     });
 
-    expect(screen.getByTestId("available-models")).toHaveTextContent("fast-team-model");
+    await waitFor(() => {
+      expect(screen.getByTestId("available-models")).toHaveTextContent("fast-team-model");
+    });
     expect(screen.getByTestId("available-models")).not.toHaveTextContent("slow-team-model");
   });
 
   it("does not call onChange when unmounted mid-wait", async () => {
     const onChange = vi.fn<(value: RouterSettingsAccordionValue) => void>();
-    const { unmount } = render(<RouterSettingsAccordion accessToken="test-token" onChange={onChange} />);
+    const { unmount } = renderWithQueryClient(<RouterSettingsAccordion accessToken="test-token" onChange={onChange} />);
     await flushInitialPropagation(onChange);
 
     fireEvent.click(screen.getByText("set-least-busy"));

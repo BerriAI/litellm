@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useImperativeHandle, forwardRef, useRef } from "react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
+import { useQuery } from "@tanstack/react-query";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { getRouterSettingsCall } from "../networking";
 import RouterSettingsForm, { RouterSettingsFormValue } from "../router_settings/RouterSettingsForm";
@@ -48,7 +49,6 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
     });
     const [fallbacks, setFallbacks] = useState<Fallbacks>([]);
     const [fallbackGroups, setFallbackGroups] = useState<FallbackGroup[]>([]);
-    const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
     const [availableRoutingStrategies, setAvailableRoutingStrategies] = useState<string[]>([]);
     const [routerFieldsMetadata, setRouterFieldsMetadata] = useState<{ [key: string]: any }>({});
     const [routingStrategyDescriptions, setRoutingStrategyDescriptions] = useState<{ [key: string]: string }>({});
@@ -176,29 +176,11 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
       });
     }, [accessToken]);
 
-    // Fetch available models for fallbacks
-    useEffect(() => {
-      if (!accessToken) {
-        return;
-      }
-      let stale = false;
-      const loadModels = async () => {
-        try {
-          const uniqueModels = teamId
-            ? await fetchAvailableModelsForTeam(accessToken, teamId)
-            : await fetchAvailableModels(accessToken);
-          if (!stale) {
-            setModelInfo(uniqueModels);
-          }
-        } catch (error) {
-          console.error("Error fetching model info for fallbacks:", error);
-        }
-      };
-      loadModels();
-      return () => {
-        stale = true;
-      };
-    }, [accessToken, teamId]);
+    const { data: modelInfo = [] } = useQuery<ModelGroup[]>({
+      queryKey: ["fallbackAvailableModels", accessToken, teamId ?? null],
+      queryFn: () => (teamId ? fetchAvailableModelsForTeam(accessToken, teamId) : fetchAvailableModels(accessToken)),
+      enabled: Boolean(accessToken),
+    });
 
     // Helper function to build router_settings from current state
     const buildRouterSettings = (): RouterSettingsAccordionValue["router_settings"] => {
