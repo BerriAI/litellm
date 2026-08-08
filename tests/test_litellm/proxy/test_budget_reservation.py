@@ -1662,6 +1662,98 @@ async def test_fail_closed_releases_earlier_counters_before_503(
 
 
 @pytest.mark.asyncio
+async def test_should_raise_503_when_cost_cannot_be_estimated_and_fail_closed(
+    spend_counter_state,
+):
+    """A budget is configured but the request's cost can't be estimated (e.g. an
+    unpriced model or an image/audio route). With fail_closed_budget_enforcement
+    on, this must reject instead of silently skipping the reservation and
+    falling back to non-atomic read-time-only enforcement."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-no-estimate-fail-closed",
+        spend=0.0,
+        max_budget=1.0,
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=None,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await reserve_budget_for_request(
+                request_body=_request_body(),
+                route="/chat/completions",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=None,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                fail_closed_budget_enforcement=True,
+            )
+
+    assert exc_info.value.status_code == 503
+    assert (
+        counter_cache.in_memory_cache.get_cache(
+            key="spend:key:key-budget-no-estimate-fail-closed"
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_cost_estimate_falls_back_silently_by_default(
+    spend_counter_state,
+):
+    """Default behavior (fail_closed_budget_enforcement off) is unchanged: an
+    unestimable cost with a budget configured returns no reservation rather
+    than raising, but must now warn that enforcement fell back to non-atomic
+    read-time-only checks instead of doing so silently."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-no-estimate-default",
+        spend=0.0,
+        max_budget=1.0,
+    )
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.verbose_proxy_logger.warning"
+        ) as mock_warning,
+    ):
+        result = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            fail_closed_budget_enforcement=False,
+        )
+
+    assert result is None
+    assert (
+        counter_cache.in_memory_cache.get_cache(
+            key="spend:key:key-budget-no-estimate-default"
+        )
+        is None
+    )
+    mock_warning.assert_called_once()
+    assert "could not estimate a cost" in mock_warning.call_args.args[0]
+
+
+@pytest.mark.asyncio
 async def test_should_skip_reservation_when_counter_initialization_fails(
     spend_counter_state,
 ):

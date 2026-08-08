@@ -78,6 +78,38 @@ def _raise_reservation_unavailable(counter_key: str) -> NoReturn:
     )
 
 
+def _raise_cost_estimate_unavailable(route: str) -> NoReturn:
+    verbose_proxy_logger.warning(
+        "fail_closed_budget_enforcement: rejecting request — request cost for route %s could not be estimated",
+        route,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=(
+            "Budget enforcement unavailable: this request's cost could not be "
+            "estimated before dispatch (e.g. an unpriced model or route), and "
+            "fail_closed_budget_enforcement is enabled, so the request was "
+            "rejected to avoid exceeding a configured budget."
+        ),
+    )
+
+
+def _handle_missing_cost_estimate(route: str, fail_closed_budget_enforcement: bool) -> None:
+    """A budget is configured but estimate_request_max_cost() returned no usable
+    estimate. Reject when the operator opted into fail_closed_budget_enforcement;
+    otherwise warn so the read-time-only fallback is visible instead of silent.
+    """
+    if fail_closed_budget_enforcement:
+        _raise_cost_estimate_unavailable(route=route)
+    verbose_proxy_logger.warning(
+        "reserve_budget_for_request: could not estimate a cost for route=%s; a budget is "
+        "configured for this request but no atomic reservation will be made (non-atomic, "
+        "read-time-only enforcement). Set fail_closed_budget_enforcement=true to reject "
+        "these requests instead.",
+        route,
+    )
+
+
 def get_reserved_counter_keys(budget_reservation: dict | None) -> set:
     if not budget_reservation:
         return set()
@@ -189,8 +221,10 @@ async def reserve_budget_for_request(
     )
     # estimate_request_max_cost still returns None when the model is unknown
     # to the cost map (no token-priced cost fields, e.g. image/audio routes).
-    # In that case we fall back to read-time enforcement only.
+    # A budget is configured here (counters is non-empty), so this is a real
+    # atomicity gap, not a benign no-budget request.
     if reservation_cost is None or reservation_cost <= 0:
+        _handle_missing_cost_estimate(route=route, fail_closed_budget_enforcement=fail_closed_budget_enforcement)
         return None
 
     applied_entries: Final[list[dict[str, Any]]] = []
