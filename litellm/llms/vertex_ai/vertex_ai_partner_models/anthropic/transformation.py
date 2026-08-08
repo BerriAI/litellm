@@ -12,6 +12,10 @@ from litellm.types.utils import ModelResponse
 from ....anthropic.chat.transformation import AnthropicConfig
 from .output_params_utils import sanitize_vertex_anthropic_output_params
 
+# Betas that Vertex's rawPredict rejects (400) when sent in the anthropic-beta HTTP
+# header; they are only accepted in the anthropic_beta request body (e.g. context-1m).
+VERTEX_BODY_ONLY_ANTHROPIC_BETAS = frozenset({"context-1m-2025-08-07"})
+
 
 class VertexAIError(Exception):
     def __init__(self, status_code, message):
@@ -138,7 +142,9 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         if beta_set:
             data["anthropic_beta"] = list(beta_set)
-            headers["anthropic-beta"] = ",".join(beta_set)
+            header_betas = beta_set - VERTEX_BODY_ONLY_ANTHROPIC_BETAS
+            if header_betas:
+                headers["anthropic-beta"] = ",".join(header_betas)
 
         return data
 

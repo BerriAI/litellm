@@ -463,6 +463,62 @@ def test_vertex_ai_anthropic_no_extra_headers_unchanged():
     assert "anthropic-beta" not in headers
 
 
+def test_vertex_ai_anthropic_context_1m_beta_in_body_not_header():
+    """context-1m-2025-08-07 must go in the anthropic_beta body field only.
+
+    Vertex's rawPredict 400s ("Unexpected value(s) ... for the anthropic-beta header")
+    when this beta is sent in the HTTP header, so it must not be forwarded there.
+    """
+    config = VertexAIAnthropicConfig()
+
+    headers = {}
+    optional_params = {
+        "max_tokens": 100,
+        "is_vertex_request": True,
+        "extra_headers": {"anthropic-beta": "context-1m-2025-08-07"},
+    }
+
+    result = config.transform_request(
+        model="claude-sonnet-4-5@20250929",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers=headers,
+    )
+
+    assert "context-1m-2025-08-07" in result["anthropic_beta"]
+    assert "anthropic-beta" not in headers
+
+
+def test_vertex_ai_anthropic_context_1m_excluded_from_header_but_others_kept():
+    """When context-1m is combined with a header-compatible beta, only context-1m is
+    stripped from the HTTP header; both still travel in the body."""
+    config = VertexAIAnthropicConfig()
+
+    headers = {}
+    optional_params = {
+        "max_tokens": 100,
+        "is_vertex_request": True,
+        "extra_headers": {
+            "anthropic-beta": "context-1m-2025-08-07,interleaved-thinking-2025-05-14",
+        },
+    }
+
+    result = config.transform_request(
+        model="claude-sonnet-4-5@20250929",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers=headers,
+    )
+
+    assert "context-1m-2025-08-07" in result["anthropic_beta"]
+    assert "interleaved-thinking-2025-05-14" in result["anthropic_beta"]
+
+    assert "interleaved-thinking-2025-05-14" in headers["anthropic-beta"]
+    assert "context-1m-2025-08-07" not in headers["anthropic-beta"]
+
+
 def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_header():
     """
     Test that remove_unsupported_beta correctly filters out prompt-caching-scope-2026-01-05
