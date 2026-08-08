@@ -849,6 +849,19 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
+    def _get_keepalive_seconds_from_request(headers: Mapping[str, str]) -> float | None:
+        """
+        Get `keepalive_seconds` from the request headers, for clients (e.g. the
+        Vercel AI SDK) that can set custom headers more easily than extra body
+        fields. Subject to the same deployment-level allow_client_keepalive_override
+        gate as the request body field: see _resolve_keepalive_seconds.
+        """
+        keepalive_seconds_header: Final = headers.get("x-litellm-keepalive-seconds", None)
+        if keepalive_seconds_header is not None:
+            return float(keepalive_seconds_header)
+        return None
+
+    @staticmethod
     def _get_num_retries_from_request(headers: dict) -> int | None:
         """
         Workaround for client request from Vercel's AI SDK.
@@ -1062,6 +1075,10 @@ class LiteLLMProxyRequestSetup:
         num_retries: Final = LiteLLMProxyRequestSetup._get_num_retries_from_request(headers)
         if num_retries is not None:
             data["num_retries"] = num_retries
+
+        keepalive_seconds: Final = LiteLLMProxyRequestSetup._get_keepalive_seconds_from_request(headers)
+        if keepalive_seconds is not None:
+            data["keepalive_seconds"] = keepalive_seconds
 
         return data
 

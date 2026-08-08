@@ -2009,6 +2009,54 @@ def test_get_num_retries_from_request():
     assert result == -1
 
 
+def test_get_keepalive_seconds_from_request():
+    """
+    Test LiteLLMProxyRequestSetup._get_keepalive_seconds_from_request method
+    """
+    # Header present with valid float string
+    headers_with_keepalive = {"x-litellm-keepalive-seconds": "15"}
+    result = LiteLLMProxyRequestSetup._get_keepalive_seconds_from_request(
+        headers_with_keepalive
+    )
+    assert result == 15.0
+
+    # Header not present
+    result = LiteLLMProxyRequestSetup._get_keepalive_seconds_from_request(
+        {"Content-Type": "application/json"}
+    )
+    assert result is None
+
+    # Empty headers dictionary
+    result = LiteLLMProxyRequestSetup._get_keepalive_seconds_from_request({})
+    assert result is None
+
+    # Header present with a fractional value
+    result = LiteLLMProxyRequestSetup._get_keepalive_seconds_from_request(
+        {"x-litellm-keepalive-seconds": "1.5"}
+    )
+    assert result == 1.5
+
+    # Header present with invalid value raises ValueError, matching the other
+    # x-litellm-* numeric header helpers (_get_timeout_from_request, etc.)
+    with pytest.raises(ValueError):
+        LiteLLMProxyRequestSetup._get_keepalive_seconds_from_request(
+            {"x-litellm-keepalive-seconds": "not-a-number"}
+        )
+
+
+def test_add_litellm_data_for_backend_llm_call_merges_keepalive_seconds_header():
+    """
+    The x-litellm-keepalive-seconds header must be merged into the data dict
+    that add_litellm_data_to_request later data.update()s onto the request body,
+    the same way x-litellm-timeout/x-litellm-num-retries already are.
+    """
+    result = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+        headers={"x-litellm-keepalive-seconds": "20"},
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+    )
+    assert result.get("keepalive_seconds") == 20.0
+
+
 def test_add_user_api_key_auth_to_request_metadata():
     """
     Test that add_user_api_key_auth_to_request_metadata properly adds user API key authentication data to request metadata

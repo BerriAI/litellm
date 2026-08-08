@@ -3398,6 +3398,8 @@ all_litellm_params = (
     + [
         "metadata",
         "litellm_metadata",
+        "keepalive_seconds",
+        "allow_client_keepalive_override",
         "litellm_trace_id",
         "litellm_request_debug",
         "guardrails",

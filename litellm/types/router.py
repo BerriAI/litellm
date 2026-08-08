@@ -245,6 +245,12 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     # Deployment budgets
     max_budget: float | None = None
     budget_duration: str | None = None
+    keepalive_seconds: float | None = None
+    # keepalive_seconds is operator-only by default: a client's request-level
+    # value is ignored unless the deployment opts in here. Prevents a client
+    # from unilaterally enabling heartbeats (and the LB-idle-timeout evasion
+    # that comes with them) for a deployment that never configured them.
+    allow_client_keepalive_override: bool | None = False
     use_in_pass_through: bool | None = False
     use_litellm_proxy: bool | None = False
     use_chat_completions_api: bool | None = None
@@ -421,6 +427,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     # deployment budgets
     max_budget: float | None
     budget_duration: str | None
+    keepalive_seconds: float | None
+    allow_client_keepalive_override: bool | None
 
 
 class DeploymentTypedDict(TypedDict, total=False):

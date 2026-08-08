@@ -4018,6 +4018,7 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     stream_timeout: float | None
     user: str | None
     num_retries: int | None
+    keepalive_seconds: float | None
 
 
 class LitellmMetadataFromRequestHeaders(TypedDict, total=False):
