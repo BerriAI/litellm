@@ -26,7 +26,7 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.secret_managers.main import get_secret
+from litellm.secret_managers.main import get_secret, get_secret_str
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
@@ -1302,6 +1302,23 @@ def get_anthropic_beta_from_headers(headers: dict) -> list[str]:
         return [beta.strip() for beta in anthropic_beta_header.split(",")]
 
     return []
+
+
+def resolve_s3_encryption_key_id(
+    litellm_params: Mapping[str, Any],
+    optional_params: Mapping[str, Any] | None = None,
+) -> str | None:
+    """
+    Resolve the SSE-KMS key configured for Bedrock batch/file S3 objects.
+
+    Precedence: `s3_encryption_key_id` in litellm_params, then optional_params
+    (client-side / request params), then the AWS_S3_ENCRYPTION_KEY_ID env var.
+    """
+    candidates: Final = tuple(
+        source.get("s3_encryption_key_id") for source in (litellm_params, optional_params) if source is not None
+    )
+    explicit: Final = next((value for value in candidates if isinstance(value, str) and value), None)
+    return explicit or get_secret_str("AWS_S3_ENCRYPTION_KEY_ID")
 
 
 class CommonBatchFilesUtils:

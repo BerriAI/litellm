@@ -165,6 +165,7 @@ if TYPE_CHECKING:
     from prisma.client import TransactionManager
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.models.team import LiteLLM_TeamTableCachedObj
     from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
 
@@ -3000,6 +3001,13 @@ class PrismaClient:
     ] = []  # mutable-ok: drained queue, mirrors tool_usage_transactions
     _autorouter_turn_transactions_lock = asyncio.Lock()
 
+    # How long a health probe failure waits for an in-flight planned engine
+    # replacement to settle before deciding whether to report itself. Generous
+    # against a replacement that takes well under a second, and far short of the
+    # reconnect budget an outage-hung `connect()` runs under, so a real outage
+    # is never waited out.
+    PLANNED_ENGINE_REPLACEMENT_SETTLE_SECONDS: ClassVar[float] = 5.0
+
     def __init__(
         self,
         database_url: str,
@@ -4970,6 +4978,101 @@ class PrismaClient:
                 else:
                     verbose_proxy_logger.debug("Prisma DB health watchdog observed non-DB error: %s", e)
 
+    def _probe_target_wrapper(self) -> PrismaWrapper:
+        """The Prisma wrapper a `SELECT 1` health probe actually reaches.
+
+        `health_check()` issues `query_raw`, which `RoutingPrismaWrapper` sends
+        to the reader unless the reader is degraded. The writer's engine state
+        therefore says nothing about a probe that failed against the reader, so
+        the gate has to follow the same routing rule the probe did.
+        """
+        if isinstance(self.db, RoutingPrismaWrapper):
+            return self.db.writer if self.db.reader_unavailable else self.db.reader
+        return self.db
+
+    async def _run_health_probe(self, wrapper: PrismaWrapper) -> object:
+        """Issue the `SELECT 1` a health check is made of, against `wrapper`.
+
+        Takes the wrapper rather than re-reading `self.db`, because routing is
+        re-resolved on every attribute access: a reader that recovers between
+        the caller picking its target and the query going out would send the
+        probe to a different engine than the one whose generation the caller is
+        about to check, and attribute the failure to the wrong replacement.
+        """
+        sql_query: Final = "SELECT 1"
+        response: Final = await wrapper.query_raw(sql_query)
+        return response
+
+    async def _probe_answers_now(self, wrapper: PrismaWrapper) -> bool:
+        try:
+            await self._run_health_probe(wrapper)
+        except Exception as probe_error:  # noqa: BLE001  # any failure means the database is not answering
+            verbose_proxy_logger.debug("Prisma health_check() confirmation probe failed: %s", probe_error)
+            return False
+        return True
+
+    async def _planned_engine_replacement_absorbed(
+        self,
+        e: Exception,
+        wrapper: PrismaWrapper,
+        generation_before: int,
+    ) -> bool:
+        """True iff `e` is a connection-class probe failure that a completed
+        planned query-engine replacement explains.
+
+        Planned replacements (RDS IAM token refresh, guarded reconnect) kill the
+        running query engine and spawn a new one. A `SELECT 1` probe that races
+        that sub-second window fails with a transport error against the engine's
+        local HTTP port even though nothing is wrong with the database, and
+        reporting it drives a false-positive `db_exceptions` alert on every
+        replacement.
+
+        Two things must both hold, because neither is sufficient alone. The
+        engine generation must have moved, which says a replacement completed
+        rather than merely being attempted: reconnect attempts during a real
+        outage hold the same lock for tens of seconds, so gating on an in-flight
+        replacement would swallow most of an outage's alerts. And a fresh probe
+        must succeed, because `Prisma.connect()` polls the query engine's own
+        `/status` endpoint rather than round-tripping to the database, so a
+        future engine that binds before it validates its connection pool would
+        let the generation advance with the database still unreachable.
+
+        Waiting for an in-flight replacement to settle is what makes the
+        generation check meaningful, since the generation has not moved yet at
+        the instant the probe fails. The wait is generous against a replacement
+        that takes well under a second and short enough that an outage-hung
+        reconnect is not waited out; a replacement that has not settled by then
+        reports rather than stays silent.
+        """
+        if not PrismaDBExceptionHandler.is_database_connection_error(e):
+            return False
+        await wrapper.wait_for_planned_engine_replacement(self.PLANNED_ENGINE_REPLACEMENT_SETTLE_SECONDS)
+        if wrapper.engine_generation == generation_before:
+            return False
+        return await self._probe_answers_now(wrapper)
+
+    async def _report_health_check_failure(
+        self,
+        e: Exception,
+        duration: float,
+        traceback_str: str,
+        wrapper: PrismaWrapper,
+        generation_before: int,
+    ) -> None:
+        if await self._planned_engine_replacement_absorbed(e, wrapper, generation_before):
+            verbose_proxy_logger.info(
+                "Prisma health_check() connection error raced a planned query-engine replacement; "
+                "not reporting it as a DB exception: %s",
+                e,
+            )
+            return
+        await self.proxy_logging_obj.failure_handler(
+            original_exception=e,
+            duration=duration,
+            call_type="health_check",
+            traceback_str=traceback_str,
+        )
+
     @backoff.on_exception(
         backoff.expo,
         Exception,
@@ -4982,13 +5085,10 @@ class PrismaClient:
         Health check endpoint for the prisma client
         """
         start_time: Final = time.time()
+        probe_wrapper: Final = self._probe_target_wrapper()
+        generation_before: Final = probe_wrapper.engine_generation
         try:
-            sql_query: Final = "SELECT 1"
-
-            # Execute the raw query
-            # The asterisk before `user_id_list` unpacks the list into separate arguments
-            response: Final = await self.db.query_raw(sql_query)
-            return response
+            return await self._run_health_probe(probe_wrapper)
         except Exception as e:
             import traceback
 
@@ -4998,11 +5098,12 @@ class PrismaClient:
             end_time: Final = time.time()
             _duration: Final = end_time - start_time
             asyncio.create_task(
-                self.proxy_logging_obj.failure_handler(
-                    original_exception=e,
+                self._report_health_check_failure(
+                    e=e,
                     duration=_duration,
-                    call_type="health_check",
                     traceback_str=error_traceback,
+                    wrapper=probe_wrapper,
+                    generation_before=generation_before,
                 )
             )
             raise e
@@ -6319,6 +6420,74 @@ def construct_database_url_from_env_vars() -> str | None:
     return None
 
 
+async def _get_validated_team_object(
+    user_api_key_dict: "UserAPIKeyAuth",
+    team_id: str,
+    prisma_client: "PrismaClient",
+    user_api_key_cache: "UserApiKeyCache",
+    proxy_logging_obj: "ProxyLogging",
+) -> "LiteLLM_TeamTableCachedObj":
+    from litellm.proxy.auth.auth_checks import get_team_object
+    from litellm.proxy.management_endpoints.team_endpoints import validate_membership
+
+    team_object: Final = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    await validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_object)
+    return team_object
+
+
+async def _get_team_object_for_access_groups(
+    team_id: str | None,
+    prisma_client: Optional["PrismaClient"],
+    user_api_key_cache: Optional["UserApiKeyCache"],
+    proxy_logging_obj: Optional["ProxyLogging"],
+) -> Optional["LiteLLM_TeamTableCachedObj"]:
+    from litellm.proxy.auth.auth_checks import get_team_object
+
+    if team_id is None or prisma_client is None or user_api_key_cache is None or proxy_logging_obj is None:
+        return None
+    try:
+        return await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except HTTPException:
+        verbose_proxy_logger.debug("Could not fetch team %s while listing models", team_id)
+        return None
+
+
+async def _get_access_group_models(
+    user_api_key_dict: "UserAPIKeyAuth",
+    team_object: Optional["LiteLLM_TeamTableCachedObj"],
+    prisma_client: Optional["PrismaClient"],
+    user_api_key_cache: Optional["UserApiKeyCache"],
+    proxy_logging_obj: Optional["ProxyLogging"],
+) -> tuple[str, ...]:
+    from litellm.proxy.auth.auth_checks import (
+        _get_models_from_access_groups,
+        get_authorized_resources_from_key_access_groups,
+    )
+
+    team_group_models: Final = await _get_models_from_access_groups(
+        access_group_ids=(team_object.access_group_ids or ()) if team_object is not None else (),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    key_group_models: Final = await get_authorized_resources_from_key_access_groups(
+        valid_token=user_api_key_dict,
+        team_object=team_object,
+        resource_field="access_model_names",
+    )
+    return tuple(dict.fromkeys((*team_group_models, *key_group_models)))
+
+
 async def get_available_models_for_user(
     user_api_key_dict: "UserAPIKeyAuth",
     llm_router: Optional["Router"],
@@ -6350,13 +6519,11 @@ async def get_available_models_for_user(
     Returns:
         List of model names available to the user
     """
-    from litellm.proxy.auth.auth_checks import get_team_object
     from litellm.proxy.auth.model_checks import (
         get_complete_model_list,
         get_key_models,
         get_team_models,
     )
-    from litellm.proxy.management_endpoints.team_endpoints import validate_membership
 
     # Get proxy model list and access groups
     if llm_router is None:
@@ -6366,31 +6533,33 @@ async def get_available_models_for_user(
         proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()
 
-    # Get key models
-    key_models = get_key_models(
-        user_api_key_dict=user_api_key_dict,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-        include_model_access_groups=include_model_access_groups,
-    )
-
-    # Get team models
-    team_models: list[str] = user_api_key_dict.team_models
-
-    # If specific team_id is provided, validate and get team models
-    if team_id and prisma_client and proxy_logging_obj and user_api_key_cache:
-        key_models = []
-        team_object: Final = await get_team_object(
+    requested_team_object: Final = (
+        await _get_validated_team_object(
+            user_api_key_dict=user_api_key_dict,
             team_id=team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
-        await validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_object)
-        team_models = team_object.models
+        if team_id and prisma_client and proxy_logging_obj and user_api_key_cache
+        else None
+    )
 
-    team_models = get_team_models(
-        team_models=team_models,
+    key_models: Final[Sequence[str]] = (
+        ()
+        if requested_team_object is not None
+        else get_key_models(
+            user_api_key_dict=user_api_key_dict,
+            proxy_model_list=proxy_model_list,
+            model_access_groups=model_access_groups,
+            include_model_access_groups=include_model_access_groups,
+        )
+    )
+
+    team_models: Final = get_team_models(
+        team_models=(
+            requested_team_object.models if requested_team_object is not None else user_api_key_dict.team_models
+        ),
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
         include_model_access_groups=include_model_access_groups,
@@ -6398,10 +6567,31 @@ async def get_available_models_for_user(
 
     effective_team_id: Final = team_id or user_api_key_dict.team_id
 
+    access_group_models: Final = (
+        await _get_access_group_models(
+            user_api_key_dict=user_api_key_dict,
+            team_object=requested_team_object
+            or await _get_team_object_for_access_groups(
+                team_id=effective_team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            ),
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if key_models or team_models
+        else ()
+    )
+
+    granted_key_models: Final = (*key_models, *access_group_models) if key_models else key_models
+    granted_team_models: Final = (*team_models, *access_group_models) if team_models else team_models
+
     # Get complete model list
     all_models: Final = get_complete_model_list(
-        key_models=key_models,
-        team_models=team_models,
+        key_models=granted_key_models,
+        team_models=granted_team_models,
         proxy_model_list=proxy_model_list,
         user_model=user_model,
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
