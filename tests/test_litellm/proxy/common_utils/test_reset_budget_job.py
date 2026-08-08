@@ -1727,6 +1727,20 @@ def test_reset_budget_runs_and_releases_the_lock_when_this_pod_is_the_leader(moc
     assert [w["where"] for w in _batch_writes(mock_prisma_client, "key", op="update")] == [{"token": "tok-leader"}]
 
 
+def test_reset_budget_renews_the_lease_after_every_phase(mock_prisma_client):
+    """Re-acquiring a lock this pod already holds extends its TTL, so the
+    between-phase re-assert is what keeps a run longer than the TTL from having
+    the lock expire underneath it. One acquire to take it, one per phase after.
+    """
+    lock = FakePodLockManager(acquired=True)
+    mock_prisma_client.data["key"] = [_key_row("tok-1")]
+
+    asyncio.run(_leader_job(mock_prisma_client, lock).reset_budget())
+
+    assert len(lock.acquire_calls) == 6
+    assert all(call["ttl"] == RESET_BUDGET_JOB_LOCK_TTL_SECONDS for call in lock.acquire_calls)
+
+
 def test_reset_budget_stops_when_the_lock_is_lost_mid_run(mock_prisma_client):
     """A run slower than the TTL can be taken over by another pod. Re-asserting
     the lock between phases catches that, so the two pods do not fire the same
