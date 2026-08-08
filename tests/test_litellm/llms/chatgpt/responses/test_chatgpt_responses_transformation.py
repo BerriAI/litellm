@@ -7,6 +7,7 @@ Source: litellm/llms/chatgpt/responses/transformation.py
 import json
 import os
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -15,16 +16,28 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.openai.common_utils import OpenAIError
+from litellm.main import responses_api_bridge_check
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 
 
+REPO_ROOT = Path(__file__).resolve().parents[5]
+MODEL_COST_MAP_PATHS = (
+    REPO_ROOT / "model_prices_and_context_window.json",
+    REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json",
+)
+
+
 class TestChatGPTResponsesAPITransformation:
     @pytest.mark.parametrize(
         "model_name",
         [
+            "chatgpt/gpt-5.5",
+            "chatgpt/gpt-5.6-luna",
+            "chatgpt/gpt-5.6-sol",
+            "chatgpt/gpt-5.6-terra",
             "chatgpt/gpt-5.4",
             "chatgpt/gpt-5.4-pro",
             "chatgpt/gpt-5.3-chat-latest",
@@ -42,6 +55,54 @@ class TestChatGPTResponsesAPITransformation:
         assert config is not None
         assert isinstance(config, ChatGPTResponsesAPIConfig)
         assert config.custom_llm_provider == LlmProviders.CHATGPT
+
+    @pytest.mark.parametrize("model_cost_map_path", MODEL_COST_MAP_PATHS)
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "chatgpt/gpt-5.5",
+            "chatgpt/gpt-5.6-luna",
+            "chatgpt/gpt-5.6-sol",
+            "chatgpt/gpt-5.6-terra",
+        ],
+    )
+    def test_chatgpt_responses_model_metadata(self, model_name, model_cost_map_path):
+        with model_cost_map_path.open() as model_cost_map_file:
+            model_info = json.load(model_cost_map_file)[model_name]
+
+        assert model_info["litellm_provider"] == "chatgpt"
+        assert model_info["mode"] == "responses"
+        assert model_info["supported_endpoints"] == [
+            "/v1/chat/completions",
+            "/v1/responses",
+        ]
+
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "chatgpt/gpt-5.5",
+            "chatgpt/gpt-5.6-luna",
+            "chatgpt/gpt-5.6-sol",
+            "chatgpt/gpt-5.6-terra",
+        ],
+    )
+    @patch("litellm.main._get_model_info_helper")
+    def test_chatgpt_models_bridge_chat_completions_to_responses(
+        self, mock_get_model_info, model_name
+    ):
+        mock_get_model_info.return_value = {"mode": "responses"}
+
+        model_info, routed_model = responses_api_bridge_check(
+            model=model_name,
+            custom_llm_provider="chatgpt",
+        )
+
+        mock_get_model_info.assert_called_once_with(
+            model=model_name,
+            custom_llm_provider="chatgpt",
+        )
+        assert routed_model == model_name
+        assert model_info["mode"] == "responses"
 
     @patch("litellm.llms.chatgpt.responses.transformation.Authenticator")
     def test_chatgpt_responses_endpoint_url(self, mock_authenticator_class):
