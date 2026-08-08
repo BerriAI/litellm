@@ -62,6 +62,9 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
+    id_jag_assertion_capture_gap,
+)
 from litellm.proxy.management_helpers.audit_logs import get_audit_log_changed_by
 from litellm.repositories.table_repositories import (
     MCPServerRepository,
@@ -226,6 +229,22 @@ if MCP_AVAILABLE:
     def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
         _base_validate_and_normalize_mcp_server_payload(payload)
         _validate_mcp_server_name_fields(payload)
+
+    def warn_if_id_jag_server_outruns_sso(server_id: str | None, auth_type: MCPAuth | str | None) -> None:
+        """Registering an ``oauth2_id_jag`` server under an SSO provider that captures no IdP
+        identity assertion is a dead configuration: nothing here fails, and then every ID-JAG call
+        fails for every user with a message that only ever tells them to sign in again. Say it once,
+        at the moment the admin can still act on it."""
+        if auth_type != MCPAuth.oauth2_id_jag:
+            return
+        gap = id_jag_assertion_capture_gap()
+        if gap is None:
+            return
+        verbose_proxy_logger.warning(
+            "MCP server %s is registered with auth_type=oauth2_id_jag, but %s.",
+            server_id,
+            gap,
+        )
 
     def stamp_omitted_oauth2_flow(payload: NewMCPServerRequest) -> None:
         """Fallback only: fill in oauth2_flow when an oauth2 create omits it.
@@ -1489,6 +1508,8 @@ if MCP_AVAILABLE:
                 detail={"error": f"Error creating mcp server: {e}"},
             )
 
+        warn_if_id_jag_server_outruns_sso(new_mcp_server.server_id, new_mcp_server.auth_type)
+
         # Registry refresh is best-effort: the row is already committed, so a
         # failure here (e.g. an unrelated malformed row in the table) must not
         # surface as a 500 and orphan the created server, which would push the
@@ -2476,6 +2497,7 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP Server not found, passed server_id={payload.server_id}"},
             )
+        warn_if_id_jag_server_outruns_sso(mcp_server_record_updated.server_id, mcp_server_record_updated.auth_type)
         await global_mcp_server_manager.update_server(mcp_server_record_updated)
 
         # Ensure registry is up to date by reloading from database

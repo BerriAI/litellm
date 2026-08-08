@@ -7879,6 +7879,274 @@ async def test_cli_completion_persists_assertion_under_db_user_id():
     assert response.status_code == 200
 
 
+# ── Diagnosing a login that captured nothing an id_jag server can spend ───────
+
+
+def _id_jag_gap_warnings(logger_mock) -> list:
+    return [call for call in logger_mock.warning.call_args_list if "oauth2_id_jag" in str(call)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider_env, expected_fragment",
+    [
+        ({"GOOGLE_CLIENT_ID": "cid"}, "google"),
+        ({"MICROSOFT_CLIENT_ID": "cid", "MICROSOFT_TENANT": "t"}, "microsoft"),
+        ({}, "no SSO provider is configured"),
+    ],
+)
+async def test_uncaptured_assertion_warns_when_an_id_jag_server_is_registered(
+    monkeypatch, provider_env, expected_fragment
+):
+    """A provider with no capture path leaves ID-JAG permanently broken, and the only place
+    that is knowable is the login itself; without this line the operator sees nothing at all."""
+    from litellm.proxy.management_endpoints.ui_sso import (
+        warn_if_id_jag_assertion_uncaptured,
+    )
+
+    for name in ("GOOGLE_CLIENT_ID", "MICROSOFT_CLIENT_ID", "GENERIC_CLIENT_ID", "SAML_IDP_METADATA_URL"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in provider_env.items():
+        monkeypatch.setenv(name, value)
+
+    logger_mock = MagicMock()
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.ema_assertion_retention_enabled",
+            AsyncMock(return_value=True),
+        ),
+        patch("litellm.proxy.management_endpoints.ui_sso.verbose_proxy_logger", logger_mock),
+    ):
+        await warn_if_id_jag_assertion_uncaptured(None)
+
+    warnings = _id_jag_gap_warnings(logger_mock)
+    assert len(warnings) == 1
+    assert expected_fragment in str(warnings[0])
+
+
+@pytest.mark.asyncio
+async def test_generic_provider_that_returned_no_id_token_still_warns(monkeypatch):
+    """Generic OIDC has a capture path, so there is no configuration gap to report; the login
+    still handed the id_jag arm nothing, and that must not pass silently."""
+    from litellm.proxy.management_endpoints.ui_sso import (
+        warn_if_id_jag_assertion_uncaptured,
+    )
+
+    for name in ("GOOGLE_CLIENT_ID", "MICROSOFT_CLIENT_ID", "SAML_IDP_METADATA_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("GENERIC_CLIENT_ID", "cid")
+
+    logger_mock = MagicMock()
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.ema_assertion_retention_enabled",
+            AsyncMock(return_value=True),
+        ),
+        patch("litellm.proxy.management_endpoints.ui_sso.verbose_proxy_logger", logger_mock),
+    ):
+        await warn_if_id_jag_assertion_uncaptured(None)
+
+    warnings = _id_jag_gap_warnings(logger_mock)
+    assert len(warnings) == 1
+    assert "no usable id_token" in str(warnings[0])
+
+
+@pytest.mark.asyncio
+async def test_no_warning_when_the_assertion_was_captured(monkeypatch):
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+        assertion_from_sso_login,
+    )
+    from litellm.proxy.management_endpoints.ui_sso import (
+        warn_if_id_jag_assertion_uncaptured,
+    )
+
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    assertion = assertion_from_sso_login(_ema_id_token(), None)
+    assert assertion is not None
+
+    retention_mock = AsyncMock(return_value=True)
+    logger_mock = MagicMock()
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.ema_assertion_retention_enabled",
+            retention_mock,
+        ),
+        patch("litellm.proxy.management_endpoints.ui_sso.verbose_proxy_logger", logger_mock),
+    ):
+        await warn_if_id_jag_assertion_uncaptured(assertion)
+
+    assert _id_jag_gap_warnings(logger_mock) == []
+    retention_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_no_warning_when_no_id_jag_server_is_registered(monkeypatch):
+    """Most deployments never register one; a warning about ID-JAG on every login there would
+    be pure noise and would train operators to ignore it."""
+    from litellm.proxy.management_endpoints.ui_sso import (
+        warn_if_id_jag_assertion_uncaptured,
+    )
+
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    logger_mock = MagicMock()
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.ema_assertion_retention_enabled",
+            AsyncMock(return_value=False),
+        ),
+        patch("litellm.proxy.management_endpoints.ui_sso.verbose_proxy_logger", logger_mock),
+    ):
+        await warn_if_id_jag_assertion_uncaptured(None)
+
+    assert _id_jag_gap_warnings(logger_mock) == []
+
+
+@pytest.mark.asyncio
+async def test_store_outage_does_not_break_the_login(monkeypatch):
+    from litellm.proxy.management_endpoints.ui_sso import (
+        warn_if_id_jag_assertion_uncaptured,
+    )
+
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.ema_assertion_retention_enabled",
+            AsyncMock(side_effect=Exception("db down")),
+        ),
+        patch("litellm.proxy.management_endpoints.ui_sso.verbose_proxy_logger", MagicMock()),
+    ):
+        await warn_if_id_jag_assertion_uncaptured(None)
+
+
+@pytest.mark.asyncio
+async def test_browser_funnel_reports_an_uncaptured_assertion(monkeypatch):
+    """Wiring: the browser login path must reach the diagnostic, not just define it."""
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://localhost:4000/"
+    mock_request.cookies = {}
+
+    logger_mock = MagicMock()
+    with (
+        patch("litellm.proxy.utils.get_prisma_client_or_throw", return_value=MagicMock()),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.user_custom_sso", None),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch(
+            "litellm.proxy.proxy_server.generate_key_helper_fn",
+            AsyncMock(return_value={"token": "sk-ui-key", "user_id": "canonical-user-id"}),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.check_and_update_if_proxy_admin_id",
+            AsyncMock(return_value="internal_user"),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.retain_sso_identity_assertion_for_ema",
+            AsyncMock(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.ema_assertion_retention_enabled",
+            AsyncMock(return_value=True),
+        ),
+        patch("litellm.proxy.management_endpoints.ui_sso.verbose_proxy_logger", logger_mock),
+    ):
+        await SSOAuthenticationHandler.get_redirect_response_from_openid(
+            result=CustomOpenID(
+                id="raw-idp-subject",
+                email="u@example.com",
+                first_name="U",
+                last_name="Ser",
+                display_name="U Ser",
+                provider="google",
+                team_ids=[],
+                user_role=None,
+            ),
+            request=mock_request,
+            received_response=None,
+            generic_client_id=None,
+            ui_access_mode=None,
+            access_token_payload=None,
+            jwt_handler=None,
+            sso_assertion=None,
+        )
+
+    warnings = _id_jag_gap_warnings(logger_mock)
+    assert len(warnings) == 1
+    assert "google" in str(warnings[0])
+
+
+@pytest.mark.asyncio
+async def test_cli_funnel_reports_an_uncaptured_assertion(monkeypatch):
+    """Wiring: the CLI login path shares the gap, so it must share the diagnostic."""
+    from litellm.proxy.management_endpoints.ui_sso import (
+        _complete_cli_sso_callback_session,
+    )
+
+    monkeypatch.setenv("MICROSOFT_CLIENT_ID", "cid")
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://localhost:4000/"
+
+    user_info = MagicMock()
+    user_info.user_id = "cli-user-id"
+    user_info.user_role = "internal_user"
+    user_info.models = []
+    user_info.teams = []
+
+    logger_mock = MagicMock()
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
+            AsyncMock(return_value=user_info),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso._fetch_cli_sso_team_details",
+            AsyncMock(return_value=[]),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.build_cli_sso_attribution_metadata",
+            return_value={},
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.retain_sso_identity_assertion_for_ema",
+            AsyncMock(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.ema_assertion_retention_enabled",
+            AsyncMock(return_value=True),
+        ),
+        patch("litellm.proxy.management_endpoints.ui_sso.verbose_proxy_logger", logger_mock),
+    ):
+        await _complete_cli_sso_callback_session(
+            request=mock_request,
+            key="cli-login-id",
+            flow={},
+            result={"sub": "raw-idp-subject"},
+            parsed_openid_result={
+                "user_id": "raw-idp-subject",
+                "user_email": "u@example.com",
+                "user_role": None,
+            },
+            user_defined_values=None,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            cli_sso_session_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            sso_assertion=None,
+        )
+
+    warnings = _id_jag_gap_warnings(logger_mock)
+    assert len(warnings) == 1
+    assert "microsoft" in str(warnings[0])
+
+
 class TestSameOriginReturnPath:
     """The same-origin relative return_to arm added for the MCP gateway DCR authorize
     round-trip: only strictly relative paths qualify, so login can never redirect the

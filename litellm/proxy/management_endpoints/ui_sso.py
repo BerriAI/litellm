@@ -55,6 +55,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
     SSOIdentityAssertion,
     assertion_from_sso_login,
+    ema_assertion_retention_enabled,
     retain_sso_identity_assertion_for_ema,
 )
 from litellm.proxy._types import (
@@ -89,6 +90,9 @@ from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
+from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
+    id_jag_assertion_capture_gap,
+)
 from litellm.proxy.management_endpoints.sso.saml_sso import SAMLAuthHandler
 from litellm.proxy.management_endpoints.sso_helper_utils import (
     check_is_admin_only_access,
@@ -1527,6 +1531,26 @@ async def get_generic_sso_response(
     return result or {}, received_response, access_token_payload, sso_assertion
 
 
+async def warn_if_id_jag_assertion_uncaptured(assertion: SSOIdentityAssertion | None) -> None:
+    """Say, at the one moment it is knowable, that this login gave an ``oauth2_id_jag`` server
+    nothing to spend. Without it the operator only ever sees the per-request failure, which cannot
+    tell a user who has never signed in from a provider that will never capture. Kept strictly
+    diagnostic: a store outage is swallowed, since a login must not fail over a log line."""
+    if assertion is not None:
+        return
+    try:
+        if not await ema_assertion_retention_enabled():
+            return
+    except Exception as exc:  # noqa: BLE001  # diagnostics must never break the login
+        verbose_proxy_logger.debug("Could not check for oauth2_id_jag MCP servers after SSO login: %s", exc)
+        return
+    gap = id_jag_assertion_capture_gap()
+    verbose_proxy_logger.warning(
+        "SSO login captured no IdP identity assertion while an oauth2_id_jag MCP server is registered: %s",
+        gap if gap is not None else "the identity provider's token response carried no usable id_token",
+    )
+
+
 async def create_team_member_add_task(team_id, user_info):
     """Create a task for adding a member to a team."""
     try:
@@ -2088,6 +2112,7 @@ async def _complete_cli_sso_callback_session(
         raise HTTPException(status_code=500, detail="Failed to retrieve user information from SSO")
 
     await retain_sso_identity_assertion_for_ema(user_id=user_info.user_id, assertion=sso_assertion)
+    await warn_if_id_jag_assertion_uncaptured(sso_assertion)
 
     teams: list[str] = []
     if hasattr(user_info, "teams") and user_info.teams:
@@ -3376,6 +3401,7 @@ class SSOAuthenticationHandler:
 
         if isinstance(user_id, str) and user_id:
             await retain_sso_identity_assertion_for_ema(user_id=user_id, assertion=sso_assertion)
+            await warn_if_id_jag_assertion_uncaptured(sso_assertion)
 
         disabled_non_admin_personal_key_creation: Final = get_disabled_non_admin_personal_key_creation()
         litellm_dashboard_ui = get_custom_url(request_base_url=str(request.base_url), route="ui/")
