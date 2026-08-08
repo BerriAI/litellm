@@ -4486,7 +4486,6 @@ async def _tag_max_budget_check(
                 counter_key=f"spend:tag:{tag_name}",
                 fallback_spend=tag_object.spend or 0.0,
                 max_budget=tag_object.litellm_budget_table.max_budget,
-                fallback_authoritative=True,
             )
             if tag_spend <= tag_object.litellm_budget_table.max_budget:
                 continue

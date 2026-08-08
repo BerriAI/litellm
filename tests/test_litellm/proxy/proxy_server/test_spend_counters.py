@@ -333,7 +333,7 @@ async def test_get_current_spend_fail_closed_admits_when_redis_verified(monkeypa
 
 @pytest.mark.asyncio
 async def test_get_current_spend_fail_closed_allows_authoritative_fallback(monkeypatch):
-    """End-user/tag callers pass fallback_authoritative=True (their spend is
+    """End-user callers pass fallback_authoritative=True (their spend is
     loaded fresh from the DB in auth), so fail-closed does not reject them even
     when the counter path is unreadable."""
     fake_cache = _make_spend_counter_cache(
@@ -354,6 +354,79 @@ async def test_get_current_spend_fail_closed_allows_authoritative_fallback(monke
         fallback_authoritative=True,
     )
     assert result == 1.0
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_tag_counter_reseeds_from_tag_row(monkeypatch):
+    """A cold ``spend:tag:*`` counter must reseed from ``LiteLLM_TagTable.spend``
+    rather than trusting the caller's cached tag object, which is per-pod and
+    lags spend written by other workers (issue #35538)."""
+    fake_cache = _make_spend_counter_cache(redis_get_value=None)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+
+    tag_row = MagicMock()
+    tag_row.spend = 9.0
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_tagtable.find_unique = AsyncMock(return_value=tag_row)
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma)
+
+    result = await ps.get_current_spend(
+        counter_key="spend:tag:tenant-42",
+        fallback_spend=0.1,
+        max_budget=5.0,
+    )
+
+    assert result == 9.0
+    fake_prisma.db.litellm_tagtable.find_unique.assert_awaited_with(
+        where={"tag_name": "tenant-42"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_tag_counter_honors_zero_spend_reset(monkeypatch):
+    """After a tag budget reset the DB row is 0, so a cold counter must admit the
+    request instead of re-enforcing the pre-reset cached spend."""
+    fake_cache = _make_spend_counter_cache(redis_get_value=None)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+
+    tag_row = MagicMock()
+    tag_row.spend = 0.0
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_tagtable.find_unique = AsyncMock(return_value=tag_row)
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma)
+
+    result = await ps.get_current_spend(
+        counter_key="spend:tag:tenant-42",
+        fallback_spend=99.0,
+        max_budget=5.0,
+    )
+
+    assert result == 0.0
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_tag_counter_floors_stale_low_counter(monkeypatch):
+    """A stale-low tag counter (e.g. Redis reloaded an older snapshot) is a cache
+    hit, so enforcement must still floor it at the authoritative tag row."""
+    fake_cache = _make_spend_counter_cache(redis_get_value=0.5)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+
+    tag_row = MagicMock()
+    tag_row.spend = 12.0
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_tagtable.find_unique = AsyncMock(return_value=tag_row)
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma)
+
+    result = await ps.get_current_spend(
+        counter_key="spend:tag:tenant-42",
+        fallback_spend=1.0,
+        max_budget=5.0,
+    )
+
+    assert result == 12.0
+    fake_cache.redis_cache.async_set_max.assert_awaited_once_with(
+        key="spend:tag:tenant-42", value=12.0
+    )
 
 
 @pytest.mark.asyncio
