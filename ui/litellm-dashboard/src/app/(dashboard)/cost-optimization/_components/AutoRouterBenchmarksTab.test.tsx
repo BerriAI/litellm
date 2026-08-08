@@ -339,7 +339,9 @@ describe("AutoRouterBenchmarksTab", () => {
       renderTab();
 
       expect(
-        screen.getAllByText("Non-router traffic isn't sending session IDs, so it can't be grouped into sessions to compare"),
+        screen.getAllByText(
+          "Non-router traffic isn't sending session IDs, so it can't be grouped into sessions to compare",
+        ),
       ).toHaveLength(2);
     });
 

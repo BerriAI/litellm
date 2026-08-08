@@ -314,7 +314,7 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
   const stats = view.stats;
   const selectedGroup = data.groups.find((g) => groupKey(g) === selectedKey);
   const signals = qualityData
-    ? signalsFor(qualityData, selectedKey === ALL_ROUTERS ? null : (selectedGroup?.router_name ?? null))
+    ? signalsFor(qualityData, selectedKey === ALL_ROUTERS ? null : selectedGroup?.router_name ?? null)
     : undefined;
   return (
     <>
