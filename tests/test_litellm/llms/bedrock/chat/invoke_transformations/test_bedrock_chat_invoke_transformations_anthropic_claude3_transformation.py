@@ -430,6 +430,34 @@ def test_output_config_forwarded_for_bedrock_chat_invoke_request():
     assert result["max_tokens"] == 100
 
 
+def test_output_config_forwarded_for_mantle_routed_model():
+    """A mantle-routed id must resolve the same capabilities as its us.* twin.
+
+    bedrock/mantle/anthropic.claude-opus-5 and bedrock/us.anthropic.claude-opus-5
+    are the same underlying model, but the mantle route segment was not among the
+    prefixes capability lookups strip, so supports_output_config and the effort
+    check both came back False and this path stripped output_config. The request
+    then went out with the legacy thinking.type=enabled shape, which Bedrock
+    rejects.
+    """
+    config = AmazonAnthropicClaudeConfig()
+
+    optional_params = {
+        "max_tokens": 100,
+        "output_config": {"effort": "high"},
+    }
+
+    result = config.transform_request(
+        model="mantle/anthropic.claude-opus-5",
+        messages=[{"role": "user", "content": "test"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("output_config") == {"effort": "high"}
+
+
 def test_output_config_format_converted_for_bedrock_chat_invoke_request():
     """Bedrock Invoke chat path consumes ``output_config.format`` before forwarding."""
     config = AmazonAnthropicClaudeConfig()

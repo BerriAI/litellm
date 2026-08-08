@@ -312,7 +312,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         prefixes: Final = (
             "bedrock/converse/",
             "bedrock/invoke/",
+            "bedrock/mantle/",
             "bedrock/",
+            "mantle/",
             "vertex_ai/",
         )
         deprefixed: Final = tuple(model[len(p) :] for p in prefixes if model.startswith(p))
