@@ -1,37 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
-import { determineEndpointType } from "./EndpointUtils";
+import { determineEndpointType, filterModelsForEndpoint, isModelCompatibleWithEndpoint } from "./EndpointUtils";
 import { EndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
 
-// Mock the getEndpointType function
-vi.mock("@/components/chat_ui/mode_endpoint_mapping", () => ({
-  EndpointType: {
-    IMAGE: "image",
-    VIDEO: "video",
-    CHAT: "chat",
-    RESPONSES: "responses",
-    IMAGE_EDITS: "image_edits",
-    ANTHROPIC_MESSAGES: "anthropic_messages",
-    EMBEDDINGS: "embeddings",
-    SPEECH: "speech",
-    TRANSCRIPTION: "transcription",
-    A2A_AGENTS: "a2a_agents",
-  },
-  getEndpointType: vi.fn(),
-  ModelMode: {
-    AUDIO_SPEECH: "audio_speech",
-    AUDIO_TRANSCRIPTION: "audio_transcription",
-    IMAGE_GENERATION: "image_generation",
-    VIDEO_GENERATION: "video_generation",
-    CHAT: "chat",
-    RESPONSES: "responses",
-    IMAGE_EDITS: "image_edits",
-    ANTHROPIC_MESSAGES: "anthropic_messages",
-    EMBEDDING: "embedding",
-  },
-}));
+vi.mock("@/components/chat_ui/mode_endpoint_mapping", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/chat_ui/mode_endpoint_mapping")>();
+  return {
+    ...actual,
+    getEndpointType: vi.fn(actual.getEndpointType),
+  };
+});
 
-// Import the mocked function
 import { getEndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
 
 describe("determineEndpointType", () => {
@@ -210,10 +189,69 @@ describe("determineEndpointType", () => {
 
     vi.mocked(getEndpointType).mockReturnValue(EndpointType.CHAT);
 
-    // Test with different case - should not match
     const result = determineEndpointType("gpt-3.5-turbo", mockModelInfo);
 
     expect(getEndpointType).not.toHaveBeenCalled();
     expect(result).toBe(EndpointType.CHAT);
+  });
+});
+
+describe("isModelCompatibleWithEndpoint / filterModelsForEndpoint", () => {
+  beforeEach(() => {
+    vi.mocked(getEndpointType).mockImplementation((mode: string) => {
+      const map: Record<string, EndpointType> = {
+        chat: EndpointType.CHAT,
+        responses: EndpointType.RESPONSES,
+        image_generation: EndpointType.IMAGE,
+        image_edits: EndpointType.IMAGE_EDITS,
+        audio_speech: EndpointType.SPEECH,
+        realtime: EndpointType.REALTIME,
+        embedding: EndpointType.EMBEDDINGS,
+      };
+      return map[mode] ?? EndpointType.CHAT;
+    });
+  });
+
+  it("keeps models with no mode for every endpoint", () => {
+    const model: ModelGroup = { model_group: "custom-proxy-model" };
+    expect(isModelCompatibleWithEndpoint(model, EndpointType.CHAT)).toBe(true);
+    expect(isModelCompatibleWithEndpoint(model, EndpointType.REALTIME)).toBe(true);
+    expect(isModelCompatibleWithEndpoint(model, EndpointType.SPEECH)).toBe(true);
+  });
+
+  it("keeps chat models for responses, anthropic messages, and interactions", () => {
+    const chatModel: ModelGroup = { model_group: "gpt-4o", mode: "chat" };
+    expect(isModelCompatibleWithEndpoint(chatModel, EndpointType.RESPONSES)).toBe(true);
+    expect(isModelCompatibleWithEndpoint(chatModel, EndpointType.ANTHROPIC_MESSAGES)).toBe(true);
+    expect(isModelCompatibleWithEndpoint(chatModel, EndpointType.INTERACTIONS)).toBe(true);
+    expect(isModelCompatibleWithEndpoint(chatModel, EndpointType.SPEECH)).toBe(false);
+  });
+
+  it("keeps image models for image_edits", () => {
+    const imageModel: ModelGroup = { model_group: "dall-e-3", mode: "image_generation" };
+    expect(isModelCompatibleWithEndpoint(imageModel, EndpointType.IMAGE_EDITS)).toBe(true);
+    expect(isModelCompatibleWithEndpoint(imageModel, EndpointType.IMAGE)).toBe(true);
+    expect(isModelCompatibleWithEndpoint(imageModel, EndpointType.CHAT)).toBe(false);
+  });
+
+  it("keeps only realtime models for the realtime endpoint", () => {
+    const models: ModelGroup[] = [
+      { model_group: "gpt-4o", mode: "chat" },
+      { model_group: "gpt-realtime", mode: "realtime" },
+      { model_group: "no-mode" },
+    ];
+
+    expect(filterModelsForEndpoint(models, EndpointType.REALTIME).map((m) => m.model_group)).toEqual([
+      "gpt-realtime",
+      "no-mode",
+    ]);
+  });
+
+  it("excludes unknown modes from conversational endpoints", () => {
+    const batchModel: ModelGroup = { model_group: "batch-job", mode: "batch" };
+    const rerankModel: ModelGroup = { model_group: "reranker", mode: "rerank" };
+    expect(isModelCompatibleWithEndpoint(batchModel, EndpointType.CHAT)).toBe(false);
+    expect(isModelCompatibleWithEndpoint(rerankModel, EndpointType.RESPONSES)).toBe(false);
+    expect(isModelCompatibleWithEndpoint(batchModel, EndpointType.REALTIME)).toBe(false);
   });
 });
