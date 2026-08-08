@@ -33,9 +33,7 @@ def _error_event_message(event: object) -> str:
     )
     if direct_message is not None:
         return str(direct_message)
-    nested_error: Final = getattr(event, "error", None) or (
-        event.get("error") if isinstance(event, dict) else None
-    )
+    nested_error: Final = getattr(event, "error", None) or (event.get("error") if isinstance(event, dict) else None)
     nested_message: Final = getattr(nested_error, "message", None) or (
         nested_error.get("message") if isinstance(nested_error, dict) else None
     )
@@ -264,9 +262,7 @@ class AnthropicResponsesStreamWrapper:
             )
             error_obj: Final = (
                 getattr(response_obj, "error", None)
-                or (
-                    response_obj.get("error") if isinstance(response_obj, dict) else None
-                )
+                or (response_obj.get("error") if isinstance(response_obj, dict) else None)
                 if response_obj is not None
                 else None
             )
