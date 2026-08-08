@@ -714,7 +714,6 @@ async def test_increment_spend_counters_does_not_double_count_when_cleanup_fails
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
     monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
     monkeypatch.setattr(ps, "prisma_client", None)
-    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
 
     key_counter = "spend:key:hashed-tok"
     monkeypatch.setattr(
