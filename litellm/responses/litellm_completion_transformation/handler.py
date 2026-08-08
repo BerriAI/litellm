@@ -2,7 +2,7 @@
 Handler for transforming responses api requests to litellm.completion requests
 """
 
-from typing import Any, Coroutine, Dict, Optional, Union
+from typing import Any, Coroutine, Dict, Optional, Union, List
 
 import litellm
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
@@ -30,6 +30,7 @@ class LiteLLMCompletionTransformationHandler:
         _is_async: bool = False,
         stream: Optional[bool] = None,
         extra_headers: Optional[Dict[str, Any]] = None,
+        context_management: Optional[List[Dict[str, Any]]] = None,
         **kwargs,
     ) -> Union[
         ResponsesAPIResponse,
@@ -38,6 +39,7 @@ class LiteLLMCompletionTransformationHandler:
             Any, Any, Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]
         ],
     ]:
+        print("REE1", context_management)
         litellm_completion_request: dict = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
             model=model,
             input=input,
@@ -45,6 +47,7 @@ class LiteLLMCompletionTransformationHandler:
             custom_llm_provider=custom_llm_provider,
             stream=stream,
             extra_headers=extra_headers,
+            context_management=context_management,
             **kwargs,
         )
 

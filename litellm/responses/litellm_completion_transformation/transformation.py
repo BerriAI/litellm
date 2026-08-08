@@ -170,6 +170,10 @@ class LiteLLMCompletionResponsesConfig:
                 "type": "message",
                 "role": "user",
                 "content": "",
+            },
+            {
+                 "type": "compaction",
+                 "encrypted_content": "blahb lah blah"
             }
         ]
 
@@ -205,7 +209,15 @@ class LiteLLMCompletionResponsesConfig:
 
         Returns the (possibly compacted) input.
         """
-        pass
+
+        import pdb
+        pdb.set_trace()
+        if LiteLLMCompletionResponsesConfig.should_execute_compaction(LiteLLMCompletionResponsesConfig._cheap_token_counter(input),
+                                                                      context_management,
+                                                                      ):
+
+            return LiteLLMCompletionResponsesConfig._compact_input(model, input)
+        return input
 
     @staticmethod
     def should_execute_compaction(
@@ -215,7 +227,12 @@ class LiteLLMCompletionResponsesConfig:
         """
         Check if compaction should be executed
         """
-        pass
+        #TODO handle null case of indexing.
+        if not context_management: return False
+        if len(context_management) != 1: return False
+
+        if input_token_size < context_management[0]["compact_threshold"]:
+            return True
 
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
@@ -225,6 +242,7 @@ class LiteLLMCompletionResponsesConfig:
         custom_llm_provider: Optional[str] = None,
         stream: Optional[bool] = None,
         extra_headers: Optional[Dict[str, Any]] = None,
+        context_management: Optional[List[Dict[str, Any]]] = None,
         **kwargs,
     ) -> dict:
         """
@@ -236,6 +254,7 @@ class LiteLLMCompletionResponsesConfig:
         ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
             responses_api_request.get("tools") or []  # type: ignore
         )
+        print("REE", context_management)
 
         response_format = None
         text_param = responses_api_request.get("text")
@@ -260,6 +279,7 @@ class LiteLLMCompletionResponsesConfig:
                 model=model,
                 input=input,
                 responses_api_request=responses_api_request,
+                context_management=context_management,
             ),
             "model": model,
             "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
@@ -328,6 +348,7 @@ class LiteLLMCompletionResponsesConfig:
                 Message,
             ]
         ] = []
+        input: Union[str, ResponseInputParam] = LiteLLMCompletionResponsesConfig._transform_context_management(model, input, context_management)
         if responses_api_request.get("instructions"):
             messages.append(
                 LiteLLMCompletionResponsesConfig.transform_instructions_to_system_message(
@@ -341,7 +362,6 @@ class LiteLLMCompletionResponsesConfig:
             )
         )
 
-        LiteLLMCompletionResponsesConfig._transform_context_management(model, input, context_management)
         #messages.extend(
             #msgs
         #)

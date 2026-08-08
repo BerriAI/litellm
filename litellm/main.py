@@ -1098,6 +1098,7 @@ def completion(  # type: ignore # noqa: PLR0915
     shared_session: Optional["ClientSession"] = None,
     # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
     enable_json_schema_validation: Optional[bool] = None,
+    context_management: Optional[List[Dict[str, Any]]] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -1512,6 +1513,7 @@ def completion(  # type: ignore # noqa: PLR0915
             "safety_identifier": safety_identifier,
             "service_tier": service_tier,
             "allowed_openai_params": kwargs.get("allowed_openai_params"),
+            "context_management":  context_management,
         }
         optional_params = get_optional_params(
             **optional_param_args, **non_default_params
