@@ -244,6 +244,7 @@ export interface Organization {
   users: any[] | null;
   members: any[] | null;
   object_permission?: ObjectPermission | null;
+  resolved_logging_exporters?: string[] | null;
 }
 
 export interface CredentialItem {
@@ -253,6 +254,19 @@ export interface CredentialItem {
     custom_llm_provider?: string;
     description?: string;
     required?: boolean;
+    // "logging" tags an admin-owned trace destination (Option A: lives in the
+    // free-form credential_info, no schema migration). Absent = a provider credential.
+    credential_type?: string;
+    // Non-secret destination host/endpoint, surfaced in the logging credentials list.
+    host?: string;
+    // Admin-owned access grant for a logging destination: who may see/assign it.
+    // global reaches everyone; teams/orgs list ids. Visibility only -- on its own it
+    // never enables tracing for a request.
+    access?: {
+      global?: boolean;
+      teams?: string[];
+      orgs?: string[];
+    };
   };
 }
 
@@ -2628,7 +2642,7 @@ export const credentialGetCall = async (accessToken: string, credentialName: str
 
 export const credentialDeleteCall = async (accessToken: string, credentialName: string) => {
   try {
-    const data = await apiClient.delete(`/credentials/${credentialName}`, { accessToken });
+    const data = await apiClient.delete(`/credentials/${encodeURIComponent(credentialName)}`, { accessToken });
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -2652,7 +2666,7 @@ export const credentialUpdateCall = async (
       }
     }
 
-    const data = await apiClient.patch(`/credentials/${credentialName}`, {
+    const data = await apiClient.patch(`/credentials/${encodeURIComponent(credentialName)}`, {
       accessToken,
       body: {
         ...formValues, // Include formValues in the request body
