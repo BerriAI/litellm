@@ -8,8 +8,8 @@ to run through agentic completion hooks. If an agentic hook fires, the
 follow-up response is chained as Phase 2 of the same iterator.
 
 In hold-back mode (``hold_back=True``) chunks are buffered instead of yielded
-live, keepalive pings run until the hooks finish, and then either the follow-up
-replaces the message or the buffer replays, except that a buffered tool_use for
+live, keepalive pings run whenever no other byte is ready, and then either the
+follow-up replaces the message or the buffer replays, except that a tool_use for
 a server-fulfilled tool fails the turn rather than reaching a client that cannot
 execute it.
 """
@@ -29,6 +29,14 @@ SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES: Final = (
     b'data: {"type": "error", "error": {"type": "api_error", "message": '
     b'"Server-side tool retrieval failed, so this turn could not be completed. Please retry."}}\n\n'
 )
+
+
+async def _anext_or_none(iterator: AsyncIterator) -> bytes | None:
+    try:
+        return await iterator.__anext__()
+    except StopAsyncIteration:
+        return None
+
 
 # ---------------------------------------------------------------------------
 # SSE parsing helpers (module-level to keep the class lean)
@@ -195,6 +203,7 @@ class AgenticAnthropicStreamingIterator:
         self._follow_up_iterator: AsyncIterator | None = None
         self._drain_task: asyncio.Task | None = None
         self._hook_task: asyncio.Task | None = None
+        self._follow_up_chunk_task: asyncio.Task | None = None
         self._replay_index = 0
         self._error_emitted = False
 
@@ -253,7 +262,7 @@ class AgenticAnthropicStreamingIterator:
             return PING_SSE_BYTES
 
         if self._follow_up_iterator is not None:
-            return await self._follow_up_iterator.__anext__()
+            return await self._next_follow_up_chunk(self._follow_up_iterator)
 
         if self._buffer_holds_server_fulfilled_tool_use():
             if self._error_emitted:
@@ -272,6 +281,17 @@ class AgenticAnthropicStreamingIterator:
             return chunk
 
         raise StopAsyncIteration
+
+    async def _next_follow_up_chunk(self, follow_up_iterator: AsyncIterator) -> bytes:
+        if self._follow_up_chunk_task is None:
+            self._follow_up_chunk_task = asyncio.create_task(_anext_or_none(follow_up_iterator))
+        if not await self._completed_within_ping_interval(self._follow_up_chunk_task):
+            return PING_SSE_BYTES
+        chunk: Final = self._follow_up_chunk_task.result()
+        self._follow_up_chunk_task = None
+        if chunk is None:
+            raise StopAsyncIteration
+        return chunk
 
     def _buffer_holds_server_fulfilled_tool_use(self) -> bool:
         if not self._server_fulfilled_tool_names:
@@ -307,6 +327,7 @@ class AgenticAnthropicStreamingIterator:
 
         await self._settle_task(self._drain_task)
         await self._settle_task(self._hook_task)
+        await self._settle_task(self._follow_up_chunk_task)
         await aclose_if_supported(self._inner)
         await aclose_if_supported(self._follow_up_iterator)
 

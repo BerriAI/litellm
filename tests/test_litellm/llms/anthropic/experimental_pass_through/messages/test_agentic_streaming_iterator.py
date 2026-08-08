@@ -1002,6 +1002,65 @@ class TestAgenticStreamingIteratorHoldBack:
         assert [c for c in collected if c != PING_SSE_BYTES] == chunks
 
     @pytest.mark.asyncio
+    async def test_should_emit_pings_while_the_follow_up_stream_is_slow(self):
+        """The corrected answer can be slow to generate, so the follow-up stream gets keepalives too."""
+        chunks = _build_tool_use_stream()
+        phase2_chunks = [b"follow-up-chunk-1", b"follow-up-chunk-2"]
+
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = AsyncMock(
+            return_value=MockSlowAsyncStream(phase2_chunks, delay_seconds=0.06)
+        )
+
+        iterator = _build_hold_back_iterator(
+            MockAsyncStream(chunks),
+            mock_handler,
+            ping_interval_seconds=0.02,
+        )
+
+        collected = []
+        async for chunk in iterator:
+            collected.append(chunk)
+
+        first_follow_up_index = collected.index(phase2_chunks[0])
+        assert collected[first_follow_up_index + 1] == PING_SSE_BYTES
+        assert [c for c in collected if c != PING_SSE_BYTES] == phase2_chunks
+
+    @pytest.mark.asyncio
+    async def test_should_propagate_follow_up_stream_error(self):
+        """A failing follow-up stream surfaces its error instead of hanging on pings forever."""
+        chunks = _build_tool_use_stream()
+
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = AsyncMock(
+            return_value=MockFailingAsyncStream([b"follow-up-chunk"], RuntimeError("follow-up died"))
+        )
+
+        iterator = _build_hold_back_iterator(MockAsyncStream(chunks), mock_handler, ping_interval_seconds=0.02)
+
+        with pytest.raises(RuntimeError, match="follow-up died"):
+            async for _ in iterator:
+                pass
+
+    @pytest.mark.asyncio
+    async def test_aclose_cancels_in_flight_follow_up_chunk_task(self):
+        """Closing while a follow-up chunk is pending must not orphan that task."""
+        chunks = _build_tool_use_stream()
+
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = AsyncMock(
+            return_value=MockSlowAsyncStream([b"follow-up-chunk"], delay_seconds=5.0)
+        )
+
+        iterator = _build_hold_back_iterator(MockAsyncStream(chunks), mock_handler, ping_interval_seconds=0.02)
+
+        while iterator._follow_up_chunk_task is None:
+            await iterator.__anext__()
+
+        await iterator.aclose()
+        assert iterator._follow_up_chunk_task.cancelled()
+
+    @pytest.mark.asyncio
     async def test_aclose_cancels_drain_task(self):
         """Closing the iterator mid-buffer must cancel the background drain task."""
         chunks = _build_simple_text_stream()
