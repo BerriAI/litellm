@@ -59,6 +59,7 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
             return result
         else:
             # Fall back to string conversion for non-serializable objects.
+            seen.remove(id(obj))
             try:
                 return strip_null_bytes(str(obj))
             except Exception:
