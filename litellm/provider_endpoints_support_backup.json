@@ -2010,6 +2010,23 @@
         "interactions": true
       }
     },
+    "scx-ai": {
+      "display_name": "SCX.ai (`scx-ai`)",
+      "url": "https://docs.litellm.ai/docs/providers/scx-ai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "snowflake": {
       "display_name": "Snowflake (`snowflake`)",
       "url": "https://docs.litellm.ai/docs/providers/snowflake",
