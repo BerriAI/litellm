@@ -45,6 +45,7 @@ from litellm.types.responses.main import (
     OutputCodeInterpreterCall,
     OutputFunctionToolCall,
     OutputImageGenerationCall,
+    CompactionResponseOutputItem,
     OutputText,
 )
 from litellm.types.utils import (
@@ -59,6 +60,7 @@ from litellm.types.utils import (
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE = InMemoryCache()
+COMPACTION_TOKEN_BUFFER = 1000
 
 
 class ChatCompletionSession(TypedDict, total=False):
@@ -157,20 +159,26 @@ class LiteLLMCompletionResponsesConfig:
     async def _compact_input(
         model: str,
         input: Union[str, ResponseInputParam],
-    ) -> Union[str, ResponseInputParam]:
+    ) -> Tuple[Union[str, ResponseInputParam], List[Union[str, ResponseInputParam]]]:
+
         """
         Make a 2nd LLM call to compact/summarize the conversation history.
         Returns the compacted input as a single user message list.
         """
         import litellm
 
+        compaction_event = {
+                 "type": "compaction",
+                 "encrypted_content": "blahb lah blah"
+            }
 
-        return [
+        return compaction_event, [
             {
                 "type": "message",
                 "role": "user",
-                "content": "",
-            }
+                "content": "what is your name and how do you feel about bananas",
+            },
+            compaction_event
         ]
 
     @staticmethod
@@ -179,14 +187,24 @@ class LiteLLMCompletionResponsesConfig:
         Cheaply estimate the token count of the input.
         ~4 chars per token for strings; for message lists, stringify first.
         """
-        pass
+        tokens = 0
+        for message in input:
+            # TODO replace with isinstance maybe
+            if message["type"] == "message":
+                if message["role"] == "user":
+                    tokens += len(message["content"]) // 4
+                elif message["role"] == "assistant":
+                    for submsg in message["content"]:
+                        tokens += len(submsg["text"]) // 4
+
+        return tokens
 
     @staticmethod
-    async def _transform_context_management(
+    def _transform_context_management(
         model: str,
         input: Union[str, ResponseInputParam],
         context_management: Optional[List[Dict[str, Any]]],
-    ) -> Union[str, ResponseInputParam]:
+    ) -> Tuple[Optional[ResponseInputParam], Union[str, ResponseInputParam]]:
         """
         Handle context_management compaction for the Responses API -> Chat Completion path.
 
@@ -195,7 +213,14 @@ class LiteLLMCompletionResponsesConfig:
 
         Returns the (possibly compacted) input.
         """
-        pass
+
+        if LiteLLMCompletionResponsesConfig.should_execute_compaction(LiteLLMCompletionResponsesConfig._cheap_token_counter(input),
+                                                                      context_management,
+                                                                      ):
+
+            import asyncio
+            return asyncio.run(LiteLLMCompletionResponsesConfig._compact_input(model, input)) 
+        return None, input
 
     @staticmethod
     def should_execute_compaction(
@@ -205,7 +230,11 @@ class LiteLLMCompletionResponsesConfig:
         """
         Check if compaction should be executed
         """
-        pass
+        if not context_management: return False
+        if len(context_management) != 1: return False
+
+        if input_token_size + COMPACTION_TOKEN_BUFFER > context_management[0]["compact_threshold"]:
+            return True
 
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
@@ -215,8 +244,9 @@ class LiteLLMCompletionResponsesConfig:
         custom_llm_provider: Optional[str] = None,
         stream: Optional[bool] = None,
         extra_headers: Optional[Dict[str, Any]] = None,
+        context_management: Optional[List[Dict[str, Any]]] = None,
         **kwargs,
-    ) -> dict:
+    ) -> Tuple[Optional[ResponseInputParam], dict]:
         """
         Transform a Responses API request into a Chat Completion request
         """
@@ -226,6 +256,7 @@ class LiteLLMCompletionResponsesConfig:
         ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
             responses_api_request.get("tools") or []  # type: ignore
         )
+        print("REE", context_management)
 
         response_format = None
         text_param = responses_api_request.get("text")
@@ -244,12 +275,16 @@ class LiteLLMCompletionResponsesConfig:
             elif isinstance(reasoning_param, str):
                 # reasoning could be a string directly
                 reasoning_effort = reasoning_param
-        
-        litellm_completion_request: dict = {
-            "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+
+        compaction, messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                model=model,
                 input=input,
                 responses_api_request=responses_api_request,
-            ),
+                context_management=context_management,
+            )
+
+        litellm_completion_request: dict = {
+            "messages": messages,
             "model": model,
             "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
                 responses_api_request.get("tool_choice")
@@ -266,7 +301,6 @@ class LiteLLMCompletionResponsesConfig:
             "web_search_options": web_search_options,
             "response_format": response_format,
             "reasoning_effort": reasoning_effort,
-            "context_management": responses_api_request.get("context_management"),
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
@@ -288,20 +322,22 @@ class LiteLLMCompletionResponsesConfig:
         litellm_completion_request = {
             k: v for k, v in litellm_completion_request.items() if v is not None
         }
-        return litellm_completion_request
+        return compaction, litellm_completion_request
 
     @staticmethod
     def transform_responses_api_input_to_messages(
+        model: str,
         input: Union[str, ResponseInputParam],
         responses_api_request: Union[ResponsesAPIOptionalRequestParams, dict],
-    ) -> List[
+        context_management: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[Optional[ResponseInputParam], List[
         Union[
             AllMessageValues,
             GenericChatCompletionMessage,
             ChatCompletionMessageToolCall,
             ChatCompletionResponseMessage,
             Message,
-        ]
+        ]]
     ]:
         """
         Transform a Responses API input into a list of messages
@@ -315,6 +351,8 @@ class LiteLLMCompletionResponsesConfig:
                 Message,
             ]
         ] = []
+        compaction, input = LiteLLMCompletionResponsesConfig._transform_context_management(model, input, context_management)
+
         if responses_api_request.get("instructions"):
             messages.append(
                 LiteLLMCompletionResponsesConfig.transform_instructions_to_system_message(
@@ -328,7 +366,18 @@ class LiteLLMCompletionResponsesConfig:
             )
         )
 
-        return messages
+        #messages.extend(
+            #msgs
+        #)
+
+        #if LiteLLMCompletionResponsesConfig.should_execute_compaction(
+                #LiteLLMCompletionResponsesConfig._cheap_token_counter(input),
+                #context_management
+            #):
+
+
+
+        return compaction, messages
 
     @staticmethod
     async def async_responses_api_session_handler(
@@ -1690,6 +1739,7 @@ class LiteLLMCompletionResponsesConfig:
         request_input: Union[str, ResponseInputParam],
         responses_api_request: ResponsesAPIOptionalRequestParams,
         chat_completion_response: Union[ModelResponse, dict],
+        compaction = None,
     ) -> ResponsesAPIResponse:
         """
         Transform a Chat Completion response into a Responses API response
@@ -1716,6 +1766,7 @@ class LiteLLMCompletionResponsesConfig:
             output=LiteLLMCompletionResponsesConfig._transform_chat_completion_choices_to_responses_output(
                 chat_completion_response=chat_completion_response,
                 choices=getattr(chat_completion_response, "choices", []),
+                compaction=compaction
             ),
             parallel_tool_calls=getattr(
                 chat_completion_response, "parallel_tool_calls", False
@@ -1758,6 +1809,7 @@ class LiteLLMCompletionResponsesConfig:
     def _transform_chat_completion_choices_to_responses_output(
         chat_completion_response: ModelResponse,
         choices: List[Choices],
+        compaction
     ) -> List[
         Union[
             GenericResponseOutputItem,
@@ -1773,6 +1825,7 @@ class LiteLLMCompletionResponsesConfig:
                 OutputCodeInterpreterCall,
                 OutputFunctionToolCall,
                 OutputImageGenerationCall,
+                CompactionResponseOutputItem,
                 ResponseFunctionToolCall,
             ]
         ] = []
@@ -1792,6 +1845,9 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_response=chat_completion_response
             )
         )
+
+        if compaction is not None:
+            responses_output.append(CompactionResponseOutputItem(**compaction))
 
         # Convert server-side tool results (e.g. Anthropic code execution)
         # into code_interpreter_call output items, replacing the corresponding

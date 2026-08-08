@@ -848,6 +848,7 @@ class CustomGuardrail(CustomLogger):
                 return None
 
             messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                model="TODO placeholder",
                 input=input_data,
                 responses_api_request=data,
             )

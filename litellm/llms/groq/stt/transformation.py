@@ -68,6 +68,7 @@ class GroqSTTConfig:
             "response_format",
             "temperature",
             "language",
+            "context_management"
         ]
 
     def get_supported_openai_response_formats_stt(self) -> List[str]:

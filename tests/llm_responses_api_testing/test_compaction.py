@@ -7,6 +7,7 @@ import pytest
 sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 
 
 @pytest.mark.asyncio
@@ -18,7 +19,7 @@ async def test_responses_api_compaction_with_conversation_history():
     litellm.set_verbose = True
 
     response = await litellm.aresponses(
-        model="groq/llama-3.3-70b-versatile",
+        model="groq/openai/gpt-oss-120b",
         input=[
             {
                 "type": "message",
@@ -64,7 +65,7 @@ async def test_responses_api_compaction_with_trimming():
     litellm.set_verbose = True
 
     response = await litellm.aresponses(
-        model="groq/llama-3.3-70b-versatile",
+        model="groq/openai/gpt-oss-120b",
         input=[
             {
                 "type": "message",
@@ -100,3 +101,30 @@ async def test_responses_api_compaction_with_trimming():
     assert response.output is not None
     assert len(response.output) > 0
 
+    output_types = [item.get("type") for item in response.output]
+    assert "compaction" in output_types
+
+async def test_compatct_input():
+    resp = LiteLLMCompletionResponsesConfig._cheap_token_counter([
+            {
+                "type": "message",
+                "role": "user",
+                "content": "Help me debug a production incident.",
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "What symptoms are you seeing?" * 1000,
+                    }
+                ],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": "We are seeing intermittent 502s from one provider path.",
+            },
+        ])
+    assert resp == 7272

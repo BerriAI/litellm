@@ -85,6 +85,10 @@ def build_code_interpreter_log_outputs(
     return [OutputCodeInterpreterCallLog(type="logs", logs=logs)] if logs else None
 
 
+class CompactionResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
+    type: Literal["compaction"]
+    encrypted_content: str
+
 class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
     """
     Generic response API output item

@@ -445,6 +445,8 @@ async def aresponses(
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     # LiteLLM specific params,
     custom_llm_provider: Optional[str] = None,
+
+    context_management: Optional[Iterable[Any]] = None,
     **kwargs,
 ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
     """
@@ -547,6 +549,7 @@ async def aresponses(
             custom_llm_provider=custom_llm_provider,
             service_tier=service_tier,
             safety_identifier=safety_identifier,
+            context_management=context_management,
             **kwargs,
         )
 
@@ -739,6 +742,7 @@ def responses(
     # LiteLLM specific params,
     allowed_openai_params: Optional[List[str]] = None,
     custom_llm_provider: Optional[str] = None,
+    context_management: Optional[List[Dict[str, Any]]] = None,
     **kwargs,
 ):
     """
@@ -929,6 +933,7 @@ def responses(
                 stream=stream,
                 extra_headers=extra_headers,
                 extra_body=extra_body,
+                context_management=context_management,
                 **kwargs,
             )
 
