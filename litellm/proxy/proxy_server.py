@@ -580,6 +580,7 @@ from litellm.proxy.utils import (
     _is_valid_team_configs,
     evict_config_param,
     get_config_param,
+    get_cookie_path_from_server_root_path,
     get_custom_url,
     get_error_message_str,
     get_server_root_path,
@@ -13966,7 +13967,7 @@ async def login(request: Request):
 
     # Create redirect response with cookie
     redirect_response: Final = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-    redirect_response.set_cookie(key="token", value=jwt_token)
+    redirect_response.set_cookie(key="token", value=jwt_token, path=get_cookie_path_from_server_root_path())
     if cp_return_to:
         redirect_response.delete_cookie(key="litellm_cp_return_to")
     return redirect_response
@@ -14012,7 +14013,7 @@ async def login_v2(request: Request):
             content={"redirect_url": litellm_dashboard_ui, "token": jwt_token},
             status_code=status.HTTP_200_OK,
         )
-        json_response.set_cookie(key="token", value=jwt_token)
+        json_response.set_cookie(key="token", value=jwt_token, path=get_cookie_path_from_server_root_path())
         return json_response
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.login_v2(): Exception occurred - %s", e)
@@ -14160,7 +14161,7 @@ async def login_v3_exchange(request: Request):
             },
             status_code=status.HTTP_200_OK,
         )
-        json_response.set_cookie(key="token", value=cached_data["token"])
+        json_response.set_cookie(key="token", value=cached_data["token"], path=get_cookie_path_from_server_root_path())
         return json_response
     except ProxyException:
         raise
