@@ -8741,7 +8741,9 @@ class TestResolveTeamAccessGroupResources:
     @pytest.mark.asyncio
     async def test_populates_flat_lists_and_per_group_details(self):
         """access_group_details must attribute each model to the group granting it,
-        so the UI can show provenance on hover; flat lists stay for back-compat."""
+        so the UI can show provenance on hover; flat lists stay for back-compat.
+        Duplicated ids must collapse to one entry (response amplification), and the
+        input object must stay untouched (resolution returns a copy)."""
         from litellm.proxy._types import TeamInfoResponseObjectTeamTable
         from litellm.proxy.management_endpoints.team_endpoints import (
             _resolve_team_access_group_resources,
@@ -8767,21 +8769,22 @@ class TestResolveTeamAccessGroupResources:
         )
 
         team_info = TeamInfoResponseObjectTeamTable(
-            team_id="team-1", access_group_ids=["ag-1", "ag-2", "ag-missing"]
+            team_id="team-1", access_group_ids=["ag-1", "ag-2", "ag-1", "ag-missing"]
         )
         with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
-            await _resolve_team_access_group_resources(team_info)
+            resolved = await _resolve_team_access_group_resources(team_info)
 
-        assert sorted(team_info.access_group_models or []) == [
+        assert team_info.access_group_details is None
+        assert sorted(resolved.access_group_models or []) == [
             "claude-3",
             "gemini",
             "gpt-4",
         ]
-        assert team_info.access_group_mcp_server_ids == ["mcp-1"]
-        assert team_info.access_group_agent_ids == ["agent-1"]
+        assert resolved.access_group_mcp_server_ids == ["mcp-1"]
+        assert resolved.access_group_agent_ids == ["agent-1"]
         assert [
             (d.access_group_id, d.access_group_name, d.models)
-            for d in (team_info.access_group_details or [])
+            for d in (resolved.access_group_details or [])
         ] == [
             ("ag-1", "shared-models", ("gpt-4", "claude-3")),
             ("ag-2", "extra-models", ("claude-3", "gemini")),
@@ -8795,10 +8798,10 @@ class TestResolveTeamAccessGroupResources:
         )
 
         team_info = TeamInfoResponseObjectTeamTable(team_id="team-1", access_group_ids=[])
-        await _resolve_team_access_group_resources(team_info)
+        resolved = await _resolve_team_access_group_resources(team_info)
 
-        assert team_info.access_group_details is None
-        assert team_info.access_group_models is None
+        assert resolved.access_group_details is None
+        assert resolved.access_group_models is None
 
 
 @pytest.mark.asyncio

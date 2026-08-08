@@ -3839,25 +3839,33 @@ async def _add_team_member_budget_table(
     return team_info_response_object
 
 
-async def _resolve_team_access_group_resources(_team_info: TeamInfoResponseObjectTeamTable) -> None:
-    """Populate access_group_models / mcp_server_ids / agent_ids on the team
-    info response by resolving inherited resources from its access groups."""
+async def _resolve_team_access_group_resources(
+    _team_info: TeamInfoResponseObjectTeamTable,
+) -> TeamInfoResponseObjectTeamTable:
+    """Return a copy of the team info with access_group_models / mcp_server_ids /
+    agent_ids / details resolved from its access groups."""
     if not _team_info.access_group_ids:
-        return
+        return _team_info
     ag_lookup: Final = await _batch_resolve_access_group_resources(_team_info.access_group_ids)
-    resolved_groups: Final = tuple(ag_lookup[ag_id] for ag_id in _team_info.access_group_ids if ag_id in ag_lookup)
-    _team_info.access_group_models = list({m for group in resolved_groups for m in (group.access_model_names or [])})
-    _team_info.access_group_mcp_server_ids = list(
-        {s for group in resolved_groups for s in (group.access_mcp_server_ids or [])}
+    resolved_groups: Final = tuple(
+        ag_lookup[ag_id] for ag_id in dict.fromkeys(_team_info.access_group_ids) if ag_id in ag_lookup
     )
-    _team_info.access_group_agent_ids = list({a for group in resolved_groups for a in (group.access_agent_ids or [])})
-    _team_info.access_group_details = tuple(
-        TeamAccessGroupModelGrant(
-            access_group_id=group.access_group_id,
-            access_group_name=group.access_group_name,
-            models=tuple(group.access_model_names or ()),
-        )
-        for group in resolved_groups
+    return _team_info.model_copy(
+        update={
+            "access_group_models": list({m for group in resolved_groups for m in (group.access_model_names or [])}),
+            "access_group_mcp_server_ids": list(
+                {s for group in resolved_groups for s in (group.access_mcp_server_ids or [])}
+            ),
+            "access_group_agent_ids": list({a for group in resolved_groups for a in (group.access_agent_ids or [])}),
+            "access_group_details": tuple(
+                TeamAccessGroupModelGrant(
+                    access_group_id=group.access_group_id,
+                    access_group_name=group.access_group_name,
+                    models=tuple(group.access_model_names or ()),
+                )
+                for group in resolved_groups
+            ),
+        }
     )
 
 
@@ -3964,11 +3972,11 @@ async def team_info(
             )
 
         # Resolve resources inherited from access groups
-        await _resolve_team_access_group_resources(_team_info)
+        resolved_team_info: Final = await _resolve_team_access_group_resources(_team_info)
 
         response_object: Final = TeamInfoResponseObject(
             team_id=team_id,
-            team_info=_team_info,
+            team_info=resolved_team_info,
             keys=keys,
             team_memberships=returned_tm,
         )

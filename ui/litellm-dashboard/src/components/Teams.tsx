@@ -352,8 +352,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           }
         }
 
-        formValues.models = normalizeTeamModelSelection(formValues.models);
-        await teamCreateCall(accessToken, formValues);
+        await teamCreateCall(accessToken, { ...formValues, models: normalizeTeamModelSelection(formValues.models) });
         NotificationsManager.success("Team created");
         await refreshTeams();
         form.resetFields();
