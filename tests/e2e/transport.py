@@ -25,7 +25,13 @@ from e2e_http import (
 
 class Transport(Protocol):
     def post[R: BaseModel](
-        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]: ...
 
     def stream(
@@ -119,14 +125,20 @@ class HttpTransport:
         return self.bearer(self.master_key)
 
     def post[R: BaseModel](
-        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]:
         return e2e_http.post(
             self._url(path),
             headers=headers,
             json=json,
             response_type=response_type,
-            timeout=self.request_timeout,
+            timeout=timeout if timeout is not None else self.request_timeout,
         )
 
     def get[R: BaseModel](
@@ -323,10 +335,16 @@ class SplitTransport:
         return self.data.master
 
     def post[R: BaseModel](
-        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]:
         return self._route(path).post(
-            path, headers=headers, json=json, response_type=response_type
+            path, headers=headers, json=json, response_type=response_type, timeout=timeout
         )
 
     def get[R: BaseModel](

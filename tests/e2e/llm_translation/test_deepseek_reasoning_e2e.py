@@ -29,6 +29,7 @@ pytestmark = pytest.mark.e2e
 
 REASONER = "deepseek/deepseek-v4-pro"
 PROMPT = "What is 17 + 26? Answer with just the number."
+REASONER_TIMEOUT_SECONDS = 240.0
 
 
 def _register_reasoner(client: PassthroughClient, resources: ResourceManager) -> str:
@@ -63,6 +64,7 @@ class TestDeepSeekReasoningDisable:
                     messages=[ChatMessage(role="user", content=PROMPT)],
                     max_tokens=64,
                 ),
+                timeout=REASONER_TIMEOUT_SECONDS,
             )
         )
         reasoning = _reasoning_content(response)
@@ -86,6 +88,7 @@ class TestDeepSeekReasoningDisable:
                     max_tokens=64,
                     reasoning_effort="none",
                 ),
+                timeout=REASONER_TIMEOUT_SECONDS,
             )
         )
         assert not _reasoning_content(response), (
@@ -108,6 +111,7 @@ class TestDeepSeekReasoningDisable:
                     max_tokens=64,
                     thinking=ThinkingParam(type="disabled"),
                 ),
+                timeout=REASONER_TIMEOUT_SECONDS,
             )
         )
         assert not _reasoning_content(response), (
