@@ -17,6 +17,7 @@ import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSel
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
+import { estimateFields, estimateRules, withNormalizedEstimates } from "./estimatedOutputTokens";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import {
@@ -178,6 +179,7 @@ export function KeyEditView({
     guardrails: keyData.metadata?.guardrails,
     disable_global_guardrails: keyData.metadata?.disable_global_guardrails || false,
     throttle_on_budget_exceeded: keyData.metadata?.throttle_on_budget_exceeded || false,
+    ...estimateFields(keyData.metadata),
     prompts: keyData.metadata?.prompts,
     tags: keyData.metadata?.tags,
     vector_stores: keyData.object_permission?.vector_stores || [],
@@ -222,6 +224,7 @@ export function KeyEditView({
       },
       mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
       throttle_on_budget_exceeded: keyData.metadata?.throttle_on_budget_exceeded || false,
+      ...estimateFields(keyData.metadata),
       logging_settings: extractLoggingSettings(keyData.metadata),
       disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
         ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
@@ -339,7 +342,7 @@ export function KeyEditView({
         values.budget_fallbacks = {};
       }
 
-      await onSubmit(values);
+      await onSubmit(withNormalizedEstimates(values));
     } finally {
       setIsKeySaving(false);
     }
@@ -568,6 +571,24 @@ export function KeyEditView({
 
       <Form.Item label="Model RPM Limit" name="model_rpm_limit">
         <Input.TextArea rows={4} placeholder='{"gpt-4": 100, "claude-v1": 200}' />
+      </Form.Item>
+
+      <Form.Item
+        label="Estimated Output Tokens"
+        name="default_estimated_output_tokens"
+        tooltip="Expected output tokens reserved for TPM limiting when a request omits max_tokens. Overrides the built-in estimate for this key."
+        rules={[estimateRules.positive]}
+      >
+        <NumericalInput min={1} step={1} />
+      </Form.Item>
+
+      <Form.Item
+        label="Estimated Output Tokens Per Model"
+        name="default_estimated_output_tokens_per_model"
+        tooltip="Per-model expected output tokens reserved for TPM limiting when a request omits max_tokens. Takes precedence over the key-wide estimate."
+        rules={[estimateRules.perModel]}
+      >
+        <Input.TextArea rows={4} placeholder='{"gpt-4": 4096}' />
       </Form.Item>
 
       <Form.Item

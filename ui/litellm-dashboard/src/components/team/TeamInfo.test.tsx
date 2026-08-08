@@ -1,6 +1,6 @@
 import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import * as networking from "@/components/networking";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
@@ -964,6 +964,60 @@ describe("TeamInfoView", () => {
       expect(updateArg.model_tpm_limit).toEqual({ "gpt-4": 100 });
     });
 
+    it("prefills the estimated output token controls, hides them from the pair editor, and saves edits", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          metadata: {
+            department: "research",
+            default_estimated_output_tokens: 512,
+            default_estimated_output_tokens_per_model: { "gpt-4": 4096 },
+          },
+          models: ["gpt-4"],
+        }),
+      );
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+      await openSettingsEditor(user);
+
+      expect(screen.getByLabelText("Estimated Output Tokens")).toHaveValue(512);
+      expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toHaveValue('{"gpt-4":4096}');
+      const keyValues = screen.queryAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value);
+      expect(keyValues).toEqual(["department"]);
+
+      fireEvent.change(screen.getByLabelText("Estimated Output Tokens"), { target: { value: "999" } });
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      const updateArg = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
+      expect(updateArg.metadata.default_estimated_output_tokens).toBe(999);
+      expect(updateArg.metadata.default_estimated_output_tokens_per_model).toEqual({ "gpt-4": 4096 });
+    });
+
+    it("omits the estimated output token settings when both controls are blank", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"] }));
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+      await openSettingsEditor(user);
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      const updateArg = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
+      expect(updateArg.metadata).not.toHaveProperty("default_estimated_output_tokens");
+      expect(updateArg.metadata).not.toHaveProperty("default_estimated_output_tokens_per_model");
+    });
+
     it("includes a newly added pair in the team update", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"] }));
@@ -1076,6 +1130,34 @@ describe("TeamInfoView", () => {
       expect(screen.getByText("gpt-4")).toBeInTheDocument();
       expect(screen.getByText("my-fast-model")).toBeInTheDocument();
       expect(screen.getByText("gpt-3.5-turbo")).toBeInTheDocument();
+    });
+
+    it("should render the estimated output token settings in the overview and read-only settings views", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          metadata: {
+            default_estimated_output_tokens: 512,
+            default_estimated_output_tokens_per_model: { "gpt-4": 4096 },
+          },
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        const teamNameElements = screen.queryAllByText("Test Team");
+        expect(teamNameElements.length).toBeGreaterThan(0);
+      });
+
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+
+      await waitFor(() => {
+        expect(screen.getByText("Team Settings")).toBeInTheDocument();
+      });
+
+      expect(screen.getAllByText("Estimated Output Tokens: 512")).toHaveLength(2);
+      expect(screen.getAllByText('Estimated Output Tokens Per Model: {"gpt-4":4096}')).toHaveLength(2);
     });
 
     it("should show an empty state when the team has no model aliases", async () => {

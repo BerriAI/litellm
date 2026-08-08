@@ -1348,4 +1348,89 @@ describe("KeyEditView", () => {
       });
     });
   });
+
+  describe("estimated output tokens", () => {
+    const renderEditView = (keyData: KeyResponse, onSubmit: (values: any) => Promise<void>) =>
+      renderWithProviders(
+        <KeyEditView
+          keyData={keyData}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"admin"}
+          premiumUser={false}
+        />,
+      );
+
+    it("loads the estimates from key metadata and resubmits them unchanged", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderEditView(
+        {
+          ...MOCK_KEY_DATA,
+          metadata: {
+            ...MOCK_KEY_DATA.metadata,
+            default_estimated_output_tokens: 512,
+            default_estimated_output_tokens_per_model: { "gpt-4": 4096 },
+          },
+        },
+        onSubmitMock,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Estimated Output Tokens")).toHaveValue(512);
+      });
+      expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toHaveValue('{"gpt-4":4096}');
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.default_estimated_output_tokens).toBe(512);
+      expect(callArgs.default_estimated_output_tokens_per_model).toEqual({ "gpt-4": 4096 });
+    });
+
+    it("submits edited estimates as a number and a parsed object", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderEditView(MOCK_KEY_DATA, onSubmitMock);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Estimated Output Tokens")).toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByLabelText("Estimated Output Tokens"), { target: { value: "2048" } });
+      fireEvent.change(screen.getByLabelText("Estimated Output Tokens Per Model"), {
+        target: { value: '{"gpt-5": 8192}' },
+      });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.default_estimated_output_tokens).toBe(2048);
+      expect(callArgs.default_estimated_output_tokens_per_model).toEqual({ "gpt-5": 8192 });
+    });
+
+    it("omits both estimates from the payload when the controls are blank", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderEditView(MOCK_KEY_DATA, onSubmitMock);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toHaveValue("");
+      });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs).not.toHaveProperty("default_estimated_output_tokens");
+      expect(callArgs).not.toHaveProperty("default_estimated_output_tokens_per_model");
+    });
+  });
 });
