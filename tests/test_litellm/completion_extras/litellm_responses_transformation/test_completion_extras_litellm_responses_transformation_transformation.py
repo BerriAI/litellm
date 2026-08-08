@@ -1026,6 +1026,82 @@ def test_response_completed_emits_is_finished():
     ), "response.completed should emit finish_reason='stop'"
 
 
+def test_response_incomplete_preserves_terminal_metadata():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from pydantic import BaseModel
+
+    class ContentFilters(BaseModel):
+        hate: dict
+        self_harm: dict
+
+    class IncompleteDetails(BaseModel):
+        reason: str
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    expected_content_filters = {
+        "hate": {"filtered": False, "severity": "safe"},
+        "self_harm": {"filtered": True, "severity": "high"},
+    }
+    expected_incomplete_details = {"reason": "content_filter"}
+    chunk = {
+        "type": "response.incomplete",
+        "response": {
+            "id": "resp_incomplete",
+            "status": "incomplete",
+            "incomplete_details": IncompleteDetails(**expected_incomplete_details),
+            "content_filters": ContentFilters(**expected_content_filters),
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.finish_reason == "content_filter"
+    assert choice.delta.content == ""
+    assert choice.delta.provider_specific_fields == {
+        "content_filters": expected_content_filters,
+        "incomplete_details": expected_incomplete_details,
+    }
+    assert result.provider_specific_fields == choice.delta.provider_specific_fields
+
+
+def test_response_incomplete_defaults_to_length_finish_reason():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    incomplete_details = {"reason": "max_output_tokens"}
+    chunk = {
+        "type": "response.incomplete",
+        "response": {
+            "id": "resp_incomplete_length",
+            "status": "incomplete",
+            "incomplete_details": incomplete_details,
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.finish_reason == "length"
+    assert choice.delta.content == ""
+    assert choice.delta.provider_specific_fields == {
+        "incomplete_details": incomplete_details,
+    }
+    assert result.provider_specific_fields == choice.delta.provider_specific_fields
+
+
 def test_response_completed_with_function_calls_emits_tool_calls_finish_reason():
     """
     Test that response.completed with function_call items in output emits finish_reason='tool_calls'.
