@@ -76,15 +76,12 @@ from transport import HttpTransport, SplitTransport, Transport
 
 RowsPredicate = Callable[[list[SpendLogRow]], bool]
 
-# After /model/new, the control-plane writer reloads itself immediately, but every
-# other gateway worker (and peer pod) only picks the model up on its add_deployment
-# job. That job runs every proxy_config_reload_interval_seconds (product default 30).
-# A single /v1/models hit can land on a hot worker while the next /chat hits a cold
-# one ("Invalid model name"). Wait for first listing within MODEL_SERVABLE_TIMEOUT,
-# then require continuous listing for MODEL_SERVABLE_DB_SYNC_SECONDS (the default
-# reload interval) so every worker has had a chance to sync from the DB.
+# After /model/new, poll data-plane /v1/models until the model is listed (or fail).
+# Bound by MODEL_SERVABLE_TIMEOUT so a stuck reload does not burn the spend
+# poll_timeout (120s). Return on first listing; settle_propagation owns the separate
+# wait that lets every worker and replica reload before the caller uses the model.
 MODEL_SERVABLE_TIMEOUT = 40.0
-MODEL_SERVABLE_DB_SYNC_SECONDS = 30.0
+MODEL_SERVABLE_DB_SYNC_SECONDS = 0.0
 MODEL_SERVABLE_INTERVAL = 2.0
 # Cap each /v1/models poll so one slow request cannot outlast the remaining budget.
 MODEL_SERVABLE_REQUEST_TIMEOUT = 5.0
@@ -310,10 +307,7 @@ class ProxyClient:
         return model_id
 
     def _await_model_servable(self, model_name: str) -> None:
-        """Block until the data plane lists `model_name` long enough for DB sync.
-
-        Fails if first listing misses model_servable_timeout, or if continuous listing
-        for model_servable_db_sync_seconds never holds (multi-worker / peer reload)."""
+        """Block until the data plane lists `model_name`, or fail at model_servable_timeout."""
         outcome = await_servable(
             lambda poll_timeout: self.transport.get(
                 "/v1/models",
