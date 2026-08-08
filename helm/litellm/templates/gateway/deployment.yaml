@@ -39,6 +39,14 @@ spec:
         - name: gateway
           image: "{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+          {{- with .Values.gateway.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.gateway.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           {{- with .Values.gateway.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
