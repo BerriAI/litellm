@@ -1324,7 +1324,7 @@ class LiteLLMCompletionResponsesConfig:
                     chat_completion_tools.append(converted)
             else:
                 _tool_type = tool.get("type")
-                if _tool_type in ("computer_use", "image_generation", "shell"):
+                if _tool_type in ("computer_use", "image_generation", "namespace", "shell"):
                     # Drop unsupported Responses-API-only tool types that have no
                     # Chat Completions equivalent. Passing them through verbatim
                     # causes providers to reject the request with "'function' is a

@@ -1633,6 +1633,34 @@ class TestToolTransformation:
             "read_file",
         ]
 
+    def test_transform_nested_namespace_container_is_dropped(self):
+        """A namespace inside a namespace is not something clients send, but its inner
+        container must never reach the provider as a tool without a function schema."""
+        tools = [
+            {
+                "type": "namespace",
+                "name": "outer",
+                "tools": [
+                    {"type": "function", "name": "outer_tool"},
+                    {
+                        "type": "namespace",
+                        "name": "inner",
+                        "tools": [{"type": "function", "name": "inner_tool"}],
+                    },
+                ],
+            }
+        ]
+
+        (
+            result_tools,
+            _,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+
+        assert [tool["function"]["name"] for tool in result_tools] == ["outer_tool"]
+        assert not any(tool.get("type") == "namespace" for tool in result_tools)
+
     def test_bedrock_anthropic_drops_derived_web_search_options(self):
         """
         Regression for LIT-3858: a Responses web_search tool becomes a derived
