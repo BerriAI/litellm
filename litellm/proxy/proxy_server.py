@@ -11452,7 +11452,7 @@ async def non_admin_all_models(
         )
 
     # de-duplicate models. Only return unique model ids
-    unique_models: Final = _deduplicate_litellm_router_models(models=all_models)
+    unique_models: Final = _deduplicate_litellm_router_models(models=cast(list[dict[str, object]], all_models))
     return unique_models
 
 

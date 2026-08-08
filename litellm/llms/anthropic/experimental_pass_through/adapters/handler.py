@@ -1,7 +1,6 @@
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping
 from typing import (
     TYPE_CHECKING,
-    Any,
     Final,
     cast,
 )
@@ -27,14 +26,14 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import get_model_info
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.router import Router
 
 # Anthropic-only keys already mapped by the translator; strip on extra_kwargs re-merge.
 ANTHROPIC_ONLY_REQUEST_KEYS: Final[frozenset[str]] = frozenset({"output_config"})
 
 
-def _messages_have_compaction_block(messages: list[dict]) -> bool:
+def _messages_have_compaction_block(messages: list[dict[str, object]]) -> bool:
     """Return True when any message carries a ``compaction`` content block."""
     for msg in messages:
         content = msg.get("content")
@@ -54,7 +53,7 @@ def _proxy_router_fallback() -> "Router | None":
     return _proxy_router
 
 
-def _extract_proxy_litellm_metadata(kwargs: dict[str, Any]) -> dict[str, Any] | None:
+def _extract_proxy_litellm_metadata(kwargs: dict[str, object]) -> dict[str, object] | None:
     """Return ``kwargs["litellm_metadata"]`` when it's a dict; ``None`` otherwise.
 
     The proxy attaches its auth/spend-attribution fields (``user_api_key``,
@@ -75,14 +74,14 @@ def _extract_proxy_litellm_metadata(kwargs: dict[str, Any]) -> dict[str, Any] | 
 async def _prepare_context_managed_request(
     *,
     model: str,
-    messages: list[dict],
-    tools: list[dict] | None,
-    system: Any | None,
-    context_management_spec: Any,
-    litellm_metadata: dict | None,
-    additional_drop_params: list[str] | None,
-    llm_router: "Router | None",
-    user_api_key_auth: "UserAPIKeyAuth | None" = None,
+    messages: list[dict[str, object]],
+    tools: list[dict[str, object]] | None,
+    system: str | list[dict[str, object]] | None,
+    context_management_spec: object,
+    litellm_metadata: dict[str, object] | None,
+    additional_drop_params: object,
+    llm_router: object,
+    user_api_key_auth: object = None,
 ) -> PolyfillResult | None:
     """Apply client compaction history, then optional context_management polyfill."""
     from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
@@ -102,11 +101,11 @@ async def _prepare_context_managed_request(
 
     if polyfill_will_run:
         history_result: PolyfillResult | None = None
-        working_messages: list[dict] = messages
-        working_system: Any | None = system
+        working_messages = messages
+        working_system = system
     else:
         history_result = apply_client_compaction_block_history(
-            messages=cast(list[dict[str, Any]], messages),
+            messages=messages,
             system=system,
         )
         working_messages = history_result.messages if history_result is not None else messages
@@ -136,7 +135,7 @@ async def _prepare_context_managed_request(
     # to non-Anthropic backends that would reject them.
     if polyfill_will_run and history_result is None:
         history_result = apply_client_compaction_block_history(
-            messages=cast(list[dict[str, Any]], messages),
+            messages=messages,
             system=system,
         )
     return history_result
@@ -144,8 +143,8 @@ async def _prepare_context_managed_request(
 
 def _polyfill_will_run(
     *,
-    context_management_spec: Any,
-    additional_drop_params: list[str] | None,
+    context_management_spec: object,
+    additional_drop_params: object,
 ) -> bool:
     """Return True when ``compact_20260112`` will run via the polyfill dispatcher.
 
@@ -171,8 +170,8 @@ def _polyfill_will_run(
 
 def _spec_has_non_compact_edits(
     *,
-    context_management_spec: Any,
-    additional_drop_params: list[str] | None,
+    context_management_spec: object,
+    additional_drop_params: object,
 ) -> bool:
     """Return True when the spec includes edits other than ``compact_20260112``.
 
@@ -195,7 +194,7 @@ def _spec_has_non_compact_edits(
     return any(isinstance(edit.get("type"), str) and edit.get("type") != COMPACT_EDIT_TYPE for edit in edits)
 
 
-def _context_management_explicitly_dropped(additional_drop_params: list[str] | None) -> bool:
+def _context_management_explicitly_dropped(additional_drop_params: object) -> bool:
     """True when the caller opted out of context_management via ``additional_drop_params``.
 
     ``drop_params`` deliberately does NOT gate the polyfill: ``context_management``
@@ -209,9 +208,9 @@ def _context_management_explicitly_dropped(additional_drop_params: list[str] | N
 
 def _normalize_spec_edits(
     *,
-    context_management_spec: Any,
-    additional_drop_params: list[str] | None,
-) -> list[dict[str, Any]] | None:
+    context_management_spec: object,
+    additional_drop_params: object,
+) -> list[dict[str, object]] | None:
     """Return the normalized ``edits`` list, or ``None`` if the polyfill won't run.
 
     Delegates spec-shape normalization to the dispatcher's ``_normalize_spec``
@@ -221,6 +220,9 @@ def _normalize_spec_edits(
         return None
 
     if _context_management_explicitly_dropped(additional_drop_params):
+        return None
+
+    if not isinstance(context_management_spec, (dict, list)):
         return None
 
     from litellm.llms.anthropic.experimental_pass_through.context_management.dispatcher import (
@@ -236,14 +238,14 @@ def _normalize_spec_edits(
 async def _run_polyfill_if_enabled(
     *,
     model: str,
-    messages: list[dict],
-    tools: list[dict] | None,
-    system: Any | None,
-    context_management_spec: Any,
-    litellm_metadata: dict | None,
-    additional_drop_params: list[str] | None,
-    llm_router: "Router | None",
-    user_api_key_auth: "UserAPIKeyAuth | None" = None,
+    messages: list[dict[str, object]],
+    tools: list[dict[str, object]] | None,
+    system: str | list[dict[str, object]] | None,
+    context_management_spec: object,
+    litellm_metadata: dict[str, object] | None,
+    additional_drop_params: object,
+    llm_router: object,
+    user_api_key_auth: object = None,
 ) -> PolyfillResult | None:
     """Run the async context_management polyfill if a spec is present.
 
@@ -259,6 +261,9 @@ async def _run_polyfill_if_enabled(
 
     if _context_management_explicitly_dropped(additional_drop_params):
         return None
+
+    if not isinstance(context_management_spec, (dict, list)):
+        return PolyfillResult(messages=messages, system=system)
 
     try:
         return await apply_context_management(
@@ -304,9 +309,9 @@ ANTHROPIC_ADAPTER: Final = AnthropicAdapter()
 class LiteLLMMessagesToCompletionTransformationHandler:
     @staticmethod
     def _route_openai_thinking_to_responses_api_if_needed(
-        completion_kwargs: dict[str, Any],
+        completion_kwargs: dict[str, object],
         *,
-        thinking: dict[str, Any] | None,
+        thinking: dict[str, object] | None,
     ) -> None:
         """
         When users call `litellm.anthropic.messages.*` with a non-Anthropic model and
@@ -319,8 +324,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         If the user provides a `summary` field in the thinking dict, it is passed
         through to the OpenAI reasoning params (opt-in per OpenAI spec).
         """
-        custom_llm_provider = completion_kwargs.get("custom_llm_provider")
-        if custom_llm_provider is None:
+        raw_provider: Final = completion_kwargs.get("custom_llm_provider")
+        if isinstance(raw_provider, str):
+            custom_llm_provider = raw_provider
+        elif raw_provider is None:
             try:
                 _, inferred_provider, _, _ = litellm.utils.get_llm_provider(
                     model=cast(str, completion_kwargs.get("model"))
@@ -328,6 +335,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 custom_llm_provider = inferred_provider
             except Exception:
                 custom_llm_provider = None
+        else:
+            return
 
         if custom_llm_provider != "openai":
             return
@@ -369,7 +378,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
     @staticmethod
     def _normalize_reasoning_effort(
-        completion_kwargs: dict[str, Any],
+        completion_kwargs: dict[str, object],
     ) -> None:
         """
         Normalize reasoning_effort values based on target model capabilities.
@@ -386,7 +395,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             return
 
         model: Final = cast(str, completion_kwargs.get("model", ""))
-        custom_llm_provider: Final = completion_kwargs.get("custom_llm_provider")
+        raw_provider: Final = completion_kwargs.get("custom_llm_provider")
+        custom_llm_provider: Final = raw_provider if isinstance(raw_provider, str) else None
 
         if isinstance(reasoning_effort, str):
             normalized = normalize_reasoning_effort_value(
@@ -396,32 +406,35 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 completion_kwargs["reasoning_effort"] = normalized
         elif isinstance(reasoning_effort, dict) and "effort" in reasoning_effort:
             effort: Final = reasoning_effort["effort"]
-            normalized = normalize_reasoning_effort_value(effort, model=model, custom_llm_provider=custom_llm_provider)
-            if normalized != effort:
-                completion_kwargs["reasoning_effort"] = {
-                    **reasoning_effort,
-                    "effort": normalized,
-                }
+            if isinstance(effort, str):
+                normalized = normalize_reasoning_effort_value(
+                    effort, model=model, custom_llm_provider=custom_llm_provider
+                )
+                if normalized != effort:
+                    completion_kwargs["reasoning_effort"] = {
+                        **reasoning_effort,
+                        "effort": normalized,
+                    }
 
     @staticmethod
     def _prepare_completion_kwargs(
         *,
         max_tokens: int,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         model: str,
-        metadata: dict | None = None,
+        metadata: dict[str, object] | None = None,
         stop_sequences: list[str] | None = None,
         stream: bool | None = False,
-        system: str | list[dict[str, Any]] | None = None,
+        system: str | list[dict[str, object]] | None = None,
         temperature: float | None = None,
-        thinking: dict | None = None,
-        tool_choice: dict | None = None,
-        tools: list[dict] | None = None,
+        thinking: dict[str, object] | None = None,
+        tool_choice: dict[str, object] | None = None,
+        tools: list[dict[str, object]] | None = None,
         top_k: int | None = None,
         top_p: float | None = None,
-        output_format: dict | None = None,
-        extra_kwargs: dict[str, Any] | None = None,
-    ) -> tuple[dict[str, Any], dict[str, str]]:
+        output_format: dict[str, object] | None = None,
+        extra_kwargs: dict[str, object] | None = None,
+    ) -> tuple[dict[str, object], dict[str, str]]:
         """Prepare kwargs for litellm.completion/acompletion.
 
         Returns:
@@ -433,7 +446,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             Logging as LiteLLMLoggingObject,
         )
 
-        request_data: Final = {
+        request_data: Final[dict[str, object]] = {
             "model": model,
             "messages": messages,
             "max_tokens": max_tokens,
@@ -478,7 +491,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if openai_request is None:
             raise ValueError("Failed to translate request to OpenAI format")
 
-        completion_kwargs: Final[dict[str, Any]] = dict(openai_request)
+        completion_kwargs: Final[dict[str, object]] = dict(openai_request)
 
         if stream:
             completion_kwargs["stream"] = stream
@@ -528,31 +541,29 @@ class LiteLLMMessagesToCompletionTransformationHandler:
     @staticmethod
     async def async_anthropic_messages_handler(
         max_tokens: int,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         model: str,
-        metadata: dict | None = None,
+        metadata: dict[str, object] | None = None,
         stop_sequences: list[str] | None = None,
         stream: bool | None = False,
         system: str | None = None,
         temperature: float | None = None,
-        thinking: dict | None = None,
-        tool_choice: dict | None = None,
-        tools: list[dict] | None = None,
+        thinking: dict[str, object] | None = None,
+        tool_choice: dict[str, object] | None = None,
+        tools: list[dict[str, object]] | None = None,
         top_k: int | None = None,
         top_p: float | None = None,
-        output_format: dict | None = None,
-        **kwargs,
+        output_format: dict[str, object] | None = None,
+        **kwargs: object,
     ) -> AnthropicMessagesResponse | AsyncIterator[bytes] | Iterator[bytes]:
         """Handle non-Anthropic models asynchronously using the adapter"""
         context_management: Final = kwargs.pop("context_management", None)
-        additional_drop_params: Final[list[str] | None] = kwargs.get("additional_drop_params", None)
-        requested_router: Final[Router | None] = kwargs.pop("litellm_router", None)
-        litellm_router: Final[Router | None] = (
-            requested_router if requested_router is not None else _proxy_router_fallback()
-        )
+        additional_drop_params: Final = kwargs.get("additional_drop_params", None)
+        requested_router: Final = kwargs.pop("litellm_router", None)
+        litellm_router: Final = requested_router if requested_router is not None else _proxy_router_fallback()
 
         proxy_litellm_metadata: Final = _extract_proxy_litellm_metadata(kwargs)
-        user_api_key_auth: Final[UserAPIKeyAuth | None] = (
+        user_api_key_auth: Final = (
             proxy_litellm_metadata.get("user_api_key_auth") if proxy_litellm_metadata is not None else None
         )
 
@@ -592,7 +603,13 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             extra_kwargs=kwargs,
         )
 
-        completion_response: Final = await litellm.acompletion(**completion_kwargs)
+        async def _invoke_acompletion(
+            call_kwargs: Mapping[str, object],
+            acompletion_fn: "Callable[..., Awaitable[ModelResponse | CustomStreamWrapper]]" = litellm.acompletion,
+        ) -> "ModelResponse | CustomStreamWrapper":
+            return await acompletion_fn(**call_kwargs)
+
+        completion_response: Final = await _invoke_acompletion(completion_kwargs)
 
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
@@ -618,21 +635,21 @@ class LiteLLMMessagesToCompletionTransformationHandler:
     @staticmethod
     def anthropic_messages_handler(
         max_tokens: int,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         model: str,
-        metadata: dict | None = None,
+        metadata: dict[str, object] | None = None,
         stop_sequences: list[str] | None = None,
         stream: bool | None = False,
         system: str | None = None,
         temperature: float | None = None,
-        thinking: dict | None = None,
-        tool_choice: dict | None = None,
-        tools: list[dict] | None = None,
+        thinking: dict[str, object] | None = None,
+        tool_choice: dict[str, object] | None = None,
+        tools: list[dict[str, object]] | None = None,
         top_k: int | None = None,
         top_p: float | None = None,
-        output_format: dict | None = None,
+        output_format: dict[str, object] | None = None,
         _is_async: bool = False,
-        **kwargs,
+        **kwargs: object,
     ) -> (
         AnthropicMessagesResponse
         | Iterator[bytes]
@@ -665,7 +682,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # ``compact_20260112`` editor can ``await`` the summarization model);
         # bridge to it via ``run_async_function``.
         context_management: Final = kwargs.pop("context_management", None)
-        additional_drop_params: Final[list[str] | None] = kwargs.get("additional_drop_params", None)
+        additional_drop_params: Final = kwargs.get("additional_drop_params", None)
         # Deliberately do NOT auto-attach the proxy ``llm_router`` here:
         # ``run_async_function`` spawns a new event loop in a worker thread
         # to bridge to the async dispatcher, but the proxy router's httpx
@@ -677,7 +694,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # ``llm_router`` is ``None``, which is safe to call from the bridged
         # loop. The async ``async_anthropic_messages_handler`` path is
         # unaffected because it ``await``s within the original event loop.
-        litellm_router: Final[Router | None] = kwargs.pop("litellm_router", None)
+        litellm_router: Final = kwargs.pop("litellm_router", None)
 
         # Skip the async bridge entirely when there is nothing for either the
         # polyfill or the client-history slice-only fallback to do. The vast
@@ -689,9 +706,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             polyfill_result: PolyfillResult | None = None
         else:
             proxy_litellm_metadata: Final = _extract_proxy_litellm_metadata(kwargs)
-            user_api_key_auth: Final[UserAPIKeyAuth | None] = (
+            user_api_key_auth: Final = (
                 proxy_litellm_metadata.get("user_api_key_auth") if proxy_litellm_metadata is not None else None
             )
+
             polyfill_result = run_async_function(
                 _prepare_context_managed_request,
                 model=model,
@@ -729,7 +747,13 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             extra_kwargs=kwargs,
         )
 
-        completion_response: Final = litellm.completion(**completion_kwargs)
+        def _invoke_completion(
+            call_kwargs: Mapping[str, object],
+            completion_fn: "Callable[..., ModelResponse | CustomStreamWrapper]" = litellm.completion,
+        ) -> "ModelResponse | CustomStreamWrapper":
+            return completion_fn(**call_kwargs)
+
+        completion_response: Final = _invoke_completion(completion_kwargs)
 
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(

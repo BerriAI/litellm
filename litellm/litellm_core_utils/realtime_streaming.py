@@ -1,6 +1,7 @@
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from collections.abc import Mapping, Sized
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeGuard, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -20,15 +21,61 @@ from .litellm_logging import Logging as LiteLLMLogging
 if TYPE_CHECKING:
     from websockets.asyncio.client import ClientConnection
 
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.guardrails import GuardrailEventHooks
+
     CLIENT_CONNECTION_CLASS = ClientConnection
 else:
     CLIENT_CONNECTION_CLASS = Any
 
 
+def _is_str_keyed_dict(value: object) -> TypeGuard[dict[str, object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
+    return isinstance(value, dict)
+
+
+def _is_object_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
+    return isinstance(value, list)
+
+
+def _output_modalities_from_beta(mods: object) -> list[str] | None:
+    mods_list: Final = mods if _is_object_list(mods) else []
+    mods_set: Final = {m.lower() for m in mods_list if isinstance(m, str)}
+    if "audio" in mods_set:
+        return ["audio"]
+    if "text" in mods_set:
+        return ["text"]
+    return None
+
+
+def _parse_json(payload: str | bytes) -> object:
+    return cast(object, json.loads(payload))
+
+
+def _json_loads_dict(payload: str | bytes) -> dict[str, object]:
+    parsed: Final = _parse_json(payload)
+    return parsed if _is_str_keyed_dict(parsed) else {}
+
+
+def _is_two_item_pair(value: object) -> TypeGuard[tuple[object, object]]:  # guard-ok: isinstance-checked 2-item list/tuple narrowed to a pair for unpacking  # fmt: skip
+    return isinstance(value, Sized) and len(value) == 2 and isinstance(value, (list, tuple))
+
+
+class _ClientWebSocketExceptionTypes(Protocol):
+    ConnectionClosed: type[BaseException]
+
+
+class ClientWebSocketInterface(Protocol):
+    exceptions: _ClientWebSocketExceptionTypes
+
+    async def send_text(self, data: str) -> None: ...
+
+    async def receive_text(self) -> str: ...
+
+
 class RealtimeEventNormalizer(Protocol):
     def should_drop(self, event: object) -> bool: ...
-    def normalize(self, event: dict) -> dict: ...
-    def patch_outgoing_session(self, session: dict) -> dict: ...
+    def normalize(self, event: dict[str, object]) -> dict[str, object]: ...
+    def patch_outgoing_session(self, session: dict[str, object]) -> dict[str, object]: ...
 
 
 DefaultLoggedRealTimeEventTypes: Final = [
@@ -43,13 +90,13 @@ DefaultLoggedRealTimeEventTypes: Final = [
 class RealTimeStreaming:
     def __init__(
         self,
-        websocket: Any,
+        websocket: ClientWebSocketInterface,
         backend_ws: CLIENT_CONNECTION_CLASS,
         logging_obj: LiteLLMLogging,
         provider_config: BaseRealtimeConfig | None = None,
         model: str = "",
-        user_api_key_dict: Any | None = None,
-        request_data: dict | None = None,
+        user_api_key_dict: "UserAPIKeyAuth | None" = None,
+        request_data: Mapping[str, object] | None = None,
         backend_uses_beta_protocol: bool | None = None,
         force_transcription_model: str | None = None,
         event_normalizer: RealtimeEventNormalizer | None = None,
@@ -57,11 +104,11 @@ class RealTimeStreaming:
         self.websocket = websocket
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
-        self.messages: list[OpenAIRealtimeEvents] = []
-        self.input_message: dict = {}
-        self.input_messages: list[dict[str, str]] = []
-        self.session_tools: list[dict] = []
-        self.tool_calls: list[dict] = []
+        self.messages: list[OpenAIRealtimeEvents | Mapping[str, object]] = []
+        self.input_message: dict[str, object] = {}
+        self.input_messages: list[dict[str, object]] = []
+        self.session_tools: list[object] = []
+        self.tool_calls: list[dict[str, object]] = []
 
         # Detect whether the client is explicitly opting into the beta protocol.
         self._client_wants_beta = self._detect_beta_header(websocket)
@@ -84,7 +131,7 @@ class RealTimeStreaming:
         self.current_delta_type: ALL_DELTA_TYPES | None = None
         self.session_configuration_request: str | None = None
         self.user_api_key_dict = user_api_key_dict
-        self.request_data: dict = request_data or {}
+        self.request_data: Mapping[str, object] = request_data or {}
         # Violation counter for end_session_after_n_fails support
         self._violation_count: int = 0
         # When a text message is blocked, hold the guardrail reason so the next
@@ -127,7 +174,7 @@ class RealTimeStreaming:
         ]
     )
     _CLIENT_AUDIO_BUFFER_COMMIT_TYPES = frozenset(["input_audio_buffer.commit", "input_audio_buffer.end"])
-    _AUDIO_FORMAT_MAP: dict[str, dict[str, Any]] = {
+    _AUDIO_FORMAT_MAP: Mapping[str, Mapping[str, str | int]] = {
         "pcm16": {"type": "audio/pcm", "rate": 24000},
         "g711_ulaw": {"type": "audio/G711-ulaw", "rate": 8000},
         "g711_alaw": {"type": "audio/G711-alaw", "rate": 8000},
@@ -149,16 +196,16 @@ class RealTimeStreaming:
 
     def _should_store_message(
         self,
-        message_obj: dict | OpenAIRealtimeEvents,
+        message_obj: Mapping[str, object],
     ) -> bool:
         _msg_type: Final = message_obj["type"] if "type" in message_obj else None
         if self.logged_real_time_event_types == "*":
             return True
-        if _msg_type and _msg_type in self.logged_real_time_event_types:
+        if _msg_type and isinstance(_msg_type, str) and _msg_type in self.logged_real_time_event_types:
             return True
         return False
 
-    def store_message(self, message: str | bytes | dict | OpenAIRealtimeEvents):
+    def store_message(self, message: str | bytes | dict[str, object] | OpenAIRealtimeEvents):
         """Store message in list"""
         if isinstance(message, bytes):
             message = message.decode("utf-8")
@@ -183,34 +230,35 @@ class RealTimeStreaming:
             return
         self.messages.append(typed_obj)
 
-    def _collect_user_input_from_client_event(self, message: str | dict) -> None:
+    def _collect_user_input_from_client_event(self, message: str | dict[str, object]) -> None:
         """Extract user text content from client WebSocket events for spend logging."""
         try:
             if isinstance(message, str):
-                msg_obj = json.loads(message)
-            elif isinstance(message, dict):
-                msg_obj = message
+                msg_obj: dict[str, object] = _json_loads_dict(message)
             else:
-                return
+                msg_obj = message
 
             msg_type: Final = msg_obj.get("type", "")
 
             if msg_type == "conversation.item.create":
-                item: Final = msg_obj.get("item", {})
+                item_raw: Final = msg_obj.get("item", {})
+                item: Final = item_raw if _is_str_keyed_dict(item_raw) else {}
                 if item.get("role") == "user":
-                    content_list: Final = item.get("content", [])
+                    content_raw: Final = item.get("content", [])
+                    content_list: Final = content_raw if _is_object_list(content_raw) else []
                     for content in content_list:
-                        if isinstance(content, dict) and content.get("type") == "input_text":
+                        if _is_str_keyed_dict(content) and content.get("type") == "input_text":
                             text = content.get("text", "")
                             if text:
                                 self.input_messages.append({"role": "user", "content": text})
             elif msg_type == "session.update":
-                session: Final = msg_obj.get("session", {})
+                session_raw: Final = msg_obj.get("session", {})
+                session: Final = session_raw if _is_str_keyed_dict(session_raw) else {}
                 instructions: Final = session.get("instructions", "")
                 if instructions:
                     self.input_messages.append({"role": "system", "content": instructions})
                 tools: Final = session.get("tools")
-                if tools and isinstance(tools, list):
+                if tools and _is_object_list(tools):
                     self.session_tools = tools
                 # GA: session.type is required; log it for traceability but no action needed
                 verbose_logger.debug("Realtime session.type: %s", session.get("type"))
@@ -219,18 +267,18 @@ class RealTimeStreaming:
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
-    def _collect_user_input_from_backend_event(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
+    def _collect_user_input_from_backend_event(self, event_obj: Mapping[str, object]) -> None:
         """Extract user voice transcription from backend events for spend logging."""
         try:
             event_type: Final = event_obj.get("type", "")
             if event_type == "conversation.item.input_audio_transcription.completed":
-                transcript: Final = cast(str, event_obj.get("transcript", ""))
+                transcript: Final = event_obj.get("transcript", "")
                 if transcript:
                     self.input_messages.append({"role": "user", "content": transcript})
         except (AttributeError, TypeError):
             pass
 
-    def _detect_transcription_session_from_backend(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
+    def _detect_transcription_session_from_backend(self, event_obj: Mapping[str, object]) -> None:
         """Flag transcription-only sessions from backend session events."""
         try:
             event_type: Final = event_obj.get("type", "")
@@ -240,13 +288,13 @@ class RealTimeStreaming:
             ):
                 self._is_transcription_session = True
             elif event_type in ("session.created", "session.updated"):
-                session: Final = cast(dict, event_obj).get("session", {}) or {}
-                if session.get("type") == "transcription":
+                session_raw: Final = event_obj.get("session")
+                if _is_str_keyed_dict(session_raw) and session_raw.get("type") == "transcription":
                     self._is_transcription_session = True
         except (AttributeError, TypeError):
             pass
 
-    def _capture_transcription_usage(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
+    def _capture_transcription_usage(self, event_obj: Mapping[str, object]) -> None:
         """
         Append a usage-only transcription completed event to the logged results so
         the cost calculator can bill it by audio duration. The default logged event
@@ -264,24 +312,28 @@ class RealTimeStreaming:
             if self._should_store_message(event_obj):
                 return
             self.messages.append(
-                cast(
-                    OpenAIRealtimeEvents,
-                    {
-                        "type": "conversation.item.input_audio_transcription.completed",
-                        "usage": usage,
-                    },
-                )
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "usage": usage,
+                }
             )
         except (AttributeError, TypeError):
             pass
 
-    def _collect_tool_calls_from_response_done(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
+    def _collect_tool_calls_from_response_done(self, event_obj: Mapping[str, object]) -> None:
         """Extract function_call items from response.done events for spend logging."""
         try:
             if event_obj.get("type") != "response.done":
                 return
-            response: Final = cast(dict[str, Any], event_obj.get("response", {}))
-            for item in response.get("output", []):
+            response: Final = event_obj.get("response", {})
+            if not _is_str_keyed_dict(response):
+                return
+            output: Final = response.get("output", [])
+            if not _is_object_list(output):
+                return
+            for item in output:
+                if not _is_str_keyed_dict(item):
+                    return
                 if item.get("type") == "function_call":
                     self.tool_calls.append(
                         {
@@ -296,7 +348,7 @@ class RealTimeStreaming:
         except (AttributeError, TypeError):
             pass
 
-    def store_input(self, message: str | dict):
+    def store_input(self, message: str | dict[str, object]):
         """Store input message"""
         self.input_message = message if isinstance(message, dict) else {}
         self._collect_user_input_from_client_event(message)
@@ -338,10 +390,10 @@ class RealTimeStreaming:
             sent = False
             for msg in transformed:
                 try:
-                    msg_obj = json.loads(msg)
+                    msg_obj: object = _parse_json(msg)
                 except (json.JSONDecodeError, TypeError):
                     msg_obj = None
-                if isinstance(msg_obj, dict) and self.provider_config.is_setup_message(msg_obj):
+                if _is_str_keyed_dict(msg_obj) and self.provider_config.is_setup_message(msg_obj):
                     if self._content_sent_after_setup:
                         verbose_logger.debug("Dropping follow-up setup after content was already sent to backend")
                         continue
@@ -350,7 +402,9 @@ class RealTimeStreaming:
                     self._cache_session_configuration_request(msg)
                     sent = True
                 else:
-                    is_content_message = isinstance(msg_obj, dict) and self.provider_config.is_content_message(msg_obj)
+                    is_content_message = _is_str_keyed_dict(msg_obj) and self.provider_config.is_content_message(
+                        msg_obj
+                    )
                     # Send first, then mutate state, so a failed send leaves both
                     # ``session_configuration_request`` and
                     # ``_content_sent_after_setup`` untouched. Caching or marking
@@ -384,7 +438,7 @@ class RealTimeStreaming:
             return message
 
         try:
-            message_obj: Final = json.loads(message)
+            message_obj: Final = _json_loads_dict(message)
         except (json.JSONDecodeError, TypeError):
             return message
 
@@ -395,7 +449,7 @@ class RealTimeStreaming:
             return message
 
         session: Final = message_obj.get("session")
-        if not isinstance(session, dict):
+        if not _is_str_keyed_dict(session):
             return message
 
         if session.get("type") == "transcription":
@@ -405,7 +459,7 @@ class RealTimeStreaming:
         changed = False
 
         transcription: Final = session.get("input_audio_transcription")
-        if isinstance(transcription, dict) and transcription.get("model") != authorized_model:
+        if _is_str_keyed_dict(transcription) and transcription.get("model") != authorized_model:
             session["input_audio_transcription"] = {
                 **transcription,
                 "model": authorized_model,
@@ -413,11 +467,11 @@ class RealTimeStreaming:
             changed = True
 
         audio: Final = session.get("audio")
-        if isinstance(audio, dict):
+        if _is_str_keyed_dict(audio):
             audio_input: Final = audio.get("input")
-            if isinstance(audio_input, dict):
+            if _is_str_keyed_dict(audio_input):
                 nested_transcription: Final = audio_input.get("transcription")
-                if isinstance(nested_transcription, dict) and nested_transcription.get("model") != authorized_model:
+                if _is_str_keyed_dict(nested_transcription) and nested_transcription.get("model") != authorized_model:
                     session["audio"] = {
                         **audio,
                         "input": {
@@ -453,7 +507,7 @@ class RealTimeStreaming:
 
         for message in messages:
             try:
-                msg_type = json.loads(message).get("type")
+                msg_type = _json_loads_dict(message).get("type")
             except (json.JSONDecodeError, TypeError):
                 collapsed.extend(pending_appends)
                 pending_appends = []
@@ -487,14 +541,14 @@ class RealTimeStreaming:
         if self._backend_setup_complete and not self._flushing_pending_messages_until_setup:
             return False
         try:
-            msg_obj: Final = json.loads(message)
+            msg_obj: Final = _json_loads_dict(message)
         except (json.JSONDecodeError, TypeError):
             return False
         return msg_obj.get("type") in RealTimeStreaming._CLIENT_AUDIO_BUFFER_TYPES
 
     def _buffer_pending_message_until_setup(self, message: str) -> None:
         try:
-            msg_type = json.loads(message).get("type")
+            msg_type: object = _json_loads_dict(message).get("type")
         except (json.JSONDecodeError, TypeError):
             msg_type = None
 
@@ -546,22 +600,22 @@ class RealTimeStreaming:
             return self._event_normalizer.should_drop(event)
         return False
 
-    def _normalize_event_for_ga_client(self, event: dict) -> dict:
+    def _normalize_event_for_ga_client(self, event: dict[str, object]) -> dict[str, object]:
         """Apply per-provider GA normalization before forwarding to clients."""
         if self._event_normalizer is not None:
             return self._event_normalizer.normalize(event)
         return event
 
-    def _event_to_client_json(self, event: dict) -> str:
+    def _event_to_client_json(self, event: dict[str, object]) -> str:
         return json.dumps(self._normalize_event_for_ga_client(event))
 
-    async def _send_event_to_client(self, event: Any, event_str: str) -> bool:
+    async def _send_event_to_client(self, event: object, event_str: str) -> bool:
         if self._should_drop_event_from_client(event):
             return False
-        if isinstance(event, dict):
+        if _is_str_keyed_dict(event):
             event = self._normalize_event_for_ga_client(event)
             event_str = json.dumps(event)
-        if self._client_wants_beta and isinstance(event, dict):
+        if self._client_wants_beta and _is_str_keyed_dict(event):
             try:
                 translated: Final = self._translate_event_to_beta(event)
                 if translated is None:
@@ -587,20 +641,20 @@ class RealTimeStreaming:
         ``return_new_content_delta_events`` modality lookup, ...).
         """
         try:
-            message_obj: Final = json.loads(transformed_message)
-            if "setup" in message_obj:
+            message_obj: Final = _parse_json(transformed_message)
+            if _is_str_keyed_dict(message_obj) and "setup" in message_obj:
                 self.session_configuration_request = transformed_message
         except (json.JSONDecodeError, TypeError):
             return
 
     def _make_disable_auto_response_message(self) -> str:
         """Return a session.update that disables VAD auto-response."""
-        turn_detection: Final[dict[str, Any]] = {
+        turn_detection: Final[Mapping[str, str | bool]] = {
             "type": "server_vad",
             "create_response": False,
         }
         if self._backend_uses_beta_protocol:
-            session: dict[str, Any] = {"turn_detection": turn_detection}
+            session: Mapping[str, object] = {"turn_detection": turn_detection}
         else:
             session = {
                 "type": "realtime",
@@ -654,7 +708,7 @@ class RealTimeStreaming:
 
     def _has_realtime_guardrails_for_event_hooks(
         self,
-        event_hooks: list[Any],
+        event_hooks: "list[GuardrailEventHooks]",
     ) -> bool:
         """Return True if any callback would run for one of ``event_hooks``."""
         from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -699,7 +753,7 @@ class RealTimeStreaming:
         transcript: str,
         item_id: str | None = None,
         pre_block_backend_message: str | None = None,
-        event_hooks: list[Any] | None = None,
+        event_hooks: "list[GuardrailEventHooks] | None" = None,
     ) -> bool:
         """
         Run registered guardrails on realtime text (transcript, user message, tool output).
@@ -724,8 +778,8 @@ class RealTimeStreaming:
         if event_hooks is None:
             event_hooks = [GuardrailEventHooks.realtime_input_transcription]
         _realtime_event_types: Final = event_hooks
-        _check_data: Final = {**self.request_data, "transcript": transcript}
-        _already_run: Final[set] = set()
+        _check_data: Final[dict[str, object]] = {**self.request_data, "transcript": transcript}
+        _already_run: Final[set[int]] = set()
 
         for callback in litellm.callbacks:
             if not isinstance(callback, CustomGuardrail):
@@ -753,8 +807,8 @@ class RealTimeStreaming:
                     raise
                 # Extract the human-readable error from the detail dict (HTTPException)
                 # or fall back to str(e) for plain ValueError.
-                detail = getattr(e, "detail", None)
-                if isinstance(detail, dict):
+                detail: object = getattr(e, "detail", None)
+                if _is_str_keyed_dict(detail):
                     safe_msg = detail.get("error") or str(e)
                 elif detail is not None:
                     safe_msg = str(detail)
@@ -762,7 +816,8 @@ class RealTimeStreaming:
                     safe_msg = str(e) or "I'm sorry, that request was blocked by the content filter."
 
                 # Use realtime_violation_message if configured; fall back to guardrail error text.
-                error_msg = getattr(callback, "realtime_violation_message", None) or safe_msg
+                violation_message: object = getattr(callback, "realtime_violation_message", None)
+                error_msg = violation_message or safe_msg
 
                 # Deliver any caller-supplied backend message FIRST so that
                 # protocol contracts requiring a specific ordering (e.g.
@@ -826,7 +881,7 @@ class RealTimeStreaming:
                 return True
         return False
 
-    async def _handle_provider_config_message(self, raw_response) -> None:
+    async def _handle_provider_config_message(self, raw_response: str | bytes) -> None:
         """Process a backend message when a provider_config is set (transformed path)."""
         returned_object: Final = self.provider_config.transform_realtime_response(
             raw_response,
@@ -855,7 +910,7 @@ class RealTimeStreaming:
         for event in events:
             if self._should_drop_event_from_client(event):
                 continue
-            is_session_created_event = isinstance(event, dict) and event.get("type") == "session.created"
+            is_session_created_event = _is_str_keyed_dict(event) and event.get("type") == "session.created"
             if is_session_created_event:
                 if self._uses_deferred_backend_setup() and not self._backend_setup_complete:
                     self._backend_setup_complete = True
@@ -893,14 +948,18 @@ class RealTimeStreaming:
                 await self._maybe_send_guardrail_turn_detection_update()
                 continue
             ## GUARDRAIL: run on transcription events in provider_config path too
-            if isinstance(event, dict) and event.get("type") == "conversation.item.input_audio_transcription.completed":
+            if (
+                _is_str_keyed_dict(event)
+                and event.get("type") == "conversation.item.input_audio_transcription.completed"
+            ):
                 transcript = event.get("transcript", "")
-                self._collect_user_input_from_backend_event(cast(dict, event))
+                item_id_raw = event.get("item_id")
+                self._collect_user_input_from_backend_event(event)
                 self.store_message(event_str)
                 await self._send_event_to_client(event, event_str)
                 blocked = await self.run_realtime_guardrails(
-                    cast(str, transcript),
-                    item_id=cast(str | None, event.get("item_id")),
+                    transcript if isinstance(transcript, str) else "",
+                    item_id=item_id_raw if isinstance(item_id_raw, str) else None,
                 )
                 if not blocked:
                     await self._send_to_backend(json.dumps({"type": "response.create"}))
@@ -910,15 +969,15 @@ class RealTimeStreaming:
             await self._send_event_to_client(event, event_str)
 
     @staticmethod
-    def _parse_backend_event(raw_response: str) -> dict | None:
+    def _parse_backend_event(raw_response: str) -> dict[str, object] | None:
         """Parse a backend frame once. Returns None for non-JSON or non-object frames."""
         try:
-            event: Final = json.loads(raw_response)
+            event: Final = _parse_json(raw_response)
         except (json.JSONDecodeError, TypeError):
             return None
-        return event if isinstance(event, dict) else None
+        return event if _is_str_keyed_dict(event) else None
 
-    async def _handle_raw_backend_message(self, event_obj: dict, raw_response: str) -> bool:
+    async def _handle_raw_backend_message(self, event_obj: dict[str, object], raw_response: str) -> bool:
         """Process a backend message without provider_config (raw path).
 
         Returns True if the caller should skip the default store+forward (i.e. continue the loop).
@@ -949,9 +1008,10 @@ class RealTimeStreaming:
                 self._capture_transcription_usage(event_obj)
                 return True
 
+            item_id_raw: Final = event_obj.get("item_id")
             blocked: Final = await self.run_realtime_guardrails(
-                transcript,
-                item_id=event_obj.get("item_id"),
+                transcript if isinstance(transcript, str) else "",
+                item_id=item_id_raw if isinstance(item_id_raw, str) else None,
             )
             if not blocked:
                 await self._send_to_backend(json.dumps({"type": "response.create"}))
@@ -1013,27 +1073,39 @@ class RealTimeStreaming:
             await self.log_messages()
 
     @staticmethod
-    def _detect_beta_header(websocket: Any) -> bool:
+    def _detect_beta_header(websocket: object) -> bool:
         """Return True if the client sent 'OpenAI-Beta: realtime=v1'.
 
         Checks the raw ASGI scope headers so it works for both FastAPI WebSocket
         objects and any test doubles that expose a .scope dict.
         """
         try:
-            headers: Final = websocket.scope.get("headers", [])
-            for name, value in headers:
-                if isinstance(name, bytes):
-                    name = name.decode("latin-1")
-                if isinstance(value, bytes):
-                    value = value.decode("latin-1")
-                if name.lower() == "openai-beta" and "realtime=v1" in value.lower():
+            scope: Final[object] = getattr(websocket, "scope", None)
+            if not _is_str_keyed_dict(scope):
+                return False
+            headers: Final = scope.get("headers", [])
+            if not _is_object_list(headers):
+                return False
+            for header_pair in headers:
+                if not _is_two_item_pair(header_pair):
+                    return False
+                raw_name, raw_value = header_pair
+                name = raw_name.decode("latin-1") if isinstance(raw_name, bytes) else raw_name
+                if not isinstance(name, str):
+                    return False
+                if name.lower() != "openai-beta":
+                    continue
+                value = raw_value.decode("latin-1") if isinstance(raw_value, bytes) else raw_value
+                if not isinstance(value, str):
+                    return False
+                if "realtime=v1" in value.lower():
                     return True
         except Exception:
             pass
         return False
 
     @staticmethod
-    def _remap_beta_session_to_ga(session: dict) -> dict:
+    def _remap_beta_session_to_ga(session: dict[str, object]) -> dict[str, object]:
         """
         Convert a beta-style session.update payload to the GA nested schema.
 
@@ -1064,16 +1136,14 @@ class RealTimeStreaming:
         if "modalities" in session:
             mods: Final = session.pop("modalities")
             if "output_modalities" not in session:
-                mods_set: Final = {m.lower() for m in (mods or [])}
-                if "audio" in mods_set:
-                    session["output_modalities"] = ["audio"]
-                elif "text" in mods_set:
-                    session["output_modalities"] = ["text"]
+                normalized: Final = _output_modalities_from_beta(mods)
+                if normalized is not None:
+                    session["output_modalities"] = normalized
 
         # 3-7. Lift flat audio fields into the nested audio object
-        audio: Final[dict[str, Any]] = {}
-        inp: Final[dict[str, Any]] = {}
-        out: Final[dict[str, Any]] = {}
+        audio: Final[dict[str, object]] = {}
+        inp: Final[dict[str, object]] = {}
+        out: Final[dict[str, object]] = {}
 
         # voice → audio.output.voice
         if "voice" in session:
@@ -1105,10 +1175,12 @@ class RealTimeStreaming:
         if audio:
             # Merge with any existing GA-style `audio` block the client already set,
             # letting the remapped values take precedence within each sub-key.
-            existing: Final = session.get("audio") or {}
+            existing_candidate: Final = session.get("audio")
+            existing: Final[dict[str, object]] = existing_candidate if _is_str_keyed_dict(existing_candidate) else {}
             for sub_key, sub_val in audio.items():
-                if sub_key in existing and isinstance(existing[sub_key], dict) and isinstance(sub_val, dict):
-                    existing[sub_key] = {**existing[sub_key], **sub_val}
+                current = existing.get(sub_key)
+                if _is_str_keyed_dict(current) and _is_str_keyed_dict(sub_val):
+                    existing[sub_key] = {**current, **sub_val}
                 else:
                     existing[sub_key] = sub_val
             session["audio"] = existing
@@ -1116,7 +1188,7 @@ class RealTimeStreaming:
         return session
 
     @staticmethod
-    def _translate_event_to_beta(event: dict) -> dict | None:
+    def _translate_event_to_beta(event: dict[str, object]) -> dict[str, object] | None:
         """Translate a single GA event dict to its beta equivalent.
 
         Returns None when the event must be dropped (the GA-only
@@ -1129,38 +1201,48 @@ class RealTimeStreaming:
         if event_type == "conversation.item.done":
             return None
 
-        renamed_type: Final = RealTimeStreaming._GA_TO_BETA_EVENT_TYPES.get(event_type)
-        has_item: Final = isinstance(event.get("item"), dict)
+        renamed_type: Final = (
+            RealTimeStreaming._GA_TO_BETA_EVENT_TYPES.get(event_type) if isinstance(event_type, str) else None
+        )
+        item_raw: Final = event.get("item")
+        has_item: Final = isinstance(item_raw, dict)
         response: Final = event.get("response")
-        has_response_output: Final = isinstance(response, dict) and isinstance(response.get("output"), list)
+        output_raw: Final = response.get("output") if _is_str_keyed_dict(response) else None
+        has_response_output: Final = isinstance(output_raw, list)
         if renamed_type is None and not has_item and not has_response_output:
             return event
 
         translated: Final = dict(event)
         if renamed_type is not None:
             translated["type"] = renamed_type
-        if has_item:
-            translated["item"] = RealTimeStreaming._translate_item_content_types(dict(translated["item"]))
-        if has_response_output:
-            resp: Final = dict(translated["response"])
+        if _is_str_keyed_dict(item_raw):
+            translated["item"] = RealTimeStreaming._translate_item_content_types(dict(item_raw))
+        if _is_str_keyed_dict(response) and _is_object_list(output_raw):
+            resp: Final = dict(response)
             resp["output"] = [
-                (RealTimeStreaming._translate_item_content_types(dict(o)) if isinstance(o, dict) else o)
-                for o in resp["output"]
+                (RealTimeStreaming._translate_item_content_types(dict(o)) if _is_str_keyed_dict(o) else o)
+                for o in output_raw
             ]
             translated["response"] = resp
 
         return translated
 
     @staticmethod
-    def _translate_item_content_types(item: dict) -> dict:
+    def _translate_item_content_types(item: dict[str, object]) -> dict[str, object]:
         """Replace GA content type names with beta names inside a single item."""
-        if "content" not in item or not isinstance(item["content"], list):
+        content_raw: Final = item.get("content") if "content" in item else None
+        if not _is_object_list(content_raw):
             return item
-        new_content: Final = []
-        for block in item["content"]:
-            if isinstance(block, dict) and block.get("type") in RealTimeStreaming._GA_TO_BETA_CONTENT_TYPES:
+        new_content: Final[list[object]] = []
+        for block in content_raw:
+            block_type = block.get("type") if _is_str_keyed_dict(block) else None
+            if (
+                _is_str_keyed_dict(block)
+                and isinstance(block_type, str)
+                and block_type in RealTimeStreaming._GA_TO_BETA_CONTENT_TYPES
+            ):
                 block = dict(block)
-                block["type"] = RealTimeStreaming._GA_TO_BETA_CONTENT_TYPES[block["type"]]
+                block["type"] = RealTimeStreaming._GA_TO_BETA_CONTENT_TYPES[block_type]
             new_content.append(block)
         item["content"] = new_content
         return item
@@ -1176,12 +1258,14 @@ class RealTimeStreaming:
                 try:
                     from litellm.types.guardrails import GuardrailEventHooks
 
-                    msg_obj = json.loads(message)
-                    msg_type = msg_obj.get("type")
+                    msg_obj = _json_loads_dict(message)
+                    msg_type_raw = msg_obj.get("type")
+                    msg_type = msg_type_raw if isinstance(msg_type_raw, str) else None
 
                     if msg_type == "conversation.item.create":
                         # Check user text messages for prompt injection
-                        item = msg_obj.get("item", {})
+                        item_raw = msg_obj.get("item", {})
+                        item = item_raw if _is_str_keyed_dict(item_raw) else {}
                         # Check function_call_output first so a client cannot
                         # bypass the tool-result guardrail by also setting
                         # role="user" on a function_call_output item.
@@ -1241,11 +1325,14 @@ class RealTimeStreaming:
                                     # interaction turn.
                                     continue
                         elif item.get("role") == "user":
-                            content_list = item.get("content", [])
+                            content_raw = item.get("content", [])
+                            content_list: list[object] = content_raw if _is_object_list(content_raw) else []
                             texts = [
-                                c.get("text", "")
+                                text
                                 for c in content_list
-                                if isinstance(c, dict) and c.get("type") == "input_text"
+                                if _is_str_keyed_dict(c)
+                                and c.get("type") == "input_text"
+                                and isinstance(text := c.get("text", ""), str)
                             ]
                             combined_text = " ".join(texts)
                             if combined_text:
@@ -1281,10 +1368,11 @@ class RealTimeStreaming:
                         and self._has_audio_transcription_guardrails()
                     ):
                         session = msg_obj.setdefault("session", {})
-                        if isinstance(session, dict):
-                            existing_td = session.get("turn_detection")
-                            if not isinstance(existing_td, dict):
-                                existing_td = {}
+                        if _is_str_keyed_dict(session):
+                            existing_td_raw = session.get("turn_detection")
+                            existing_td: dict[str, object] = (
+                                existing_td_raw if _is_str_keyed_dict(existing_td_raw) else {}
+                            )
                             existing_td["create_response"] = False
                             session["turn_detection"] = existing_td
                             message = json.dumps(msg_obj)
@@ -1308,27 +1396,27 @@ class RealTimeStreaming:
                         and self._has_audio_transcription_guardrails()
                     ):
                         session = msg_obj.get("session")
-                        if isinstance(session, dict):
+                        if _is_str_keyed_dict(session):
                             td_overridden = False
-                            flat_td = session.get("turn_detection")
-                            flat_td_present = flat_td is not None
+                            flat_td_raw = session.get("turn_detection")
+                            flat_td_present = flat_td_raw is not None
                             if flat_td_present:
-                                if not isinstance(flat_td, dict):
-                                    flat_td = {}
+                                flat_td: dict[str, object] = flat_td_raw if _is_str_keyed_dict(flat_td_raw) else {}
                                 if flat_td.get("create_response") is not False:
                                     flat_td["create_response"] = False
                                     session["turn_detection"] = flat_td
                                     td_overridden = True
                             nested_td_present = False
                             audio = session.get("audio")
-                            if isinstance(audio, dict):
+                            if _is_str_keyed_dict(audio):
                                 audio_input = audio.get("input")
-                                if isinstance(audio_input, dict):
-                                    nested_td = audio_input.get("turn_detection")
-                                    if nested_td is not None:
+                                if _is_str_keyed_dict(audio_input):
+                                    nested_td_raw = audio_input.get("turn_detection")
+                                    if nested_td_raw is not None:
                                         nested_td_present = True
-                                        if not isinstance(nested_td, dict):
-                                            nested_td = {}
+                                        nested_td: dict[str, object] = (
+                                            nested_td_raw if _is_str_keyed_dict(nested_td_raw) else {}
+                                        )
                                         if nested_td.get("create_response") is not False:
                                             nested_td["create_response"] = False
                                             audio_input["turn_detection"] = nested_td
@@ -1351,14 +1439,14 @@ class RealTimeStreaming:
                     # session shape unchanged.
                     if msg_type == "session.update" and not self._backend_uses_beta_protocol:
                         session = msg_obj.get("session", {})
-                        if isinstance(session, dict):
+                        if _is_str_keyed_dict(session):
                             session = self._remap_beta_session_to_ga(session)
                             msg_obj["session"] = session
                             message = json.dumps(msg_obj)
 
                     if msg_type == "session.update" and self._event_normalizer:
                         session = msg_obj.get("session")
-                        if isinstance(session, dict):
+                        if _is_str_keyed_dict(session):
                             msg_obj["session"] = self._event_normalizer.patch_outgoing_session(session)
                             message = json.dumps(msg_obj)
 
@@ -1420,6 +1508,6 @@ class RealTimeStreaming:
                     pass
 
 
-def client_sent_openai_beta_realtime_header(websocket: Any) -> bool:
+def client_sent_openai_beta_realtime_header(websocket: object) -> bool:
     """True when the client WebSocket includes ``OpenAI-Beta: realtime=v1``."""
     return RealTimeStreaming._detect_beta_header(websocket)

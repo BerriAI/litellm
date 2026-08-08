@@ -12,6 +12,7 @@ from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ....litellm_core_utils.realtime_streaming import (
+    ClientWebSocketInterface,
     RealtimeEventNormalizer,
     RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
@@ -135,7 +136,8 @@ class OpenAIRealtime(OpenAIChatCompletion):
             # Get provider-specific SSL configuration
             ssl_config: Final = self._get_ssl_config(url)
 
-            openai_beta_realtime: Final = client_sent_openai_beta_realtime_header(websocket)
+            client_ws: Final = cast(ClientWebSocketInterface, websocket)
+            openai_beta_realtime: Final = client_sent_openai_beta_realtime_header(client_ws)
             if not openai_beta_realtime:
                 verbose_logger.debug(
                     "OpenAI Realtime: connecting with GA protocol (no OpenAI-Beta header). "
@@ -161,12 +163,12 @@ class OpenAIRealtime(OpenAIChatCompletion):
                 ssl=ssl_config,
             ) as backend_ws:
                 realtime_streaming: Final = RealTimeStreaming(
-                    websocket,
+                    client_ws,
                     cast(ClientConnection, backend_ws),
                     logging_obj,
                     model=model,
                     user_api_key_dict=user_api_key_dict,
-                    request_data={"litellm_metadata": litellm_metadata or {}},
+                    request_data=cast(dict[str, object], {"litellm_metadata": litellm_metadata or {}}),
                     force_transcription_model=(
                         model if (query_params or {}).get("intent") == "transcription" else None
                     ),
