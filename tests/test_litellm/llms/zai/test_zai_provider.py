@@ -146,7 +146,7 @@ def test_glm47_cost_calculation():
 async def test_zai_completion_call(respx_mock, zai_response, monkeypatch):
     """Test completion call with zai provider using mocked response"""
     monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
-    litellm.disable_aiohttp_transport = True
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(
         json=zai_response
@@ -172,7 +172,7 @@ async def test_zai_completion_call(respx_mock, zai_response, monkeypatch):
 def test_zai_sync_completion(respx_mock, zai_response, monkeypatch):
     """Test synchronous completion call"""
     monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
-    litellm.disable_aiohttp_transport = True
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(
         json=zai_response
@@ -186,3 +186,263 @@ def test_zai_sync_completion(respx_mock, zai_response, monkeypatch):
 
     assert response.choices[0].message.content == "Hello! How can I help you today?"
     assert response.usage.total_tokens == 25
+
+
+@pytest.fixture
+def zai_thinking_response():
+    return {
+        "id": "chatcmpl-zai-thinking",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "glm-4.6",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+    }
+
+
+def _captured_body(respx_mock):
+    assert len(respx_mock.calls) == 1
+    return json.loads(respx_mock.calls[0].request.content.decode("utf-8"))
+
+
+class TestZaiSupportedParamsWhitelistReasoning:
+    """`thinking` and `reasoning_effort` enter the whitelist only when the
+    registry marks the model `supports_reasoning: true`. The registry
+    update in this PR adds the flag to the entire GLM-4.5 family
+    (previously every GLM-4.5 entry in
+    `model_prices_and_context_window_backup.json` was missing the flag
+    despite docs.z.ai listing GLM-4.5 as the first model with `thinking`
+    support), so the gate now unlocks reasoning params for all of them.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _use_local_model_cost(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "glm-4.5",
+            "glm-4.5v",
+            "glm-4.5-air",
+            "glm-4.5-airx",
+            "glm-4.5-x",
+            "glm-4.5-flash",
+            "glm-4.6",
+            "glm-4.7",
+        ],
+    )
+    def test_reasoning_params_in_whitelist(self, model):
+        from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+        params = ZAIChatConfig().get_supported_openai_params(model=model)
+        assert "thinking" in params
+        assert "reasoning_effort" in params
+
+    def test_reasoning_params_excluded_when_registry_flag_missing(self, monkeypatch):
+        """Regression guard for the gate. A model whose registry entry
+        does NOT mark `supports_reasoning: true` must keep `thinking`
+        and `reasoning_effort` OUT of the whitelist — otherwise a new
+        ZAI model added to the registry without the flag silently
+        accepts reasoning kwargs that the upstream API will reject.
+        """
+        from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+        # Synthetic model that won't match any registry entry or
+        # wildcard pattern.
+        params = ZAIChatConfig().get_supported_openai_params(
+            model="glm-no-such-future-model-xyz"
+        )
+        assert "thinking" not in params
+        assert "reasoning_effort" not in params
+
+
+class TestZaiReasoningParamsLandInExtraBody:
+    """The OpenAI Python SDK rejects unknown top-level kwargs (e.g.
+    `AsyncCompletions.create() got an unexpected keyword argument 'thinking'`),
+    so ZAI-specific reasoning fields must travel inside `extra_body` and
+    let the SDK flatten them into the HTTP body. Without this wrapping a
+    chained-proxy topology (LiteLLM A -> LiteLLM B -> ZAI) drops the
+    field on hop 2: hop 1's SDK flattens `extra_body` into a top-level
+    `thinking` kwarg, hop 2 re-emits that as a top-level kwarg, and the
+    SDK rejects it
+    """
+
+    def test_thinking_wraps_into_extra_body(self):
+        from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+        result = ZAIChatConfig()._map_openai_params(
+            non_default_params={"thinking": {"type": "disabled"}},
+            optional_params={},
+            model="glm-4.6",
+            drop_params=False,
+        )
+        assert "thinking" not in result
+        assert result["extra_body"]["thinking"] == {"type": "disabled"}
+
+    def test_reasoning_effort_wraps_into_extra_body(self):
+        from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+        result = ZAIChatConfig()._map_openai_params(
+            non_default_params={"reasoning_effort": "none"},
+            optional_params={},
+            model="glm-5",
+            drop_params=False,
+        )
+        assert "reasoning_effort" not in result
+        assert result["extra_body"]["reasoning_effort"] == "none"
+
+    def test_thinking_merges_into_existing_extra_body(self):
+        from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+        result = ZAIChatConfig()._map_openai_params(
+            non_default_params={"thinking": {"type": "disabled"}},
+            optional_params={"extra_body": {"already_here": True}},
+            model="glm-4.6",
+            drop_params=False,
+        )
+        assert result["extra_body"]["already_here"] is True
+        assert result["extra_body"]["thinking"] == {"type": "disabled"}
+
+    def test_standard_params_stay_top_level_alongside_thinking(self):
+        from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+        result = ZAIChatConfig()._map_openai_params(
+            non_default_params={
+                "max_tokens": 100,
+                "temperature": 0.7,
+                "thinking": {"type": "enabled"},
+            },
+            optional_params={},
+            model="glm-4.6",
+            drop_params=False,
+        )
+        assert result["max_tokens"] == 100
+        assert result["temperature"] == 0.7
+        assert result["extra_body"]["thinking"] == {"type": "enabled"}
+        assert "thinking" not in result
+
+    @pytest.mark.asyncio
+    async def test_top_level_thinking_kwarg_reaches_http_body(
+        self, respx_mock, zai_thinking_response, monkeypatch
+    ):
+        """Regression for the hop-2 SDK crash. Pre-fix this raised
+        `AsyncCompletions.create() got an unexpected keyword argument
+        'thinking'`. Post-fix the boundary HTTP body carries `thinking`
+        as a top-level field (the OpenAI SDK flattened `extra_body`)
+        """
+        monkeypatch.setenv("ZAI_API_KEY", "test-key")
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(
+            json=zai_thinking_response
+        )
+
+        await litellm.acompletion(
+            model="zai/glm-4.6",
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "disabled"},
+        )
+
+        body = _captured_body(respx_mock)
+        assert body["thinking"] == {"type": "disabled"}
+        assert "extra_body" not in body
+
+    @pytest.mark.asyncio
+    async def test_extra_body_thinking_reaches_http_body(
+        self, respx_mock, zai_thinking_response, monkeypatch
+    ):
+        monkeypatch.setenv("ZAI_API_KEY", "test-key")
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(
+            json=zai_thinking_response
+        )
+
+        await litellm.acompletion(
+            model="zai/glm-4.6",
+            messages=[{"role": "user", "content": "hi"}],
+            extra_body={"thinking": {"type": "disabled"}},
+        )
+
+        body = _captured_body(respx_mock)
+        assert body["thinking"] == {"type": "disabled"}
+
+    @pytest.mark.asyncio
+    async def test_top_level_reasoning_effort_reaches_http_body(
+        self, respx_mock, zai_thinking_response, monkeypatch
+    ):
+        monkeypatch.setenv("ZAI_API_KEY", "test-key")
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(
+            json=zai_thinking_response
+        )
+
+        await litellm.acompletion(
+            model="zai/glm-5",
+            messages=[{"role": "user", "content": "hi"}],
+            reasoning_effort="none",
+        )
+
+        body = _captured_body(respx_mock)
+        assert body["reasoning_effort"] == "none"
+
+    @pytest.mark.asyncio
+    async def test_thinking_works_on_glm_4_5_via_registry_flag(
+        self, respx_mock, zai_thinking_response, monkeypatch
+    ):
+        """End-to-end: GLM-4.5 carries `supports_reasoning: true` in the
+        registry, so the gate in `get_supported_openai_params` lets
+        `thinking` through and the SDK boundary lands it in the HTTP
+        body. Without the registry update this test would fail with the
+        SDK rejecting `thinking` as an unsupported param.
+        """
+        monkeypatch.setenv("ZAI_API_KEY", "test-key")
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(
+            json=zai_thinking_response
+        )
+
+        await litellm.acompletion(
+            model="zai/glm-4.5",
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "disabled"},
+        )
+
+        body = _captured_body(respx_mock)
+        assert body["thinking"] == {"type": "disabled"}
+
+
+class TestGlm45FamilyRegistrySupportsReasoning:
+    """docs.z.ai lists GLM-4.5 as the first model family that supports
+    `thinking`. The registry had every GLM-4.5 entry marked
+    `supports_reasoning: false`, which is the source-of-truth bug that
+    let the SDK-kwarg crash hide for so long
+    """
+
+    @pytest.mark.parametrize(
+        "model_key",
+        [
+            "zai/glm-4.5",
+            "zai/glm-4.5v",
+            "zai/glm-4.5-x",
+            "zai/glm-4.5-air",
+            "zai/glm-4.5-airx",
+            "zai/glm-4.5-flash",
+        ],
+    )
+    def test_supports_reasoning_true(self, model_key):
+        import os
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        assert model_key in litellm.model_cost
+        assert litellm.model_cost[model_key].get("supports_reasoning") is True
