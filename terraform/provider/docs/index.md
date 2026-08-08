@@ -51,6 +51,7 @@ The LiteLLM provider supports the following resources:
 * [`litellm_mcp_server`](./resources/mcp_server) - Manage MCP (Model Context Protocol) servers
 * [`litellm_credential`](./resources/credential) - Manage credentials for various providers
 * [`litellm_vector_store`](./resources/vector_store) - Manage vector stores
+* [`litellm_jwt_key_mapping`](./resources/jwt_key_mapping) - Map JWT claim values to virtual keys
 
 ## Available Data Sources
 

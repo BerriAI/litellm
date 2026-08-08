@@ -19,6 +19,7 @@ func Provider() *schema.Provider {
 			"litellm_mcp_server":              resourceLiteLLMMCPServer(),
 			"litellm_credential":              resourceLiteLLMCredential(),
 			"litellm_vector_store":            resourceLiteLLMVectorStore(),
+			"litellm_jwt_key_mapping":         resourceLiteLLMJWTKeyMapping(),
 		},
 		DataSourcesMap: map[string]*schema.Resource{
 			"litellm_credential":   dataSourceLiteLLMCredential(),
