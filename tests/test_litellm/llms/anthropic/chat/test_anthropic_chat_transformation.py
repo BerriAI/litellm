@@ -2436,6 +2436,85 @@ def test_calculate_usage_completion_tokens_details_with_reasoning():
     assert usage.completion_tokens == 500
 
 
+def test_calculate_usage_prefers_reported_thinking_tokens():
+    """
+    Anthropic reports the billed thinking count in usage.output_tokens_details.thinking_tokens.
+    Under the default display ("omitted") the thinking blocks are empty, so estimating from the
+    visible reasoning text yields 0 even though the model thought (and billed).
+
+    Fixes: https://github.com/BerriAI/litellm/issues/36290
+    """
+    config = AnthropicConfig()
+
+    usage_object = {
+        "input_tokens": 29,
+        "output_tokens": 391,
+        "output_tokens_details": {"thinking_tokens": 180},
+    }
+
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content="")
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 180
+    assert usage.completion_tokens_details.text_tokens == 211
+
+
+def test_calculate_usage_reported_thinking_tokens_override_text_estimate():
+    """Summarized thinking text understates the billed count, so the reported value wins."""
+    config = AnthropicConfig()
+
+    usage_object = {
+        "input_tokens": 29,
+        "output_tokens": 391,
+        "output_tokens_details": {"thinking_tokens": 180},
+    }
+
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content="short summary")
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 180
+
+
+@pytest.mark.parametrize(
+    "output_tokens_details",
+    [None, {}, {"thinking_tokens": None}],
+)
+def test_calculate_usage_falls_back_to_estimate_without_reported_thinking_tokens(output_tokens_details):
+    """Older responses have no thinking_tokens, so the visible-text estimate must still apply."""
+    config = AnthropicConfig()
+
+    usage_object = {
+        "input_tokens": 100,
+        "output_tokens": 500,
+        "output_tokens_details": output_tokens_details,
+    }
+
+    usage = config.calculate_usage(
+        usage_object=usage_object,
+        reasoning_content="Let me think about this step by step. " * 10,
+    )
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens is not None
+    assert usage.completion_tokens_details.reasoning_tokens > 0
+
+
+def test_calculate_usage_clamps_reported_thinking_tokens_to_output_tokens():
+    config = AnthropicConfig()
+
+    usage_object = {
+        "input_tokens": 10,
+        "output_tokens": 50,
+        "output_tokens_details": {"thinking_tokens": 900},
+    }
+
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 50
+    assert usage.completion_tokens_details.text_tokens == 0
+
+
 # ============ Reasoning Effort Tests ============
 
 

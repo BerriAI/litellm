@@ -2117,6 +2117,22 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return False
         return any(key in usage_object for key in ("cache_read_input_tokens", "cache_creation_input_tokens"))
 
+    @staticmethod
+    def _get_reported_thinking_tokens(usage_object: dict) -> int | None:
+        """Anthropic reports the billed extended-thinking count in ``usage.output_tokens_details.thinking_tokens``.
+
+        It is authoritative: under the default ``display: "omitted"`` the thinking blocks carry no text at all,
+        so estimating from the visible reasoning content always yields 0, and under ``display: "summarized"``
+        the visible summary understates what was billed.
+        """
+        details: Final = usage_object.get("output_tokens_details")
+        if not isinstance(details, dict):
+            return None
+        thinking_tokens: Final = details.get("thinking_tokens")
+        if isinstance(thinking_tokens, bool) or not isinstance(thinking_tokens, (int, float)):
+            return None
+        return int(thinking_tokens)
+
     def calculate_usage(
         self,
         usage_object: dict,
@@ -2199,7 +2215,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         estimated_reasoning_tokens: Final = (
             token_counter(text=reasoning_content, count_response_tokens=True) if reasoning_content else 0
         )
-        reasoning_tokens: Final = min(estimated_reasoning_tokens, completion_tokens)
+        reported_reasoning_tokens: Final = self._get_reported_thinking_tokens(_usage)
+        reasoning_tokens: Final = min(
+            estimated_reasoning_tokens if reported_reasoning_tokens is None else reported_reasoning_tokens,
+            completion_tokens,
+        )
         completion_token_details: Final = CompletionTokensDetailsWrapper(
             reasoning_tokens=max(0, reasoning_tokens),
             text_tokens=(completion_tokens - reasoning_tokens if reasoning_tokens > 0 else completion_tokens),
