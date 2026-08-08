@@ -1943,9 +1943,11 @@ async def update_team(
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
 
+        existing_team = LiteLLM_TeamTable.model_validate(existing_team_row.model_dump())
+
         # Verify caller has access to manage this team
         await _verify_team_access(
-            team_obj=LiteLLM_TeamTable.model_validate(existing_team_row.model_dump()),
+            team_obj=existing_team,
             user_api_key_dict=user_api_key_dict,
         )
 
@@ -2074,7 +2076,7 @@ async def update_team(
             )
 
         # Check budget_duration and budget_reset_at
-        _set_budget_reset_at(data, updated_kv)
+        _set_budget_reset_at(data, updated_kv, existing_team)
 
         _team_member_fields_in_request: Final = {
             field
@@ -2279,8 +2281,17 @@ async def patch_team(
         raise handle_exception_on_proxy(e)
 
 
-def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:
-    """Set budget_reset_at in updated_kv if budget_duration is provided."""
+def _set_budget_reset_at(
+    data: UpdateTeamRequest,
+    updated_kv: dict,
+    existing_team_row: LiteLLM_TeamTable,
+) -> None:
+    """Set budget_reset_at in updated_kv if budget_duration is provided.
+
+    For ``budget_limits``, windows whose ``budget_duration`` already exists on
+    the team keep their current ``reset_at`` so editing ``max_budget`` alone
+    does not restart the window (and therefore does not disturb its spend).
+    """
     if data.budget_duration is not None:
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
@@ -2290,14 +2301,16 @@ def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:
         updated_kv["budget_reset_at"] = None
 
     if data.budget_limits is not None and len(data.budget_limits) > 0:
-        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+        from litellm.proxy.common_utils.budget_limits import (
+            resolve_budget_limit_windows,
+            serialize_budget_limit_windows,
+        )
 
-        initialized_windows: Final = []
-        for window in data.budget_limits:
-            w = window if isinstance(window, dict) else window.model_dump()
-            w["reset_at"] = get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat()
-            initialized_windows.append(w)
-        updated_kv["budget_limits"] = json.dumps(initialized_windows)
+        windows = resolve_budget_limit_windows(
+            incoming=data.budget_limits,
+            existing=existing_team_row.budget_limits,
+        )
+        updated_kv["budget_limits"] = serialize_budget_limit_windows(windows)
 
 
 async def handle_update_object_permission(data_json: dict, existing_team_row: LiteLLM_TeamTable) -> dict:

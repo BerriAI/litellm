@@ -10,6 +10,7 @@ from datetime import datetime
 from pydantic import ConfigDict
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+from litellm.models.team import BudgetLimitEntry
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 
@@ -59,7 +60,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     last_rotation_at: datetime | None = None
     key_rotation_at: datetime | None = None
     router_settings: dict | None = None
-    budget_limits: list[dict] | None = None
+    budget_limits: list[BudgetLimitEntry] | None = None
     model_config = ConfigDict(protected_namespaces=())
 
 

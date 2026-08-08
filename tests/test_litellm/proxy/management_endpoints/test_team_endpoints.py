@@ -9375,7 +9375,7 @@ def test_set_budget_reset_at_clears_when_budget_duration_null():
     data = UpdateTeamRequest(team_id="test-team", budget_duration=None)
     updated_kv = {"team_id": "test-team", "budget_duration": None}
 
-    _set_budget_reset_at(data, updated_kv)
+    _set_budget_reset_at(data, updated_kv, LiteLLM_TeamTable(team_id="test-team"))
 
     assert "budget_reset_at" in updated_kv
     assert updated_kv["budget_reset_at"] is None
@@ -9392,7 +9392,7 @@ def test_set_budget_reset_at_noop_when_budget_duration_not_sent():
     data = UpdateTeamRequest(team_id="test-team")
     updated_kv = {"team_id": "test-team"}
 
-    _set_budget_reset_at(data, updated_kv)
+    _set_budget_reset_at(data, updated_kv, LiteLLM_TeamTable(team_id="test-team"))
 
     assert "budget_reset_at" not in updated_kv
 
@@ -9408,10 +9408,149 @@ def test_set_budget_reset_at_sets_value_when_budget_duration_provided():
     data = UpdateTeamRequest(team_id="test-team", budget_duration="30d")
     updated_kv = {"team_id": "test-team", "budget_duration": "30d"}
 
-    _set_budget_reset_at(data, updated_kv)
+    _set_budget_reset_at(data, updated_kv, LiteLLM_TeamTable(team_id="test-team"))
 
     assert "budget_reset_at" in updated_kv
     assert updated_kv["budget_reset_at"] is not None
+
+
+def test_set_budget_reset_at_preserves_reset_at_for_unchanged_duration():
+    """
+    Editing a budget_limits window's max_budget must NOT restart the window:
+    a window whose budget_duration already exists on the team keeps its
+    existing reset_at, and only the max_budget changes.
+    """
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
+
+    existing_reset_at = datetime(2027, 1, 1, tzinfo=timezone.utc).isoformat()
+    existing_team_row = LiteLLM_TeamTable(
+        team_id="test-team",
+        budget_limits=[{"budget_duration": "365d", "max_budget": 100.0, "reset_at": existing_reset_at}],
+    )
+    data = UpdateTeamRequest(
+        team_id="test-team",
+        budget_limits=[{"budget_duration": "365d", "max_budget": 250.0}],
+    )
+    updated_kv = {"team_id": "test-team"}
+
+    _set_budget_reset_at(data, updated_kv, existing_team_row)
+
+    stored = json.loads(updated_kv["budget_limits"])
+    assert len(stored) == 1
+    assert stored[0]["max_budget"] == 250.0
+    assert stored[0]["reset_at"] == existing_reset_at
+
+
+def test_set_budget_reset_at_initializes_new_duration_window():
+    """
+    A budget_limits window with a duration not present on the team gets a fresh
+    reset_at while any unchanged-duration window keeps its existing reset_at.
+    """
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
+
+    existing_reset_at = datetime(2027, 1, 1, tzinfo=timezone.utc).isoformat()
+    existing_team_row = LiteLLM_TeamTable(
+        team_id="test-team",
+        budget_limits=[{"budget_duration": "365d", "max_budget": 100.0, "reset_at": existing_reset_at}],
+    )
+    data = UpdateTeamRequest(
+        team_id="test-team",
+        budget_limits=[
+            {"budget_duration": "365d", "max_budget": 100.0},
+            {"budget_duration": "30d", "max_budget": 20.0},
+        ],
+    )
+    updated_kv = {"team_id": "test-team"}
+
+    _set_budget_reset_at(data, updated_kv, existing_team_row)
+
+    stored = {w["budget_duration"]: w for w in json.loads(updated_kv["budget_limits"])}
+    assert stored["365d"]["reset_at"] == existing_reset_at
+    assert stored["30d"]["reset_at"] is not None
+    assert stored["30d"]["reset_at"] != existing_reset_at
+
+
+def test_set_budget_reset_at_ignores_client_supplied_reset_at():
+    """
+    reset_at is server-managed. A client-sent reset_at on a brand-new duration
+    is discarded in favor of a freshly computed boundary.
+    """
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
+
+    bogus = datetime(2000, 1, 1, tzinfo=timezone.utc).isoformat()
+    data = UpdateTeamRequest(
+        team_id="test-team",
+        budget_limits=[{"budget_duration": "30d", "max_budget": 20.0, "reset_at": bogus}],
+    )
+    updated_kv = {"team_id": "test-team"}
+
+    _set_budget_reset_at(data, updated_kv, LiteLLM_TeamTable(team_id="test-team"))
+
+    stored = json.loads(updated_kv["budget_limits"])
+    assert stored[0]["reset_at"] != bogus
+
+
+@pytest.mark.asyncio
+async def test_update_team_endpoint_preserves_budget_limits_reset_at():
+    """
+    End-to-end through the /team/update endpoint: editing a budget_limits
+    window's max_budget must persist the existing window's reset_at unchanged,
+    so the spend window is not restarted. Exercises the update_team wiring that
+    reads the existing team row and routes it through _set_budget_reset_at.
+    """
+    from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UpdateTeamRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    existing_reset_at = datetime(2099, 1, 1, tzinfo=timezone.utc).isoformat()
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id")
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client,
+        patch("litellm.proxy.proxy_server.llm_router"),
+        patch("litellm.proxy.proxy_server.user_api_key_cache"),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj"),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch("litellm.proxy.management_endpoints.team_endpoints._cache_team_object"),
+    ):
+        mock_existing_team = MagicMock()
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "test_team_id",
+            "team_alias": "test_team",
+            "budget_limits": [
+                {"budget_duration": "365d", "max_budget": 100.0, "reset_at": existing_reset_at}
+            ],
+            "metadata": {},
+        }
+        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+
+        mock_updated_team = MagicMock()
+        mock_updated_team.team_id = "test_team_id"
+        mock_updated_team.model_dump.return_value = {"team_id": "test_team_id"}
+        mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=mock_updated_team)
+        mock_prisma_client.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
+
+        await update_team(
+            data=UpdateTeamRequest(
+                team_id="test_team_id",
+                budget_limits=[{"budget_duration": "365d", "max_budget": 200.0}],
+            ),
+            http_request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        assert mock_prisma_client.db.litellm_teamtable.update.called
+        update_data = mock_prisma_client.db.litellm_teamtable.update.call_args[1]["data"]
+        stored = json.loads(update_data["budget_limits"])
+        assert stored[0]["max_budget"] == 200.0
+        assert stored[0]["reset_at"] == existing_reset_at
 
 
 @pytest.mark.asyncio

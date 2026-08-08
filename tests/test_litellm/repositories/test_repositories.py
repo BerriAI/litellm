@@ -1643,7 +1643,7 @@ class TestVerificationTokenRepositoryExtended:
             "spend": 5.0,
             "organization_id": "org-9",
             "budget_id": "budget-9",
-            "budget_limits": [{"model": "gpt-4", "budget": 1.0}],
+            "budget_limits": [{"budget_duration": "1d", "max_budget": 1.0}],
         }
 
         class MockTx:
@@ -1742,7 +1742,7 @@ class TestVerificationTokenRepositoryExtended:
             "model_spend": '{"gpt-4": 10.0}',
             "model_max_budget": '{"gpt-4": 100.0}',
             "router_settings": '{"timeout": 30}',
-            "budget_limits": '[{"limit": 50}]',
+            "budget_limits": '[{"budget_duration": "1d", "max_budget": 50.0}]',
             "litellm_budget_table": '{"budget_id": "b1"}',
         }
         token = await repo.find_by_id("sk-json")

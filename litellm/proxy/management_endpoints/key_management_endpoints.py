@@ -2012,14 +2012,16 @@ async def prepare_key_update_data(
     if "budget_limits" in non_default_values:
         raw_windows: Final = non_default_values["budget_limits"]
         if raw_windows:
-            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+            from litellm.proxy.common_utils.budget_limits import (
+                resolve_budget_limit_windows,
+                serialize_budget_limit_windows,
+            )
 
-            initialized_windows: Final = []
-            for window in raw_windows:
-                w = window if isinstance(window, dict) else window.model_dump()
-                w["reset_at"] = get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat()
-                initialized_windows.append(w)
-            non_default_values["budget_limits"] = json.dumps(initialized_windows)
+            windows = resolve_budget_limit_windows(
+                incoming=raw_windows,
+                existing=existing_key_row.budget_limits,
+            )
+            non_default_values["budget_limits"] = serialize_budget_limit_windows(windows)
         else:
             # [] / None clears the field; prisma-client-py has no DbNull
             # sentinel for Json? columns, so store the JSON literal null
