@@ -41,7 +41,9 @@ Python max line length is 120, not 88
 
 When you fix violations gated by `ruff-strict-budget.json`, `type-discipline-budget.json`, or `basedpyright-code-budget.json`, run `make lint-budget-update` and commit the lowered limits so the ceilings ratchet down instead of leaving stale headroom. It measures the working tree, so it must contain exactly the fixes you're committing
 
-`make pre-commit` saves its complete output to a log file in .git (overwriting previous pre-commit logs) and prints that path as its first and last output lines. To inspect a run, read or grep that log instead of re-running the multi-minute checks just to see a different slice
+Run `make check` (formerly `make pre-commit`, which still works as an alias) before every commit, merge commits included. It runs the CI-gating lint scoped to your staged files, so stage everything you intend to commit first; it warns about changed files you left unstaged and names the checks that were skipped because of them. With nothing staged it instead checks the working tree's diff against the merge base with origin/litellm_internal_staging, which is how you predict the CI lint on an already-committed branch, e.g. right after a merge commit. Deleted files count toward which checks run (a deletion alone can turn CI red) in both modes
+
+`make check` saves its complete output to a log file in .git (overwriting previous logs) and prints that path as its first and last output lines. To inspect a run, read or grep that log instead of re-running the multi-minute checks just to see a different slice
 
 If you're trying to create a new function that relies on untyped stuff, instead of adding more Any's and pushing `reportAny` / `reportExplicitAny` closer to their basedpyright ceilings, just validate it in the caller with Pydantic (a model or `TypeAdapter` that returns the typed thing or raises will do) and then pass the now typed variable in
 
