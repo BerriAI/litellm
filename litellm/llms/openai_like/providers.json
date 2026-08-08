@@ -159,6 +159,21 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "melious": {
+    "base_url": "https://api.melious.ai/v1",
+    "api_key_env": "MELIOUS_API_KEY",
+    "api_base_env": "MELIOUS_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/messages",
+      "/v1/embeddings",
+      "/v1/images/generations",
+      "/v1/audio/transcriptions"
+    ]
+  },
   "empiriolabs": {
     "base_url": "https://api.empiriolabs.ai/v1",
     "api_key_env": "EMPIRIOLABS_API_KEY",
