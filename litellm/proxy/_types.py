@@ -648,6 +648,7 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/logs",
         "/spend/logs/v2",
         "/spend/logs/ui",
+        "/spend/logs/ui/{request_id}",
         "/spend/logs/session/ui",
         "/key/spend/report",
         "/user/spend/report",
