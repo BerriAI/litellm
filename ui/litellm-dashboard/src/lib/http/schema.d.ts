@@ -12952,6 +12952,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/spend/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest External Usage
+         * @description PROXY_ADMIN ONLY: record externally measured usage into the same spend pipeline as proxy-routed traffic.
+         *
+         *     For inference traffic that legitimately bypasses the proxy (for example async batch processors
+         *     dispatching directly to model gateways), so budgets and spend stay coherent in litellm as the
+         *     single metering system.
+         *
+         *     Attribution (user/team/org) is derived from the given virtual key, submitted either raw
+         *     (api_key) or pre-hashed (api_key_hash) to keep raw keys out of request bodies. Records accept an optional
+         *     idempotency_key, stored as the spend-log request_id: the reservation insert, counter updates and
+         *     dedup are checked atomically at the database primary key, so overlapping retries are safe. The
+         *     reservation row is always written (even when disable_spend_logs is set), because it is both the
+         *     dedup anchor and the audit record for the booked usage. When cost is omitted it is computed from
+         *     litellm pricing; records whose model cannot be priced are rejected with an error instead of
+         *     being booked as zero spend.
+         */
+        post: operations["ingest_external_usage_spend_usage_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/spend/users": {
         parameters: {
             query?: never;
@@ -24710,6 +24743,46 @@ export interface components {
             /** Updated At */
             updated_at?: number | null;
         };
+        /** ExternalUsageRecord */
+        ExternalUsageRecord: {
+            /**
+             * Api Key
+             * @description Raw virtual key (sk-...) to attribute usage to. Never logged.
+             */
+            api_key?: string | null;
+            /**
+             * Api Key Hash
+             * @description SHA-256 hash of the virtual key. Use instead of api_key to avoid submitting raw keys.
+             */
+            api_key_hash?: string | null;
+            /** Completion Tokens */
+            completion_tokens: number;
+            /**
+             * Cost
+             * @description Explicit cost in USD. Computed from litellm pricing when omitted.
+             */
+            cost?: number | null;
+            /** End Time */
+            end_time?: string | null;
+            /** End User Id */
+            end_user_id?: string | null;
+            /**
+             * Idempotency Key
+             * @description Becomes the spend-log request_id for dedup on retries.
+             */
+            idempotency_key?: string | null;
+            /** Model */
+            model: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /**
+             * Start Time
+             * Format: date-time
+             */
+            start_time: string;
+            /** Tags */
+            tags?: string[] | null;
+        };
         /**
          * FacetListResponse
          * @description The distinct values one column takes over a filtered query. `data` holds bare values, not entity rows.
@@ -34529,6 +34602,30 @@ export interface components {
             trend: string;
             /** Type */
             type: string;
+        };
+        /** UsageIngestRecordResult */
+        UsageIngestRecordResult: {
+            /** Error */
+            error?: string | null;
+            /** Request Id */
+            request_id: string;
+            /** Spend */
+            spend?: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "recorded" | "duplicate" | "error";
+        };
+        /** UsageIngestRequest */
+        UsageIngestRequest: {
+            /** Records */
+            records: components["schemas"]["ExternalUsageRecord"][];
+        };
+        /** UsageIngestResponse */
+        UsageIngestResponse: {
+            /** Results */
+            results: components["schemas"]["UsageIngestRecordResult"][];
         };
         /** UsageLogEntry */
         UsageLogEntry: {
@@ -51504,6 +51601,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LiteLLM_SpendLogs"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_external_usage_spend_usage_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UsageIngestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageIngestResponse"];
                 };
             };
             /** @description Validation Error */

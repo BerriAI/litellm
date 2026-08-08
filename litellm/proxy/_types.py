@@ -634,6 +634,7 @@ class LiteLLMRoutes(enum.Enum):
             "/jwt/key/mapping/delete",
             "/jwt/key/mapping/list",
             "/jwt/key/mapping/info",
+            "/spend/usage",
         ]
         + key_management_routes
         + mcp_management_routes
