@@ -3,9 +3,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALLS_CACHE,
@@ -34,11 +32,7 @@ class TestLiteLLMCompletionResponsesConfig:
         input_item = {"type": "input_file", "file_id": "file-abc123xyz"}
 
         # Execute
-        result = (
-            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
-                input_item
-            )
-        )
+        result = LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(input_item)
 
         # Assert
         expected = {"type": "file", "file": {"file_id": "file-abc123xyz"}}
@@ -53,11 +47,7 @@ class TestLiteLLMCompletionResponsesConfig:
         input_item = {"type": "input_file", "file_data": file_data}
 
         # Execute
-        result = (
-            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
-                input_item
-            )
-        )
+        result = LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(input_item)
 
         # Assert
         expected = {"type": "file", "file": {"file_data": file_data}}
@@ -75,11 +65,7 @@ class TestLiteLLMCompletionResponsesConfig:
         }
 
         # Execute
-        result = (
-            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
-                input_item
-            )
-        )
+        result = LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(input_item)
 
         # Assert
         expected = {
@@ -97,11 +83,7 @@ class TestLiteLLMCompletionResponsesConfig:
         input_item = {"type": "input_file"}
 
         # Execute
-        result = (
-            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
-                input_item
-            )
-        )
+        result = LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(input_item)
 
         # Assert
         expected = {"type": "file", "file": {}}
@@ -120,11 +102,7 @@ class TestLiteLLMCompletionResponsesConfig:
         }
 
         # Execute
-        result = (
-            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
-                input_item
-            )
-        )
+        result = LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(input_item)
 
         # Assert
         expected = {"type": "file", "file": {"file_id": "file-abc123xyz"}}
@@ -134,10 +112,8 @@ class TestLiteLLMCompletionResponsesConfig:
 
     def test_transform_input_file_item_to_file_item_with_file_url(self):
         """file_url should be mapped to file_id for downstream URL handling"""
-        result = (
-            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
-                {"type": "input_file", "file_url": "https://example.com/doc.pdf"}
-            )
+        result = LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+            {"type": "input_file", "file_url": "https://example.com/doc.pdf"}
         )
         assert result == {
             "type": "file",
@@ -146,14 +122,12 @@ class TestLiteLLMCompletionResponsesConfig:
 
     def test_transform_input_file_item_file_id_takes_precedence_over_file_url(self):
         """explicit file_id should not be overwritten by file_url"""
-        result = (
-            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
-                {
-                    "type": "input_file",
-                    "file_id": "file-abc123",
-                    "file_url": "https://example.com/doc.pdf",
-                }
-            )
+        result = LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+            {
+                "type": "input_file",
+                "file_id": "file-abc123",
+                "file_url": "https://example.com/doc.pdf",
+            }
         )
         assert result == {"type": "file", "file": {"file_id": "file-abc123"}}
 
@@ -164,11 +138,7 @@ class TestLiteLLMCompletionResponsesConfig:
         input_item = {"type": "input_image", "image_url": image_url, "detail": "high"}
 
         # Execute
-        result = (
-            LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(
-                input_item
-            )
-        )
+        result = LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(input_item)
 
         # Assert
         expected = {
@@ -187,11 +157,7 @@ class TestLiteLLMCompletionResponsesConfig:
         input_item = {"type": "input_image", "image_url": image_url, "detail": "high"}
 
         # Execute
-        result = (
-            LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(
-                input_item
-            )
-        )
+        result = LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(input_item)
 
         # Assert
         expected = {
@@ -210,11 +176,7 @@ class TestLiteLLMCompletionResponsesConfig:
         input_item = {"type": "input_image", "image_url": image_url}
 
         # Execute
-        result = (
-            LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(
-                input_item
-            )
-        )
+        result = LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(input_item)
 
         # Assert
         expected = {
@@ -232,11 +194,7 @@ class TestLiteLLMCompletionResponsesConfig:
         input_item = {"type": "input_image"}
 
         # Execute
-        result = (
-            LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(
-                input_item
-            )
-        )
+        result = LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(input_item)
 
         # Assert
         expected = {"type": "image_url", "image_url": {"url": "", "detail": "auto"}}
@@ -256,11 +214,7 @@ class TestLiteLLMCompletionResponsesConfig:
         }
 
         # Execute
-        result = (
-            LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(
-                input_item
-            )
-        )
+        result = LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(input_item)
 
         # Assert
         expected = {
@@ -296,28 +250,26 @@ class TestLiteLLMCompletionResponsesConfig:
         )
 
         # Execute
-        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-            request_input="What is the meaning of life?",
-            responses_api_request={},
-            chat_completion_response=chat_completion_response,
+        responses_api_response = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="What is the meaning of life?",
+                responses_api_request={},
+                chat_completion_response=chat_completion_response,
+            )
         )
 
         # Assert
         assert hasattr(responses_api_response, "output")
         assert len(responses_api_response.output) >= 2
 
-        reasoning_items = [
-            item for item in responses_api_response.output if item.type == "reasoning"
-        ]
+        reasoning_items = [item for item in responses_api_response.output if item.type == "reasoning"]
         assert len(reasoning_items) == 1, "Should have exactly one reasoning item"
 
         reasoning_item = reasoning_items[0]
         # Note: ID auto-generation was disabled, so reasoning items may not have IDs
         # Only assert ID format if an ID is present
         if hasattr(reasoning_item, "id") and reasoning_item.id:
-            assert reasoning_item.id.startswith(
-                "rs_"
-            ), f"Expected ID to start with 'rs_', got: {reasoning_item.id}"
+            assert reasoning_item.id.startswith("rs_"), f"Expected ID to start with 'rs_', got: {reasoning_item.id}"
         assert reasoning_item.status == "completed"
         assert reasoning_item.role == "assistant"
         assert len(reasoning_item.content) == 1
@@ -325,9 +277,7 @@ class TestLiteLLMCompletionResponsesConfig:
         assert "step by step" in reasoning_item.content[0].text
         assert "42" in reasoning_item.content[0].text
 
-        message_items = [
-            item for item in responses_api_response.output if item.type == "message"
-        ]
+        message_items = [item for item in responses_api_response.output if item.type == "message"]
         assert len(message_items) == 1, "Should have exactly one message item"
 
         message_item = message_items[0]
@@ -354,21 +304,19 @@ class TestLiteLLMCompletionResponsesConfig:
         )
 
         # Execute
-        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-            request_input="A simple question?",
-            responses_api_request={},
-            chat_completion_response=chat_completion_response,
+        responses_api_response = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="A simple question?",
+                responses_api_request={},
+                chat_completion_response=chat_completion_response,
+            )
         )
 
         # Assert
-        reasoning_items = [
-            item for item in responses_api_response.output if item.type == "reasoning"
-        ]
+        reasoning_items = [item for item in responses_api_response.output if item.type == "reasoning"]
         assert len(reasoning_items) == 0, "Should have no reasoning items"
 
-        message_items = [
-            item for item in responses_api_response.output if item.type == "message"
-        ]
+        message_items = [item for item in responses_api_response.output if item.type == "message"]
         assert len(message_items) == 1, "Should have exactly one message item"
         assert message_items[0].content[0].text == "Just a regular answer."
         assert responses_api_response.object == "response"
@@ -404,22 +352,20 @@ class TestLiteLLMCompletionResponsesConfig:
         )
 
         # Execute
-        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-            request_input="A question with multiple answers?",
-            responses_api_request={},
-            chat_completion_response=chat_completion_response,
+        responses_api_response = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="A question with multiple answers?",
+                responses_api_request={},
+                chat_completion_response=chat_completion_response,
+            )
         )
 
         # Assert
-        reasoning_items = [
-            item for item in responses_api_response.output if item.type == "reasoning"
-        ]
+        reasoning_items = [item for item in responses_api_response.output if item.type == "reasoning"]
         assert len(reasoning_items) == 1, "Should have exactly one reasoning item"
         assert reasoning_items[0].content[0].text == "First reasoning process."
 
-        message_items = [
-            item for item in responses_api_response.output if item.type == "message"
-        ]
+        message_items = [item for item in responses_api_response.output if item.type == "message"]
         assert len(message_items) == 2, "Should have two message items"
 
     def test_transform_chat_completion_response_status_with_stop(self):
@@ -446,10 +392,12 @@ class TestLiteLLMCompletionResponsesConfig:
             ],
         )
 
-        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-            request_input="this is a test",
-            responses_api_request={},
-            chat_completion_response=chat_completion_response,
+        responses_api_response = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="this is a test",
+                responses_api_request={},
+                chat_completion_response=chat_completion_response,
+            )
         )
 
         assert responses_api_response.status == "completed"
@@ -485,15 +433,15 @@ class TestLiteLLMCompletionResponsesConfig:
             ],
         )
 
-        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-            request_input="this is a test",
-            responses_api_request={},
-            chat_completion_response=chat_completion_response,
+        responses_api_response = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="this is a test",
+                responses_api_request={},
+                chat_completion_response=chat_completion_response,
+            )
         )
 
-        message_items = [
-            item for item in responses_api_response.output if item.type == "message"
-        ]
+        message_items = [item for item in responses_api_response.output if item.type == "message"]
         assert len(message_items) > 0
 
         for item in message_items:
@@ -528,10 +476,12 @@ class TestLiteLLMCompletionResponsesConfig:
             ],
         )
 
-        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-            request_input="this is a test",
-            responses_api_request={},
-            chat_completion_response=chat_completion_response,
+        responses_api_response = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="this is a test",
+                responses_api_request={},
+                chat_completion_response=chat_completion_response,
+            )
         )
 
         assert responses_api_response.status == "incomplete"
@@ -563,10 +513,12 @@ class TestLiteLLMCompletionResponsesConfig:
         }
 
         # Execute
-        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-            request_input="Test",
-            responses_api_request={},
-            chat_completion_response=chat_completion_response,
+        responses_api_response = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="Test",
+                responses_api_request={},
+                chat_completion_response=chat_completion_response,
+            )
         )
 
         # Assert
@@ -598,10 +550,12 @@ class TestLiteLLMCompletionResponsesConfig:
         )
 
         # Execute
-        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-            request_input="Test",
-            responses_api_request={},
-            chat_completion_response=chat_completion_response,
+        responses_api_response = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="Test",
+                responses_api_request={},
+                chat_completion_response=chat_completion_response,
+            )
         )
 
         # Assert - should default to empty dict
@@ -630,26 +584,14 @@ class TestFunctionCallTransformation:
         regular_message = {"type": "message", "role": "user", "content": "Hello"}
 
         # Test function_call detection
-        assert LiteLLMCompletionResponsesConfig._is_input_item_function_call(
-            function_call_item
-        )
-        assert not LiteLLMCompletionResponsesConfig._is_input_item_function_call(
-            function_call_output_item
-        )
-        assert not LiteLLMCompletionResponsesConfig._is_input_item_function_call(
-            regular_message
-        )
+        assert LiteLLMCompletionResponsesConfig._is_input_item_function_call(function_call_item)
+        assert not LiteLLMCompletionResponsesConfig._is_input_item_function_call(function_call_output_item)
+        assert not LiteLLMCompletionResponsesConfig._is_input_item_function_call(regular_message)
 
         # Test function_call_output detection (should still work)
-        assert LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(
-            function_call_output_item
-        )
-        assert not LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(
-            function_call_item
-        )
-        assert not LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(
-            regular_message
-        )
+        assert LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(function_call_output_item)
+        assert not LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(function_call_item)
+        assert not LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(regular_message)
 
     def test_function_call_transformation(self):
         """Test that function_call items are correctly transformed to assistant messages with tool calls"""
@@ -733,9 +675,7 @@ class TestFunctionCallTransformation:
         tool_msg = messages[2]
         assert tool_msg.get("role") == "tool"
         assert tool_msg.get("content") == "Rainy"
-        assert (
-            tool_msg.get("tool_call_id") == "call_1fe70e2a-a596-45ef-b72c-9b8567c460e5"
-        )
+        assert tool_msg.get("tool_call_id") == "call_1fe70e2a-a596-45ef-b72c-9b8567c460e5"
 
     def test_complete_request_transformation_with_function_calls(self):
         """Test the complete request transformation that would be used by the responses API"""
@@ -940,9 +880,7 @@ class TestToolChoiceTransformation:
         Test that {"type": "tool"} is transformed to "required".
         This fixes the Anthropic error: "tool_choice.tool.name: Field required"
         """
-        result = LiteLLMCompletionResponsesConfig._transform_tool_choice(
-            {"type": "tool"}
-        )
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice({"type": "tool"})
         assert result == "required"
 
     def test_transform_tool_choice_preserves_function_with_name(self):
@@ -954,9 +892,7 @@ class TestToolChoiceTransformation:
     def test_transform_tool_choice_responses_flat_function_name(self):
         """Responses-API forced-function with a top-level name maps to the nested Chat
         Completions shape instead of degrading to required and dropping the name"""
-        result = LiteLLMCompletionResponsesConfig._transform_tool_choice(
-            {"type": "function", "name": "get_weather"}
-        )
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice({"type": "function", "name": "get_weather"})
         assert result == {"type": "function", "function": {"name": "get_weather"}}
 
     def test_transform_tool_choice_custom_follows_function_downgrade(self):
@@ -966,9 +902,7 @@ class TestToolChoiceTransformation:
         function tool_choice naming the same tool or it references a tool type absent
         from the converted request.
         """
-        flat = LiteLLMCompletionResponsesConfig._transform_tool_choice(
-            {"type": "custom", "name": "ApplyPatch"}
-        )
+        flat = LiteLLMCompletionResponsesConfig._transform_tool_choice({"type": "custom", "name": "ApplyPatch"})
         assert flat == {"type": "function", "function": {"name": "ApplyPatch"}}
 
         nested = LiteLLMCompletionResponsesConfig._transform_tool_choice(
@@ -982,16 +916,12 @@ class TestToolChoiceTransformation:
 
     def test_transform_tool_choice_function_without_name_falls_back_to_required(self):
         """A function-type dict with no name still falls back to required"""
-        result = LiteLLMCompletionResponsesConfig._transform_tool_choice(
-            {"type": "function"}
-        )
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice({"type": "function"})
         assert result == "required"
 
     def test_transform_tool_choice_function_empty_name_falls_back_to_required(self):
         """An empty top-level name is falsy and must not produce an empty function name"""
-        result = LiteLLMCompletionResponsesConfig._transform_tool_choice(
-            {"type": "function", "name": ""}
-        )
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice({"type": "function", "name": ""})
         assert result == "required"
 
 
@@ -1003,20 +933,12 @@ class TestContentTypeTransformation:
         Test that 'tool_result' content type is transformed to 'text'.
         This fixes: Invalid user message - content type 'tool_result' not valid.
         """
-        result = (
-            LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
-                "tool_result"
-            )
-        )
+        result = LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type("tool_result")
         assert result == "text"
 
     def test_input_text_content_type_transformed_to_text(self):
         """Test that 'input_text' content type is transformed to 'text'"""
-        result = (
-            LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
-                "input_text"
-            )
-        )
+        result = LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type("input_text")
         assert result == "text"
 
     def test_none_text_blocks_filtered_out(self):
@@ -1030,9 +952,7 @@ class TestContentTypeTransformation:
             {"type": "text", "text": None},  # Should be filtered out
             {"type": "text", "text": "another valid"},
         ]
-        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-            content
-        )
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(content)
         assert len(result) == 2
         assert result[0]["text"] == "valid text"
         assert result[1]["text"] == "another valid"
@@ -1054,9 +974,7 @@ class TestToolTransformation:
         (
             result_tools,
             web_search_options,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            tools=tools
-        )
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
 
         # Assert
         assert len(result_tools) == 1
@@ -1078,9 +996,7 @@ class TestToolTransformation:
         (
             result_tools,
             web_search_options,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            tools=tools
-        )
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
 
         # Assert
         assert len(result_tools) == 1
@@ -1108,9 +1024,7 @@ class TestToolTransformation:
         (
             result_tools,
             web_search_options,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            tools=tools
-        )
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
 
         # Assert - computer_use has no Chat Completions equivalent, so it is dropped
         assert len(result_tools) == 0
@@ -1135,9 +1049,7 @@ class TestToolTransformation:
         (
             result_tools,
             web_search_options,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            tools=tools
-        )
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
 
         # Assert - custom tool is converted to a function tool
         assert len(result_tools) == 1
@@ -1162,9 +1074,7 @@ class TestToolTransformation:
         (
             result_tools,
             web_search_options,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            tools=tools
-        )
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
 
         # Assert
         assert len(result_tools) == 1
@@ -1188,9 +1098,7 @@ class TestToolTransformation:
         (
             result_tools,
             _,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            tools=tools
-        )
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
 
         # Assert
         assert len(result_tools) == 1
@@ -1211,9 +1119,7 @@ class TestToolTransformation:
         (
             result_tools,
             _,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            tools=tools
-        )
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
 
         # Assert
         assert len(result_tools) == 1
@@ -1232,9 +1138,7 @@ class TestToolTransformation:
         tools = [custom_tool]
 
         with pytest.raises(ValueError, match="allowed_callers must be a list of strings"):
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=tools
-            )
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
 
     def test_transform_web_search_tools_to_web_search_options(self):
         """Test that web_search tools are converted to web_search_options"""
@@ -1250,9 +1154,7 @@ class TestToolTransformation:
         (
             result_tools,
             web_search_options,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            tools=tools
-        )
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
 
         # Assert
         assert len(result_tools) == 0  # Web search is not added to tools
@@ -1283,9 +1185,7 @@ class TestToolTransformation:
         (
             result_tools,
             web_search_options,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            tools=tools
-        )
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
 
         # Assert
         assert len(result_tools) == 1
@@ -1315,9 +1215,7 @@ class TestToolTransformation:
         (
             result_tools,
             _,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            tools=tools
-        )
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
 
         # Assert
         assert len(result_tools) == 1
@@ -1343,9 +1241,7 @@ class TestToolTransformation:
         (
             result_tools,
             _,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            tools=tools
-        )
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
 
         # Assert
         assert len(result_tools) == 1
@@ -1371,9 +1267,7 @@ class TestToolTransformation:
         (
             result_tools,
             _,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            tools=tools
-        )
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
 
         # Assert
         assert len(result_tools) == 1
@@ -1397,9 +1291,7 @@ class TestToolTransformation:
         (
             result_tools,
             _,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            tools=tools
-        )
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
 
         # Assert
         assert len(result_tools) == 2
@@ -1431,14 +1323,10 @@ class TestToolTransformation:
         (
             result_tools,
             web_search_options,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            tools=tools
-        )
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
 
         # Assert
-        assert (
-            len(result_tools) == 3
-        )  # function, mcp, vertex (web_search becomes options)
+        assert len(result_tools) == 3  # function, mcp, vertex (web_search becomes options)
         assert web_search_options is not None
 
         # Check function tool
@@ -1468,9 +1356,7 @@ class TestToolTransformation:
         (
             result_tools,
             _,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            tools=tools
-        )
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
 
         # Assert
         assert len(result_tools) == 1
@@ -1493,9 +1379,7 @@ class TestToolTransformation:
         (
             result_tools,
             _,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            tools=tools
-        )
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
 
         # Assert
         assert len(result_tools) == 1
@@ -1516,9 +1400,7 @@ class TestToolTransformation:
         (
             result_tools,
             _,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            tools=tools
-        )
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
 
         # Assert
         assert len(result_tools) == 1
@@ -1540,19 +1422,14 @@ class TestToolTransformation:
         (
             result_tools,
             _,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            tools=tools
-        )
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
 
         # Assert
         assert len(result_tools) == 1
         result_tool = result_tools[0]
         assert result_tool["function"]["parameters"]["type"] == "object"
         assert "properties" in result_tool["function"]["parameters"]
-        assert (
-            result_tool["function"]["parameters"]["properties"]["arg"]["type"]
-            == "string"
-        )
+        assert result_tool["function"]["parameters"]["properties"]["arg"]["type"] == "string"
 
     def test_bedrock_anthropic_drops_derived_web_search_options(self):
         """
@@ -1678,11 +1555,7 @@ class TestToolTransformation:
         assert "web_search_options" not in result
 
         bedrock_tool_blocks = _bedrock_tools_pt(tools=result["tools"], model=model)
-        names = [
-            block["toolSpec"]["name"]
-            for block in bedrock_tool_blocks
-            if "toolSpec" in block
-        ]
+        names = [block["toolSpec"]["name"] for block in bedrock_tool_blocks if "toolSpec" in block]
         assert names == ["noop"]
         assert not any(name.startswith("litellm_unnamed_tool_") for name in names)
 
@@ -1982,9 +1855,7 @@ class TestUsageTransformation:
                 Choices(
                     finish_reason="stop",
                     index=0,
-                    message=Message(
-                        content="Here is the generated image.", role="assistant"
-                    ),
+                    message=Message(content="Here is the generated image.", role="assistant"),
                 )
             ],
         )
@@ -2208,9 +2079,7 @@ class TestStreamingIDConsistency:
         # Verify the cached ID is set and matches
         assert iterator._cached_item_id is not None, "Iterator should cache the item_id"
         assert iterator._cached_item_id == item_id_1, "Cached ID should match event IDs"
-        assert (
-            iterator._cached_item_id == "chatcmpl-first-id"
-        ), "Should use the first chunk's ID"
+        assert iterator._cached_item_id == "chatcmpl-first-id", "Should use the first chunk's ID"
 
     def test_streaming_iterator_initial_events_use_cached_id(self):
         """
@@ -2300,9 +2169,7 @@ class TestStreamingIDConsistency:
 
         # Create done events
         text_done_event = iterator.create_output_text_done_event(complete_response)
-        content_done_event = iterator.create_output_content_part_done_event(
-            complete_response
-        )
+        content_done_event = iterator.create_output_content_part_done_event(complete_response)
         item_done_event = iterator.create_output_item_done_event(complete_response)
 
         # Extract IDs
@@ -2362,27 +2229,19 @@ class TestStreamingIDConsistency:
             input=input_items
         )
 
-        roles = [
-            m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
-            for m in messages
-        ]
+        roles = [m.get("role") if isinstance(m, dict) else getattr(m, "role", None) for m in messages]
 
         # Must not have two consecutive assistant messages
         for i in range(len(roles) - 1):
-            assert not (
-                roles[i] == "assistant" and roles[i + 1] == "assistant"
-            ), f"Consecutive assistant messages at indices {i} and {i+1}: {roles}"
+            assert not (roles[i] == "assistant" and roles[i + 1] == "assistant"), (
+                f"Consecutive assistant messages at indices {i} and {i + 1}: {roles}"
+            )
 
         # The single assistant message must contain BOTH tool_calls
         assistant_messages = [
-            m
-            for m in messages
-            if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None))
-            == "assistant"
+            m for m in messages if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) == "assistant"
         ]
-        assert (
-            len(assistant_messages) == 1
-        ), f"Expected 1 assistant message, got {len(assistant_messages)}"
+        assert len(assistant_messages) == 1, f"Expected 1 assistant message, got {len(assistant_messages)}"
 
         assistant_msg = assistant_messages[0]
         tool_calls = (
@@ -2390,27 +2249,19 @@ class TestStreamingIDConsistency:
             if isinstance(assistant_msg, dict)
             else getattr(assistant_msg, "tool_calls", None)
         )
-        assert (
-            tool_calls is not None and len(tool_calls) == 2
-        ), f"Expected 2 tool_calls in the merged assistant message, got: {tool_calls}"
+        assert tool_calls is not None and len(tool_calls) == 2, (
+            f"Expected 2 tool_calls in the merged assistant message, got: {tool_calls}"
+        )
 
-        call_ids = [
-            (tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None))
-            for tc in tool_calls
-        ]
+        call_ids = [(tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)) for tc in tool_calls]
         assert "toolu_01" in call_ids, f"toolu_01 missing from tool_calls: {call_ids}"
         assert "toolu_02" in call_ids, f"toolu_02 missing from tool_calls: {call_ids}"
 
         # Both tool messages must be present
         tool_messages = [
-            m
-            for m in messages
-            if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None))
-            == "tool"
+            m for m in messages if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) == "tool"
         ]
-        assert (
-            len(tool_messages) == 2
-        ), f"Expected 2 tool messages, got {len(tool_messages)}"
+        assert len(tool_messages) == 2, f"Expected 2 tool messages, got {len(tool_messages)}"
 
     def test_single_tool_call_still_works_after_merge_fix(self):
         """
@@ -2432,20 +2283,14 @@ class TestStreamingIDConsistency:
             input=input_items
         )
 
-        roles = [
-            m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
-            for m in messages
-        ]
+        roles = [m.get("role") if isinstance(m, dict) else getattr(m, "role", None) for m in messages]
 
         assert "user" in roles
         assert "assistant" in roles
         assert "tool" in roles
 
         assistant_messages = [
-            m
-            for m in messages
-            if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None))
-            == "assistant"
+            m for m in messages if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) == "assistant"
         ]
         assert len(assistant_messages) == 1
 
@@ -2618,9 +2463,7 @@ class TestEnsureOutputItemContentPartAdded:
             LiteLLMCompletionStreamingIterator,
         )
 
-        iterator = LiteLLMCompletionStreamingIterator.__new__(
-            LiteLLMCompletionStreamingIterator
-        )
+        iterator = LiteLLMCompletionStreamingIterator.__new__(LiteLLMCompletionStreamingIterator)
         iterator.sent_output_item_added_event = False
         iterator.sent_content_part_added_event = False
         iterator._sequence_number = 0
@@ -2713,9 +2556,7 @@ class TestEnsureOutputItemContentPartAdded:
             usage=Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
         )
 
-        completed_event = iterator._emit_response_completed_event(
-            litellm_model_response
-        )
+        completed_event = iterator._emit_response_completed_event(litellm_model_response)
 
         assert completed_event is not None
         assert completed_event.response.status == "incomplete"
@@ -2758,9 +2599,7 @@ class TestCacheControlPreservation:
                 "cache_control": {"type": "ephemeral"},
             }
         ]
-        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-            content
-        )
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(content)
         assert isinstance(result, list)
         assert len(result) == 1
         assert result[0]["cache_control"] == {"type": "ephemeral"}
@@ -2768,9 +2607,7 @@ class TestCacheControlPreservation:
     def test_content_without_cache_control_unaffected(self):
         """Content blocks that don't have cache_control should be unaffected."""
         content = [{"type": "text", "text": "hello"}]
-        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-            content
-        )
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(content)
         assert isinstance(result, list)
         assert len(result) == 1
         assert "cache_control" not in result[0]
@@ -2792,9 +2629,7 @@ class TestCacheControlPreservation:
         )
         assert len(messages) == 1
         msg_content = (
-            messages[0].get("content")
-            if isinstance(messages[0], dict)
-            else getattr(messages[0], "content", None)
+            messages[0].get("content") if isinstance(messages[0], dict) else getattr(messages[0], "content", None)
         )
         assert isinstance(msg_content, list)
         assert msg_content[0]["cache_control"] == {"type": "ephemeral"}
@@ -2807,9 +2642,7 @@ class TestCacheControlPreservation:
                 "cache_control": {"type": "ephemeral"},
             }
         ]
-        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-            content
-        )
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(content)
         assert isinstance(result, list)
         assert len(result) == 1
         assert result[0]["cache_control"] == {"type": "ephemeral"}
@@ -2822,9 +2655,7 @@ class TestCacheControlPreservation:
                 "cache_control": {"type": "ephemeral"},
             }
         ]
-        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-            content
-        )
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(content)
         assert isinstance(result, list)
         assert len(result) == 1
         assert result[0]["cache_control"] == {"type": "ephemeral"}
@@ -2840,16 +2671,590 @@ def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
     for the bedrock-mantle gpt-5.5 non-streaming path."""
     from types import SimpleNamespace
 
-    convert = (
-        LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call
-    )
+    convert = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call
 
-    mantle = SimpleNamespace(
-        id="fc_unique_abc123", call_id="call_0", name="get_weather", arguments="{}"
-    )
+    mantle = SimpleNamespace(id="fc_unique_abc123", call_id="call_0", name="get_weather", arguments="{}")
     assert convert(mantle)["id"] == "fc_unique_abc123"
 
-    openai = SimpleNamespace(
-        id="fc_2", call_id="call_tokyo", name="get_weather", arguments="{}"
-    )
+    openai = SimpleNamespace(id="fc_2", call_id="call_tokyo", name="get_weather", arguments="{}")
     assert convert(openai)["id"] == "call_tokyo"
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_handles_empty_choices_usage_chunk():
+    from unittest.mock import MagicMock
+
+    import litellm
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    reasoning_chunk = ModelResponseStream(
+        id="chatcmpl-test",
+        model="gpt-5-mini",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(reasoning_content="think"),
+            )
+        ],
+    )
+    usage_chunk = ModelResponseStream(
+        id="chatcmpl-test",
+        model="gpt-5-mini",
+        choices=[],
+        usage=Usage(prompt_tokens=3, completion_tokens=1, total_tokens=4),
+        provider_specific_fields={"trace_id": "trace-test"},
+    )
+    mock_stream_wrapper = MagicMock(spec=litellm.CustomStreamWrapper)
+    mock_stream_wrapper.logging_obj = MagicMock()
+    mock_stream_wrapper.__anext__.side_effect = [reasoning_chunk, usage_chunk]
+
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="gpt-5-mini",
+        litellm_custom_stream_wrapper=mock_stream_wrapper,
+        request_input="say hello",
+        responses_api_request={},
+        custom_llm_provider="azure",
+    )
+    iterator.sent_response_created_event = True
+    iterator.sent_response_in_progress_event = True
+
+    events = []
+    for _ in range(20):
+        event = await iterator.__anext__()
+        events.append(event)
+        if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+            break
+    else:
+        pytest.fail("stream did not emit response.completed")
+
+    assert [event.type for event in events] == [
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+        ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE,
+        ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+    ]
+    reasoning_item_id = events[0].item.id
+    assert events[1].item_id == reasoning_item_id
+    assert events[1].delta == "think"
+    assert events[2].item_id == reasoning_item_id
+    assert events[2].text == "think"
+    assert events[3].item_id == reasoning_item_id
+    assert events[4].item.id == reasoning_item_id
+    assert iterator._reasoning_active is False
+    assert iterator._reasoning_done_emitted is True
+    assert len(iterator.collected_chat_completion_chunks) == 2
+    assert iterator.collected_chat_completion_chunks[1]["choices"] == []
+    assert iterator.collected_chat_completion_chunks[1]["usage"]["prompt_tokens"] == 3
+    completed_response = events[-1].response
+    assert completed_response.usage.input_tokens == 3
+    assert completed_response.usage.output_tokens == 1
+    assert completed_response.usage.total_tokens == 4
+    assert completed_response.provider_specific_fields == {"trace_id": "trace-test"}
+
+
+@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.parametrize("combined_chunk", [False, True])
+def test_streaming_iterator_frames_text_after_reasoning_item(sync_mode, combined_chunk):
+    import asyncio
+    from unittest.mock import MagicMock
+
+    import litellm
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    reasoning_chunk = ModelResponseStream(
+        id="chatcmpl-test",
+        model="gpt-5-mini",
+        choices=[StreamingChoices(index=0, delta=Delta(reasoning_content="think"))],
+    )
+    second_reasoning_chunk = ModelResponseStream(
+        id="chatcmpl-test",
+        model="gpt-5-mini",
+        choices=[StreamingChoices(index=0, delta=Delta(reasoning_content=" more"))],
+    )
+    text_chunk = ModelResponseStream(
+        id="chatcmpl-test",
+        model="gpt-5-mini",
+        choices=[StreamingChoices(index=0, delta=Delta(content="answer"))],
+    )
+    tool_chunk = ModelResponseStream(
+        id="chatcmpl-test",
+        model="gpt-5-mini",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call_test",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": "{}"},
+                        }
+                    ]
+                ),
+            )
+        ],
+    )
+    usage_chunk = ModelResponseStream(
+        id="chatcmpl-test",
+        model="gpt-5-mini",
+        choices=[],
+        usage=Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+    )
+    mock_stream_wrapper = MagicMock(spec=litellm.CustomStreamWrapper)
+    mock_stream_wrapper.logging_obj = MagicMock()
+    if combined_chunk:
+        text_chunk.choices[0].delta.tool_calls = tool_chunk.choices[0].delta.tool_calls
+        chunks = [reasoning_chunk, second_reasoning_chunk, text_chunk, usage_chunk]
+    else:
+        chunks = [reasoning_chunk, second_reasoning_chunk, text_chunk, tool_chunk, usage_chunk]
+    if sync_mode:
+        mock_stream_wrapper.__next__.side_effect = chunks
+    else:
+        mock_stream_wrapper.__anext__.side_effect = chunks
+
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="gpt-5-mini",
+        litellm_custom_stream_wrapper=mock_stream_wrapper,
+        request_input="say hello",
+        responses_api_request={},
+        custom_llm_provider="azure",
+    )
+    iterator.sent_response_created_event = True
+    iterator.sent_response_in_progress_event = True
+
+    if sync_mode:
+        events = []
+        for _ in range(20):
+            event = next(iterator)
+            events.append(event)
+            if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+                break
+        else:
+            pytest.fail("stream did not emit response.completed")
+    else:
+
+        async def collect_events():
+            collected = []
+            for _ in range(20):
+                event = await iterator.__anext__()
+                collected.append(event)
+                if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+                    break
+            else:
+                pytest.fail("stream did not emit response.completed")
+            return collected
+
+        events = asyncio.run(collect_events())
+
+    assert [event.type for event in events] == [
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+        ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+        ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE,
+        ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+        ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+        ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+    ]
+    reasoning_item_id = events[0].item.id
+    assert [events[1].delta, events[2].delta] == ["think", " more"]
+    assert events[1].item_id == reasoning_item_id
+    assert events[2].item_id == reasoning_item_id
+    assert events[3].item_id == reasoning_item_id
+    assert events[3].text == "think more"
+    assert events[4].item_id == reasoning_item_id
+    assert events[5].item.id == reasoning_item_id
+    assert [event.output_index for event in events[:6]] == [0] * 6
+    message_item_id = events[6].item.id
+    assert events[8].delta == "answer"
+    assert events[7].item_id == message_item_id
+    assert events[8].item_id == message_item_id
+    assert events[13].item_id == message_item_id
+    assert events[14].item_id == message_item_id
+    assert events[15].item.id == message_item_id
+    assert [events[index].output_index for index in (6, 7, 8, 13, 14, 15)] == [1] * 6
+    tool_item_id = events[9].item.id
+    assert events[10].item_id == tool_item_id
+    assert events[11].item_id == tool_item_id
+    assert events[12].item.id == tool_item_id
+    assert [event.output_index for event in events[9:13]] == [2] * 4
+    assert events[8].sequence_number < events[9].sequence_number < events[10].sequence_number
+    completed_output = events[-1].response.output
+    assert [item.type for item in completed_output] == ["reasoning", "message", "function_call"]
+    assert [item.id for item in completed_output] == [reasoning_item_id, message_item_id, tool_item_id]
+
+
+@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.parametrize("stream_prefix", ["none", "reasoning", "text"])
+def test_tool_output_matches_completed_response(sync_mode, stream_prefix):
+    import asyncio
+    from unittest.mock import MagicMock
+
+    import litellm
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    reasoning_chunk = ModelResponseStream(
+        id="chatcmpl-test",
+        model="gpt-5-mini",
+        choices=[StreamingChoices(index=0, delta=Delta(reasoning_content="think"))],
+    )
+    tool_chunk = ModelResponseStream(
+        id="chatcmpl-test",
+        model="gpt-5-mini",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call_test",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": "{}"},
+                        }
+                    ]
+                ),
+            )
+        ],
+    )
+    usage_chunk = ModelResponseStream(
+        id="chatcmpl-test",
+        model="gpt-5-mini",
+        choices=[],
+        usage=Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+    )
+    text_tool_chunk = ModelResponseStream(
+        id="chatcmpl-test",
+        model="gpt-5-mini",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content="answer", tool_calls=tool_chunk.choices[0].delta.tool_calls),
+            )
+        ],
+    )
+    mock_stream_wrapper = MagicMock(spec=litellm.CustomStreamWrapper)
+    mock_stream_wrapper.logging_obj = MagicMock()
+    if stream_prefix == "reasoning":
+        chunks = [reasoning_chunk, tool_chunk, usage_chunk]
+    elif stream_prefix == "text":
+        chunks = [text_tool_chunk, usage_chunk]
+    else:
+        chunks = [tool_chunk, usage_chunk]
+    if sync_mode:
+        mock_stream_wrapper.__next__.side_effect = chunks
+    else:
+        mock_stream_wrapper.__anext__.side_effect = chunks
+
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="gpt-5-mini",
+        litellm_custom_stream_wrapper=mock_stream_wrapper,
+        request_input="say hello",
+        responses_api_request={},
+        custom_llm_provider="azure",
+    )
+    iterator.sent_response_created_event = True
+    iterator.sent_response_in_progress_event = True
+
+    async def collect_async_events():
+        collected = []
+        for _ in range(20):
+            event = await iterator.__anext__()
+            collected.append(event)
+            if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+                break
+        return collected
+
+    if sync_mode:
+        events = []
+        for _ in range(20):
+            event = next(iterator)
+            events.append(event)
+            if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+                break
+    else:
+        events = asyncio.run(collect_async_events())
+
+    if stream_prefix == "reasoning":
+        assert [event.type for event in events] == [
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+            ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE,
+            ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE,
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+            ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        ]
+        reasoning_item_id = events[0].item.id
+        tool_item_id = events[5].item.id
+        assert [event.output_index for event in events[:5]] == [0] * 5
+        assert [event.output_index for event in events[5:9]] == [1] * 4
+        assert [item.type for item in events[-1].response.output] == ["reasoning", "function_call"]
+        assert [item.id for item in events[-1].response.output] == [reasoning_item_id, tool_item_id]
+    elif stream_prefix == "none":
+        assert [event.type for event in events] == [
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+            ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+            ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        ]
+        tool_item_id = events[0].item.id
+        assert [event.output_index for event in events[:4]] == [1] * 4
+        assert [item.type for item in events[-1].response.output] == ["message", "function_call"]
+        assert events[-1].response.output[1].id == tool_item_id
+    else:
+        assert [event.type for event in events] == [
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+            ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+            ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+            ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        ]
+        message_item_id = events[0].item.id
+        tool_item_id = events[3].item.id
+        assert [events[index].output_index for index in (0, 1, 2, 7, 8, 9)] == [0] * 6
+        assert [event.output_index for event in events[3:7]] == [1] * 4
+        assert [item.type for item in events[-1].response.output] == ["message", "function_call"]
+        assert [item.id for item in events[-1].response.output] == [message_item_id, tool_item_id]
+
+
+def test_reconcile_preserves_nonempty_unstreamed_message():
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText, ResponseReasoningItem
+
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    iterator = LiteLLMCompletionStreamingIterator.__new__(LiteLLMCompletionStreamingIterator)
+    iterator._cached_reasoning_item_id = "rs_streamed"
+    iterator._cached_item_id = None
+    iterator.sent_content_part_added_event = False
+    reasoning_item = ResponseReasoningItem(id="rs_final", summary=[], type="reasoning")
+    empty_message = ResponseOutputMessage(
+        type="message",
+        id="msg_empty",
+        content=[ResponseOutputText(type="output_text", text="", annotations=[])],
+        role="assistant",
+        status="completed",
+    )
+    nonempty_message = ResponseOutputMessage(
+        type="message",
+        id="msg_answer",
+        content=[ResponseOutputText(type="output_text", text="answer", annotations=[])],
+        role="assistant",
+        status="completed",
+    )
+    response = ResponsesAPIResponse.model_construct(output=[reasoning_item, empty_message, nonempty_message])
+
+    iterator._reconcile_streamed_output_items(response)
+
+    assert response.output == [reasoning_item, nonempty_message]
+    assert reasoning_item.id == "rs_streamed"
+
+
+def test_reconcile_removes_empty_generic_message():
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+
+    iterator = LiteLLMCompletionStreamingIterator.__new__(LiteLLMCompletionStreamingIterator)
+    iterator._cached_reasoning_item_id = "rs_streamed"
+    iterator._cached_item_id = None
+    iterator.sent_content_part_added_event = False
+    empty_message = GenericResponseOutputItem(
+        type="message",
+        id="msg_empty",
+        status="completed",
+        role="assistant",
+        content=[OutputText(type="output_text", text="", annotations=[])],
+    )
+    response = ResponsesAPIResponse.model_construct(output=[empty_message])
+
+    iterator._reconcile_streamed_output_items(response)
+
+    assert response.output == []
+
+
+@pytest.mark.parametrize("sync_mode", [False, True])
+def test_reasoning_finish_chunk_does_not_open_empty_message(sync_mode):
+    import asyncio
+    from unittest.mock import MagicMock
+
+    import litellm
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    reasoning_chunk = ModelResponseStream(
+        id="chatcmpl-test",
+        model="gpt-5-mini",
+        choices=[StreamingChoices(index=0, delta=Delta(reasoning_content="think"))],
+    )
+    finish_chunk = ModelResponseStream(
+        id="chatcmpl-test",
+        model="gpt-5-mini",
+        choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")],
+    )
+    mock_stream_wrapper = MagicMock(spec=litellm.CustomStreamWrapper)
+    mock_stream_wrapper.logging_obj = MagicMock()
+    if sync_mode:
+        mock_stream_wrapper.__next__.side_effect = [reasoning_chunk, finish_chunk]
+    else:
+        mock_stream_wrapper.__anext__.side_effect = [reasoning_chunk, finish_chunk]
+
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="gpt-5-mini",
+        litellm_custom_stream_wrapper=mock_stream_wrapper,
+        request_input="say hello",
+        responses_api_request={},
+        custom_llm_provider="azure",
+    )
+    iterator.sent_response_created_event = True
+    iterator.sent_response_in_progress_event = True
+
+    if sync_mode:
+        events = []
+        for _ in range(20):
+            event = next(iterator)
+            events.append(event)
+            if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+                break
+    else:
+
+        async def collect_events():
+            collected = []
+            for _ in range(20):
+                event = await iterator.__anext__()
+                collected.append(event)
+                if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+                    break
+            return collected
+
+        events = asyncio.run(collect_events())
+
+    assert [event.type for event in events] == [
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+        ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE,
+        ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+    ]
+    assert [item.type for item in events[-1].response.output] == ["reasoning"]
+    assert events[-1].response.output[0].id == events[0].item.id
+
+
+def test_sync_streaming_iterator_finalizes_reasoning_on_empty_choices_usage_chunk():
+    from unittest.mock import MagicMock
+
+    import litellm
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    reasoning_chunk = ModelResponseStream(
+        id="chatcmpl-test",
+        model="gpt-5-mini",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(reasoning_content="think"),
+            )
+        ],
+    )
+    usage_chunk = ModelResponseStream(
+        id="chatcmpl-test",
+        model="gpt-5-mini",
+        choices=[],
+        usage=Usage(prompt_tokens=3, completion_tokens=1, total_tokens=4),
+        provider_specific_fields={"trace_id": "trace-test"},
+    )
+    mock_stream_wrapper = MagicMock(spec=litellm.CustomStreamWrapper)
+    mock_stream_wrapper.logging_obj = MagicMock()
+    mock_stream_wrapper.__next__.side_effect = [reasoning_chunk, usage_chunk]
+
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="gpt-5-mini",
+        litellm_custom_stream_wrapper=mock_stream_wrapper,
+        request_input="say hello",
+        responses_api_request={},
+        custom_llm_provider="azure",
+    )
+    iterator.sent_response_created_event = True
+    iterator.sent_response_in_progress_event = True
+
+    events = []
+    for _ in range(20):
+        event = next(iterator)
+        events.append(event)
+        if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+            break
+    else:
+        pytest.fail("stream did not emit response.completed")
+
+    assert [event.type for event in events] == [
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+        ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE,
+        ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+    ]
+    reasoning_item_id = events[0].item.id
+    assert events[1].item_id == reasoning_item_id
+    assert events[1].delta == "think"
+    assert events[2].item_id == reasoning_item_id
+    assert events[2].text == "think"
+    assert events[3].item_id == reasoning_item_id
+    assert events[4].item.id == reasoning_item_id
+    assert iterator._reasoning_active is False
+    assert iterator._reasoning_done_emitted is True
+    completed_response = events[-1].response
+    assert completed_response.usage.input_tokens == 3
+    assert completed_response.usage.output_tokens == 1
+    assert completed_response.usage.total_tokens == 4
+    assert completed_response.provider_specific_fields == {"trace_id": "trace-test"}
