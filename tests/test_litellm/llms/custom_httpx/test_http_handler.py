@@ -669,6 +669,274 @@ async def test_httpx_handler_uses_env_user_agent(monkeypatch):
         await handler.close()
 
 
+# ---------------------------------------------------------------------------
+# Accept-Encoding must not advertise zstd.
+#
+# httpx's ZStandardDecoder resets its decompressor only when `unused_data` is
+# non-empty within the same decode() call. A streamed SSE flush delivers exactly
+# one complete zstd frame per network chunk, leaving eof=True and unused_data
+# empty, so the next decode() reuses a finished decompressobj and raises
+# `httpx.DecodingError: cannot use a decompressobj multiple times`.
+#
+# Amazon Nova's direct API (api.nova.amazon.com) returns
+# `content-encoding: zstd` for streaming SSE as independent frames, which made
+# amazon_nova streaming fail 100% of the time. gzip/deflate/br are unaffected.
+#
+# The advertised set is derived from httpx's own capability-aware decoder
+# registry so that optional codecs (br, zstd) are only offered when their
+# decoder is actually installed - advertising `br` without a Brotli decoder
+# would hand undecoded bytes to downstream parsing.
+# ---------------------------------------------------------------------------
+
+
+def _decoder_registry(*encodings):
+    """A stand-in for httpx's SUPPORTED_DECODERS with a chosen capability set."""
+    return {name: object() for name in ("identity", *encodings)}
+
+
+def test_default_accept_encoding_excludes_zstd(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.delenv("LITELLM_ACCEPT_ENCODING", raising=False)
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+
+    accept_encoding = get_default_headers()["Accept-Encoding"]
+
+    assert "zstd" not in accept_encoding
+    assert "gzip" in accept_encoding
+
+
+def test_default_accept_encoding_still_offers_other_compression(monkeypatch):
+    """Dropping zstd must not disable compression altogether."""
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.delenv("LITELLM_ACCEPT_ENCODING", raising=False)
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+
+    accept_encoding = get_default_headers()["Accept-Encoding"]
+
+    assert "gzip" in accept_encoding
+    assert "deflate" in accept_encoding
+
+
+def test_accept_encoding_advertises_brotli_when_decoder_is_available(monkeypatch):
+    """br is offered when the installed HTTP stack can decode it."""
+    import httpx._decoders
+
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.delenv("LITELLM_ACCEPT_ENCODING", raising=False)
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+    monkeypatch.setattr(
+        httpx._decoders,
+        "SUPPORTED_DECODERS",
+        _decoder_registry("gzip", "deflate", "br", "zstd"),
+    )
+
+    accept_encoding = get_default_headers()["Accept-Encoding"]
+
+    assert "br" in accept_encoding
+    assert "zstd" not in accept_encoding
+
+
+def test_accept_encoding_omits_brotli_when_decoder_is_unavailable(monkeypatch):
+    """br must NOT be advertised without a Brotli decoder.
+
+    httpx pops "br" from SUPPORTED_DECODERS when neither brotli nor brotlicffi
+    is importable. Advertising it anyway would let a server return Brotli that
+    nothing can decode, handing compressed bytes to text/JSON parsing.
+    """
+    import httpx._decoders
+
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.delenv("LITELLM_ACCEPT_ENCODING", raising=False)
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+    monkeypatch.setattr(
+        httpx._decoders,
+        "SUPPORTED_DECODERS",
+        _decoder_registry("gzip", "deflate", "zstd"),
+    )
+
+    accept_encoding = get_default_headers()["Accept-Encoding"]
+
+    assert "br" not in accept_encoding
+    assert "zstd" not in accept_encoding
+    assert "gzip" in accept_encoding
+
+
+def test_accept_encoding_excludes_zstd_even_when_decoder_is_installed(monkeypatch):
+    """zstd is never advertised, precisely because its decoder is the broken one."""
+    import httpx._decoders
+
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.delenv("LITELLM_ACCEPT_ENCODING", raising=False)
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+    monkeypatch.setattr(
+        httpx._decoders,
+        "SUPPORTED_DECODERS",
+        _decoder_registry("gzip", "deflate", "br", "zstd"),
+    )
+
+    assert "zstd" not in get_default_headers()["Accept-Encoding"]
+
+
+def test_accept_encoding_when_zstd_decoder_is_not_installed(monkeypatch):
+    """With zstandard absent httpx already drops zstd; the result is unchanged."""
+    import httpx._decoders
+
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.delenv("LITELLM_ACCEPT_ENCODING", raising=False)
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+    monkeypatch.setattr(
+        httpx._decoders,
+        "SUPPORTED_DECODERS",
+        _decoder_registry("gzip", "deflate", "br"),
+    )
+
+    assert get_default_headers()["Accept-Encoding"] == "gzip, deflate, br"
+
+
+def test_accept_encoding_with_no_optional_decoders(monkeypatch):
+    """Neither br nor zstd available: fall back to the always-present codecs."""
+    import httpx._decoders
+
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.delenv("LITELLM_ACCEPT_ENCODING", raising=False)
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+    monkeypatch.setattr(
+        httpx._decoders,
+        "SUPPORTED_DECODERS",
+        _decoder_registry("gzip", "deflate"),
+    )
+
+    assert get_default_headers()["Accept-Encoding"] == "gzip, deflate"
+
+
+def test_accept_encoding_falls_back_when_registry_cannot_be_read(monkeypatch):
+    """A private-symbol change upstream must not break header construction."""
+    import httpx._decoders
+
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.delenv("LITELLM_ACCEPT_ENCODING", raising=False)
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+    monkeypatch.delattr(httpx._decoders, "SUPPORTED_DECODERS", raising=False)
+
+    accept_encoding = get_default_headers()["Accept-Encoding"]
+
+    assert "gzip" in accept_encoding
+    assert "deflate" in accept_encoding
+    assert "zstd" not in accept_encoding
+
+
+def test_accept_encoding_can_be_overridden_via_env_var(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+    monkeypatch.setenv("LITELLM_ACCEPT_ENCODING", "identity")
+
+    assert get_default_headers()["Accept-Encoding"] == "identity"
+
+
+def test_accept_encoding_is_set_even_when_user_agent_is_overridden(monkeypatch):
+    """The LITELLM_USER_AGENT branch must not drop Accept-Encoding."""
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.delenv("LITELLM_ACCEPT_ENCODING", raising=False)
+    monkeypatch.setenv("LITELLM_USER_AGENT", "Claude Code")
+
+    headers = get_default_headers()
+
+    assert headers["User-Agent"] == "Claude Code"
+    assert "zstd" not in headers["Accept-Encoding"]
+
+
+def test_sync_http_handler_does_not_advertise_zstd(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    monkeypatch.delenv("LITELLM_ACCEPT_ENCODING", raising=False)
+
+    handler = HTTPHandler()
+    try:
+        req = handler.client.build_request("POST", "https://example.com")
+        assert "zstd" not in req.headers.get("accept-encoding", "")
+    finally:
+        handler.close()
+
+
+@pytest.mark.asyncio
+async def test_async_http_handler_does_not_advertise_zstd(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    monkeypatch.delenv("LITELLM_ACCEPT_ENCODING", raising=False)
+
+    handler = AsyncHTTPHandler()
+    try:
+        req = handler.client.build_request("POST", "https://example.com")
+        assert "zstd" not in req.headers.get("accept-encoding", "")
+    finally:
+        await handler.close()
+
+
+def test_caller_can_still_override_accept_encoding_per_request(monkeypatch):
+    """Pinning a default must not prevent a provider from choosing its own value."""
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    monkeypatch.delenv("LITELLM_ACCEPT_ENCODING", raising=False)
+
+    handler = HTTPHandler()
+    try:
+        req = handler.client.build_request(
+            "POST",
+            "https://example.com",
+            headers={"Accept-Encoding": "identity"},
+        )
+        assert req.headers.get_list("Accept-Encoding") == ["identity"]
+    finally:
+        handler.close()
+
+
+def test_httpx_zstd_decoder_is_unreliable_on_frame_aligned_chunks():
+    """Characterization test for the upstream httpx defect this pin works around.
+
+    Documents *why* zstd is excluded. Feeding one complete zstd frame per
+    decode() call - what a streamed SSE flush produces - leaves the decompressor
+    at eof with no unused_data, so the next call reuses a finished decompressobj.
+
+    Self-retiring: encode/httpx#3697 resets the decompressor once a frame
+    completes. When that lands and litellm picks it up, this skips rather than
+    failing on an unrelated dependency bump, and flags that the Accept-Encoding
+    pin can be reconsidered.
+    """
+    zstandard = pytest.importorskip("zstandard")
+    from httpx import DecodingError
+    from httpx._decoders import ZStandardDecoder
+
+    compressor = zstandard.ZstdCompressor()
+    frames = [
+        compressor.compress(b'data: {"chunk": 0}\n\n'),
+        compressor.compress(b'data: {"chunk": 1}\n\n'),
+    ]
+
+    decoder = ZStandardDecoder()
+    decoder.decode(frames[0])
+
+    try:
+        decoder.decode(frames[1])
+    except DecodingError as exc:
+        assert "decompressobj" in str(exc)
+        return
+
+    pytest.skip(
+        "httpx now decodes frame-aligned zstd chunks (encode/httpx#3697); "
+        "the Accept-Encoding pin in get_default_headers can be reconsidered"
+    )
+
+
 def test_get_httpx_client_applies_float_timeout_without_mocking_handler():
     """
     Exercise real _get_httpx_client + HTTPHandler: params={'timeout': x} must reach httpx.Client(timeout=...).
