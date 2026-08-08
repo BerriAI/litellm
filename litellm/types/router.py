@@ -235,6 +235,8 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     ## LOGGING PARAMS ##
     litellm_trace_id: str | None = None
 
+    drop_params: bool | None = None
+
     max_file_size_mb: float | None = None
 
     # Proxy-wide default rate limits applied to any API key using this deployment
