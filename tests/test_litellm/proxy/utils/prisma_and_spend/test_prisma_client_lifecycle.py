@@ -10,6 +10,7 @@ Symbols pinned here:
 from __future__ import annotations
 
 import asyncio
+import builtins
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -109,6 +110,48 @@ def test_prismaclient_init_raises_when_prisma_not_generated() -> None:
     finally:
         if had_prisma_attr:
             _prisma_pkg.Prisma = previous_prisma_attr  # type: ignore[attr-defined]
+
+
+def test_prismaclient_init_raises_when_prisma_package_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing prisma package gets install guidance instead of generate guidance."""
+    real_import = builtins.__import__
+
+    def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "prisma":
+            raise ModuleNotFoundError("No module named 'prisma'", name="prisma")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(Exception, match="litellm\\[proxy,extra_proxy\\]"):
+        PrismaClient(
+            database_url="postgres://x:y@h:5432/db",
+            proxy_logging_obj=MagicMock(),
+        )
+
+
+def test_prismaclient_init_reraises_other_module_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transitive missing module should keep its original import error."""
+    real_import = builtins.__import__
+
+    def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "prisma":
+            raise ModuleNotFoundError("No module named 'other'", name="other")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(ModuleNotFoundError) as exc_info:
+        PrismaClient(
+            database_url="postgres://x:y@h:5432/db",
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert exc_info.value.name == "other"
 
 
 def test_writer_db_returns_db_when_no_routing(prisma_client: PrismaClient) -> None:
