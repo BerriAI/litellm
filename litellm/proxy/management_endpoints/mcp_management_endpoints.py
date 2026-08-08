@@ -22,7 +22,7 @@ import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Final, Literal
+from typing import Any, Final
 
 from fastapi import (
     APIRouter,
@@ -1099,23 +1099,31 @@ if MCP_AVAILABLE:
         """
         user_mcp_management_mode: Final = _get_user_mcp_management_mode()
 
-        if user_mcp_management_mode == "view_all":
+        def _health_entry(server: "LiteLLM_MCPServerTable") -> dict[str, Any]:
+            return {
+                "server_id": server.server_id,
+                "server_name": server.server_name,
+                "alias": server.alias,
+                "status": server.status,
+            }
+
+        if user_mcp_management_mode == "view_all" and not _is_restricted_virtual_key_request(user_api_key_dict):
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_unfiltered(server_ids=server_ids)
-            return [{"server_id": server.server_id, "status": server.status} for server in servers]
+            return [_health_entry(server) for server in servers]
 
         auth_contexts: Final = await build_effective_auth_contexts(user_api_key_dict)
 
-        server_status_map: Final[dict[str, Literal["healthy", "unhealthy", "unknown"] | None]] = {}
+        server_health_map: Final[dict[str, dict[str, Any]]] = {}
         for auth_context in auth_contexts:
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
                 user_api_key_auth=auth_context,
                 server_ids=server_ids,
             )
             for server in servers:
-                if server.server_id not in server_status_map:
-                    server_status_map[server.server_id] = server.status
+                if server.server_id not in server_health_map:
+                    server_health_map[server.server_id] = _health_entry(server)
 
-        return [{"server_id": server_id, "status": status} for server_id, status in server_status_map.items()]
+        return list(server_health_map.values())
 
     @router.post(
         "/server/register",
