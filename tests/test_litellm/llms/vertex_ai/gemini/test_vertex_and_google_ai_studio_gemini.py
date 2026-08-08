@@ -1254,12 +1254,30 @@ def test_vertex_ai_map_tool_input_schema_gets_vertex_schema_conversion():
 
 def test_vertex_ai_map_tool_explicit_parameters_wins_over_input_schema():
     """A tool carrying both keys must keep `parameters` — `input_schema` is only a fallback."""
-    tool = _anthropic_shaped_tool({"type": "object", "properties": {"ignored": {"type": "string"}}})
-    tool["parameters"] = {"type": "object", "properties": {"location": {"type": "string"}}}
+    tool = {
+        **_anthropic_shaped_tool({"type": "object", "properties": {"ignored": {"type": "string"}}}),
+        "parameters": {"type": "object", "properties": {"location": {"type": "string"}}},
+    }
 
     declaration = _declaration_for(tool)
 
     assert declaration["parameters"]["properties"] == {"location": {"type": "string"}}
+
+
+def test_vertex_ai_map_tool_null_parameters_falls_back_to_input_schema():
+    """A JSON `"parameters": null` alongside `input_schema` must take the fallback, not
+    send a null schema upstream."""
+    tool = {
+        **_anthropic_shaped_tool({"type": "object", "properties": {"location": {"type": "string"}}}),
+        "parameters": None,
+    }
+
+    declaration = _declaration_for(tool)
+
+    assert declaration["parameters"] == {
+        "type": "object",
+        "properties": {"location": {"type": "string"}},
+    }
 
 
 def test_vertex_ai_map_tool_without_any_schema_is_unchanged():
