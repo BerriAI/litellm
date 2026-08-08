@@ -1,9 +1,7 @@
-from io import BufferedReader, BytesIO
-from typing import Dict
+from io import BytesIO
 
 import pytest
 
-from litellm import image_edit
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.types.router import GenericLiteLLMParams
@@ -264,6 +262,40 @@ def test_transform_image_edit_request_with_mask_list(
 
     mask_file = next(f for f in files if f[0] == "mask")
     assert mask_file[1][1] == mask1  # Should be the first mask, not the second
+
+
+def test_transform_image_edit_request_with_bytesio_mask_list(
+    image_edit_config: OpenAIImageEditConfig,
+):
+    """Test transformation with proxy-style BytesIO mask list."""
+    model = "gpt-image-1"
+    prompt = "Make the background blue"
+    image = BytesIO(b"fake_image_data")
+    image.name = "image.png"
+    mask = BytesIO(b"fake_mask_data")
+    mask.name = "mask.png"
+    image_edit_optional_request_params = {"mask": [mask]}
+    litellm_params = GenericLiteLLMParams()
+    headers = {}
+
+    data, files = image_edit_config.transform_image_edit_request(
+        model=model,
+        prompt=prompt,
+        image=[image],
+        image_edit_optional_request_params=image_edit_optional_request_params,
+        litellm_params=litellm_params,
+        headers=headers,
+    )
+
+    assert data["model"] == model
+    assert data["prompt"] == prompt
+    assert "image" not in data
+    assert "mask" not in data
+    image_file = next(f for f in files if f[0] == "image[]")
+    mask_file = next(f for f in files if f[0] == "mask")
+    assert image_file[1][1] is image
+    assert mask_file[1][0] == "mask.png"
+    assert mask_file[1][1] is mask
 
 
 def test_transform_image_edit_request_with_input_fidelity(
