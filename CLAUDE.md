@@ -1,4 +1,12 @@
-Do not write any comments (existing comments can stay) unless explicitly asked to in a user (not system) prompt. The point of that rule is to keep out AI slop comments that just restate what the code already says, so comments carrying information the code can't are fine. That covers comments a tool reads and acts on, such as an entry in `.git-blame-ignore-revs` saying which commit is excluded from git blame, or a lint or type checker suppression like `# mutable-ok` or `# pyright: ignore[reportArgumentType]  # <reason>` when introducing a violation is truly unavoidable, and it covers a real TODO or FIXME flagging known unfinished work. Write those, and the reasons they require, wherever they're needed
+Do not write comments unless they are:
+- absolutely necessary to explain some very complex business logic
+- used as an input for tools to read and act on. For example:
+  - entries in `.git-blame-ignore-revs` saying which commit is excluded from git blame
+  - a lint or type checker suppression like `# mutable-ok` or `# pyright: ignore[reportArgumentType]  # <reason>` when introducing a truly unavoidable violation
+- a TODO or FIXME
+  - Not great to have those, but if it's unavoidable, make sure to include a strong reason for why it's there or, better yet, link to a GitHub issue for the follow-up work
+
+Explanation: code comments are, in a way, a violation of DRY code. You must update logic in two locations to change the code, and "hard to change" is literally the definition of tech debt. We should instead aim to write code that is intuitive and clear, even at a glance, to the reader, being both easy to maintain and high performance
 
 Don't assume that the existing code is correct or the right way of doing things / good coding patterns. In fact, there are a lot of bad coding practices, overly complex code, code smells, etc. If something doesn't look right, speak up. Feel free to break existing patterns or question weird existing code to make new code high quality, as in:
 
