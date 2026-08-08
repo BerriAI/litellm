@@ -3,6 +3,7 @@ import MakeAgentPublicForm from "@/components/AIHub/forms/MakeAgentPublicForm";
 import MakeMCPPublicForm from "@/components/AIHub/forms/MakeMCPPublicForm";
 import MakeModelPublicForm from "@/components/AIHub/forms/MakeModelPublicForm";
 import { getMCPHubTableColumns, MCPServerData } from "@/components/AIHub/MCPHubTableColumns";
+import { getCapabilityBadgeColor } from "@/components/AIHub/capabilityColors";
 import { getModelHubTableColumns, ModelHubData } from "@/components/AIHub/ModelHubTableColumns";
 import UsefulLinksManagement from "@/components/AIHub/UsefulLinksManagement";
 import { getClaudeCodePluginsList } from "@/components/networking";
@@ -674,14 +675,18 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
               <div className="flex flex-wrap gap-2">
                 {(() => {
                   const capabilities = getModelCapabilities(selectedModel);
-                  const colors = ["green", "blue", "purple", "orange", "red", "yellow"];
 
                   if (capabilities.length === 0) {
                     return <Text className="text-gray-500">No special capabilities listed</Text>;
                   }
 
-                  return capabilities.map((capability, index) => (
-                    <Badge key={capability} color={colors[index % colors.length]}>
+                  return capabilities.map((capability) => (
+                    <Badge
+                      key={capability}
+                      color={getCapabilityBadgeColor(capability)}
+                      data-testid={`model-detail-capability-${capability}`}
+                      data-capability-color={getCapabilityBadgeColor(capability)}
+                    >
                       {formatCapabilityName(capability)}
                     </Badge>
                   ));
