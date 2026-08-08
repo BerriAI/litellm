@@ -1,6 +1,7 @@
 import json
 import re
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
 import httpx
@@ -2118,7 +2119,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return any(key in usage_object for key in ("cache_read_input_tokens", "cache_creation_input_tokens"))
 
     @staticmethod
-    def _get_reported_thinking_tokens(usage_object: dict) -> int | None:
+    def _get_reported_thinking_tokens(usage_object: Mapping[str, object]) -> int | None:
         """Anthropic reports the billed extended-thinking count in ``usage.output_tokens_details.thinking_tokens``.
 
         It is authoritative: under the default ``display: "omitted"`` the thinking blocks carry no text at all,
@@ -2126,9 +2127,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         the visible summary understates what was billed.
         """
         details: Final = usage_object.get("output_tokens_details")
-        if not isinstance(details, dict):
+        if not isinstance(details, Mapping):
             return None
-        thinking_tokens: Final = details.get("thinking_tokens")
+        thinking_tokens: Final = cast(Mapping[str, object], details).get("thinking_tokens")
         if isinstance(thinking_tokens, bool) or not isinstance(thinking_tokens, (int, float)):
             return None
         return int(thinking_tokens)
