@@ -3119,8 +3119,9 @@ async def test_file_list_cursors_follow_the_owner_scoped_page():
     )
 
     managed_row = MagicMock()
+    managed_row.unified_file_id = "litellm_proxy:mine"
     managed_row.file_object = {
-        "id": "litellm_proxy:mine",
+        "id": "file-mine",
         "bytes": 100,
         "created_at": 1,
         "filename": "mine.jsonl",
