@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from functools import partial
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
 
 import httpx
@@ -606,7 +607,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif "name" in tool:  # functions list
                 _input_schema = tool.get("input_schema") if tool.get("parameters") is None else None
                 _named_tool = (
-                    {**tool, "parameters": _build_vertex_schema(_input_schema)}
+                    MappingProxyType({**tool, "parameters": _build_vertex_schema(_input_schema)})
                     if isinstance(_input_schema, dict)
                     else tool
                 )
