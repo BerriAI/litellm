@@ -66,6 +66,7 @@ import type {
 } from "@/app/(dashboard)/caching/_components/coordination_redis_settings/types";
 import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
 import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity_router_config";
+import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
 import type { RoutingDecision } from "./view_logs/LogDetailsDrawer/RoutingDecisionCard";
 import {
   createApiClient,
@@ -5618,6 +5619,20 @@ export const vectorStoreListCall = async (
     return await response.json();
   } catch (error) {
     console.error("Error listing vector stores:", error);
+    throw error;
+  }
+};
+
+export interface IndexesListResponse {
+  object: string;
+  data: VectorStoreIndex[];
+}
+
+export const indexesListCall = async (accessToken: string): Promise<IndexesListResponse> => {
+  try {
+    return await apiClient.get<IndexesListResponse>(`/v1/indexes`, { accessToken });
+  } catch (error) {
+    console.error("Error listing indexes:", error);
     throw error;
   }
 };
