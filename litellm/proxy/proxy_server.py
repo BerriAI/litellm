@@ -11162,6 +11162,8 @@ async def _try_provider_token_count(
     system: str | None = None,
 ) -> Optional["TokenCountResponse"]:
     """Attempt provider-specific token counting. Returns result on success, None to fall through to local counting."""
+    import openai
+
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
         return None
     try:
@@ -11174,6 +11176,22 @@ async def _try_provider_token_count(
             tools=tools,
             system=system,
         )
+    except (httpx.HTTPError, openai.OpenAIError) as e:
+        error_message = getattr(e, "message", None) or str(e)
+        status_code = getattr(e, "status_code", None)
+        if status_code is None and hasattr(e, "response") and hasattr(e.response, "status_code"):
+            status_code = e.response.status_code
+        status_code = status_code or 500
+
+        if litellm.disable_token_counter is True:
+            raise ProxyException(
+                message=error_message,
+                type="token_counting_error",
+                param="model",
+                code=status_code,
+            )
+        verbose_proxy_logger.warning(
+            f"Provider token counting failed ({status_code}): {error_message}. Falling back to local tokenizer."
     except httpx.HTTPStatusError as e:
         error_message: Final = getattr(e, "message", None) or str(e)
         status_code: Final = getattr(e, "status_code", None) or e.response.status_code
@@ -11183,6 +11201,7 @@ async def _try_provider_token_count(
             param="model",
             code=status_code,
         )
+        return None
     if result is not None and result.error is True:
         if litellm.disable_token_counter is True:
             raise ProxyException(
