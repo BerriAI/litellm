@@ -3,7 +3,7 @@
 ## Initial implementation - covers gemini + image gen calls
 import json
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
@@ -1486,6 +1486,58 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return invocations if invocations else None
 
+    @staticmethod
+    def _code_execution_entry(part: HttpxPartType) -> Mapping[str, Any] | None:
+        """Map one part to its code execution entry, or None when it is neither type.
+
+        The entries stay plain dicts: they are handed to the caller inside
+        `provider_specific_fields`, which is serialised to JSON. A read-only
+        wrapper such as MappingProxyType is rejected by both pydantic and
+        json.dumps, so freezing them here would break the response.
+        """
+        if "executableCode" in part:
+            executable_code = part["executableCode"]
+            return {  # mutable-ok: must stay a plain dict, this is serialised to JSON
+                "type": "executable_code",
+                "language": executable_code.get("language"),
+                "code": executable_code.get("code"),
+            }
+        if "codeExecutionResult" in part:
+            execution_result = part["codeExecutionResult"]
+            return {  # mutable-ok: must stay a plain dict, this is serialised to JSON
+                "type": "code_execution_result",
+                "outcome": execution_result.get("outcome"),
+                "output": execution_result.get("output"),
+            }
+        return None
+
+    @staticmethod
+    def _extract_code_execution_parts(
+        parts: Sequence[HttpxPartType],
+    ) -> tuple[Mapping[str, Any], ...] | None:
+        """Extract code execution parts (executableCode/codeExecutionResult) from parts.
+
+        Gemini returns these when the `codeExecution` tool is enabled: the model
+        writes Python, Google runs it server-side, and the response carries both
+        the source and the console output alongside the regular `text` parts.
+
+        Neither part type is handled by get_assistant_content_message() or
+        _transform_parts(), so today they are dropped. The console output is the
+        only trustworthy source for the computed values - when it is dropped, the
+        caller is left with whatever numbers the model restates from memory.
+
+        Parts are returned in wire order so a consumer can pair each snippet with
+        the result that follows it.
+
+        Returns:
+            Tuple of code execution entries if any found, None otherwise.
+        """
+        code_execution = tuple(
+            entry for part in parts if (entry := VertexGeminiConfig._code_execution_entry(part)) is not None
+        )
+
+        return code_execution or None
+
     def _extract_image_response_from_parts(self, parts: list[HttpxPartType]) -> list[ImageURLListItem] | None:
         """Extract image response from parts if present"""
         images: Final[list[ImageURLListItem]] = []
@@ -2216,6 +2268,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         reasoning_content: str | None = None
         thought_signatures: Any | None = None
         server_side_tool_invocations: list[dict[str, Any]] | None = None
+        code_execution: tuple[Mapping[str, Any], ...] | None = None
 
         for idx, candidate in enumerate(_candidates):
             if "content" not in candidate:
@@ -2260,6 +2313,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 server_side_tool_invocations = VertexGeminiConfig._extract_server_side_tool_invocations(
                     parts=candidate["content"]["parts"]
                 )
+
+                # Extract code execution parts (executableCode / codeExecutionResult)
+                code_execution = VertexGeminiConfig._extract_code_execution_parts(parts=candidate["content"]["parts"])
 
                 if audio_response is not None:
                     cast(dict[str, Any], chat_completion_message)["audio"] = audio_response
@@ -2328,6 +2384,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 tool_invocation_fields = chat_completion_message.get("provider_specific_fields") or {}
                 tool_invocation_fields["server_side_tool_invocations"] = server_side_tool_invocations
                 chat_completion_message["provider_specific_fields"] = tool_invocation_fields
+
+            # Store code execution parts in provider_specific_fields
+            if code_execution is not None:
+                existing_fields = chat_completion_message.get("provider_specific_fields")
+                code_execution_fields = existing_fields or {}  # mutable-ok: accumulator shared with siblings
+                code_execution_fields["code_execution"] = code_execution
+                chat_completion_message["provider_specific_fields"] = code_execution_fields
 
             if isinstance(model_response, ModelResponseStream):
                 choice = VertexGeminiConfig._create_streaming_choice(
