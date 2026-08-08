@@ -11511,13 +11511,14 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-04-20"
     },
     "claude-3-opus-20240229": {
         "cache_creation_input_token_cost": 1.875e-05,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 1.5e-06,
-        "deprecation_date": "2026-05-01",
+        "deprecation_date": "2026-01-05",
         "input_cost_per_token": 1.5e-05,
         "litellm_provider": "anthropic",
         "max_input_tokens": 200000,
@@ -11556,7 +11557,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "deprecation_date": "2026-06-15"
     },
     "claude-4-sonnet-20250514": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -11587,7 +11589,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "deprecation_date": "2026-06-15"
     },
     "claude-sonnet-4-5": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -11812,7 +11815,7 @@
         "cache_creation_input_token_cost_above_1hr": 3e-05,
         "cache_read_input_token_cost": 1.5e-06,
         "input_cost_per_token": 1.5e-05,
-        "deprecation_date": "2026-05-14",
+        "deprecation_date": "2026-06-15",
         "litellm_provider": "anthropic",
         "max_input_tokens": 200000,
         "max_output_tokens": 32000,
@@ -12153,7 +12156,7 @@
         "prompt_cache_min_tokens": 1024
     },
     "claude-sonnet-4-20250514": {
-        "deprecation_date": "2026-05-14",
+        "deprecation_date": "2026-06-15",
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -18887,7 +18890,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "deprecation_date": "2026-04-30"
     },
     "gemini/gemini-robotics-er-2-preview": {
         "cache_read_input_token_cost": 2e-07,
@@ -19098,7 +19102,8 @@
         "output_vector_size": 3072,
         "rpm": 10000,
         "source": "https://ai.google.dev/gemini-api/docs/embeddings#model-versions",
-        "tpm": 10000000
+        "tpm": 10000000,
+        "deprecation_date": "2026-07-14"
     },
     "gemini/gemini-embedding-2-preview": {
         "input_cost_per_audio_per_second": 0.00016,
@@ -19306,7 +19311,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_image_size": false
+        "supports_image_size": false,
+        "deprecation_date": "2026-10-16"
     },
     "gemini/gemini-2.5-flash-image": {
         "cache_read_input_token_cost": 3e-08,
@@ -19356,7 +19362,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_image_size": false
+        "supports_image_size": false,
+        "deprecation_date": "2026-10-02"
     },
     "gemini/gemini-3-pro-image": {
         "input_cost_per_image": 0.0011,
@@ -19442,7 +19449,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "deprecation_date": "2026-06-25"
     },
     "gemini/gemini-3.1-flash-image": {
         "input_cost_per_token": 2.5e-07,
@@ -19526,7 +19534,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "deprecation_date": "2026-06-25"
     },
     "gemini/deep-research-pro-preview-12-2025": {
         "input_cost_per_image": 0.0011,
@@ -19614,7 +19623,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_image_size": false
+        "supports_image_size": false,
+        "deprecation_date": "2026-10-16"
     },
     "gemini/gemini-2.5-flash-lite-preview-09-2025": {
         "cache_read_input_token_cost": 1e-08,
@@ -19661,7 +19671,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_image_size": false
+        "supports_image_size": false,
+        "deprecation_date": "2026-03-31"
     },
     "gemini/gemini-2.5-flash-preview-09-2025": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -19909,7 +19920,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "deprecation_date": "2026-10-16"
     },
     "gemini/gemini-2.5-computer-use-preview-10-2025": {
         "input_cost_per_token": 1.25e-06,
@@ -20045,7 +20057,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "deprecation_date": "2026-05-25"
     },
     "gemini/gemini-3.1-flash-lite": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -20103,7 +20116,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "deprecation_date": "2027-05-07"
     },
     "gemini/gemini-3.5-flash-lite": {
         "cache_read_input_token_cost": 3e-08,
@@ -20821,19 +20835,22 @@
         "litellm_provider": "gemini",
         "mode": "image_generation",
         "output_cost_per_image": 0.02,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "deprecation_date": "2026-08-17"
     },
     "gemini/imagen-4.0-generate-001": {
         "litellm_provider": "gemini",
         "mode": "image_generation",
         "output_cost_per_image": 0.04,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "deprecation_date": "2026-08-17"
     },
     "gemini/imagen-4.0-ultra-generate-001": {
         "litellm_provider": "gemini",
         "mode": "image_generation",
         "output_cost_per_image": 0.06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "deprecation_date": "2026-08-17"
     },
     "gemini/learnlm-1.5-pro-experimental": {
         "input_cost_per_audio_per_second": 0,
@@ -20924,7 +20941,8 @@
         ],
         "supported_output_modalities": [
             "video"
-        ]
+        ],
+        "deprecation_date": "2026-06-30"
     },
     "gemini/veo-3.1-fast-generate-preview": {
         "litellm_provider": "gemini",
@@ -21960,7 +21978,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2026-10-23"
     },
     "gpt-3.5-turbo-0125": {
         "input_cost_per_token": 5e-07,
@@ -21974,7 +21993,8 @@
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2026-10-23"
     },
     "gpt-3.5-turbo-1106": {
         "deprecation_date": "2026-09-28",
@@ -22032,7 +22052,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2026-10-23"
     },
     "gpt-4-0125-preview": {
         "deprecation_date": "2026-03-26",
@@ -22062,7 +22083,7 @@
         "supports_tool_choice": true
     },
     "gpt-4-0613": {
-        "deprecation_date": "2025-06-06",
+        "deprecation_date": "2026-10-23",
         "input_cost_per_token": 3e-05,
         "litellm_provider": "openai",
         "max_input_tokens": 8192,
@@ -22076,7 +22097,7 @@
         "supports_tool_choice": true
     },
     "gpt-4-1106-preview": {
-        "deprecation_date": "2026-03-26",
+        "deprecation_date": "2026-10-23",
         "input_cost_per_token": 1e-05,
         "litellm_provider": "openai",
         "max_input_tokens": 128000,
@@ -22104,7 +22125,8 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-10-23"
     },
     "gpt-4-turbo-2024-04-09": {
         "input_cost_per_token": 1e-05,
@@ -22120,7 +22142,8 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-10-23"
     },
     "gpt-4-turbo-preview": {
         "input_cost_per_token": 1e-05,
@@ -22319,7 +22342,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-10-23"
     },
     "gpt-4.1-nano-2025-04-14": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -22355,7 +22379,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-10-23"
     },
     "gpt-4o": {
         "cache_read_input_token_cost": 1.25e-06,
@@ -22398,7 +22423,8 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-10-23"
     },
     "gpt-4o-2024-08-06": {
         "cache_read_input_token_cost": 1.25e-06,
@@ -22461,7 +22487,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2027-01-20"
     },
     "gpt-4o-audio-preview-2024-12-17": {
         "input_cost_per_audio_token": 4e-05,
@@ -22478,7 +22505,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2027-01-20"
     },
     "gpt-4o-audio-preview-2025-06-03": {
         "input_cost_per_audio_token": 4e-05,
@@ -22495,7 +22523,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2027-01-20"
     },
     "gpt-audio": {
         "input_cost_per_audio_token": 3.2e-05,
@@ -22531,7 +22560,8 @@
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "deprecation_date": "2027-01-20"
     },
     "gpt-audio-1.5": {
         "input_cost_per_audio_token": 3.2e-05,
@@ -22600,7 +22630,8 @@
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "deprecation_date": "2027-01-20"
     },
     "gpt-audio-mini": {
         "input_cost_per_audio_token": 1e-05,
@@ -22636,7 +22667,8 @@
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "deprecation_date": "2027-01-20"
     },
     "gpt-audio-mini-2025-10-06": {
         "input_cost_per_audio_token": 1e-05,
@@ -22672,7 +22704,8 @@
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "deprecation_date": "2026-07-23"
     },
     "gpt-audio-mini-2025-12-15": {
         "input_cost_per_audio_token": 1e-05,
@@ -22708,7 +22741,8 @@
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "deprecation_date": "2027-01-20"
     },
     "gpt-4o-mini": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -22776,7 +22810,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2027-01-20"
     },
     "gpt-4o-mini-audio-preview-2024-12-17": {
         "input_cost_per_audio_token": 1e-05,
@@ -22793,7 +22828,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2027-01-20"
     },
     "gpt-4o-mini-realtime-preview": {
         "cache_creation_input_audio_token_cost": 3e-07,
@@ -22812,7 +22848,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2027-01-20"
     },
     "gpt-4o-mini-realtime-preview-2024-12-17": {
         "cache_creation_input_audio_token_cost": 3e-07,
@@ -22831,7 +22868,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2027-01-20"
     },
     "gpt-4o-mini-search-preview": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -22877,7 +22915,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-07-23"
     },
     "gpt-4o-mini-transcribe": {
         "input_cost_per_audio_token": 1.25e-06,
@@ -22925,7 +22964,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2027-01-20"
     },
     "gpt-4o-realtime-preview-2024-12-17": {
         "cache_read_input_token_cost": 2.5e-06,
@@ -22943,7 +22983,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2027-01-20"
     },
     "gpt-4o-realtime-preview-2025-06-03": {
         "cache_read_input_token_cost": 2.5e-06,
@@ -22961,7 +23002,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2027-01-20"
     },
     "gpt-4o-search-preview": {
         "cache_read_input_token_cost": 1.25e-06,
@@ -23007,7 +23049,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-07-23"
     },
     "gpt-4o-transcribe": {
         "input_cost_per_audio_token": 2.5e-06,
@@ -23033,7 +23076,8 @@
             "/v1/images/generations"
         ],
         "supports_vision": true,
-        "supports_pdf_input": true
+        "supports_pdf_input": true,
+        "deprecation_date": "2026-12-01"
     },
     "gpt-image-1.5-2025-12-16": {
         "cache_read_input_token_cost": 1.25e-06,
@@ -23566,7 +23610,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "deprecation_date": "2026-07-23"
     },
     "gpt-5.2": {
         "cache_read_input_token_cost": 1.75e-07,
@@ -23684,7 +23729,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "deprecation_date": "2026-08-10"
     },
     "gpt-5.3-chat-latest": {
         "cache_read_input_token_cost": 1.75e-07,
@@ -23722,7 +23768,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "deprecation_date": "2026-08-10"
     },
     "gpt-5.2-pro": {
         "input_cost_per_token": 2.1e-05,
@@ -24637,7 +24684,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "deprecation_date": "2026-12-11"
     },
     "gpt-5-2025-08-07": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -24679,7 +24727,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "deprecation_date": "2026-12-11"
     },
     "gpt-5-chat": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -24749,7 +24798,8 @@
         "supports_vision": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "deprecation_date": "2026-07-23"
     },
     "gpt-5-codex": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -24783,7 +24833,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "deprecation_date": "2026-07-23"
     },
     "gpt-5.1-codex": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -24820,7 +24871,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "deprecation_date": "2026-07-23"
     },
     "gpt-5.1-codex-max": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -24854,7 +24906,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "deprecation_date": "2026-07-23"
     },
     "gpt-5.1-codex-mini": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -24891,7 +24944,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "deprecation_date": "2026-07-23"
     },
     "gpt-5.2-codex": {
         "cache_read_input_token_cost": 1.75e-07,
@@ -24928,7 +24982,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "deprecation_date": "2026-07-23"
     },
     "gpt-5.3-codex": {
         "cache_read_input_token_cost": 1.75e-07,
@@ -25049,7 +25104,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "deprecation_date": "2026-12-11"
     },
     "gpt-5-nano": {
         "cache_read_input_token_cost": 5e-09,
@@ -25129,7 +25185,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "deprecation_date": "2026-12-11"
     },
     "gpt-image-1": {
         "cache_read_input_token_cost": 1.25e-06,
@@ -25141,7 +25198,8 @@
         "supported_endpoints": [
             "/v1/images/generations",
             "/v1/images/edits"
-        ]
+        ],
+        "deprecation_date": "2026-10-23"
     },
     "gpt-image-1-mini": {
         "cache_read_input_token_cost": 2e-07,
@@ -25153,7 +25211,8 @@
         "supported_endpoints": [
             "/v1/images/generations",
             "/v1/images/edits"
-        ]
+        ],
+        "deprecation_date": "2026-12-01"
     },
     "gpt-realtime": {
         "cache_creation_input_audio_token_cost": 4e-07,
@@ -25185,7 +25244,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2027-01-20"
     },
     "gpt-realtime-1.5": {
         "cache_creation_input_audio_token_cost": 4e-07,
@@ -25350,7 +25410,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2027-01-20"
     },
     "gpt-realtime-2025-08-28": {
         "cache_creation_input_audio_token_cost": 4e-07,
@@ -25382,7 +25443,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2027-01-20"
     },
     "gradient_ai/alibaba-qwen3-32b": {
         "litellm_provider": "gradient_ai",
@@ -29198,7 +29260,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-10-23"
     },
     "o1-2024-12-17": {
         "cache_read_input_token_cost": 7.5e-06,
@@ -29217,7 +29280,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-10-23"
     },
     "o1-pro": {
         "input_cost_per_token": 0.00015,
@@ -29249,7 +29313,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-10-23"
     },
     "o1-pro-2025-03-19": {
         "input_cost_per_token": 0.00015,
@@ -29281,7 +29346,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-10-23"
     },
     "o3": {
         "cache_read_input_token_cost": 5e-07,
@@ -29357,7 +29423,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-12-11"
     },
     "o3-deep-research": {
         "cache_read_input_token_cost": 2.5e-06,
@@ -29391,7 +29458,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-07-23"
     },
     "o3-deep-research-2025-06-26": {
         "cache_read_input_token_cost": 2.5e-06,
@@ -29425,7 +29493,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-07-23"
     },
     "o3-mini": {
         "cache_read_input_token_cost": 5.5e-07,
@@ -29442,7 +29511,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "deprecation_date": "2026-10-23"
     },
     "o3-mini-2025-01-31": {
         "cache_read_input_token_cost": 5.5e-07,
@@ -29459,7 +29529,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "deprecation_date": "2026-10-23"
     },
     "o3-pro": {
         "input_cost_per_token": 2e-05,
@@ -29521,7 +29592,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-12-11"
     },
     "o4-mini": {
         "cache_read_input_token_cost": 2.75e-07,
@@ -29546,7 +29618,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-10-23"
     },
     "o4-mini-2025-04-16": {
         "cache_read_input_token_cost": 2.75e-07,
@@ -29571,7 +29644,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-10-23"
     },
     "o4-mini-deep-research": {
         "cache_read_input_token_cost": 5e-07,
@@ -29605,7 +29679,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-07-23"
     },
     "o4-mini-deep-research-2025-06-26": {
         "cache_read_input_token_cost": 5e-07,
@@ -29639,7 +29714,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-07-23"
     },
     "oci/meta.llama-3.1-8b-instruct": {
         "input_cost_per_token": 7.2e-07,
@@ -44353,7 +44429,8 @@
         ],
         "supported_output_modalities": [
             "audio"
-        ]
+        ],
+        "deprecation_date": "2026-07-23"
     },
     "gpt-4o-mini-tts-2025-12-15": {
         "input_cost_per_token": 2.5e-06,
@@ -44383,7 +44460,8 @@
         "output_cost_per_token": 5e-06,
         "supported_endpoints": [
             "/v1/audio/transcriptions"
-        ]
+        ],
+        "deprecation_date": "2027-01-20"
     },
     "gpt-4o-mini-transcribe-2025-12-15": {
         "input_cost_per_audio_token": 1.25e-06,
@@ -44471,7 +44549,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2026-07-23"
     },
     "gpt-realtime-mini-2025-12-15": {
         "cache_creation_input_audio_token_cost": 3e-07,
@@ -44504,7 +44583,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2027-01-20"
     },
     "gpt-realtime-whisper": {
         "input_cost_per_second": 0.0002833333333333333,
@@ -44572,7 +44652,8 @@
         "supported_endpoints": [
             "/v1/images/generations",
             "/v1/images/edits"
-        ]
+        ],
+        "deprecation_date": "2026-12-01"
     },
     "gemini-2.0-flash-exp-image-generation": {
         "input_cost_per_token": 0.0,
