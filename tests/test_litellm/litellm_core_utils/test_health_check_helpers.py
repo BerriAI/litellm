@@ -17,6 +17,70 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
 
 
+@pytest.mark.asyncio
+async def test_ahealth_check_uses_provider_mode_and_responses_message_input():
+    mock_response = MagicMock()
+    mock_response._hidden_params = {}
+    mock_aresponses = AsyncMock(return_value=mock_response)
+    mock_acompletion = AsyncMock()
+
+    with (
+        patch(
+            "litellm.main.get_llm_provider",
+            return_value=("gpt-5.6-sol", "chatgpt", None, None),
+        ),
+        patch.object(
+            HealthCheckHelpers,
+            "_update_model_params_with_health_check_tracking_information",
+            side_effect=lambda model_params: model_params,
+        ),
+        patch("litellm.aresponses", new=mock_aresponses),
+        patch("litellm.acompletion", new=mock_acompletion),
+    ):
+        result = await ahealth_check(
+            model_params={"model": "chatgpt/gpt-5.6-sol"},
+            mode=None,
+            prompt="health check",
+        )
+
+    assert "error" not in result
+    mock_aresponses.assert_awaited_once()
+    assert mock_aresponses.await_args.kwargs["input"] == [
+        {"role": "user", "content": "health check"}
+    ]
+    mock_acompletion.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ahealth_check_provider_without_default_mode_keeps_chat():
+    mock_response = MagicMock()
+    mock_response._hidden_params = {}
+    mock_aresponses = AsyncMock()
+    mock_acompletion = AsyncMock(return_value=mock_response)
+
+    with (
+        patch(
+            "litellm.main.get_llm_provider",
+            return_value=("custom-model", "custom", None, None),
+        ),
+        patch.object(
+            HealthCheckHelpers,
+            "_update_model_params_with_health_check_tracking_information",
+            side_effect=lambda model_params: model_params,
+        ),
+        patch("litellm.aresponses", new=mock_aresponses),
+        patch("litellm.acompletion", new=mock_acompletion),
+    ):
+        result = await ahealth_check(
+            model_params={"model": "custom/custom-model"},
+            mode=None,
+        )
+
+    assert "error" not in result
+    mock_acompletion.assert_awaited_once()
+    mock_aresponses.assert_not_awaited()
+
+
 def test_update_model_params_with_health_check_tracking_information():
     """Test _update_model_params_with_health_check_tracking_information adds required tracking info."""
     initial_model_params = {"model": "gpt-3.5-turbo", "api_key": "test_key"}

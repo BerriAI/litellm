@@ -8313,6 +8313,13 @@ async def ahealth_check(
             api_base=api_base_from_params,
             api_key=api_key_from_params,
         )
+        if mode is None and custom_llm_provider in [provider.value for provider in LlmProviders]:
+            provider_config = ProviderConfigManager.get_provider_chat_config(
+                model=model,
+                provider=LlmProviders(custom_llm_provider),
+            )
+            if provider_config is not None:
+                mode = provider_config.get_health_check_mode()
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
 
