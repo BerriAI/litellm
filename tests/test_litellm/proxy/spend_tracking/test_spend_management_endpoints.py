@@ -3557,6 +3557,78 @@ async def test_build_ui_spend_logs_response_sums_multi_round_session_spend():
     assert call_args[2] == [api_key]
 
 
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_sums_multi_round_session_duration():
+    """
+    Regression test: a multi-round session collapses into a single UI row, so that row
+    must carry the duration of every round summed, not just the representative call's.
+    Rows written before request_duration_ms existed are NULL, so the aggregate falls back
+    to endTime - startTime for them.
+    """
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _build_ui_spend_logs_response,
+    )
+
+    session_id = "sess-multi-round-duration"
+    api_key = "hashed-key-xyz"
+    dict_rows = [
+        {
+            "request_id": "req-1",
+            "session_id": session_id,
+            "call_type": "completion",
+            "api_key": api_key,
+            "spend": 0.01,
+            "request_duration_ms": 1200,
+        },
+        {
+            "request_id": "req-2",
+            "session_id": session_id,
+            "call_type": "completion",
+            "api_key": api_key,
+            "spend": 0.02,
+            "request_duration_ms": 4200,
+        },
+    ]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(
+        return_value=[{"session_id": session_id, "_count": {"session_id": 2}}]
+    )
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {
+                "session_id": session_id,
+                "session_total_spend": 0.03,
+                "session_total_duration_ms": 5400.0,
+                "mcp_tool_call_count": 0,
+                "mcp_tool_call_spend": 0.0,
+            }
+        ]
+    )
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=dict_rows,
+        total_records=2,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    rows = result["data"]
+    assert [row["session_total_duration_ms"] for row in rows] == [5400, 5400]
+    assert all(isinstance(row["session_total_duration_ms"], int) for row in rows)
+    assert [row["request_duration_ms"] for row in rows] == [1200, 4200]
+
+    _, call_args, _ = mock_prisma.db.query_raw.mock_calls[0]
+    sql = " ".join(call_args[0].split())
+    assert (
+        'SUM( COALESCE( request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER ) )'
+        in sql
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tests for /spend/logs team-member permission
 # ---------------------------------------------------------------------------

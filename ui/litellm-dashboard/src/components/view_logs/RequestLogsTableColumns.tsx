@@ -133,7 +133,8 @@ export const getRequestLogsTableColumns = ({
       const mcpCount = log.mcp_tool_call_count || 0;
       const mcpSpend = log.mcp_tool_call_spend || 0;
       const isMultiCallSession = (log.session_total_count || 1) > 1;
-      const spend = isMultiCallSession && log.session_total_spend != null ? log.session_total_spend : log.spend;
+      const sessionTotalSpend = isMultiCallSession ? log.session_total_spend : undefined;
+      const spend = sessionTotalSpend ?? log.spend;
       const money = (
         <span>
           <MoneyCell value={spend} decimals={6} />
@@ -143,7 +144,7 @@ export const getRequestLogsTableColumns = ({
       return (
         <div className="flex flex-col items-end">
           {spend ? <CellTooltip content={`$${String(spend)}`} trigger={money} /> : money}
-          {isMultiCallSession && <span className="text-[10px] text-gray-400">session total</span>}
+          {sessionTotalSpend != null && <span className="text-[10px] text-gray-400">session total</span>}
           {mcpCount > 0 && mcpSpend > 0 && (
             <span className="text-[10px] text-amber-600">
               incl. {getSpendString(mcpSpend)} from {mcpCount} MCP
@@ -160,13 +161,19 @@ export const getRequestLogsTableColumns = ({
     enableSorting: true,
     meta: { numeric: true },
     cell: ({ row }) => {
-      const ms = row.original.request_duration_ms;
+      const log = row.original;
+      const isMultiCallSession = (log.session_total_count || 1) > 1;
+      const sessionTotalMs = isMultiCallSession ? log.session_total_duration_ms : undefined;
+      const ms = sessionTotalMs ?? log.request_duration_ms;
       if (ms == null) return <span>-</span>;
       return (
-        <CellTooltip
-          content={`${ms}ms`}
-          trigger={<span className="max-w-[15ch] truncate inline-block">{(ms / 1000).toFixed(2)}</span>}
-        />
+        <div className="flex flex-col items-end">
+          <CellTooltip
+            content={`${ms}ms`}
+            trigger={<span className="max-w-[15ch] truncate inline-block">{(ms / 1000).toFixed(2)}</span>}
+          />
+          {sessionTotalMs != null && <span className="text-[10px] text-gray-400">session total</span>}
+        </div>
       );
     },
   },
