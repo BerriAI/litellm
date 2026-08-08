@@ -251,10 +251,32 @@ def test_split_concatenated_json_non_dict_value():
     assert result == [{}]
 
 
-def test_split_concatenated_json_invalid_raises():
-    """Completely invalid JSON raises JSONDecodeError."""
-    with pytest.raises(json.JSONDecodeError):
-        split_concatenated_json_objects("not json at all")
+def test_split_concatenated_json_wholly_invalid_returns_empty():
+    """
+    Wholly unparseable JSON degrades to an empty list instead of raising.
+
+    Regression for https://github.com/BerriAI/litellm/issues/18667: a raise
+    here propagated out of `_convert_to_bedrock_tool_call_invoke` and turned
+    every replayed conversation into a 500.
+    """
+    assert split_concatenated_json_objects("not json at all") == []
+
+
+def test_split_concatenated_json_malformed_object_returns_empty():
+    """
+    A single malformed object (missing comma between keys) degrades to an
+    empty list rather than raising `Expecting ',' delimiter`.
+    """
+    assert split_concatenated_json_objects('{"location": "Boston" "unit": "celsius"}') == []
+
+
+def test_split_concatenated_json_salvages_prefix_before_truncated_tail():
+    """
+    Complete objects parsed before an unparseable/truncated tail are kept;
+    only the bad tail is discarded.
+    """
+    result = split_concatenated_json_objects('{"a": 1}{"b": 2}{"c":')
+    assert result == [{"a": 1}, {"b": 2}]
 
 
 # ---------------------------------------------------------------------------
