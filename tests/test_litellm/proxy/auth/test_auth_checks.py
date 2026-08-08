@@ -2992,8 +2992,11 @@ async def test_custom_auth_common_checks_opt_in():
     import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy.auth.user_api_key_auth import _run_centralized_common_checks
 
+    from types import SimpleNamespace
+
     valid_token = UserAPIKeyAuth(token="test-token", user_id="u1")
     mock_request = MagicMock()
+    mock_request.state = SimpleNamespace(litellm_authenticated_via_custom_auth=True)
 
     def _attrs(flag, user_custom_auth):
         return {

@@ -3704,10 +3704,9 @@ async def test_centralized_common_checks_routes_header_tags_to_litellm_metadata(
 
 @pytest.mark.asyncio
 async def test_centralized_common_checks_skipped_for_custom_auth_without_flag():
-    """Existing RPS guarantee: custom-auth deployments without
-    custom_auth_run_common_checks must not pay the centralized gate.
-    Custom-auth paths don't use OAuth2/DB-fallback so this skip does
-    not widen any bypass."""
+    """Existing RPS guarantee: a request authenticated by custom auth on a
+    deployment without custom_auth_run_common_checks must not pay the
+    centralized gate."""
     import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
@@ -3715,6 +3714,7 @@ async def test_centralized_common_checks_skipped_for_custom_auth_without_flag():
     token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
     request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
+    request.state.litellm_authenticated_via_custom_auth = True
 
     attrs = _proxy_attrs_for_centralized_checks(
         user_custom_auth=AsyncMock(), flag=False
@@ -3752,6 +3752,7 @@ async def test_centralized_common_checks_runs_for_custom_auth_with_flag():
     request._url = URL(url="/chat/completions")
 
     attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=AsyncMock(), flag=True)
+    request.state.litellm_authenticated_via_custom_auth = True
     originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
     try:
         for k, v in attrs.items():
@@ -3770,6 +3771,89 @@ async def test_centralized_common_checks_runs_for_custom_auth_with_flag():
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_run_when_custom_auth_configured_but_unused():
+    """Configuring custom_auth must not disable authorization for requests
+    that custom auth did not authenticate (enterprise auto/off fallback,
+    custom auth returning an api key string, JWT/OAuth2 requests). Those
+    carry a normal virtual key, so common_checks must still run."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    attrs = _proxy_attrs_for_centralized_checks(
+        user_custom_auth=AsyncMock(), flag=False
+    )
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+        ) as mock_checks:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-4o"},
+                route="/chat/completions",
+            )
+            mock_checks.assert_awaited_once()
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_custom_auth_identity_marks_request_state():
+    """The builder must record that custom auth produced the identity, so the
+    centralized gate can tell custom-auth requests apart from key-auth ones."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy.auth.user_api_key_auth import (
+        _user_api_key_auth_builder,
+        was_authenticated_via_custom_auth,
+    )
+
+    request = Request(scope={"type": "http", "headers": []})
+    request._url = URL(url="/chat/completions")
+
+    async def _custom_auth(request, api_key):
+        return UserAPIKeyAuth(api_key=api_key, user_id="custom-user")
+
+    originals = {
+        "user_custom_auth": getattr(_proxy_server_mod, "user_custom_auth", None),
+        "general_settings": getattr(_proxy_server_mod, "general_settings", {}),
+    }
+    try:
+        _proxy_server_mod.user_custom_auth = _custom_auth
+        _proxy_server_mod.general_settings = {}
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.enterprise_custom_auth", None
+        ):
+            result = await _user_api_key_auth_builder(
+                request=request,
+                api_key="Bearer sk-custom",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={"model": "gpt-4o"},
+            )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    assert result.user_id == "custom-user"
+    assert was_authenticated_via_custom_auth(request) is True
 
 
 @pytest.mark.asyncio

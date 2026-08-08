@@ -1220,12 +1220,12 @@ async def _enforce_responses_ws_first_frame_model_auth(
     from litellm.proxy.auth.user_api_key_auth import (
         _enforce_key_and_fallback_model_access,
         _run_centralized_common_checks,
+        was_authenticated_via_custom_auth,
     )
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_model_list,
         master_key,
-        user_custom_auth,
     )
 
     request_data: Final = {"model": model}
@@ -1236,7 +1236,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
         or general_settings.get("enable_oauth2_proxy_auth", False)
     ):
         return
-    if user_custom_auth is not None and not general_settings.get("custom_auth_run_common_checks", False):
+    if was_authenticated_via_custom_auth(request) and not general_settings.get("custom_auth_run_common_checks", False):
         return
     await _enforce_key_and_fallback_model_access(
         valid_token=user_api_key_dict,
