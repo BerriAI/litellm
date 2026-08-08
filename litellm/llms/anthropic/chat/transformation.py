@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
 import httpx
+from pydantic import ValidationError
 
 import litellm
 from litellm.constants import (
@@ -39,6 +40,7 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesTool,
     AnthropicMessagesToolChoice,
     AnthropicOutputSchema,
+    AnthropicOutputTokensDetails,
     AnthropicSystemMessageContent,
     AnthropicThinkingParam,
     AnthropicWebSearchTool,
@@ -2129,10 +2131,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         details: Final = usage_object.get("output_tokens_details")
         if not isinstance(details, Mapping):
             return None
-        thinking_tokens: Final = cast(Mapping[str, object], details).get("thinking_tokens")
-        if isinstance(thinking_tokens, bool) or not isinstance(thinking_tokens, (int, float)):
+        try:
+            parsed_details: Final = AnthropicOutputTokensDetails.model_validate(details)
+        except ValidationError:
             return None
-        return int(thinking_tokens)
+        return parsed_details.thinking_tokens
 
     def calculate_usage(
         self,

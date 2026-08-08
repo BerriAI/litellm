@@ -2477,7 +2477,7 @@ def test_calculate_usage_reported_thinking_tokens_override_text_estimate():
 
 @pytest.mark.parametrize(
     "output_tokens_details",
-    [None, {}, {"thinking_tokens": None}],
+    [None, {}, {"thinking_tokens": None}, {"thinking_tokens": "180"}, {"thinking_tokens": True}],
 )
 def test_calculate_usage_falls_back_to_estimate_without_reported_thinking_tokens(output_tokens_details):
     """Older responses have no thinking_tokens, so the visible-text estimate must still apply."""
