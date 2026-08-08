@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 
@@ -307,6 +308,91 @@ async def test_aresponses_bedrock_mantle_service_tier_raises_without_drop_params
         mock_post.assert_not_called()
         assert "drop_params" in str(excinfo.value)
         assert "priority" in str(excinfo.value)
+
+
+async def _aresponses_bridge_and_get_chat_completions_body(
+    respx_mock: respx.MockRouter, monkeypatch, **request_kwargs
+) -> dict:
+    original_disable_aiohttp = litellm.disable_aiohttp_transport
+    try:
+        litellm.disable_aiohttp_transport = True
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+        mock_route = respx_mock.post("https://api.openai.com/v1/chat/completions")
+        mock_route.return_value = httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-bridge-test",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": "gpt-5.6",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+            },
+        )
+
+        await litellm.aresponses(
+            model="openai/gpt-5.6",
+            api_key="fake-api-key",
+            input="hi",
+            use_chat_completions_api=True,
+            **request_kwargs,
+        )
+
+        assert len(respx_mock.calls) > 0, "chat completions endpoint was not called"
+        return json.loads(respx_mock.calls.last.request.read())
+    finally:
+        litellm.disable_aiohttp_transport = original_disable_aiohttp
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+@pytest.mark.asyncio
+async def test_aresponses_bridge_does_not_leak_unknown_params_to_chat_completions_body(
+    respx_mock: respx.MockRouter, monkeypatch
+):
+    """
+    Unknown top-level fields sent by clients like the Codex CLI (client_metadata)
+    must not be forwarded to a chat-completions-only backend, which rejects them
+    with a 400. Regression: they used to be swept into extra_body and merged
+    verbatim into the outgoing JSON.
+    """
+    request_body = await _aresponses_bridge_and_get_chat_completions_body(
+        respx_mock,
+        monkeypatch,
+        client_metadata={"x-codex-turn-metadata": '{"turn":1}'},
+        custom_metadata={"team": "qa"},
+    )
+
+    assert "client_metadata" not in request_body
+    assert "custom_metadata" not in request_body
+
+
+@pytest.mark.asyncio
+async def test_aresponses_bridge_forwards_codex_cache_and_verbosity_params(
+    respx_mock: respx.MockRouter, monkeypatch
+):
+    """
+    prompt_cache_key and text.verbosity are valid chat completion params and must
+    survive the bridge so Codex prompt-cache routing and verbosity keep working.
+    """
+    request_body = await _aresponses_bridge_and_get_chat_completions_body(
+        respx_mock,
+        monkeypatch,
+        prompt_cache_key="codex-session-1",
+        safety_identifier="user-7",
+        text={"verbosity": "low"},
+    )
+
+    assert request_body["prompt_cache_key"] == "codex-session-1"
+    assert request_body["safety_identifier"] == "user-7"
+    assert request_body["verbosity"] == "low"
 
 
 async def _aresponses_and_get_request_headers(**request_kwargs) -> dict:
