@@ -37,6 +37,8 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
             }'
     """
 
+    SUPPORTED_PASSAGE_FIELDS: tuple[str, ...] = ("text", "image")
+
     def __init__(self) -> None:
         super().__init__()
         # top_n captured in transform_rerank_request and applied in
