@@ -184,11 +184,10 @@ def test_openrouter_qwen36_plus_model_info():
 @pytest.mark.parametrize(
     "model",
     [
-        "github_copilot/mai-code-1-flash",
-        "github_copilot/mai-code-1-flash-internal",
+        "github_copilot/mai-code-1-flash-picker",
     ],
 )
-def test_github_copilot_mai_code_1_flash_pricing(model):
+def test_github_copilot_mai_code_1_flash_picker_pricing(model):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
@@ -196,11 +195,11 @@ def test_github_copilot_mai_code_1_flash_pricing(model):
 
     assert model_info is not None, f"Missing model pricing entry: {model}"
     assert model_info["litellm_provider"] == "github_copilot"
-    assert model_info["mode"] == "chat"
+    assert model_info["mode"] == "responses"
     assert model_info["input_cost_per_token"] == 7.5e-07
     assert model_info["cache_read_input_token_cost"] == 7.5e-08
     assert model_info["output_cost_per_token"] == 4.5e-06
-    assert model_info["supported_endpoints"] == ["/v1/chat/completions"]
+    assert model_info["supported_endpoints"] == ["/v1/responses"]
 
     prompt_usd, completion_usd = cost_per_token(
         model=model,
@@ -216,6 +215,110 @@ def test_github_copilot_mai_code_1_flash_pricing(model):
 
     assert prompt_usd == pytest.approx((800 * 7.5e-07) + (200 * 7.5e-08))
     assert completion_usd == pytest.approx(500 * 4.5e-06)
+
+
+def test_github_copilot_claude_opus_5_pricing():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "github_copilot/claude-opus-5"
+    model_info = litellm.model_cost.get(model)
+
+    assert model_info is not None, f"Missing model pricing entry: {model}"
+    assert model_info["litellm_provider"] == "github_copilot"
+    assert model_info["mode"] == "chat"
+    assert model_info["max_input_tokens"] == 936000
+    assert model_info["max_output_tokens"] == 64000
+    assert model_info["input_cost_per_token"] == 5e-06
+    assert model_info["cache_read_input_token_cost"] == 5e-07
+    assert model_info["cache_creation_input_token_cost"] == 6.25e-06
+    assert model_info["output_cost_per_token"] == 2.5e-05
+    assert model_info["supported_endpoints"] == [
+        "/v1/messages",
+        "/v1/chat/completions",
+    ]
+    assert model_info["supports_adaptive_thinking"] is True
+    assert model_info["supports_xhigh_reasoning_effort"] is True
+
+    prompt_usd, completion_usd = cost_per_token(
+        model=model,
+        prompt_tokens=1000,
+        completion_tokens=500,
+        custom_llm_provider="github_copilot",
+        usage_object=Usage(
+            prompt_tokens=1000,
+            completion_tokens=500,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=200),
+        ),
+    )
+
+    assert prompt_usd == pytest.approx((800 * 5e-06) + (200 * 5e-07))
+    assert completion_usd == pytest.approx(500 * 2.5e-05)
+
+
+@pytest.mark.parametrize(
+    (
+        "model,threshold,max_input_tokens,input_cost,cache_read_cost,output_cost,"
+        "long_input_cost,long_cache_read_cost,long_output_cost"
+    ),
+    [
+        ("github_copilot/gpt-5.6-luna", 200000, 922000, 2e-7, 2e-8, 1.2e-6, 4e-7, 4e-8, 1.8e-6),
+        ("github_copilot/gpt-5.6-terra", 272000, 922000, 2e-6, 2e-7, 1.2e-5, 4e-6, 4e-7, 1.8e-5),
+        ("github_copilot/grok-4.5", 200000, 372000, 2e-6, 5e-7, 6e-6, 4e-6, 1e-6, 1.2e-5),
+    ],
+)
+def test_github_copilot_tiered_pricing(
+    model: str,
+    threshold: int,
+    max_input_tokens: int,
+    input_cost: float,
+    cache_read_cost: float,
+    output_cost: float,
+    long_input_cost: float,
+    long_cache_read_cost: float,
+    long_output_cost: float,
+):
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_info = litellm.model_cost.get(model)
+    threshold_suffix = f"above_{threshold // 1000}k_tokens"
+
+    assert model_info is not None, f"Missing model pricing entry: {model}"
+    assert model_info["litellm_provider"] == "github_copilot"
+    assert model_info["mode"] == "responses"
+    assert model_info["max_input_tokens"] == max_input_tokens
+    assert model_info["max_output_tokens"] == 128000
+    assert model_info["input_cost_per_token"] == input_cost
+    assert model_info["cache_read_input_token_cost"] == cache_read_cost
+    assert model_info["output_cost_per_token"] == output_cost
+    assert model_info[f"input_cost_per_token_{threshold_suffix}"] == long_input_cost
+    assert model_info[f"cache_read_input_token_cost_{threshold_suffix}"] == long_cache_read_cost
+    assert model_info[f"output_cost_per_token_{threshold_suffix}"] == long_output_cost
+    assert model_info["supported_endpoints"] == ["/v1/responses"]
+    assert model_info["supports_response_schema"] is True
+    assert model_info["supports_vision"] is True
+    assert model_info["supports_reasoning"] is True
+
+    prompt_tokens = threshold + 1000
+    cached_tokens = 200
+    completion_tokens = 500
+    prompt_usd, completion_usd = cost_per_token(
+        model=model,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        custom_llm_provider="github_copilot",
+        usage_object=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+        ),
+    )
+
+    assert prompt_usd == pytest.approx(
+        ((prompt_tokens - cached_tokens) * long_input_cost) + (cached_tokens * long_cache_read_cost)
+    )
+    assert completion_usd == pytest.approx(completion_tokens * long_output_cost)
 
 
 def test_cost_calculator_with_usage(monkeypatch):
