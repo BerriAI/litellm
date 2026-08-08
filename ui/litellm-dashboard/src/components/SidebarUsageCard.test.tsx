@@ -68,7 +68,7 @@ describe("SidebarUsageCard", () => {
 
   it("renders an expanded seat meter reporting value and range when data loads", async () => {
     const { container } = renderWithClient(
-      <SidebarUsageCard accessToken="token" collapsed={false} onExpandRail={() => {}} />,
+      <SidebarUsageCard accessToken="token" userRole="Admin" collapsed={false} onExpandRail={() => {}} />,
     );
 
     await screen.findByText("Enterprise usage");
@@ -83,7 +83,9 @@ describe("SidebarUsageCard", () => {
 
   it("collapses the meter panel when the trigger is toggled", async () => {
     const user = userEvent.setup();
-    renderWithClient(<SidebarUsageCard accessToken="token" collapsed={false} onExpandRail={() => {}} />);
+    renderWithClient(
+      <SidebarUsageCard accessToken="token" userRole="Admin" collapsed={false} onExpandRail={() => {}} />,
+    );
 
     await screen.findByRole("meter");
     await user.click(screen.getByRole("button", { name: /Enterprise usage/i }));
@@ -95,7 +97,7 @@ describe("SidebarUsageCard", () => {
     mockGetRemainingUsers.mockResolvedValue(OVER_LIMIT_DATA);
 
     const { container } = renderWithClient(
-      <SidebarUsageCard accessToken="token" collapsed={false} onExpandRail={() => {}} />,
+      <SidebarUsageCard accessToken="token" userRole="Admin" collapsed={false} onExpandRail={() => {}} />,
     );
 
     await screen.findByRole("meter");
@@ -107,7 +109,9 @@ describe("SidebarUsageCard", () => {
   it("renders nothing when neither seat nor team limits are set", async () => {
     mockGetRemainingUsers.mockResolvedValue(NO_LIMITS_DATA);
 
-    renderWithClient(<SidebarUsageCard accessToken="token" collapsed={false} onExpandRail={() => {}} />);
+    renderWithClient(
+      <SidebarUsageCard accessToken="token" userRole="Admin" collapsed={false} onExpandRail={() => {}} />,
+    );
 
     await waitFor(() => expect(screen.queryByText("Enterprise usage")).not.toBeInTheDocument());
   });
@@ -116,7 +120,7 @@ describe("SidebarUsageCard", () => {
     mockUseLicenseInfo.mockReturnValue(licenseResult(null));
 
     const { container } = renderWithClient(
-      <SidebarUsageCard accessToken="token" collapsed={false} onExpandRail={() => {}} />,
+      <SidebarUsageCard accessToken="token" userRole="Admin" collapsed={false} onExpandRail={() => {}} />,
     );
 
     await waitFor(() => expect(mockGetRemainingUsers).toHaveBeenCalled());
@@ -127,7 +131,9 @@ describe("SidebarUsageCard", () => {
   it("shows the exact license expiration date as the subtitle instead of time remaining", async () => {
     mockUseLicenseInfo.mockReturnValue(licenseResult({ ...ACTIVE_LICENSE, expiration_date: "2099-12-31" }));
 
-    renderWithClient(<SidebarUsageCard accessToken="token" collapsed={false} onExpandRail={() => {}} />);
+    renderWithClient(
+      <SidebarUsageCard accessToken="token" userRole="Admin" collapsed={false} onExpandRail={() => {}} />,
+    );
 
     expect(await screen.findByText("Expires Dec 31, 2099")).toBeInTheDocument();
     expect(screen.queryByText(/(day|days|month|months) remaining/)).not.toBeInTheDocument();
@@ -136,21 +142,33 @@ describe("SidebarUsageCard", () => {
   it("shows the exact date as the subtitle when the license is expired", async () => {
     mockUseLicenseInfo.mockReturnValue(licenseResult({ ...ACTIVE_LICENSE, expiration_date: "2020-01-01" }));
 
-    renderWithClient(<SidebarUsageCard accessToken="token" collapsed={false} onExpandRail={() => {}} />);
+    renderWithClient(
+      <SidebarUsageCard accessToken="token" userRole="Admin" collapsed={false} onExpandRail={() => {}} />,
+    );
 
     expect(await screen.findByText("Expired Jan 1, 2020")).toBeInTheDocument();
   });
 
   it("falls back to Active plan when the license has no expiration date", async () => {
-    renderWithClient(<SidebarUsageCard accessToken="token" collapsed={false} onExpandRail={() => {}} />);
+    renderWithClient(
+      <SidebarUsageCard accessToken="token" userRole="Admin" collapsed={false} onExpandRail={() => {}} />,
+    );
 
     expect(await screen.findByText("Active plan")).toBeInTheDocument();
+  });
+
+  it("forwards the user role to the license hook, which gates the admin-only call", async () => {
+    renderWithClient(
+      <SidebarUsageCard accessToken="token" userRole="Internal User" collapsed={false} onExpandRail={() => {}} />,
+    );
+
+    await waitFor(() => expect(mockUseLicenseInfo).toHaveBeenCalledWith("token", "Internal User"));
   });
 
   it("shows a collapsed rail button that expands the sidebar", async () => {
     const onExpandRail = vi.fn();
     const user = userEvent.setup();
-    renderWithClient(<SidebarUsageCard accessToken="token" collapsed onExpandRail={onExpandRail} />);
+    renderWithClient(<SidebarUsageCard accessToken="token" userRole="Admin" collapsed onExpandRail={onExpandRail} />);
 
     const rail = await screen.findByTitle("Enterprise usage");
     await user.click(rail);

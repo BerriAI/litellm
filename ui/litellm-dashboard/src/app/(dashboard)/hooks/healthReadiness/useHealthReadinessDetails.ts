@@ -1,5 +1,6 @@
 import { useQuery, UseQueryResult } from "@tanstack/react-query";
 import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
+import { hasCapability } from "@/utils/capabilities";
 import { createQueryKeys } from "../common/queryKeysFactory";
 
 const healthReadinessDetailsKeys = createQueryKeys("healthReadinessDetails");
@@ -31,21 +32,23 @@ const fetchHealthReadinessDetails = async (accessToken: string): Promise<HealthR
 };
 
 /**
- * Fetches the auth-gated detailed readiness payload.
+ * Fetches the admin-only detailed readiness payload.
  *
- * The caller passes its own `accessToken` so this hook stays usable in both
- * authed and unauthed shells (e.g. the public model hub renders the navbar
- * with a null token). When `accessToken` is falsy the query stays disabled
- * and `data` is undefined — consumers should treat that as "details
- * unavailable" rather than an error.
+ * The caller passes its own `accessToken` and `userRole` so this hook stays
+ * usable in both authed and unauthed shells (e.g. the public model hub renders
+ * the navbar with a null token and no role). When either is missing, or the
+ * role cannot read proxy diagnostics, the query stays disabled and `data` is
+ * undefined — consumers should treat that as "details unavailable" rather than
+ * an error.
  */
 export const useHealthReadinessDetails = (
   accessToken: string | null | undefined,
+  userRole: string | null | undefined,
 ): UseQueryResult<HealthReadinessDetailsResponse> => {
   return useQuery<HealthReadinessDetailsResponse>({
     queryKey: healthReadinessDetailsKeys.detail("readiness"),
     queryFn: () => fetchHealthReadinessDetails(accessToken!),
-    enabled: Boolean(accessToken),
+    enabled: Boolean(accessToken) && hasCapability(userRole, "viewProxyDiagnostics"),
     staleTime: 5 * 60 * 1000,
     // The response feeds a passive navbar tag and a debug banner — a failed
     // call (e.g. expired token → 401) shouldn't fan out into three retries.

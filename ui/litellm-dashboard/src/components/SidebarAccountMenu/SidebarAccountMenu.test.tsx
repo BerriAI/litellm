@@ -7,6 +7,7 @@ interface AuthMock {
   userId: string | null;
   userEmail: string | null;
   userRoleLabel: string;
+  userRole: string;
   premiumUser: boolean;
   accessToken: string;
 }
@@ -15,6 +16,7 @@ let mockUseAuthorizedImpl: () => AuthMock = () => ({
   userId: "test-user-id",
   userEmail: "test@example.com",
   userRoleLabel: "Admin",
+  userRole: "Admin",
   premiumUser: false,
   accessToken: "test-token",
 });
@@ -45,8 +47,13 @@ vi.mock("@/app/(dashboard)/hooks/useDisableBouncingIcon", () => ({
   useDisableBouncingIcon: () => mockUseDisableBouncingIconImpl(),
 }));
 
+const useHealthReadinessDetailsSpy = vi.hoisted(() => vi.fn());
+
 vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails", () => ({
-  useHealthReadinessDetails: () => ({ data: mockHealthDataImpl() }),
+  useHealthReadinessDetails: (accessToken: string | null, userRole: string | null) => {
+    useHealthReadinessDetailsSpy(accessToken, userRole);
+    return { data: mockHealthDataImpl() };
+  },
 }));
 
 vi.mock("@/utils/localStorageUtils", () => ({
@@ -75,6 +82,7 @@ describe("SidebarAccountMenu", () => {
       userId: "test-user-id",
       userEmail: "test@example.com",
       userRoleLabel: "Admin",
+      userRole: "Admin",
       premiumUser: false,
       accessToken: "test-token",
     });
@@ -128,6 +136,7 @@ describe("SidebarAccountMenu", () => {
       userId: "test-user-id",
       userEmail: "test@example.com",
       userRoleLabel: "Admin",
+      userRole: "Admin",
       premiumUser: true,
       accessToken: "test-token",
     });
@@ -148,6 +157,23 @@ describe("SidebarAccountMenu", () => {
     const versionLink = screen.getByRole("link", { name: /v1\.99\.0/ });
     expect(versionLink).toHaveAttribute("href", "https://docs.litellm.ai/release_notes");
     expect(versionLink).toHaveAttribute("target", "_blank");
+  });
+
+  it("should forward the session role, not the display label, to the readiness hook", () => {
+    // proxy_admin_viewer is the one role where the two diverge: the session role
+    // is "Admin" while the label shown in the menu stays "Admin Viewer".
+    mockUseAuthorizedImpl = () => ({
+      userId: "test-user-id",
+      userEmail: "test@example.com",
+      userRoleLabel: "Admin Viewer",
+      userRole: "Admin",
+      premiumUser: false,
+      accessToken: "test-token",
+    });
+
+    renderWithProviders(<SidebarAccountMenu onLogout={mockOnLogout} />);
+
+    expect(useHealthReadinessDetailsSpy).toHaveBeenCalledWith("test-token", "Admin");
   });
 
   it("should not render the version badge when the version is unavailable", async () => {
@@ -274,6 +300,7 @@ describe("SidebarAccountMenu", () => {
       userId: "default_user_id",
       userEmail: null,
       userRoleLabel: "Admin",
+      userRole: "Admin",
       premiumUser: false,
       accessToken: "test-token",
     });
@@ -287,6 +314,7 @@ describe("SidebarAccountMenu", () => {
       userId: "test-user-id",
       userEmail: null,
       userRoleLabel: "Admin",
+      userRole: "Admin",
       premiumUser: false,
       accessToken: "test-token",
     });

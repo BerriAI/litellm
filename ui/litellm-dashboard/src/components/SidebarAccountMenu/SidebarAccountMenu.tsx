@@ -81,8 +81,15 @@ interface SidebarAccountMenuProps {
 }
 
 const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, collapsed = false }) => {
-  const { userId, userEmail, userRoleLabel: userRole, premiumUser, accessToken } = useAuthorized();
-  const { data: healthData } = useHealthReadinessDetails(accessToken);
+  const {
+    userId,
+    userEmail,
+    userRoleLabel: userRole,
+    userRole: sessionRole,
+    premiumUser,
+    accessToken,
+  } = useAuthorized();
+  const { data: healthData } = useHealthReadinessDetails(accessToken, sessionRole);
   const version = healthData?.litellm_version;
   const disableShowPrompts = useDisableShowPrompts();
   const disableBlogPosts = useDisableBlogPosts();

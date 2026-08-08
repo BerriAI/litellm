@@ -20,13 +20,16 @@ function ModeProbe() {
   );
 }
 
-const renderWithPlugins = (plugins: Plugin[]) => {
-  getMock.mockResolvedValueOnce(plugins);
-  return render(
-    <PluginModeProvider accessToken="sk-test">
+const renderAs = (userRole: string | null) =>
+  render(
+    <PluginModeProvider accessToken="sk-test" userRole={userRole}>
       <ModeProbe />
     </PluginModeProvider>,
   );
+
+const renderWithPlugins = (plugins: Plugin[]) => {
+  getMock.mockResolvedValueOnce(plugins);
+  return renderAs("Admin");
 };
 
 describe("PluginModeProvider effectiveMode fallback", () => {
@@ -52,13 +55,34 @@ describe("PluginModeProvider effectiveMode fallback", () => {
 
   it("falls back to ai-gateway when the plugins fetch fails, never stranding the user", async () => {
     getMock.mockRejectedValueOnce(new Error("network down"));
-    render(
-      <PluginModeProvider accessToken="sk-test">
-        <ModeProbe />
-      </PluginModeProvider>,
-    );
+    renderAs("Admin");
 
     await waitFor(() => expect(getMock).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByTestId("mode").textContent).toBe("ai-gateway"));
+  });
+});
+
+describe("PluginModeProvider role gating", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.setItem("litellm_plugin_mode", "my-plugin");
+  });
+
+  it.each(["Internal User", "Internal Viewer", "Org Admin", "App User"])(
+    "never requests /api/plugins for %s, and still falls back to ai-gateway",
+    async (role) => {
+      renderAs(role);
+
+      await waitFor(() => expect(screen.getByTestId("mode").textContent).toBe("ai-gateway"));
+      expect(getMock).not.toHaveBeenCalled();
+      expect(screen.getByTestId("active").textContent).toBe("none");
+    },
+  );
+
+  it("holds the stored mode while the role is still resolving, so an admin does not flash to ai-gateway", async () => {
+    renderAs(null);
+
+    await waitFor(() => expect(screen.getByTestId("mode").textContent).toBe("my-plugin"));
+    expect(getMock).not.toHaveBeenCalled();
   });
 });

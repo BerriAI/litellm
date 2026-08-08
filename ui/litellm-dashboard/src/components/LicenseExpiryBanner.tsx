@@ -13,6 +13,7 @@ const salesLink = <a href={`mailto:${SALES_EMAIL}`}>{SALES_EMAIL}</a>;
 
 interface LicenseExpiryBannerProps {
   accessToken: string | null;
+  userRole: string | null;
 }
 
 interface LicenseExpiryBannerViewProps {
@@ -89,7 +90,7 @@ export const LicenseExpiryBannerView: React.FC<LicenseExpiryBannerViewProps> = (
   );
 };
 
-export const LicenseExpiryBanner: React.FC<LicenseExpiryBannerProps> = ({ accessToken }) => {
-  const { data } = useLicenseInfo(accessToken);
+export const LicenseExpiryBanner: React.FC<LicenseExpiryBannerProps> = ({ accessToken, userRole }) => {
+  const { data } = useLicenseInfo(accessToken, userRole);
   return <LicenseExpiryBannerView licenseInfo={data ?? null} />;
 };

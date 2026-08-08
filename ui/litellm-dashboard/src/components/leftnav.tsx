@@ -411,7 +411,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   const { data: organizations } = useOrganizations();
   const { data: teams } = useTeams();
   const { logoUrl } = useTheme();
-  const { data: healthData } = useHealthReadinessDetails(accessToken);
+  const { data: healthData } = useHealthReadinessDetails(accessToken, userRole);
   const logout = useLogout(accessToken);
 
   const baseUrl = getProxyBaseUrl();
@@ -637,6 +637,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
         {isAdminRole(userRole) && (
           <SidebarUsageCard
             accessToken={accessToken}
+            userRole={userRole}
             collapsed={collapsed}
             onExpandRail={() => onToggleCollapsed?.()}
           />
