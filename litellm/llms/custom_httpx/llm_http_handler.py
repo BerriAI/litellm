@@ -5041,13 +5041,7 @@ class BaseLLMHTTPHandler:
 
     @staticmethod
     def _server_fulfilled_tools_in_request(logging_obj: LiteLLMLoggingObj, tools: object) -> frozenset[str]:
-        """
-        The request's tools that a registered callback fulfills server-side (e.g.
-        ``headroom_retrieve``). The model's tool_use for such a tool must never
-        reach the client, which cannot execute it: the agentic loop replaces the
-        whole message with a follow-up response, so a stream carrying any of
-        these is buffered (with ping keepalives) instead of forwarded live.
-        """
+        """The request's tools that a registered callback fulfills server-side (e.g. ``headroom_retrieve``)."""
         if not isinstance(tools, list) or not tools:
             return frozenset()
         from litellm.litellm_core_utils.prompt_templates.factory import has_tool_with_name
