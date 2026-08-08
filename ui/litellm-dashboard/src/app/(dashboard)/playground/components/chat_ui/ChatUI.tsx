@@ -30,7 +30,7 @@ import { MCPServer } from "@/components/mcp_tools/types";
 import { ByokCredentialModal } from "@/components/mcp_tools/ByokCredentialModal";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { callMCPTool, fetchMCPServers, fetchMCPToolsets, listMCPTools } from "@/components/networking";
-import { MCPToolset } from "@/components/mcp_tools/types";
+import { MCPTool, MCPToolset } from "@/components/mcp_tools/types";
 import TagSelector from "@/components/tag_management/TagSelector";
 import VectorStoreSelector from "@/components/vector_store_management/VectorStoreSelector";
 import { makeA2ASendMessageRequest } from "../../llm_calls/a2a_send_message";
@@ -610,6 +610,37 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
     setUploadedAudio(file);
+  };
+
+  const handleEndpointChange = (value: string) => {
+    setEndpointType(value);
+    setSelectedModel(undefined);
+    setSelectedAgent(undefined);
+    setShowCustomModelInput(false);
+    setSelectedMCPDirectTool(undefined);
+    if (value === EndpointType.MCP) {
+      setSelectedMCPServers((prev) => (prev.length === 1 && prev[0] !== "__all__" ? prev : []));
+    }
+    try {
+      sessionStorage.removeItem("selectedModel");
+      sessionStorage.removeItem("selectedAgent");
+    } catch {}
+  };
+
+  const handleVoiceChange = (value: OpenAIVoice | null) => {
+    if (value == null) {
+      return;
+    }
+    setSelectedVoice(value);
+    sessionStorage.setItem("selectedVoice", value);
+  };
+
+  const handleAudioFileInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      handleAudioUpload(file);
+    }
+    event.target.value = "";
   };
 
   const mcpServerOptions = useMemo((): MultiSelectOption[] => {
@@ -1272,20 +1303,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   </label>
                   <EndpointSelector
                     endpointType={endpointType}
-                    onEndpointChange={(value) => {
-                      setEndpointType(value);
-                      setSelectedModel(undefined);
-                      setSelectedAgent(undefined);
-                      setShowCustomModelInput(false);
-                      setSelectedMCPDirectTool(undefined);
-                      if (value === EndpointType.MCP) {
-                        setSelectedMCPServers((prev) => (prev.length === 1 && prev[0] !== "__all__" ? prev : []));
-                      }
-                      try {
-                        sessionStorage.removeItem("selectedModel");
-                        sessionStorage.removeItem("selectedAgent");
-                      } catch {}
-                    }}
+                    onEndpointChange={handleEndpointChange}
                     className="mb-4"
                   />
 
@@ -1295,16 +1313,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         <Volume2 className="mr-2 size-4" aria-hidden="true" />
                         Voice
                       </label>
-                      <ShadcnSelect
-                        value={selectedVoice}
-                        onValueChange={(value) => {
-                          if (value == null) {
-                            return;
-                          }
-                          setSelectedVoice(value);
-                          sessionStorage.setItem("selectedVoice", value);
-                        }}
-                      >
+                      <ShadcnSelect value={selectedVoice} onValueChange={handleVoiceChange}>
                         <SelectTrigger className="w-full" size="sm" aria-label="Voice">
                           <SelectValue />
                         </SelectTrigger>
@@ -1871,11 +1880,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                             type="file"
                             accept={AUDIO_ACCEPT}
                             className="sr-only"
-                            onChange={(event) => {
-                              const file = event.target.files?.[0];
-                              if (file) handleAudioUpload(file);
-                              event.target.value = "";
-                            }}
+                            onChange={handleAudioFileInputChange}
                           />
                         </label>
                       ) : (
@@ -2043,18 +2048,18 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         <div className="max-h-48 min-h-[44px] flex-1 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50/50 p-2">
                           {(() => {
                             const rawSel = selectedMCPServers[0];
-                            let toolPool: { name: string }[] = [];
+                            let toolPool: MCPTool[] = [];
                             if (rawSel.startsWith("toolset:")) {
                               const toolsetId = rawSel.slice("toolset:".length);
                               const toolset = mcpToolsets.find((t) => t.toolset_id === toolsetId);
                               if (toolset) {
                                 const uniqueServerIds = [...new Set(toolset.tools.map((t) => t.server_id))];
                                 uniqueServerIds.forEach((sid) => {
-                                  toolPool = toolPool.concat(serverToolsMap[sid] || []);
+                                  toolPool = toolPool.concat((serverToolsMap[sid] || []) as MCPTool[]);
                                 });
                               }
                             } else {
-                              toolPool = serverToolsMap[rawSel] || [];
+                              toolPool = (serverToolsMap[rawSel] || []) as MCPTool[];
                             }
                             const mcpTool = toolPool.find((t) => t.name === selectedMCPDirectTool);
                             return mcpTool ? (
