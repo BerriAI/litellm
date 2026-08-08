@@ -1,0 +1,22 @@
+[Unit]
+Description=LiteLLM agent-session runtime daemon
+Documentation=https://docs.litellm.ai/docs/agent_sessions
+After=network-online.target cloud-final.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+# Runtime config dropped by user-data.
+EnvironmentFile=-/etc/litellm-agent/runtime.env
+ExecStart=/usr/bin/python3.13 /opt/litellm-agent-runtime/daemon
+Restart=on-failure
+RestartSec=5
+# Limit accidental log volume; the daemon should rate-limit its own output.
+StandardOutput=journal
+StandardError=journal
+KillMode=mixed
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
