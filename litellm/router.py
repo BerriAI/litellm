@@ -609,6 +609,9 @@ class Router:
         # ``id()``-reuse risk after GC). See
         # ``litellm.proxy.auth.auth_checks._is_model_cost_zero``.
         self._zero_cost_cache: dict[str, bool] = {}
+        self._get_model_group_strategy_config = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(
+            self._compute_model_group_strategy_config
+        )
 
         if model_list is not None:
             # set_model_list will build indices automatically
@@ -1153,7 +1156,7 @@ class Router:
         normalized: Final = self._normalize_strategy(raw) if isinstance(raw, (str, RoutingStrategy)) else None
         return normalized, info.get("routing_strategy_args") or _EMPTY_MAPPING
 
-    def _get_model_group_strategy_config(self, model: str) -> tuple[str, Mapping[str, object]] | None:
+    def _compute_model_group_strategy_config(self, model: str) -> tuple[str, Mapping[str, object]] | None:
         """
         Reads `model_info.routing_strategy` (+ `routing_strategy_args`) off the
         deployments of `model`. When deployments of the same model_name disagree,
@@ -1161,7 +1164,9 @@ class Router:
         stable across edits and upserts (those re-append the deployment, so
         model_list order is not); invalid or conflicting values are reported
         once per offending config so a bad stored value can never take down
-        that model's traffic.
+        that model's traffic. Runs on every request, so the constructor wraps
+        it as `_get_model_group_strategy_config` with a per-instance lru_cache
+        that `_invalidate_model_group_info_cache` clears on model-list changes.
         """
         indices: Final = self.model_name_to_deployment_indices.get(model)
         if not indices:
@@ -10112,6 +10117,7 @@ class Router:
         result and bypass budget enforcement.
         """
         self._cached_get_model_group_info.cache_clear()
+        self._get_model_group_strategy_config.cache_clear()
         self._zero_cost_cache.clear()
 
     def _invalidate_access_groups_cache(self) -> None:

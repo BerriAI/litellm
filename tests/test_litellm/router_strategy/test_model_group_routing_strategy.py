@@ -244,6 +244,20 @@ def test_deleting_deployment_evicts_its_selector():
     assert all(c is not selector for c in litellm.callbacks)
 
 
+def test_strategy_config_is_cached_until_model_list_changes():
+    router = _build_router(
+        [_deployment("quality", "openai/gpt-4o", "d1", {"routing_strategy": "cost-based-routing"})]
+    )
+    assert router._get_routing_context("quality")[0] == "cost-based-routing"
+
+    for idx in router.model_name_to_deployment_indices["quality"]:
+        router.model_list[idx]["model_info"]["routing_strategy"] = "least-busy"
+    assert router._get_routing_context("quality")[0] == "cost-based-routing"
+
+    _upsert(router, "quality", "openai/gpt-4o", "d1", {"routing_strategy": "latency-based-routing"})
+    assert router._get_routing_context("quality")[0] == "latency-based-routing"
+
+
 def test_config_and_args_warnings_fire_independently(caplog):
     router = _build_router(
         [
@@ -281,8 +295,13 @@ def test_changed_bad_args_warn_again(caplog):
         router._get_routing_context("quality")
         router._get_routing_context("quality")
 
-        for idx in router.model_name_to_deployment_indices["quality"]:
-            router.model_list[idx]["model_info"]["routing_strategy_args"] = {"ttl": "still-bogus"}
+        _upsert(
+            router,
+            "quality",
+            "openai/gpt-4o",
+            "d1",
+            {"routing_strategy": "latency-based-routing", "routing_strategy_args": {"ttl": "still-bogus"}},
+        )
         router._get_routing_context("quality")
     args_warnings = [r for r in caplog.records if "cannot initialize strategy" in r.getMessage()]
     assert len(args_warnings) == 2
