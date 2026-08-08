@@ -18,6 +18,12 @@ pytestmark = pytest.mark.e2e
 
 
 class TestApplyGuardrailEndpoint:
+    @pytest.mark.skip(
+        reason=(
+            "LIT-5120: flaky - /apply_guardrail round-robins onto a pod that has not synced the "
+            "guardrail the test just created and 404s (6 of ~21 stage runs since Jul 28)"
+        )
+    )
     @pytest.mark.covers(
         "guardrail.litellm_content_filter.apply_endpoint.blocks",
         "guardrail.litellm_content_filter.apply_endpoint.allows",
