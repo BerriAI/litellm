@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import type { LogEntry } from "../view_logs/columns";
 
 const LOGS_QUERY_KEY = "chat-user-logs";
 const PAGE_SIZE = 50;
@@ -32,22 +33,8 @@ function getStartMoment(range: TimeRange): moment.Moment {
   return moment().subtract(30, "days");
 }
 
-interface LogRow {
-  request_id: string;
-  model: string;
-  custom_llm_provider?: string;
-  status?: string;
-  spend: number;
-  total_tokens: number;
-  prompt_tokens: number;
-  completion_tokens: number;
-  startTime: string;
-  endTime: string;
-  request_duration_ms?: number;
-}
-
 interface PaginatedLogs {
-  data: LogRow[];
+  data: LogEntry[];
   total: number;
   page: number;
   page_size: number;
@@ -71,13 +58,13 @@ function formatCost(spend: number): string {
   return `$${value.toFixed(4)}`;
 }
 
-function durationMs(row: LogRow): number | null {
+function durationMs(row: LogEntry): number | null {
   if (row.request_duration_ms != null) return row.request_duration_ms;
   if (row.startTime && row.endTime) return Date.parse(row.endTime) - Date.parse(row.startTime);
   return null;
 }
 
-function formatDuration(row: LogRow): string {
+function formatDuration(row: LogEntry): string {
   const ms = durationMs(row);
   if (ms == null || Number.isNaN(ms)) return "-";
   return `${(ms / 1000).toFixed(2)}s`;
@@ -147,7 +134,7 @@ function LogsError({ onRetry }: { onRetry: () => void }) {
   );
 }
 
-function LogsTable({ rows, onRowClick }: { rows: LogRow[]; onRowClick: (row: LogRow) => void }) {
+function LogsTable({ rows, onRowClick }: { rows: LogEntry[]; onRowClick: (row: LogEntry) => void }) {
   return (
     <div className="overflow-hidden rounded-lg border">
       <Table>
@@ -190,7 +177,7 @@ function LogDetailDialog({
   isLoading,
   onClose,
 }: {
-  log: LogRow | null;
+  log: LogEntry | null;
   details: LogDetails | undefined;
   isLoading: boolean;
   onClose: () => void;
@@ -248,7 +235,7 @@ function LogDetailDialog({
 const LogsPanel: React.FC<Props> = ({ accessToken, userId }) => {
   const [timeRange, setTimeRange] = useState<TimeRange>("24h");
   const [page, setPage] = useState(1);
-  const [selectedLog, setSelectedLog] = useState<LogRow | null>(null);
+  const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
 
   const startDate = getStartMoment(timeRange).utc().format("YYYY-MM-DD HH:mm:ss");
   const endDate = moment().utc().format("YYYY-MM-DD HH:mm:ss");
