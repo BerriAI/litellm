@@ -181,6 +181,42 @@ def test_nothing_staged_includes_untracked_files_in_scope(tmp_path: Path) -> Non
     assert "linting Python" in proc.stdout
 
 
+def test_nothing_staged_deletion_only_branch_triggers_checks(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    _set_base_ref(repo)
+    (repo / "litellm" / "foo.py").unlink()
+    _commit_all(repo, "delete module")
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nothing to check" not in proc.stdout
+    assert "litellm/foo.py" in proc.stdout
+    assert "linting Python" in proc.stdout
+    assert "ruff format --check" not in proc.stdout
+
+
+def test_staged_deletion_triggers_checks_without_feeding_missing_files_to_tools(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    subprocess.run(["git", "rm", "-q", "litellm/foo.py"], cwd=repo, check=True)
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nothing staged" not in proc.stdout
+    assert "linting Python" in proc.stdout
+    assert "ruff format --check" not in proc.stdout
+
+
+def test_deleted_dashboard_file_still_triggers_dashboard_lint(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    _set_base_ref(repo)
+    (repo / "ui" / "litellm-dashboard" / "src" / "app.ts").unlink()
+    _commit_all(repo, "delete dashboard file")
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "linting dashboard" in proc.stdout
+
+
 def test_nothing_staged_and_no_changes_is_an_explicit_no_op(tmp_path: Path) -> None:
     repo, bin_dir = _sandbox(tmp_path)
     _commit_all(repo, "base")

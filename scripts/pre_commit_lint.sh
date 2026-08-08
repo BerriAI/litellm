@@ -44,7 +44,7 @@ fi
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
-staged=$(git diff --cached --name-only --diff-filter=ACMR)
+staged=$(git diff --cached --name-only --diff-filter=ACMRD)
 unstaged=$(git diff --name-only)
 untracked=$(git ls-files --others --exclude-standard)
 
@@ -57,7 +57,7 @@ else
         echo "  Fix: git fetch origin litellm_internal_staging" >&2
         exit 1
     }
-    scope=$(printf '%s\n' "$(git diff --name-only --diff-filter=ACMR "$merge_base")" "$untracked" | sed '/^$/d' | sort -u)
+    scope=$(printf '%s\n' "$(git diff --name-only --diff-filter=ACMRD "$merge_base")" "$untracked" | sed '/^$/d' | sort -u)
     if [ -z "$scope" ]; then
         echo "check: nothing to check (no staged files, no working-tree changes, no branch changes vs origin/litellm_internal_staging)"
         exit 0
@@ -67,6 +67,12 @@ else
 fi
 
 scope_match() { printf '%s\n' "$scope" | grep -E "$1" || true; }
+
+existing_files() {
+    while IFS= read -r f; do
+        if [ -f "$f" ]; then printf '%s\n' "$f"; fi
+    done
+}
 
 litellm_py_pattern='^litellm/.*\.py$'
 e2e_py_pattern='^tests/e2e/.*\.py$'
@@ -80,15 +86,17 @@ ui_eslint_pattern='^ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs)$'
 litellm_py_files=$(scope_match "$litellm_py_pattern")
 e2e_py_files=$(scope_match "$e2e_py_pattern")
 # ruff format (and CI's format step) skip enterprise; the rest of make lint covers it.
-fmt_files=$(printf '%s\n' "$litellm_py_files" | grep -v '^litellm/enterprise/' || true)
+fmt_files=$(printf '%s\n' "$litellm_py_files" | grep -v '^litellm/enterprise/' | existing_files)
 # check-ui-api-types.yml triggers on any file under litellm/proxy or litellm/types
 # (Prisma schema and configs included, not just Python) plus the generator and its
 # lockfiles, so match that whole trigger set rather than a Python subset.
 spec_files=$(scope_match "$spec_pattern")
 # CI's frontend-lint runs prettier over a wider extension set than eslint; keep that
 # split so this flags exactly what the job would.
-ui_prettier_files=$(scope_match "$ui_prettier_pattern")
-ui_eslint_files=$(scope_match "$ui_eslint_pattern")
+ui_prettier_changed=$(scope_match "$ui_prettier_pattern")
+ui_eslint_changed=$(scope_match "$ui_eslint_pattern")
+ui_prettier_files=$(printf '%s\n' "$ui_prettier_changed" | existing_files)
+ui_eslint_files=$(printf '%s\n' "$ui_eslint_changed" | existing_files)
 
 # CI lints the committed tree, so with staged files this script predicts CI for
 # what you have STAGED (every trigger above reads `git diff --cached`). The tools
@@ -116,7 +124,7 @@ if [ -n "$staged" ]; then
     }
     warn_skipped "Python lint (make lint)" "$litellm_py_pattern" "$litellm_py_files"
     warn_skipped "tests/e2e checks (basedpyright + raw HTTP client ban)" "$e2e_py_pattern" "$e2e_py_files"
-    warn_skipped "dashboard lint (prettier + eslint + lint budgets)" "$ui_prettier_pattern" "$ui_prettier_files"
+    warn_skipped "dashboard lint (prettier + eslint + lint budgets)" "$ui_prettier_pattern" "$ui_prettier_changed"
     warn_skipped "dashboard API-type sync (npm run gen:api)" "$spec_pattern" "$spec_files"
 fi
 
@@ -214,7 +222,7 @@ dashboard_checks() {
     lint_dashboard || { echo "✗ Dashboard lint failed. See above; format with: (cd ui/litellm-dashboard && npm run format)." >&2; return 1; }
 }
 
-if [ -n "$ui_prettier_files" ] || [ -n "$ui_eslint_files" ]; then
+if [ -n "$ui_prettier_changed" ] || [ -n "$ui_eslint_changed" ]; then
     dash_log=$(mktemp)
     set -m
     dashboard_checks > "$dash_log" 2>&1 &
