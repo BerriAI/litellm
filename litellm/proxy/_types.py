@@ -1,7 +1,7 @@
 import enum
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -11,6 +11,7 @@ from pydantic import (
     ConfigDict,
     Field,
     Json,
+    PositiveInt,
     field_validator,
     model_validator,
 )
@@ -1102,6 +1103,8 @@ class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
 
 class KeyRequestBase(GenerateRequestBase):
     key: str | None = None
+    default_estimated_output_tokens: PositiveInt | None = None
+    default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     budget_id: str | None = None
     tags: list[str] | None = None
     disable_global_guardrails: bool | None = None
@@ -1819,6 +1822,8 @@ class NewTeamRequest(TeamBase):
     )
 
     model_tpm_limit: dict[str, int] | None = None
+    default_estimated_output_tokens: PositiveInt | None = None
+    default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     mcp_rpm_limit: dict[str, int] | None = None
     team_member_budget: float | None = None  # allow user to set a budget for all team members
     team_member_rpm_limit: int | None = None  # allow user to set RPM limit for all team members
@@ -1883,6 +1888,8 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     prompts: list[str] | None = None
     model_rpm_limit: dict[str, int] | None = None
     model_tpm_limit: dict[str, int] | None = None
+    default_estimated_output_tokens: PositiveInt | None = None
+    default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     mcp_rpm_limit: dict[str, int] | None = None
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
     enforced_batch_output_expires_after: dict | None = None
@@ -4097,6 +4104,8 @@ class PassThroughEndpointLoggingTypedDict(TypedDict):
 LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "model_rpm_limit",
     "model_tpm_limit",
+    "default_estimated_output_tokens",
+    "default_estimated_output_tokens_per_model",
     "mcp_rpm_limit",
     "tag_rpm_limit",
     "rpm_limit_type",
