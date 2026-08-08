@@ -7,8 +7,9 @@
 
 import asyncio
 import contextvars
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from functools import partial
+from types import MappingProxyType
 from typing import Any, Final, cast
 
 import litellm
@@ -372,6 +373,33 @@ def validate_anthropic_api_metadata(metadata: dict | None = None) -> dict | None
     return anthropic_metadata_obj.model_dump(exclude_none=True)
 
 
+def _drop_unsupported_anthropic_messages_params(
+    anthropic_messages_optional_request_params: Mapping[str, Any],
+    model: str,
+    custom_llm_provider: str | None,
+    additional_drop_params: Sequence[str] | None = None,
+) -> Mapping[str, Any]:
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+    from litellm.utils import _should_drop_param
+
+    additional_drop_params_list: Final = additional_drop_params if isinstance(additional_drop_params, list) else None
+    supports_effort: Final = AnthropicConfig._model_supports_effort_param(model, custom_llm_provider or "anthropic")
+    supports_reasoning: Final = AnthropicConfig._supports_model_capability(
+        model, "supports_reasoning", custom_llm_provider or "anthropic"
+    )
+    drop_context_management: Final = custom_llm_provider in ["vertex_ai", "bedrock"] and "haiku" in model.lower()
+    return MappingProxyType(
+        {
+            k: v
+            for k, v in anthropic_messages_optional_request_params.items()
+            if not _should_drop_param(k, additional_drop_params_list)
+            and (k != "output_config" or supports_effort)
+            and (k != "thinking" or supports_reasoning)
+            and (k != "context_management" or not drop_context_management)
+        }
+    )
+
+
 def anthropic_messages_handler(
     max_tokens: int,
     messages: list[dict],
@@ -576,6 +604,20 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
         )
     )
+
+    should_drop_params: Final = (
+        litellm.drop_params is True
+        or getattr(litellm_params, "drop_params", None) is True
+        or kwargs.get("drop_params") is True
+    )
+
+    if should_drop_params:
+        anthropic_messages_optional_request_params = _drop_unsupported_anthropic_messages_params(
+            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            additional_drop_params=kwargs.get("additional_drop_params"),
+        )
     if is_reasoning_auto_summary_enabled():
         thinking_param: Final = anthropic_messages_optional_request_params.get("thinking")
         if isinstance(thinking_param, dict) and thinking_param.get("type") != "disabled":
