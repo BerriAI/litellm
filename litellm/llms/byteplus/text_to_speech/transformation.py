@@ -35,6 +35,7 @@ _FORMAT_CONTENT_TYPES: Final[dict[str, str]] = {
     "pcm": "audio/pcm",
     "aac": "audio/aac",
     "opus": "audio/opus",
+    "flac": "audio/flac",
 }
 
 
@@ -43,11 +44,44 @@ def _infer_audio_content_type(audio_bytes: bytes, requested_format: str) -> str:
         return "audio/ogg"
     if audio_bytes[:4] == b"RIFF":
         return "audio/wav"
+    if audio_bytes[:4] == b"fLaC":
+        return "audio/flac"
     if audio_bytes[:3] == b"ID3" or (
         len(audio_bytes) >= 2 and audio_bytes[0] == 0xFF and audio_bytes[1] in (0xFB, 0xF3, 0xF2)
     ):
         return "audio/mpeg"
-    return _FORMAT_CONTENT_TYPES.get(requested_format.lower(), "audio/mpeg")
+    return _FORMAT_CONTENT_TYPES.get(requested_format.lower(), f"audio/{requested_format.lower()}")
+
+
+def _extract_requested_format(
+    raw_response: httpx.Response,
+    logging_obj: "LiteLLMLoggingObj | None",
+    default_format: str,
+) -> str:
+    try:
+        req: Final[httpx.Request | None] = raw_response.request
+    except RuntimeError:
+        req: Final[httpx.Request | None] = None
+
+    if req is not None:
+        try:
+            req_content: Final = getattr(req, "content", None)
+            if req_content:
+                req_json: Final = json.loads(req_content)
+                fmt: Final = req_json.get("req_params", {}).get("audio_params", {}).get("format")
+                if isinstance(fmt, str) and fmt.strip():
+                    return fmt.strip()
+        except (json.JSONDecodeError, ValueError, AttributeError, TypeError):  # noqa: BLE001  # fallback if unparseable
+            pass
+
+    if logging_obj is not None:
+        mcd: Final = getattr(logging_obj, "model_call_details", {}) or {}
+        opts: Final = getattr(logging_obj, "optional_params", None) or mcd.get("optional_params", {}) or {}
+        fmt_opts: Final = opts.get("response_format") or opts.get("format")
+        if isinstance(fmt_opts, str) and fmt_opts.strip():
+            return fmt_opts.strip()
+
+    return default_format
 
 
 class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
@@ -276,7 +310,8 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
             )
 
         audio_bytes_final: Final = bytes(audio_bytes)
-        content_type: Final = _infer_audio_content_type(audio_bytes_final, self.DEFAULT_FORMAT)
+        requested_format: Final = _extract_requested_format(raw_response, logging_obj, self.DEFAULT_FORMAT)
+        content_type: Final = _infer_audio_content_type(audio_bytes_final, requested_format)
         mock_http_response: Final = httpx.Response(
             status_code=200,
             content=audio_bytes_final,

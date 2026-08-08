@@ -113,6 +113,30 @@ class TestBytePlusTextToSpeechConfig:
         binary_res = config.transform_text_to_speech_response("seed-tts-2.0", response, None)
         assert binary_res.response.headers["content-type"] == "audio/ogg"
 
+    def test_transform_text_to_speech_response_content_type_pcm_from_request(self):
+        config = BytePlusTextToSpeechConfig()
+        pcm_data = b"\x00\x01\x02\x03\x04\x05"
+        chunk = base64.b64encode(pcm_data).decode("utf-8")
+        raw_lines = f'{{"code":0,"data":"{chunk}"}}\n{{"code":20000000,"message":"ok"}}'
+        req_payload = json.dumps({"req_params": {"audio_params": {"format": "pcm"}}}).encode("utf-8")
+        req = httpx.Request("POST", "https://example.com", content=req_payload)
+        response = httpx.Response(status_code=200, text=raw_lines, request=req)
+        binary_res = config.transform_text_to_speech_response("seed-tts-2.0", response, None)
+        assert binary_res.response.headers["content-type"] == "audio/pcm"
+
+    def test_transform_text_to_speech_response_content_type_pcm_from_logging_obj(self):
+        config = BytePlusTextToSpeechConfig()
+        pcm_data = b"\x00\x01\x02\x03\x04\x05"
+        chunk = base64.b64encode(pcm_data).decode("utf-8")
+        raw_lines = f'{{"code":0,"data":"{chunk}"}}\n{{"code":20000000,"message":"ok"}}'
+        response = httpx.Response(status_code=200, text=raw_lines)
+
+        class DummyLoggingObj:
+            optional_params = {"response_format": "pcm"}
+
+        binary_res = config.transform_text_to_speech_response("seed-tts-2.0", response, DummyLoggingObj())
+        assert binary_res.response.headers["content-type"] == "audio/pcm"
+
     def test_transform_text_to_speech_response_error_code(self):
         config = BytePlusTextToSpeechConfig()
         raw_lines = '{"code":40402003,"message":"TTSExceededTextLimit"}'
