@@ -16,6 +16,10 @@ SCAN_ROOT: Final = "litellm"
 
 GRANDFATHERED: Final = frozenset(
     {
+        "litellm/llms/anthropic/common_utils.py::_ReplayedSearchQuery",
+        "litellm/llms/anthropic/common_utils.py::_ReplayedServerToolUse",
+        "litellm/llms/anthropic/common_utils.py::_ReplayedWebSearchResult",
+        "litellm/llms/anthropic/common_utils.py::_ReplayedWebSearchToolResult",
         "litellm/llms/base_llm/ocr/transformation.py::OCRPage",
         "litellm/llms/base_llm/ocr/transformation.py::OCRPageImage",
         "litellm/llms/base_llm/ocr/transformation.py::OCRResponse",
