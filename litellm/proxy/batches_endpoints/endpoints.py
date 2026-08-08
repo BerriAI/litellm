@@ -682,7 +682,12 @@ async def list_batches(
 
         # Try to use managed objects table for listing batches (returns encoded IDs).
         managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
-        if managed_files_obj is not None and hasattr(managed_files_obj, "list_user_batches"):
+        if (
+            managed_files_obj is not None
+            and hasattr(managed_files_obj, "list_user_batches")
+            and not provider
+            and not target_model_names
+        ):
             verbose_proxy_logger.debug("Using managed objects table for batch listing")
             response = await cast(Any, managed_files_obj).list_user_batches(
                 user_api_key_dict=user_api_key_dict,
