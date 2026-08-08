@@ -543,7 +543,11 @@ class BaseAzureLLM(BaseOpenAILLM):
         if scope is None:
             scope = "https://cognitiveservices.azure.com/.default"
 
-        max_retries: Final = litellm_params.get("max_retries")
+        max_retries = litellm_params.get("max_retries")
+        if max_retries is None:
+            from litellm.constants import DEFAULT_MAX_RETRIES
+
+            max_retries = DEFAULT_MAX_RETRIES
         timeout: Final = litellm_params.get("timeout")
         if not api_key and azure_ad_token_provider is None and tenant_id and client_id and client_secret:
             verbose_logger.debug("Using Azure AD Token Provider from Entra ID for Azure Auth")
