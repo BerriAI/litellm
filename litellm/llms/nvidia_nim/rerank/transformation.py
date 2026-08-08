@@ -214,11 +214,11 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
             elif isinstance(doc, dict):
                 # Preserve structured passages (text, image, or mixed) so
                 # VL rerank models receive image passages intact
-                supported_fields: NvidiaNimPassageObject = {
-                    field: doc[field]  # type: ignore[misc]
-                    for field in self.SUPPORTED_PASSAGE_FIELDS
-                    if field in doc
-                }
+                supported_fields: NvidiaNimPassageObject = {}  # mutable-ok: assembling a request TypedDict
+                if "text" in doc:
+                    supported_fields["text"] = doc["text"]
+                if "image" in doc:
+                    supported_fields["image"] = doc["image"]
                 if supported_fields:
                     passages.append(supported_fields)
                 else:
