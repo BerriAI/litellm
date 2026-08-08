@@ -223,6 +223,61 @@ tests:
             name: init-tpl
             image: "ghcr.io/berriai/litellm-database:test"
             command: ["echo", "hello"]
+  - it: should work with environmentSecrets
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+      environmentSecrets:
+        - litellm-env-secret
+        - litellm-extra-secret
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: litellm-env-secret
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: litellm-extra-secret
+
+  - it: should work with environmentConfigMaps
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+      environmentConfigMaps:
+        - litellm-env-configmap
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            configMapRef:
+              name: litellm-env-configmap
+
+  - it: should work with both environmentSecrets and environmentConfigMaps
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+      environmentSecrets:
+        - litellm-env-secret
+      environmentConfigMaps:
+        - litellm-env-configmap
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: litellm-env-secret
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            configMapRef:
+              name: litellm-env-configmap
+
   - it: should work with extraContainers
     template: migrations-job.yaml
     set:
