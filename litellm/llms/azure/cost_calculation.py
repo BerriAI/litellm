@@ -6,9 +6,29 @@ Helper util for handling azure openai-specific cost calculation
 from typing import Final
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.types.utils import Usage
+from litellm.constants import AZURE_WEB_SEARCH_COST_PER_CALL
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    cost_for_web_search_requests,
+    generic_cost_per_token,
+)
+from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
+
+
+def cost_per_web_search_request(usage: Usage, model_info: ModelInfo) -> float | None:
+    """
+    Cost of the hosted web search tool on Azure OpenAI, charged per billable search.
+
+    Azure serves the tool through Grounding with Bing Search at $14 / 1k transactions,
+    so it is priced apart from OpenAI's own $10 / 1k calls.
+
+    https://www.microsoft.com/en-us/bing/apis/grounding-pricing
+    """
+    return cost_for_web_search_requests(
+        usage=usage,
+        model_info=model_info,
+        default_cost_per_request=AZURE_WEB_SEARCH_COST_PER_CALL,
+    )
 
 
 def cost_per_token(

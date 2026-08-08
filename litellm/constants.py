@@ -317,6 +317,8 @@ MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES: Final = int(os.getenv("MAX_LONG_SIDE_FOR_IMAGE
 MAX_TILE_WIDTH: Final = int(os.getenv("MAX_TILE_WIDTH", 512))
 MAX_TILE_HEIGHT: Final = int(os.getenv("MAX_TILE_HEIGHT", 512))
 OPENAI_FILE_SEARCH_COST_PER_1K_CALLS: Final = float(os.getenv("OPENAI_FILE_SEARCH_COST_PER_1K_CALLS", 2.5 / 1000))
+OPENAI_WEB_SEARCH_COST_PER_CALL: Final = 10.0 / 1000
+AZURE_WEB_SEARCH_COST_PER_CALL: Final = 14.0 / 1000
 GROQ_BROWSER_VISIT_WEBSITE_COST_PER_CALL: Final = 1.0 / 1000
 # Azure OpenAI Assistants feature costs
 # Source: https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/

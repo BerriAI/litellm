@@ -104,8 +104,8 @@ class StandardBuiltInToolCostTracking:
         if custom_llm_provider is None and model_info is not None:
             custom_llm_provider = model_info["litellm_provider"]
 
-        resolved_usage: Final = StandardBuiltInToolCostTracking._usage_with_anthropic_web_search(
-            usage=usage, response_object=response_object
+        resolved_usage: Final = StandardBuiltInToolCostTracking._usage_with_web_search_requests(
+            usage=usage, response_object=response_object, custom_llm_provider=custom_llm_provider
         )
 
         if model_info is not None and resolved_usage is not None and custom_llm_provider is not None:
@@ -292,24 +292,33 @@ class StandardBuiltInToolCostTracking:
         return None
 
     @staticmethod
-    def _usage_with_anthropic_web_search(usage: Usage | None, response_object: object) -> Usage | None:
-        """Return a Usage carrying server_tool_use.web_search_requests sourced from a
-        raw Anthropic /v1/messages response dict when the reconstructed Usage dropped
-        it (or was never supplied). The original Usage is returned unchanged when it
-        already exposes the field or the response is not an Anthropic dict."""
-        from litellm.llms.anthropic.cost_calculation import (
-            get_anthropic_web_search_requests_from_response,
-        )
-
-        if usage is not None and (_get_web_search_requests(getattr(usage, "server_tool_use", None)) is not None):
-            return usage
-        web_search_requests: Final = get_anthropic_web_search_requests_from_response(response_object)
-        if web_search_requests is None:
-            return usage
+    def _with_web_search_requests(usage: Usage | None, web_search_requests: int) -> Usage:
+        """Return a Usage carrying ``server_tool_use.web_search_requests``."""
         server_tool_use: Final = ServerToolUse(web_search_requests=web_search_requests)
         if usage is None:
             return Usage(server_tool_use=server_tool_use)
         return usage.model_copy(update={"server_tool_use": server_tool_use})
+
+    @staticmethod
+    def _usage_with_web_search_requests(
+        usage: Usage | None,
+        response_object: object,
+        custom_llm_provider: str | None,
+    ) -> Usage | None:
+        """Return a Usage carrying server_tool_use.web_search_requests read off the provider's
+        raw response, for the providers whose reconstructed Usage drops the count or never
+        reported one. The Usage is returned unchanged when it already exposes the field or the
+        response carries no count."""
+        from litellm.llms import get_web_search_requests_from_response
+
+        if usage is not None and (_get_web_search_requests(getattr(usage, "server_tool_use", None)) is not None):
+            return usage
+        web_search_requests: Final = get_web_search_requests_from_response(
+            custom_llm_provider=custom_llm_provider, response_object=response_object
+        )
+        if web_search_requests is None:
+            return usage
+        return StandardBuiltInToolCostTracking._with_web_search_requests(usage, web_search_requests)
 
     @staticmethod
     def response_object_includes_web_search_call(response_object: Any, usage: Usage | None = None) -> bool:

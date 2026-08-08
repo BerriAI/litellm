@@ -604,3 +604,283 @@ def test_web_search_provider_prefix_fallback_does_not_misprice_non_gemini_model(
 
 # Note: File search integration test removed due to complex annotation detection logic
 # The unit tests in test_azure_assistant_cost_tracking.py provide comprehensive coverage
+
+
+def _responses_api_response(output, model="gpt-5.5", input_tokens=21384, output_tokens=845):
+    """Build a minimal Responses API response carrying the given output items."""
+    from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+    return ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        model=model,
+        output=output,
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+        usage=ResponseAPIUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+        ),
+    )
+
+
+def _web_search_call(action_type, status="completed", index=0):
+    action = {"type": action_type}
+    if action_type == "search":
+        action["query"] = f"query {index}"
+    return {
+        "id": f"ws_{index}",
+        "type": "web_search_call",
+        "status": status,
+        "action": action,
+    }
+
+
+def _assistant_message():
+    return {
+        "id": "msg_1",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+    }
+
+
+OPENAI_WEB_SEARCH_LIST_PRICE_PER_CALL = 10.0 / 1000
+AZURE_WEB_SEARCH_LIST_PRICE_PER_CALL = 14.0 / 1000
+
+
+def test_openai_responses_web_search_charges_every_billable_search(local_model_cost_map):
+    """
+    An agentic Responses API turn runs many searches in one request, and only `search`
+    actions that completed carry the per-call fee. Every billable search must be charged,
+    not just the first one, and the free navigation actions must not be.
+    """
+    billable_searches = 3
+    response = _responses_api_response(
+        output=[
+            *(_web_search_call("search", index=i) for i in range(billable_searches)),
+            _web_search_call("open_page", index=8),
+            _web_search_call("find_in_page", index=9),
+            _web_search_call("search", status="failed", index=10),
+            _assistant_message(),
+        ]
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5.5",
+        usage=None,
+        response_object=response,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == pytest.approx(billable_searches * OPENAI_WEB_SEARCH_LIST_PRICE_PER_CALL)
+
+
+def test_azure_responses_web_search_uses_bing_grounding_price(local_model_cost_map):
+    """
+    Azure OpenAI bills the web search tool through Grounding with Bing Search, which is
+    priced above OpenAI's own per-call fee. The Azure request must not be charged the
+    OpenAI rate.
+    """
+    billable_searches = 2
+    output = [
+        *(_web_search_call("search", index=i) for i in range(billable_searches)),
+        _assistant_message(),
+    ]
+
+    azure_cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="azure/gpt-5.5",
+        usage=None,
+        response_object=_responses_api_response(output, model="gpt-5.5"),
+        custom_llm_provider="azure",
+        standard_built_in_tools_params=None,
+    )
+
+    assert azure_cost == pytest.approx(billable_searches * AZURE_WEB_SEARCH_LIST_PRICE_PER_CALL)
+    assert azure_cost > billable_searches * OPENAI_WEB_SEARCH_LIST_PRICE_PER_CALL
+
+
+def test_openai_responses_web_search_prefers_model_pricing_over_list_price(local_model_cost_map):
+    """
+    A model priced in the cost map wins over the provider list price, so per-deployment
+    and custom pricing keeps working while models absent from the map are still charged.
+    """
+    model = "gpt-4o-search-preview"
+    per_query_cost = litellm.get_model_info(model)["search_context_cost_per_query"]["search_context_size_medium"]
+    assert per_query_cost != OPENAI_WEB_SEARCH_LIST_PRICE_PER_CALL
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=None,
+        response_object=_responses_api_response(
+            [_web_search_call("search", index=0), _web_search_call("search", index=1)],
+            model=model,
+        ),
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == pytest.approx(2 * per_query_cost)
+
+
+def test_openai_responses_web_search_charges_nothing_without_a_billable_search(local_model_cost_map):
+    """
+    Reading pages inside an earlier turn's search results is free. A response whose only
+    web_search_call items are navigation actions must not be charged a search fee.
+    """
+    response = _responses_api_response(
+        [
+            _web_search_call("open_page", index=0),
+            _web_search_call("find_in_page", index=1),
+            _assistant_message(),
+        ]
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5.5",
+        usage=None,
+        response_object=response,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == 0.0
+
+
+def test_openai_chat_completion_web_search_still_priced_by_search_context_size(local_model_cost_map):
+    """
+    Chat completions report no per-search count, only url_citation annotations, so they
+    stay on search_context_size pricing. Counting Responses API items must not disturb it.
+    """
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    model = "gpt-4o-search-preview"
+    response = ModelResponse(
+        choices=[
+            Choices(
+                message=Message(
+                    role="assistant",
+                    content="hi",
+                    annotations=[{"type": "url_citation", "url_citation": {"url": "https://x"}}],
+                )
+            )
+        ]
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=None,
+        response_object=response,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=StandardBuiltInToolsParams(
+            web_search_options=WebSearchOptions(search_context_size="high")
+        ),
+    )
+
+    assert cost == litellm.get_model_info(model)["search_context_cost_per_query"]["search_context_size_high"]
+
+
+def test_completion_cost_includes_openai_web_search_fee(local_model_cost_map):
+    """
+    End-to-end: the response cost a caller sees for a Responses API request must be the
+    token cost plus one fee per billable search, not the token cost alone.
+    """
+    model = "gpt-5.5"
+    input_tokens = 21384
+    output_tokens = 845
+    billable_searches = 4
+    response = _responses_api_response(
+        output=[
+            *(_web_search_call("search", index=i) for i in range(billable_searches)),
+            _assistant_message(),
+        ],
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
+
+    model_info = litellm.get_model_info(model)
+    expected_token_cost = (
+        input_tokens * model_info["input_cost_per_token"] + output_tokens * model_info["output_cost_per_token"]
+    )
+
+    cost = litellm.completion_cost(completion_response=response, model=model, custom_llm_provider="openai")
+
+    assert cost == pytest.approx(expected_token_cost + billable_searches * OPENAI_WEB_SEARCH_LIST_PRICE_PER_CALL)
+
+
+def test_openai_responses_web_search_honors_explicit_zero_price(local_model_cost_map):
+    """
+    A deployment is free to price web search at zero, e.g. when the fee is covered elsewhere.
+    An explicit 0.0 in the cost map must be charged as zero rather than falling back to the
+    provider list price, which would inflate response costs, spend records and budgets.
+    """
+    model = "openai-zero-priced-web-search-model"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "responses",
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+                "search_context_cost_per_query": {
+                    "search_context_size_low": 0.0,
+                    "search_context_size_medium": 0.0,
+                    "search_context_size_high": 0.0,
+                },
+            }
+        }
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=None,
+        response_object=_responses_api_response(
+            [_web_search_call("search", index=0), _web_search_call("search", index=1)],
+            model=model,
+        ),
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == 0.0, f"an explicit zero web search price must not fall back to the list price, got ${cost}"
+
+
+def test_web_search_count_on_usage_wins_over_the_raw_response_count(local_model_cost_map):
+    """
+    When the provider reported a count in usage, that count is authoritative and the raw
+    response is not re-read. Otherwise a response that also carries a count would silently
+    override reconciled usage and bill a different number of searches.
+    """
+    from litellm.types.utils import ServerToolUse, Usage
+
+    model = "claude-3-7-sonnet-20250219"
+    raw_response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": "hi"}],
+        "usage": {"input_tokens": 100, "output_tokens": 50, "server_tool_use": {"web_search_requests": 5}},
+    }
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        server_tool_use=ServerToolUse(web_search_requests=1),
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=raw_response,
+        custom_llm_provider="anthropic",
+        standard_built_in_tools_params=None,
+    )
+
+    per_query_cost = litellm.get_model_info(model)["search_context_cost_per_query"]["search_context_size_medium"]
+    assert cost == pytest.approx(per_query_cost), f"expected 1 search from usage, got ${cost}"

@@ -14,6 +14,31 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo, Usage
 
 
+_RESPONSES_API_WEB_SEARCH_PROVIDERS: Final = frozenset({"openai", "azure"})
+
+
+def get_web_search_requests_from_response(custom_llm_provider: str | None, response_object: object) -> int | None:
+    """
+    Number of billable web search requests a provider's raw response reports.
+
+    OpenAI and Azure OpenAI report no count in usage, so their Responses API output items are
+    counted. Every other provider is read the Anthropic way, off the usage block of a raw
+    /v1/messages response, which also covers Claude served through Bedrock and Vertex AI.
+
+    Returns None when the response carries no count, leaving the caller's usage untouched.
+    """
+    if custom_llm_provider in _RESPONSES_API_WEB_SEARCH_PROVIDERS:
+        from .openai.cost_calculation import (
+            get_web_search_requests_from_response as openai_web_search_requests_from_response,
+        )
+
+        return openai_web_search_requests_from_response(response_object)
+
+    from .anthropic.cost_calculation import get_anthropic_web_search_requests_from_response
+
+    return get_anthropic_web_search_requests_from_response(response_object)
+
+
 def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", model_info: "ModelInfo") -> float | None:
     """
     Get the cost for a web search request for a given model.
@@ -61,6 +86,18 @@ def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", mo
         )
 
         return groq_cost_per_web_search_request(usage=usage, model_info=model_info)
+    elif custom_llm_provider == "openai":
+        from .openai.cost_calculation import (
+            cost_per_web_search_request as openai_cost_per_web_search_request,
+        )
+
+        return openai_cost_per_web_search_request(usage=usage, model_info=model_info)
+    elif custom_llm_provider == "azure":
+        from .azure.cost_calculation import (
+            cost_per_web_search_request as azure_cost_per_web_search_request,
+        )
+
+        return azure_cost_per_web_search_request(usage=usage, model_info=model_info)
     else:
         return None
 

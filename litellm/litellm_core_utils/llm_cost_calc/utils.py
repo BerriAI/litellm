@@ -78,6 +78,31 @@ def _get_web_search_requests(server_tool_use: Any) -> int | None:
     return getattr(server_tool_use, "web_search_requests", None)
 
 
+def cost_for_web_search_requests(
+    usage: Usage | None,
+    model_info: ModelInfo,
+    default_cost_per_request: float,
+) -> float | None:
+    """
+    Cost of the server-side web search requests counted on ``usage.server_tool_use``.
+
+    ``default_cost_per_request`` is the provider's list price, used when the model has no
+    ``search_context_cost_per_query`` entry in the pricing map. A model entry always wins,
+    including an explicit ``0.0``, so per-deployment pricing overrides stay in effect.
+
+    Returns ``None`` when no request count is available, so callers can fall back to
+    pricing that does not depend on a count.
+    """
+    web_search_requests: Final = _get_web_search_requests(getattr(usage, "server_tool_use", None))
+    if web_search_requests is None:
+        return None
+
+    search_costs: Final = model_info.get("search_context_cost_per_query")
+    model_cost_per_request: Final = search_costs.get("search_context_size_medium") if search_costs else None
+    cost_per_request: Final = default_cost_per_request if model_cost_per_request is None else model_cost_per_request
+    return web_search_requests * cost_per_request
+
+
 def _is_above_128k(tokens: float) -> bool:
     if tokens > 128000:
         return True
