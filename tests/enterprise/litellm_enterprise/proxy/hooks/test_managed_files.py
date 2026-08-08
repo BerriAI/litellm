@@ -2007,15 +2007,16 @@ async def test_list_batches_from_managed_objects_table_provider_filter_raises_ex
         DualCache(), prisma_client=prisma_client
     )
 
-    # Filtering by provider should raise Exception
-    with pytest.raises(Exception) as exc_info:
+    # Filtering by provider should raise HTTPException with 400
+    with pytest.raises(HTTPException) as exc_info:
         await proxy_managed_files.list_user_batches(
             user_api_key_dict=UserAPIKeyAuth(user_id="test-user"),
             limit=10,
             provider="openai",
         )
 
-    assert str(exc_info.value) == (
+    assert exc_info.value.status_code == 400
+    assert str(exc_info.value.detail) == (
         "Filtering by 'provider' is not supported when using managed batches."
     )
 
@@ -2033,15 +2034,16 @@ async def test_list_batches_from_managed_objects_table_target_model_name_filter_
         DualCache(), prisma_client=prisma_client
     )
 
-    # Filtering by provider should raise Exception
-    with pytest.raises(Exception) as exc_info:
+    # Filtering by target_model_names should raise HTTPException with 400
+    with pytest.raises(HTTPException) as exc_info:
         await proxy_managed_files.list_user_batches(
             user_api_key_dict=UserAPIKeyAuth(user_id="test-user"),
             limit=10,
             target_model_names="gpt-5.5,gpt-3.5",
         )
 
-    assert str(exc_info.value) == (
+    assert exc_info.value.status_code == 400
+    assert str(exc_info.value.detail) == (
         "Filtering by 'target_model_names' is not supported when using managed batches."
     )
 
