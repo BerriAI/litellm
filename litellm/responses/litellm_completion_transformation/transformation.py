@@ -78,6 +78,7 @@ from .custom_tools import (
     is_custom_tool_call,
     unwrap_custom_tool_arguments,
 )
+from .namespace_tools import flatten_namespace_tools
 
 if TYPE_CHECKING:
     from openai.types.responses.response_apply_patch_tool_call import (
@@ -1334,7 +1335,7 @@ class LiteLLMCompletionResponsesConfig:
             return [], None
         chat_completion_tools: Final[list[ChatCompletionToolParam | OpenAIMcpServerTool]] = []
         web_search_options: OpenAIWebSearchOptions | None = None
-        for tool in tools:
+        for tool in flatten_namespace_tools(tools):
             if tool.get("type") == "mcp":
                 chat_completion_tools.append(cast(OpenAIMcpServerTool, tool))
             elif tool.get("type") == "web_search_preview" or tool.get("type") == "web_search":
