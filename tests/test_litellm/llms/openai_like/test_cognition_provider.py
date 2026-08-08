@@ -79,6 +79,21 @@ class TestCognitionProviderIdentity:
         assert api_base == "https://api.cognition.ai/v1"
         assert api_key == "sk-cognition-env"
 
+    def test_autodetected_api_base_keeps_the_caller_api_key(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        monkeypatch.setenv("COGNITION_API_KEY", "sk-cognition-env")
+
+        _, provider, api_key, _ = get_llm_provider(
+            model="swe-1.7",
+            custom_llm_provider=None,
+            api_base="https://api.cognition.ai/v1",
+            api_key="sk-cognition-caller",
+        )
+
+        assert provider == "cognition"
+        assert api_key == "sk-cognition-caller"
+
     def test_env_api_key_is_read_from_cognition_variable(self, monkeypatch: pytest.MonkeyPatch):
         from litellm.llms.openai_like.dynamic_config import create_config_class
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
