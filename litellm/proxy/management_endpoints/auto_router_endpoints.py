@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Annotated, Final
 from pydantic import BaseModel, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import BudgetExceededError
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -498,6 +499,12 @@ _QUALITY_TURN_ROWS: Final = TypeAdapter(list[_QualityTurnRow])
 
 MAX_QUALITY_SIGNAL_ROWS: Final = 100_000
 
+QUALITY_SIGNALS_CACHE_TTL_SECONDS: Final = 3600
+
+_quality_signals_cache: Final = InMemoryCache(
+    max_size_in_memory=64, default_ttl=QUALITY_SIGNALS_CACHE_TTL_SECONDS
+)
+
 _QUALITY_SIGNALS_SQL: Final = """
 SELECT
     session_id,
@@ -652,6 +659,11 @@ async def get_auto_router_quality_signals(
     if end_day < start_day:
         raise HTTPException(status_code=400, detail="end_date must not be earlier than start_date")
 
+    cache_key: Final = f"{start_day.date()}:{end_day.date()}"
+    cached: Final = _quality_signals_cache.get_cache(cache_key)
+    if cached is not None:
+        return cached
+
     raw_rows: Final = await prisma_client.db.query_raw(
         _QUALITY_SIGNALS_SQL,
         start_day.isoformat(),
@@ -669,9 +681,11 @@ async def get_auto_router_quality_signals(
         )
     turns: Final = _QUALITY_TURN_ROWS.validate_python(raw_rows or ())
     router_names: Final = tuple(sorted(frozenset(row.router_name for row in turns if row.router_name is not None)))
-    return AutoRouterQualitySignalsResponse(
+    response: Final = AutoRouterQualitySignalsResponse(
         start_date=start_day.strftime("%Y-%m-%d"),
         end_date=end_day.strftime("%Y-%m-%d"),
         totals=_quality_signals_for(turns, None, llm_router),
         groups=tuple(_quality_signals_for(turns, name, llm_router) for name in router_names),
     )
+    _quality_signals_cache.set_cache(cache_key, response)
+    return response

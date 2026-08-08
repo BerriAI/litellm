@@ -477,6 +477,16 @@ class TestAutoRouterQualitySignals:
     CHEAP = "openai/gpt-4o-mini"
     PRICEY = "openai/gpt-4o"
 
+    @pytest.fixture(autouse=True)
+    def _fresh_cache(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import (
+            _quality_signals_cache,
+        )
+
+        _quality_signals_cache.cache_dict.clear()
+        _quality_signals_cache.ttl_dict.clear()
+        yield
+
     @staticmethod
     def _row(
         session_id: str,
@@ -709,3 +719,66 @@ class TestAutoRouterQualitySignals:
         response = await self._call(rows, monkeypatch)
         assert response.totals.routed.sessions == 1
         assert response.totals.routed.abandonment_rate_pct == 0.0
+
+    @pytest.mark.asyncio
+    async def test_a_repeated_window_is_served_from_cache_without_a_second_scan(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.auto_router_endpoints import (
+            get_auto_router_quality_signals,
+        )
+
+        scans = 0
+        rows = [self._row("s1", self.CHEAP, 1.0), self._row("s1", self.PRICEY, 2.0)]
+
+        class _DB:
+            async def query_raw(self, sql: str, *params: object):
+                nonlocal scans
+                scans += 1
+                return rows
+
+        monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": _DB()})())
+        monkeypatch.setattr(proxy_server, "llm_router", self._pricing_router())
+
+        first = await get_auto_router_quality_signals(
+            user_api_key_dict=ADMIN, start_date="2026-08-01", end_date="2026-08-02"
+        )
+        second = await get_auto_router_quality_signals(
+            user_api_key_dict=ADMIN, start_date="2026-08-01", end_date="2026-08-02"
+        )
+        assert scans == 1
+        assert second == first
+
+        await get_auto_router_quality_signals(
+            user_api_key_dict=ADMIN, start_date="2026-08-01", end_date="2026-08-03"
+        )
+        assert scans == 2
+
+    @pytest.mark.asyncio
+    async def test_a_window_too_large_to_scan_is_not_cached_as_an_answer(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.auto_router_endpoints import (
+            MAX_QUALITY_SIGNAL_ROWS,
+            get_auto_router_quality_signals,
+        )
+
+        rows = [self._row(f"s{i}", self.CHEAP, 1.0) for i in range(MAX_QUALITY_SIGNAL_ROWS + 1)]
+
+        class _DB:
+            async def query_raw(self, sql: str, *params: object):
+                return rows
+
+        monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": _DB()})())
+        monkeypatch.setattr(proxy_server, "llm_router", self._pricing_router())
+
+        with pytest.raises(HTTPException) as err:
+            await get_auto_router_quality_signals(
+                user_api_key_dict=ADMIN, start_date="2026-08-01", end_date="2026-08-02"
+            )
+        assert err.value.status_code == 400
+
+        with pytest.raises(HTTPException):
+            await get_auto_router_quality_signals(
+                user_api_key_dict=ADMIN, start_date="2026-08-01", end_date="2026-08-02"
+            )
