@@ -292,7 +292,7 @@ class TestReviewFindings:
                     llm_provider="test",
                     model="m",
                 ),
-                "The request exceeded the context limit.",
+                "The upstream provider rejected the request.",
             ),
             (
                 MidStreamFallbackError(
@@ -306,11 +306,20 @@ class TestReviewFindings:
                         model="m",
                     ),
                 ),
-                "The model is overloaded.",
+                "The upstream provider rate limit was exceeded.",
+            ),
+            (
+                APIError(
+                    status_code=500,
+                    message="connection reset by https://user:secret@internal.example/v1",
+                    llm_provider="test",
+                    model="m",
+                ),
+                "Upstream provider error while streaming.",
             ),
         ],
     )
-    async def test_responses_iterator_error_preserves_provider_message(
+    async def test_responses_iterator_error_maps_safe_message(
         self, stream_error: Exception, expected_message: str
     ) -> None:
         class ErroringStream:

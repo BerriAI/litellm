@@ -19,6 +19,11 @@ class _SupportsAclose(Protocol):
     async def aclose(self) -> None: ...
 
 
+_UPSTREAM_RATE_LIMIT_ERROR: Final = "The upstream provider rate limit was exceeded."
+_UPSTREAM_REJECTED_ERROR: Final = "The upstream provider rejected the request."
+_UPSTREAM_STREAM_ERROR: Final = "Upstream provider error while streaming."
+
+
 def _response_failed_message(error_obj: object) -> str:
     if error_obj is None:
         return "The upstream provider reported the response as failed."
@@ -48,12 +53,20 @@ def _error_event_message(event: object) -> str:
     return "The upstream provider returned an error while streaming."
 
 
+def _api_error_stream_message(api_error: APIError) -> str:
+    if api_error.status_code == 429:
+        return _UPSTREAM_RATE_LIMIT_ERROR
+    if 400 <= api_error.status_code < 500:
+        return _UPSTREAM_REJECTED_ERROR
+    return _UPSTREAM_STREAM_ERROR
+
+
 def _stream_exception_message(exception: Exception) -> str:
     if isinstance(exception, APIError):
-        return exception.message.removeprefix("litellm.APIError: ")
+        return _api_error_stream_message(exception)
     if isinstance(exception, MidStreamFallbackError) and isinstance(exception.original_exception, APIError):
-        return exception.original_exception.message.removeprefix("litellm.APIError: ")
-    return "Upstream provider error while streaming."
+        return _api_error_stream_message(exception.original_exception)
+    return _UPSTREAM_STREAM_ERROR
 
 
 class AnthropicResponsesStreamWrapper:
