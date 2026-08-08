@@ -632,7 +632,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                   organizationID={form.getFieldValue("organization_id")}
                   options={{
                     includeSpecialOptions: true,
-                    showAllProxyModelsOverride: !form.getFieldValue("organization_id"),
                   }}
                   context="team"
                   dataTestId="create-team-models-select"

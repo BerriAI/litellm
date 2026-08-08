@@ -18,7 +18,6 @@ import { useGuardrails, GuardrailListItem } from "@/app/(dashboard)/hooks/guardr
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import type { ObjectPermission } from "@/components/object_permission_types";
-import { isProxyAdminRole } from "@/utils/roles";
 import {
   EditOutlined,
   GlobalOutlined,
@@ -999,8 +998,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         options={{
                           includeSpecialOptions: true,
                           includeUserModels: !teamData?.team_info?.organization_id,
-                          showAllProxyModelsOverride:
-                            isProxyAdminRole(userRole) && !teamData?.team_info?.organization_id,
                         }}
                         context="team"
                         dataTestId="models-select"
