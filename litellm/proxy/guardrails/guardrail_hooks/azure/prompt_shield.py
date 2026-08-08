@@ -3,7 +3,7 @@
 Azure Prompt Shield Native Guardrail Integrationfor LiteLLM
 """
 
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from fastapi import HTTPException
 
@@ -13,11 +13,12 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypesLiteral, GenericGuardrailAPIInputs
 
 from .base import AzureGuardrailBase
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import AllMessageValues
     from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_prompt_shield import (
@@ -69,13 +70,13 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         chunk is analysed independently; an attack in *any* chunk raises
         an HTTPException immediately.
         """
+        from .base import AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH
         from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_prompt_shield import (
             AzurePromptShieldGuardrailRequestBody,
             AzurePromptShieldGuardrailResponse,
         )
 
-        from .base import AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH
-
+        self.raise_if_text_too_long(user_prompt)
         chunks: Final = self.split_text_by_words(user_prompt, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH)
 
         last_response: AzurePromptShieldGuardrailResponse | None = None
@@ -102,6 +103,21 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         # chunks is always non-empty (split_text_by_words guarantees ≥1 element)
         assert last_response is not None
         return last_response
+
+    @log_guardrail_information
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+    ) -> GenericGuardrailAPIInputs:
+        texts = inputs.get("texts") or []
+        self.raise_if_too_many_texts(texts)
+        for text in texts:
+            if text:
+                await self.async_make_request(user_prompt=text)
+        return inputs
 
     @log_guardrail_information
     async def async_pre_call_hook(

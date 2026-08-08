@@ -14,11 +14,12 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypesLiteral, GenericGuardrailAPIInputs
 
 from .base import AzureGuardrailBase
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.openai import AllMessageValues
     from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_text_moderation import (
         AzureTextModerationGuardrailResponse,
@@ -116,6 +117,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
 
         from .base import AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH
 
+        self.raise_if_text_too_long(text)
         chunks: Final = self.split_text_by_words(text, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH)
 
         last_response: AzureTextModerationGuardrailResponse | None = None
@@ -146,6 +148,21 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         # chunks is always non-empty (split_text_by_words guarantees ≥1 element)
         assert last_response is not None
         return last_response
+
+    @log_guardrail_information
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+    ) -> GenericGuardrailAPIInputs:
+        texts = inputs.get("texts") or []
+        self.raise_if_too_many_texts(texts)
+        for text in texts:
+            if text:
+                await self.async_make_request(text=text)
+        return inputs
 
     def check_severity_threshold(self, response: "AzureTextModerationGuardrailResponse") -> Literal[True]:
         """

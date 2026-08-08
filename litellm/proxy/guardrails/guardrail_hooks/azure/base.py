@@ -1,6 +1,8 @@
 import re
 from typing import TYPE_CHECKING, Any, Final
 
+from fastapi import HTTPException
+
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_last_user_message,
@@ -15,6 +17,8 @@ if TYPE_CHECKING:
 
 # Azure Content Safety APIs have a 10,000 character limit per request.
 AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH: Final = 10000
+AZURE_CONTENT_SAFETY_MAX_CHUNKS_PER_TEXT: Final = 10
+AZURE_CONTENT_SAFETY_MAX_TEXTS_PER_CALL: Final = 10
 
 
 class AzureGuardrailBase:
@@ -116,6 +120,43 @@ class AzureGuardrailBase:
             chunks.append(current_chunk)
 
         return chunks
+
+    @staticmethod
+    def raise_if_text_too_long(text: str) -> None:
+        """
+        Raise HTTPException(413) if scanning ``text`` would require more than
+        AZURE_CONTENT_SAFETY_MAX_CHUNKS_PER_TEXT Azure Content Safety API calls.
+        """
+        max_length: Final = AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH * AZURE_CONTENT_SAFETY_MAX_CHUNKS_PER_TEXT
+        if len(text) > max_length:
+            raise HTTPException(
+                status_code=413,
+                detail={
+                    "error": "Azure Content Safety Guardrail: input text too large",
+                    "detection_message": (
+                        f"Text length {len(text)} exceeds the maximum of {max_length} "
+                        "characters allowed per guardrail scan"
+                    ),
+                },
+            )
+
+    @staticmethod
+    def raise_if_too_many_texts(texts: list[str]) -> None:
+        """
+        Raise HTTPException(413) if ``texts`` has more entries than
+        AZURE_CONTENT_SAFETY_MAX_TEXTS_PER_CALL.
+        """
+        if len(texts) > AZURE_CONTENT_SAFETY_MAX_TEXTS_PER_CALL:
+            raise HTTPException(
+                status_code=413,
+                detail={
+                    "error": "Azure Content Safety Guardrail: too many texts",
+                    "detection_message": (
+                        f"Received {len(texts)} texts, exceeding the maximum of "
+                        f"{AZURE_CONTENT_SAFETY_MAX_TEXTS_PER_CALL} per guardrail scan"
+                    ),
+                },
+            )
 
     def get_user_prompt(self, messages: list["AllMessageValues"]) -> str | None:
         """

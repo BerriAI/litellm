@@ -305,6 +305,235 @@ async def test_azure_text_moderation_guardrail_post_call_streaming_hook():
         assert mock_async_make_request.call_args.kwargs["text"] == "Hello world"
 
 
+def _mock_moderation_response(severities):
+    resp = Mock()
+    resp.json.return_value = {
+        "blocklistsMatch": [],
+        "categoriesAnalysis": [
+            {"category": category, "severity": severity}
+            for category, severity in severities.items()
+        ],
+    }
+    return resp
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_clean_input_scans_and_passes_through():
+    """apply_guardrail must call the Azure API (not the base no-op) and
+    return the inputs unchanged when severities are below threshold."""
+    guardrail = AzureContentSafetyTextModerationGuardrail(
+        guardrail_name="azure_text_moderation",
+        api_key="azure_text_moderation_api_key",
+        api_base="azure_text_moderation_api_base",
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        return_value=_mock_moderation_response({"Hate": 0, "Violence": 0}),
+    ) as mock_post:
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["hello there"]},
+            request_data={},
+            input_type="request",
+        )
+
+    assert result == {"texts": ["hello there"]}
+    mock_post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_violation_raises():
+    """A severity at/above the default threshold must raise HTTPException(400)
+    through apply_guardrail. Reverting to `return inputs` makes this fail."""
+    guardrail = AzureContentSafetyTextModerationGuardrail(
+        guardrail_name="azure_text_moderation",
+        api_key="azure_text_moderation_api_key",
+        api_base="azure_text_moderation_api_base",
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        return_value=_mock_moderation_response({"Hate": 4}),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["i hate everyone"]},
+                request_data={},
+                input_type="request",
+            )
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_per_category_threshold_honored():
+    """Per-category thresholds must be enforced through apply_guardrail: a
+    category below its threshold passes, one at/above raises."""
+    guardrail = AzureContentSafetyTextModerationGuardrail(
+        guardrail_name="azure_text_moderation",
+        api_key="azure_text_moderation_api_key",
+        api_base="azure_text_moderation_api_base",
+        severity_threshold_by_category={"Hate": 4},
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        return_value=_mock_moderation_response({"Hate": 2}),
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["mildly rude"]},
+            request_data={},
+            input_type="request",
+        )
+    assert result == {"texts": ["mildly rude"]}
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        return_value=_mock_moderation_response({"Hate": 4}),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["very hateful"]},
+                request_data={},
+                input_type="request",
+            )
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_empty_texts_makes_no_request():
+    """Empty/blank texts must not hit the Azure API."""
+    guardrail = AzureContentSafetyTextModerationGuardrail(
+        guardrail_name="azure_text_moderation",
+        api_key="azure_text_moderation_api_key",
+        api_base="azure_text_moderation_api_base",
+    )
+
+    with patch.object(guardrail.async_handler, "post") as mock_post:
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": [""]},
+            request_data={},
+            input_type="request",
+        )
+
+    assert result == {"texts": [""]}
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_too_many_texts_rejected():
+    """A texts list larger than the per-call cap must be rejected before any
+    Azure API call is made, so a caller cannot force unbounded fan-out by
+    submitting many texts in a single apply_guardrail call."""
+    from litellm.proxy.guardrails.guardrail_hooks.azure.base import (
+        AZURE_CONTENT_SAFETY_MAX_TEXTS_PER_CALL,
+    )
+
+    guardrail = AzureContentSafetyTextModerationGuardrail(
+        guardrail_name="azure_text_moderation",
+        api_key="azure_text_moderation_api_key",
+        api_base="azure_text_moderation_api_base",
+    )
+    texts = ["safe text"] * (AZURE_CONTENT_SAFETY_MAX_TEXTS_PER_CALL + 1)
+
+    with patch.object(guardrail.async_handler, "post") as mock_post:
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": texts},
+                request_data={},
+                input_type="request",
+            )
+
+    assert exc_info.value.status_code == 413
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_max_texts_per_call_allowed():
+    """Exactly the per-call cap must still be scanned normally."""
+    from litellm.proxy.guardrails.guardrail_hooks.azure.base import (
+        AZURE_CONTENT_SAFETY_MAX_TEXTS_PER_CALL,
+    )
+
+    guardrail = AzureContentSafetyTextModerationGuardrail(
+        guardrail_name="azure_text_moderation",
+        api_key="azure_text_moderation_api_key",
+        api_base="azure_text_moderation_api_base",
+    )
+    texts = ["safe text"] * AZURE_CONTENT_SAFETY_MAX_TEXTS_PER_CALL
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        return_value=_mock_moderation_response({"Hate": 0}),
+    ) as mock_post:
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": texts},
+            request_data={},
+            input_type="request",
+        )
+
+    assert result == {"texts": texts}
+    assert mock_post.call_count == AZURE_CONTENT_SAFETY_MAX_TEXTS_PER_CALL
+
+
+@pytest.mark.asyncio
+async def test_async_make_request_text_too_long_rejected():
+    """A single text large enough to require more Azure calls than the
+    per-text chunk cap must be rejected before any request is made, so a
+    caller cannot force unbounded fan-out with one oversized text."""
+    from litellm.proxy.guardrails.guardrail_hooks.azure.base import (
+        AZURE_CONTENT_SAFETY_MAX_CHUNKS_PER_TEXT,
+        AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH,
+    )
+
+    guardrail = AzureContentSafetyTextModerationGuardrail(
+        guardrail_name="azure_text_moderation",
+        api_key="azure_text_moderation_api_key",
+        api_base="azure_text_moderation_api_base",
+    )
+    max_length = AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH * AZURE_CONTENT_SAFETY_MAX_CHUNKS_PER_TEXT
+    oversized_text = "a" * (max_length + 1)
+
+    with patch.object(guardrail.async_handler, "post") as mock_post:
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_make_request(text=oversized_text)
+
+    assert exc_info.value.status_code == 413
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_make_request_max_text_length_allowed():
+    """Text exactly at the max length must still be scanned, split into the
+    expected number of chunks."""
+    from litellm.proxy.guardrails.guardrail_hooks.azure.base import (
+        AZURE_CONTENT_SAFETY_MAX_CHUNKS_PER_TEXT,
+        AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH,
+    )
+
+    guardrail = AzureContentSafetyTextModerationGuardrail(
+        guardrail_name="azure_text_moderation",
+        api_key="azure_text_moderation_api_key",
+        api_base="azure_text_moderation_api_base",
+    )
+    max_length = AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH * AZURE_CONTENT_SAFETY_MAX_CHUNKS_PER_TEXT
+    text_at_limit = "a" * max_length
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        return_value=_mock_moderation_response({"Hate": 0}),
+    ) as mock_post:
+        await guardrail.async_make_request(text=text_at_limit)
+
+    assert mock_post.call_count == AZURE_CONTENT_SAFETY_MAX_CHUNKS_PER_TEXT
+
+
 def test_split_text_by_words():
     """Test the word-based text splitting functionality."""
     guardrail = AzureContentSafetyTextModerationGuardrail(
