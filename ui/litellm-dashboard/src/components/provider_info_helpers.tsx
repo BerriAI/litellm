@@ -110,7 +110,7 @@ export enum Providers {
   GradientAI = "GradientAI",
   Groq = "Groq",
   HEROKU = "Heroku",
-  Hosted_Vllm = "vllm",
+  Hosted_Vllm = "Hosted Vllm",
   HUGGINGFACE = "Huggingface",
   HYPERBOLIC = "Hyperbolic",
   Infinity = "Infinity",
