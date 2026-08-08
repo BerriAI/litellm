@@ -674,9 +674,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         resulting dict matches the InvokeModel body that Bedrock expects
         for batch inference.
         """
+        import litellm
         from litellm.types.utils import LlmProviders
 
         _model: Final = openai_request_body.get("model", "")
+        _model = litellm.model_alias_map.get(_model, _model)
         messages: Final = openai_request_body.get("messages", [])
         optional_params: Final = {k: v for k, v in openai_request_body.items() if k not in ["model", "messages"]}
 
@@ -754,11 +756,15 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         }
         """
 
+        import litellm
+
         bedrock_jsonl_content: Final = []
         for idx, _openai_jsonl_content in enumerate(openai_jsonl_content):
             # Extract the request body from OpenAI format
             openai_body = _openai_jsonl_content.get("body", {})
             model = openai_body.get("model", "")
+            model = litellm.model_alias_map.get(model, model)
+            openai_body = {**openai_body, "model": model}
 
             try:
                 model, _, _, _ = get_llm_provider(
