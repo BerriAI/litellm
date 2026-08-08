@@ -292,15 +292,18 @@ class LazyFeatureMiddleware:
         # Short-circuit once every feature has loaded.
         if scope["type"] in ("http", "websocket") and len(self._loaded) < len(self._features):
             path = scope.get("path", "")
-            # Strip SERVER_ROOT_PATH so prefix matching works under a server
-            # root path. Without this, requests like /api/v1/policies/... never
-            # match the registered prefixes (/policies/...) and lazy features
-            # stay unloaded — every endpoint under them returns 404. The
+            # Strip the request's root_path so prefix matching works under a
+            # server root path. Without this, requests like /api/v1/policies/...
+            # never match the registered prefixes (/policies/...) and lazy
+            # features stay unloaded — every endpoint under them returns 404.
+            # scope["root_path"] wins over the cached env scalar: FastAPI
+            # stamps SERVER_ROOT_PATH there, and PerRequestRootPathMiddleware
+            # resolves SERVER_ROOT_PATHS prefixes there per request. The
             # `+ "/"` boundary prevents false-positive matches (e.g. /apiv2
-            # against root /api). If the path doesn't start with the prefix
-            # (e.g. a reverse proxy already stripped it), we leave it alone.
-            if self._root_path and path.startswith(self._root_path + "/"):
-                path = path[len(self._root_path) :]
+            # against root /api); a pre-stripped path is left alone.
+            root_path = str(scope.get("root_path", "")).rstrip("/") or self._root_path
+            if root_path and path.startswith(root_path + "/"):
+                path = path[len(root_path) :]
             for feat in self._features:
                 if feat.module_path in self._loaded:
                     continue
