@@ -2022,6 +2022,31 @@ async def test_nothing_compressible_returns_inputs_untouched(guardrail: Headroom
 
 
 @pytest.mark.asyncio
+async def test_nothing_compressible_is_logged_as_a_zero_savings_run(guardrail: HeadroomGuardrail):
+    """A single-turn request never reaches /v1/compress, so without an entry the
+    cost optimization dashboard cannot tell it apart from a request headroom was
+    never applied to; both read as no compression at all."""
+    request_data: dict = {"model": "gpt-4o"}
+    inputs = GenericGuardrailAPIInputs(
+        texts=["A" * 5000],
+        structured_messages=[
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "A" * 5000},
+        ],
+    )
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock):
+        await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request")
+
+    entries = _recorded_guardrail_entries(request_data)
+    assert len(entries) == 1
+    assert entries[0]["guardrail_provider"] == "headroom"
+    assert entries[0]["guardrail_status"] == "success"
+    assert entries[0]["guardrail_response"] == {"tokens_before": 0, "tokens_after": 0, "tokens_saved": 0}
+    assert extract_compression_saved_tokens({"guardrail_information": entries}) == 0
+
+
+@pytest.mark.asyncio
 async def test_fail_open_returns_the_caller_inputs_object():
     """Translation handlers detect a rewrite by object identity, so a request
     that was not compressed must come back as the same object or it is

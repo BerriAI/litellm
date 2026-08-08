@@ -389,6 +389,24 @@ class HeadroomGuardrail(CustomGuardrail):
         value: Final = headers.get(BYPASS_HEADER)
         return str(value).lower() == "true"
 
+    def _record_nothing_to_compress(self, request_data: dict[str, object]) -> None:
+        """Log a zero-savings run when every message is protected.
+
+        Without an entry, a request headroom looked at and found nothing to
+        compress is indistinguishable in the spend logs and on the cost
+        optimization dashboard from one where headroom never ran at all.
+        """
+        now = time.time()
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={"tokens_before": 0, "tokens_after": 0, "tokens_saved": 0},
+            request_data=request_data,
+            guardrail_status="success",
+            guardrail_provider=HEADROOM_GUARDRAIL_PROVIDER,
+            start_time=now,
+            end_time=now,
+            duration=0.0,
+        )
+
     def _request_headers(self) -> dict[str, str]:
         headers: Final[dict[str, str]] = {"Content-Type": "application/json"}
         if self.headroom_api_key:
@@ -642,6 +660,7 @@ class HeadroomGuardrail(CustomGuardrail):
         protected_indices: Final = _protected_indices(messages)
         compressible: Final = [m for i, m in enumerate(messages) if i not in protected_indices]
         if not compressible:
+            self._record_nothing_to_compress(request_data)
             return inputs
 
         model: Final = self.headroom_model or request_data.get("model")
