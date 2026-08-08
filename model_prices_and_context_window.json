@@ -778,7 +778,7 @@
     "anthropic.claude-3-5-sonnet-20240620-v1:0": {
         "input_cost_per_token": 3e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 1000000,
+        "max_input_tokens": 200000,
         "max_output_tokens": 4096,
         "max_tokens": 4096,
         "mode": "chat",
@@ -788,10 +788,6 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "input_cost_per_token_above_200k_tokens": 6e-06,
-        "output_cost_per_token_above_200k_tokens": 3e-05,
-        "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
-        "cache_read_input_token_cost_above_200k_tokens": 6e-07,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07
     },
@@ -800,7 +796,7 @@
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 1000000,
+        "max_input_tokens": 200000,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
@@ -812,11 +808,7 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true,
-        "input_cost_per_token_above_200k_tokens": 6e-06,
-        "output_cost_per_token_above_200k_tokens": 3e-05,
-        "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
-        "cache_read_input_token_cost_above_200k_tokens": 6e-07
+        "supports_vision": true
     },
     "anthropic.claude-3-7-sonnet-20240620-v1:0": {
         "cache_creation_input_token_cost": 4.5e-06,
