@@ -924,18 +924,18 @@ async def test_add_team_member_budget_table_success():
         team_id="test-team-123", team_alias="Test Team"
     )
 
-    # Call the function
     result = await _add_team_member_budget_table(
         team_member_budget_id="budget-123",
         prisma_client=mock_prisma_client,
         team_info_response_object=team_info_response,
     )
 
-    # Verify the result
-    assert result == team_info_response
+    assert result is not team_info_response
+    assert team_info_response.team_member_budget_table is None
     assert result.team_member_budget_table == mock_budget_record
+    assert result.team_id == team_info_response.team_id
+    assert result.team_alias == team_info_response.team_alias
 
-    # Verify database call was made correctly
     mock_prisma_client.db.litellm_budgettable.find_unique.assert_called_once_with(
         where={"budget_id": "budget-123"}
     )
