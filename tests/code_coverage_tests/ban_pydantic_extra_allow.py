@@ -71,7 +71,7 @@ def _shadows(later: Binding, earlier: Binding) -> bool:
 
 
 class Scope(NamedTuple):
-    """Module-level bindings, read as of ``line``.
+    """The bindings in view, read as of ``line``.
 
     Resolution walks a name to the values it could hold just above the line reading it, and each
     hop down a chain of aliases carries that alias's own line, so rebinding a name later can
@@ -108,7 +108,7 @@ def _scoped_statements(node: ast.AST, branch: tuple[str, ...] = ()) -> Iterator[
         for child in value if isinstance(value, list) else [value]:
             if not isinstance(child, ast.AST) or isinstance(child, ast.expr):
                 continue
-            nested = branch if isinstance(node, ast.Module) else (*branch, f"{id(node)}.{field}")
+            nested = branch if isinstance(node, (ast.Module, ast.ClassDef)) else (*branch, f"{id(node)}.{field}")
             if isinstance(child, ast.ClassDef):
                 yield child, nested
                 continue
@@ -177,11 +177,11 @@ def _assigns_extra_allow(statement: ast.stmt, target_names: Sequence[str], scope
 
 
 def _body_scope(node: ast.AST, enclosing: tuple[Binding, ...]) -> tuple[Binding, ...]:
-    """The bindings a statement in ``node``'s body reads, so a class-local constant is resolved
-    and shadows a module-level name of its own, the way the class body itself would read it."""
-    local: Final = _bindings(node)
-    shadowed: Final = frozenset(binding.name for binding in local)
-    return tuple(binding for binding in enclosing if binding.name not in shadowed) + local
+    """The bindings a statement in ``node``'s body reads. A class-local binding joins the enclosing
+    ones rather than replacing them, so which one wins is decided per read line the way the body
+    itself decides it: a class-local constant only shadows an enclosing name below the line it is
+    bound on, and a read above that line still sees the enclosing value."""
+    return enclosing + _bindings(node)
 
 
 def _legacy_config_sets_extra_allow(config: ast.ClassDef, enclosing: tuple[Binding, ...]) -> bool:

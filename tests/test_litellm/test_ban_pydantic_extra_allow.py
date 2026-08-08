@@ -149,6 +149,11 @@ _ratchet_spec.loader.exec_module(ratchet)
             'ALLOW = {"extra": "allow"}\n\n\nclass Foo(BaseModel, **ALLOW):\n    pass\n',
             id="permissive_constant_spread_into_the_class_keywords",
         ),
+        pytest.param(
+            'ALLOW = ConfigDict(extra="allow")\n\n\nclass Foo(BaseModel):\n'
+            '    model_config = ALLOW\n    ALLOW = ConfigDict(extra="forbid")\n',
+            id="module_constant_read_above_a_class_local_of_the_same_name",
+        ),
     ],
 )
 def test_detects_extra_allow(source):
