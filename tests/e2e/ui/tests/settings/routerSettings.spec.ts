@@ -3,6 +3,8 @@ import { ADMIN_STORAGE_PATH } from "../../constants";
 import { navigateToPage } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
 import { Role, users } from "../../fixtures/users";
+import { MOCK_RESPONSE_TEXT } from "../../helpers/traffic";
+import { openPlayground, selectModel, sendMessage } from "../../helpers/playground";
 // Type-only import of the OpenAPI-generated backend schema, erased at runtime by
 // esbuild. It types the round-trips below so mistakes surface in the editor; the live
 // test against the real proxy is what actually enforces the contract.
@@ -79,7 +81,9 @@ test.describe("Router Settings - Fallbacks", () => {
     await primarySelect.click();
     await page.keyboard.type(PRIMARY);
     await page.keyboard.press("Enter");
-    await expect(modal.getByRole("tab", { name: PRIMARY })).toBeVisible({ timeout: 10_000 });
+    await expect(modal.getByRole("tab", { name: PRIMARY })).toBeVisible({
+      timeout: 10_000,
+    });
 
     const fallbackSelect = modal.locator(".ant-select").filter({ hasText: "Select fallback models" });
     await fallbackSelect.click();
@@ -88,7 +92,9 @@ test.describe("Router Settings - Fallbacks", () => {
     await page.keyboard.press("Escape");
     // The Fallback Chain helper text reads "(N/10 used)"; once it ticks to 1 the
     // selection has been recorded.
-    await expect(modal.getByText("(1/10 used)")).toBeVisible({ timeout: 10_000 });
+    await expect(modal.getByText("(1/10 used)")).toBeVisible({
+      timeout: 10_000,
+    });
 
     // Save
     await modal.getByRole("button", { name: /Save All Configurations/i }).click();
@@ -111,7 +117,9 @@ test.describe("Router Settings - Fallbacks", () => {
 type ConfigYAML = components["schemas"]["ConfigYAML"];
 type RouterSettingsResponse = components["schemas"]["RouterSettingsResponse"];
 
-const ADMIN_AUTH = { Authorization: `Bearer ${users[Role.ProxyAdmin].password}` };
+const ADMIN_AUTH = {
+  Authorization: `Bearer ${users[Role.ProxyAdmin].password}`,
+};
 
 /**
  * Apply a router_settings patch through the typed /config/update contract. The
@@ -172,18 +180,118 @@ test.describe("Router Settings - Loadbalancing", () => {
     // The ticket's core symptom was that a refresh showed the old value.
     await navigateToPage(page, Page.RouterSettings);
     await page.getByRole("tab", { name: "Loadbalancing" }).click();
-    await expect(page.locator('input[name="num_retries"]')).toHaveValue("5", { timeout: 15_000 });
+    await expect(page.locator('input[name="num_retries"]')).toHaveValue("5", {
+      timeout: 15_000,
+    });
 
     // The typed backend read agrees the change persisted.
     await expect
       .poll(
         async () => {
-          const res = await request.get(`/router/settings`, { headers: ADMIN_AUTH });
+          const res = await request.get(`/router/settings`, {
+            headers: ADMIN_AUTH,
+          });
           const data = (await res.json()) as RouterSettingsResponse;
           return data.current_values?.num_retries;
         },
         { timeout: 10_000 },
       )
       .toBe(5);
+  });
+});
+
+/**
+ * The fallback test above proves the UI can *record* a fallback. This one
+ * proves the recorded fallback is actually honoured: a model whose upstream is
+ * unreachable still answers, and the answer is the fallback model's.
+ *
+ * The primary is created here rather than taken from fixtures/config.yml
+ * because every configured model is backed by the mock server and therefore
+ * healthy — there is nothing in the fixture set that can fail on demand.
+ */
+test.describe("Router Settings - Fallbacks serve the request", () => {
+  test.use({ storageState: ADMIN_STORAGE_PATH });
+
+  const BROKEN_PRIMARY = "e2e-broken-primary";
+  let brokenModelId: string | null = null;
+
+  /** Drop only this test's fallback entry, leaving any others untouched. */
+  async function clearBrokenFallback(request: import("@playwright/test").APIRequestContext) {
+    const current = await request.get("/get/config/callbacks", {
+      headers: ADMIN_AUTH,
+    });
+    if (!current.ok()) return;
+    const router = (await current.json())?.router_settings ?? {};
+    const existing: Array<Record<string, string[]>> = Array.isArray(router.fallbacks) ? router.fallbacks : [];
+    await patchRouterSettings(request, {
+      fallbacks: existing.filter((entry) => !(entry && BROKEN_PRIMARY in entry)),
+    } as Partial<NonNullable<ConfigYAML["router_settings"]>>);
+  }
+
+  test.beforeEach(async ({ request }) => {
+    await clearBrokenFallback(request);
+
+    // Port 9 is the discard service: nothing listens, so the connection is
+    // refused immediately rather than hanging until a timeout.
+    const res = await request.post("/model/new", {
+      headers: ADMIN_AUTH,
+      data: {
+        model_name: BROKEN_PRIMARY,
+        litellm_params: {
+          model: "openai/broken",
+          api_base: "http://127.0.0.1:9/v1",
+          api_key: "fake",
+          timeout: 5,
+        },
+      },
+    });
+    expect(res.ok(), `creating the broken primary failed: ${res.status()} ${await res.text()}`).toBeTruthy();
+    brokenModelId = (await res.json())?.model_id ?? null;
+  });
+
+  test.afterEach(async ({ request }) => {
+    await clearBrokenFallback(request);
+    if (brokenModelId) {
+      await request.post("/model/delete", {
+        headers: ADMIN_AUTH,
+        data: { id: brokenModelId },
+      });
+      brokenModelId = null;
+    }
+  });
+
+  test("a request to an unreachable model is answered by its fallback", async ({ page, request }) => {
+    const chat = async () =>
+      request.post("/v1/chat/completions", {
+        headers: { ...ADMIN_AUTH, "Content-Type": "application/json" },
+        data: {
+          model: BROKEN_PRIMARY,
+          messages: [{ role: "user", content: "fallback probe" }],
+        },
+      });
+
+    // Without a fallback the primary's failure is the client's failure. This is
+    // the control: it proves the mock reply asserted below could only have come
+    // from the fallback, not from the primary quietly working.
+    expect((await chat()).status(), "broken primary unexpectedly succeeded on its own").toBeGreaterThanOrEqual(400);
+
+    await patchRouterSettings(request, {
+      fallbacks: [{ [BROKEN_PRIMARY]: [PRIMARY] }],
+    } as Partial<NonNullable<ConfigYAML["router_settings"]>>);
+
+    // Same call now succeeds, served by the fallback model.
+    await expect
+      .poll(async () => (await chat()).status(), {
+        timeout: 30_000,
+        message: "fallback never took effect",
+      })
+      .toBe(200);
+
+    // And the UI shows it: the playground renders a reply for a model whose own
+    // upstream is down.
+    await openPlayground(page);
+    await selectModel(page, BROKEN_PRIMARY);
+    await sendMessage(page, "fallback probe from the playground");
+    await expect(page.getByText(MOCK_RESPONSE_TEXT, { exact: false }).first()).toBeVisible({ timeout: 60_000 });
   });
 });

@@ -33,7 +33,35 @@ if [ "$IS_CI" = "false" ]; then
   for p in /usr/local/bin /opt/homebrew/bin "$HOME/.local/bin" /opt/homebrew/opt/postgresql@14/bin /opt/homebrew/opt/libpq/bin; do
     [ -d "$p" ] && export PATH="$p:$PATH"
   done
-  [ -s "$HOME/.nvm/nvm.sh" ] && source "$HOME/.nvm/nvm.sh"
+  # Sourcing nvm only makes `nvm` available -- it leaves you on whatever the
+  # default alias points at, which is frequently an older Node than the
+  # dashboard's engines allow. `npm install` then fails EBADENGINE, npm exits
+  # non-zero, and because the install below is `--silent ... || true` the error
+  # is swallowed and the run dies later with the far less obvious
+  # "sh: next: command not found".
+  #
+  # So select a Node that satisfies ui/litellm-dashboard's engines.node, and if
+  # none is available say so here rather than 200 lines downstream.
+  if [ -s "$HOME/.nvm/nvm.sh" ]; then
+    # shellcheck disable=SC1091
+    source "$HOME/.nvm/nvm.sh"
+    required_major="$(sed -nE 's/.*"node"[[:space:]]*:[[:space:]]*">=?([0-9]+).*/\1/p' \
+      "$DASHBOARD_DIR/package.json" 2>/dev/null | head -1)"
+    if [ -n "$required_major" ]; then
+      current_major="$(node --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')"
+      if [ -z "$current_major" ] || [ "$current_major" -lt "$required_major" ]; then
+        echo "Node $(node --version 2>/dev/null || echo 'not found') is below the dashboard's required v${required_major}; selecting a newer one via nvm"
+        nvm use "$required_major" >/dev/null 2>&1 || nvm use --lts >/dev/null 2>&1 || true
+        current_major="$(node --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')"
+        if [ -z "$current_major" ] || [ "$current_major" -lt "$required_major" ]; then
+          echo "Error: ui/litellm-dashboard requires Node >= v${required_major}, and no such version is installed."
+          echo "       Install one with:  nvm install ${required_major}"
+          exit 1
+        fi
+      fi
+      echo "Using Node $(node --version) / npm $(npm --version)"
+    fi
+  fi
 fi
 
 # --- Cleanup on exit ---
@@ -59,8 +87,13 @@ if [ "$IS_CI" = "false" ]; then
   for cmd in docker psql; do
     command -v "$cmd" >/dev/null 2>&1 || { echo "Error: $cmd not found."; exit 1; }
   done
+  # Only a LISTENER conflicts with us. Without -sTCP:LISTEN this also matches
+  # ESTABLISHED sockets, so an unrelated *outbound* connection from this machine
+  # to someone else's :5432 (a psql session, a running app, a Prisma engine
+  # talking to a remote database) aborts the run with "port 5432 is in use"
+  # while nothing is actually bound locally.
   for port in 4000 5432 8090; do
-    if lsof -ti ":$port" >/dev/null 2>&1; then
+    if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
       echo "Error: port $port is in use"
       exit 1
     fi
@@ -108,7 +141,11 @@ export LITELLM_LICENSE="${LITELLM_LICENSE:-}"
 # --- Rebuild UI from source ---
 echo "=== Building UI from source ==="
 cd "$DASHBOARD_DIR"
-npm install --silent 2>/dev/null || true
+# NOT silenced, and NOT `|| true`. Swallowing this is what turns a one-line
+# EBADENGINE ("dashboard requires node >=24, you have v20") into the
+# considerably less helpful "sh: next: command not found" from the build below,
+# because the deps that provide `next` were never installed.
+npm install
 npm run build
 # Copy the fresh build to the proxy's static UI directory
 cp -r "$DASHBOARD_DIR/out/" "$REPO_ROOT/litellm/proxy/_experimental/out/"
@@ -188,8 +225,36 @@ PGPASSWORD="$DB_PASS" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAM
 # --- Playwright ---
 echo "=== Installing Playwright dependencies ==="
 cd "$SCRIPT_DIR"
-npm install --silent 2>/dev/null || true
+# Same reasoning as the dashboard install above: a failure here means the suite
+# has no @playwright/test, and the run should say that rather than fail later.
+npm install
 npx playwright install chromium --with-deps 2>/dev/null || npx playwright install chromium
+
+# Authoring a new spec means running it over and over against a stack that is
+# already up -- rebuilding the UI and re-seeding for every iteration costs
+# minutes each time. E2E_KEEP_ALIVE brings the stack up, then blocks, so you can
+# run `npx playwright test <spec>` yourself from another shell against it.
+# Ctrl-C here tears everything down through the usual trap.
+if [ "${E2E_KEEP_ALIVE:-0}" = "1" ]; then
+  cat <<EOF
+
+=== Stack is up (E2E_KEEP_ALIVE=1); not running tests ===
+  UI / API : http://127.0.0.1:4000
+  Mock LLM : http://127.0.0.1:8090/v1
+  Database : $DATABASE_URL
+  Proxy log: $PROXY_LOG
+
+Run specs against it from $SCRIPT_DIR:
+  npx playwright test --config playwright.config.ts <spec>
+
+Press Ctrl-C to tear the stack down.
+EOF
+  while kill -0 "$PROXY_PID" 2>/dev/null; do
+    sleep 5
+  done
+  echo "Proxy exited."
+  exit 1
+fi
 
 echo "=== Running Playwright tests ==="
 npx playwright test --config playwright.config.ts "$@"
