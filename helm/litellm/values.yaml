@@ -3,6 +3,9 @@
 nameOverride: ""
 fullnameOverride: ""
 
+# Additional labels to apply to all resources
+extraLabels: {}
+
 imagePullSecrets: []
 
 # Optional Ingress wiring the three component Services behind a single L7
