@@ -6,6 +6,7 @@ POST /auto_router/test_routing - Route one prompt through an unsaved complexity-
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from itertools import groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final
 
@@ -557,13 +558,9 @@ def _quality_signals_for(
     baseline_rows: Final = tuple(row for row in turns if row.router_name is None and row.api_key in router_keys)
 
     router_key_rows: Final = tuple(row for row in turns if row.api_key in router_keys)
-    reachable_by_key_dict: dict[str, set[str]] = {}
-    for row in router_key_rows:
-        if row.api_key not in reachable_by_key_dict:
-            reachable_by_key_dict[row.api_key] = set()
-        reachable_by_key_dict[row.api_key].add(row.model)
+    rows_by_key: Final = groupby(sorted(router_key_rows, key=lambda row: row.api_key), key=lambda row: row.api_key)
     reachable_by_key: Final = MappingProxyType(
-        {key: frozenset(models) for key, models in reachable_by_key_dict.items()}
+        {key: frozenset(row.model for row in group) for key, group in rows_by_key}
     )
     reachable_models: Final = tuple(frozenset(row.model for row in router_key_rows))
     ranks: Final = rank_models_by_cost(llm_router, reachable_models) if llm_router is not None else MappingProxyType({})
