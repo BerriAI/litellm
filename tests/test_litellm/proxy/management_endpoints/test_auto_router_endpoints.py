@@ -317,9 +317,7 @@ class TestAutoRouterBenchmarks:
         from litellm.proxy.management_endpoints.auto_router_endpoints import _benchmark_totals
 
         totals = _benchmark_totals(self.ROW)
-        bucket_hits = (
-            totals.cache.same_model.hits + totals.cache.first_visit.hits + totals.cache.return_to_tier.hits
-        )
+        bucket_hits = totals.cache.same_model.hits + totals.cache.first_visit.hits + totals.cache.return_to_tier.hits
         assert bucket_hits == 27
         assert totals.cache.hit_rate_pct == pytest.approx(100.0 * 28 / 38, abs=0.1)
 
@@ -427,3 +425,182 @@ class TestAutoRouterBenchmarks:
         assert response.routers_in_scope == 1
         assert response.groups[0].router_name == "live-auto"
         assert response.groups[0].saved_pct == response.totals.saved_pct == 75.0
+
+
+class TestAutoRouterQualitySignals:
+    """The endpoint's cohort split and its refusal to report a baseline it cannot stand behind.
+
+    Escalation/abandonment arithmetic itself is covered in
+    tests/test_litellm/proxy/db/test_autorouter_quality_signals.py; these tests cover the
+    wiring around it -- which rows become which cohort, and when the baseline is withheld.
+    """
+
+    CHEAP = "openai/gpt-4o-mini"
+    PRICEY = "openai/gpt-4o"
+
+    @staticmethod
+    def _row(
+        session_id: str,
+        model: str,
+        started_at: float,
+        *,
+        router_name: str | None = "live-auto",
+        client_disconnected: bool = False,
+        session_turn_count: int = 2,
+        api_key: str = "key-1",
+    ) -> dict:
+        return {
+            "session_id": session_id,
+            "model": model,
+            "started_at": started_at,
+            "router_name": router_name,
+            "client_disconnected": client_disconnected,
+            "session_turn_count": session_turn_count,
+            "api_key": api_key,
+        }
+
+    @staticmethod
+    def _pricing_router() -> Router:
+        return Router(
+            model_list=[
+                {"model_name": name, "litellm_params": {"model": name, "api_key": "fake-key"}}
+                for name in (TestAutoRouterQualitySignals.CHEAP, TestAutoRouterQualitySignals.PRICEY)
+            ]
+        )
+
+    async def _call(self, rows: list[dict], monkeypatch: pytest.MonkeyPatch, **kwargs: object):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.auto_router_endpoints import (
+            get_auto_router_quality_signals,
+        )
+
+        class _DB:
+            async def query_raw(self, sql: str, *params: object):
+                return rows
+
+        monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": _DB()})())
+        monkeypatch.setattr(proxy_server, "llm_router", self._pricing_router())
+        return await get_auto_router_quality_signals(
+            user_api_key_dict=ADMIN,
+            start_date="2026-08-01",
+            end_date="2026-08-02",
+            **kwargs,
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_admin_roles_cannot_read_quality_signals(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import (
+            get_auto_router_quality_signals,
+        )
+
+        with pytest.raises(HTTPException) as err:
+            await get_auto_router_quality_signals(
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-x"),
+                start_date="2026-08-01",
+                end_date="2026-08-02",
+            )
+        assert err.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_a_reversed_window_is_rejected(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.auto_router_endpoints import (
+            get_auto_router_quality_signals,
+        )
+
+        monkeypatch.setattr(proxy_server, "prisma_client", object())
+        with pytest.raises(HTTPException) as err:
+            await get_auto_router_quality_signals(
+                user_api_key_dict=ADMIN, start_date="2026-08-05", end_date="2026-08-01"
+            )
+        assert err.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_routed_escalation_is_measured_from_routed_rows(self, monkeypatch: pytest.MonkeyPatch):
+        rows = [
+            self._row("s1", self.CHEAP, 1.0),
+            self._row("s1", self.PRICEY, 2.0),
+        ]
+        response = await self._call(rows, monkeypatch)
+        assert response.totals.routed.sessions == 1
+        assert response.totals.routed.escalation_rate_pct == 100.0
+
+    @pytest.mark.asyncio
+    async def test_rows_without_a_routing_decision_are_the_baseline_not_the_routed_cohort(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Same key, same models; only the presence of a router name separates the cohorts.
+        # The routed session escalates and the direct one does not, so a cohort mix-up
+        # cannot produce these two numbers.
+        rows = [
+            self._row("routed-1", self.CHEAP, 1.0),
+            self._row("routed-1", self.PRICEY, 2.0),
+        ]
+        rows += [self._row(f"direct-{i}", self.CHEAP, 1.0, router_name=None) for i in range(30)]
+        rows += [self._row(f"direct-{i}", self.CHEAP, 2.0, router_name=None) for i in range(30)]
+        response = await self._call(rows, monkeypatch)
+        assert response.totals.routed.escalation_rate_pct == 100.0
+        assert response.totals.baseline is not None
+        assert response.totals.baseline.sessions == 30
+        assert response.totals.baseline.escalation_rate_pct == 0.0
+
+    @pytest.mark.asyncio
+    async def test_baseline_withheld_when_sessions_are_mostly_one_request_fallback_ids(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        # session_turn_count == 1 marks a session id the spend writer minted rather than one
+        # the caller supplied. A cohort made of those is not sessions, and reporting a rate
+        # over it would describe the fallback rather than the traffic.
+        rows = [self._row("routed-1", self.CHEAP, 1.0), self._row("routed-1", self.PRICEY, 2.0)]
+        rows += [self._row(f"direct-{i}", self.CHEAP, 1.0, router_name=None, session_turn_count=1) for i in range(50)]
+        response = await self._call(rows, monkeypatch)
+        assert response.totals.baseline is None
+        assert response.totals.baseline_unavailable_reason == "no_session_ids"
+
+    @pytest.mark.asyncio
+    async def test_baseline_withheld_when_there_is_too_little_comparable_traffic(self, monkeypatch: pytest.MonkeyPatch):
+        rows = [self._row("routed-1", self.CHEAP, 1.0), self._row("routed-1", self.PRICEY, 2.0)]
+        rows += [
+            self._row("direct-1", self.CHEAP, 1.0, router_name=None),
+            self._row("direct-1", self.CHEAP, 2.0, router_name=None),
+        ]
+        response = await self._call(rows, monkeypatch)
+        assert response.totals.baseline is None
+        assert response.totals.baseline_unavailable_reason == "insufficient_sessions"
+
+    @pytest.mark.asyncio
+    async def test_baseline_only_draws_on_keys_that_used_the_router(self, monkeypatch: pytest.MonkeyPatch):
+        # A key that never touched the router says nothing about the router, and its traffic
+        # must not be folded into the comparison.
+        rows = [self._row("routed-1", self.CHEAP, 1.0), self._row("routed-1", self.PRICEY, 2.0)]
+        rows += [self._row(f"other-{i}", self.CHEAP, 1.0, router_name=None, api_key="unrelated-key") for i in range(50)]
+        response = await self._call(rows, monkeypatch)
+        assert response.totals.baseline is None
+
+    @pytest.mark.asyncio
+    async def test_groups_are_reported_per_router(self, monkeypatch: pytest.MonkeyPatch):
+        rows = [
+            self._row("a1", self.CHEAP, 1.0, router_name="router-a"),
+            self._row("a1", self.PRICEY, 2.0, router_name="router-a"),
+            self._row("b1", self.CHEAP, 1.0, router_name="router-b"),
+            self._row("b1", self.CHEAP, 2.0, router_name="router-b"),
+        ]
+        response = await self._call(rows, monkeypatch)
+        by_name = {group.router_name: group for group in response.groups}
+        assert set(by_name) == {"router-a", "router-b"}
+        assert by_name["router-a"].routed.escalation_rate_pct == 100.0
+        assert by_name["router-b"].routed.escalation_rate_pct == 0.0
+
+    @pytest.mark.asyncio
+    async def test_abandonment_reads_the_disconnect_flag_not_the_status(self, monkeypatch: pytest.MonkeyPatch):
+        # s2 gives the key a pricier model in the window, so s1 is eligible; without it s1
+        # sits at its own ceiling and is correctly excluded, measuring nothing.
+        rows = [
+            self._row("s1", self.CHEAP, 1.0, client_disconnected=True),
+            self._row("s1", self.CHEAP, 2.0, client_disconnected=False),
+            self._row("s2", self.PRICEY, 1.0),
+            self._row("s2", self.PRICEY, 2.0),
+        ]
+        response = await self._call(rows, monkeypatch)
+        assert response.totals.routed.sessions == 1
+        assert response.totals.routed.abandonment_rate_pct == 50.0
