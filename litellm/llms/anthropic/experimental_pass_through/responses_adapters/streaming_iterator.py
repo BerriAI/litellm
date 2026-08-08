@@ -4,13 +4,69 @@ import json
 import traceback
 from collections import deque
 from collections.abc import AsyncIterator
-from typing import Any, Final
+from typing import Any, Final, Protocol, runtime_checkable
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.exceptions import APIError, MidStreamFallbackError
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
+
+
+@runtime_checkable
+class _SupportsAclose(Protocol):
+    async def aclose(self) -> None: ...
+
+
+_UPSTREAM_RATE_LIMIT_ERROR: Final = "The upstream provider rate limit was exceeded."
+_UPSTREAM_REJECTED_ERROR: Final = "The upstream provider rejected the request."
+_UPSTREAM_STREAM_ERROR: Final = "Upstream provider error while streaming."
+
+
+def _response_failed_message(error_obj: object) -> str:
+    if error_obj is None:
+        return "The upstream provider reported the response as failed."
+    error_message: Final = getattr(error_obj, "message", None) or (
+        error_obj.get("message") if isinstance(error_obj, dict) else None
+    )
+    error_code: Final = getattr(error_obj, "code", None) or (
+        error_obj.get("code") if isinstance(error_obj, dict) else None
+    )
+    if error_message:
+        return f"{error_code}: {error_message}" if error_code else str(error_message)
+    return "The upstream provider reported the response as failed."
+
+
+def _error_event_message(event: object) -> str:
+    direct_message: Final = getattr(event, "message", None) or (
+        event.get("message") if isinstance(event, dict) else None
+    )
+    if direct_message is not None:
+        return str(direct_message)
+    nested_error: Final = getattr(event, "error", None) or (event.get("error") if isinstance(event, dict) else None)
+    nested_message: Final = getattr(nested_error, "message", None) or (
+        nested_error.get("message") if isinstance(nested_error, dict) else None
+    )
+    if nested_message is not None:
+        return str(nested_message)
+    return "The upstream provider returned an error while streaming."
+
+
+def _api_error_stream_message(api_error: APIError) -> str:
+    if api_error.status_code == 429:
+        return _UPSTREAM_RATE_LIMIT_ERROR
+    if 400 <= api_error.status_code < 500:
+        return _UPSTREAM_REJECTED_ERROR
+    return _UPSTREAM_STREAM_ERROR
+
+
+def _stream_exception_message(exception: Exception) -> str:
+    if isinstance(exception, APIError):
+        return _api_error_stream_message(exception)
+    if isinstance(exception, MidStreamFallbackError) and isinstance(exception.original_exception, APIError):
+        return _api_error_stream_message(exception.original_exception)
+    return _UPSTREAM_STREAM_ERROR
 
 
 class AnthropicResponsesStreamWrapper:
@@ -67,6 +123,12 @@ class AnthropicResponsesStreamWrapper:
     def _next_block_index(self) -> int:
         self._current_block_index += 1
         return self._current_block_index
+
+    def _make_error_chunk(self, message: str) -> dict[str, Any]:
+        return {
+            "type": "error",
+            "error": {"type": "api_error", "message": message},
+        }
 
     def _process_event(self, event: Any) -> None:
         """Convert one Responses API event into zero or more Anthropic chunks queued for emission."""
@@ -220,10 +282,32 @@ class AnthropicResponsesStreamWrapper:
             )
             return
 
+        # ---- response failed -> error ----
+        if event_type == "response.failed":
+            failed_response_obj: Final = getattr(event, "response", None) or (
+                event.get("response") if isinstance(event, dict) else None
+            )
+            error_obj: Final = (
+                getattr(failed_response_obj, "error", None)
+                or (failed_response_obj.get("error") if isinstance(failed_response_obj, dict) else None)
+                if failed_response_obj is not None
+                else None
+            )
+            failure_message: Final = _response_failed_message(error_obj)
+            self._chunk_queue.append(self._make_error_chunk(failure_message))
+            self._sent_message_stop = True
+            return
+
+        # ---- error event -> error ----
+        if event_type == "error":
+            event_error_message: Final = _error_event_message(event)
+            self._chunk_queue.append(self._make_error_chunk(event_error_message))
+            self._sent_message_stop = True
+            return
+
         # ---- response completed -> message_delta + message_stop ----
         if event_type in (
             "response.completed",
-            "response.failed",
             "response.incomplete",
         ):
             response_obj: Final = getattr(event, "response", None) or (
@@ -267,10 +351,25 @@ class AnthropicResponsesStreamWrapper:
     def __aiter__(self) -> "AnthropicResponsesStreamWrapper":
         return self
 
+    async def _close_responses_stream(self) -> None:
+        responses_stream: Final[object] = self.responses_stream
+        if isinstance(responses_stream, _SupportsAclose):
+            await responses_stream.aclose()
+            return
+        upstream_response: Final[object] = getattr(responses_stream, "response", None)
+        if isinstance(upstream_response, _SupportsAclose):
+            await upstream_response.aclose()
+
     async def __anext__(self) -> dict[str, Any]:
         # Return any queued chunks first
         if self._chunk_queue:
             return self._chunk_queue.popleft()
+
+        # Don't consume the upstream again after a terminal chunk
+        # (message_stop / error) has been emitted
+        if self._sent_message_stop:
+            await self._close_responses_stream()
+            raise StopAsyncIteration
 
         # Emit message_start if not yet done (fallback if response.created wasn't fired)
         if not self._sent_message_start:
@@ -288,6 +387,8 @@ class AnthropicResponsesStreamWrapper:
             pass
         except Exception as e:
             verbose_logger.error("AnthropicResponsesStreamWrapper error: %s\n%s", e, traceback.format_exc())
+            self._chunk_queue.append(self._make_error_chunk(_stream_exception_message(e)))
+            self._sent_message_stop = True
 
         # Drain any remaining queued chunks
         if self._chunk_queue:
