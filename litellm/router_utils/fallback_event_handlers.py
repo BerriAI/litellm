@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Final
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -93,6 +94,31 @@ def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
     return False
 
 
+def _check_prefixed_model_group(model_group: str, fallback_key: str) -> bool:
+    """
+    Handles wildcard routing scenario
+
+    where fallbacks set like:
+    [{"openai/gpt-4o": ["claude-3-haiku"]}]
+
+    but model_group is like:
+    "gpt-4o"
+
+    A bare model name routes through a wildcard deployment (e.g. "openai/*")
+    via provider inference, so fallback lookup resolves it the same way.
+
+    Returns:
+    - True if the provider-prefixed model group == fallback_key
+    """
+    if "/" in model_group:
+        return False
+    try:
+        _, custom_llm_provider, _, _ = get_llm_provider(model=model_group)
+    except litellm.BadRequestError:
+        return False
+    return f"{custom_llm_provider}/{model_group}" == fallback_key
+
+
 def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[list[str] | None, int | None]:
     """
     Returns:
@@ -102,6 +128,7 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
     Checks:
     - exact match
     - stripped model group match
+    - provider-prefixed model group match
     - generic fallback
     """
     generic_fallback_idx: int | None = None
@@ -110,14 +137,17 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
     ## check for specific model group-specific fallbacks
     for idx, item in enumerate(fallbacks):
         if isinstance(item, dict):
-            if list(item.keys())[0] == model_group:  # check exact match
+            fallback_key = next(iter(item))
+            if fallback_key == model_group:  # check exact match
                 fallback_model_group = item[model_group]
                 break
             elif _check_stripped_model_group(
-                model_group=model_group, fallback_key=list(item.keys())[0]
+                model_group=model_group, fallback_key=fallback_key
+            ) or _check_prefixed_model_group(
+                model_group=model_group, fallback_key=fallback_key
             ):  # check generic fallback
-                stripped_model_fallback = item[list(item.keys())[0]]
-            elif list(item.keys())[0] == "*":  # check generic fallback
+                stripped_model_fallback = item[fallback_key]
+            elif fallback_key == "*":  # check generic fallback
                 generic_fallback_idx = idx
         elif isinstance(item, str):
             fallback_model_group = [item]

@@ -351,9 +351,51 @@ def test_get_fallback_model_group_does_not_mutate_fallbacks():
     fallbacks list, which is the live router config shared across requests."""
     fallbacks = [{"gpt-3.5-turbo": ["claude-3-haiku"]}, "gpt-4o-mini"]
 
-    fallback_model_group, _ = get_fallback_model_group(
-        fallbacks=fallbacks, model_group="unmatched-model"
-    )
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="unmatched-model")
 
     assert fallback_model_group == ["gpt-4o-mini"]
     assert fallbacks == [{"gpt-3.5-turbo": ["claude-3-haiku"]}, "gpt-4o-mini"]
+
+
+def test_get_fallback_model_group_matches_provider_prefixed_key():
+    """A bare model group routed via a wildcard (e.g. "gpt-4o" through
+    "openai/*") must match a fallback keyed on the provider-prefixed name,
+    which is the form the Admin UI offers for wildcard routes."""
+    fallbacks = [{"openai/gpt-4o": ["claude-3-haiku"]}]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="gpt-4o")
+
+    assert fallback_model_group == ["claude-3-haiku"]
+
+
+def test_get_fallback_model_group_exact_match_beats_prefixed_match():
+    fallbacks = [
+        {"openai/gpt-4o": ["claude-3-haiku"]},
+        {"gpt-4o": ["gemini-1.5-flash"]},
+    ]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="gpt-4o")
+
+    assert fallback_model_group == ["gemini-1.5-flash"]
+
+
+def test_get_fallback_model_group_prefixed_match_ignores_unknown_models():
+    """Provider inference fails for unknown bare names - the lookup must not
+    raise and must fall through to the generic fallback."""
+    fallbacks = [
+        {"openai/some-model": ["claude-3-haiku"]},
+        {"*": ["gemini-1.5-flash"]},
+    ]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="some-unknown-model-xyz")
+
+    assert fallback_model_group == ["gemini-1.5-flash"]
+
+
+def test_get_fallback_model_group_prefixed_match_skips_prefixed_model_group():
+    """An already-prefixed model group must not double-prefix."""
+    fallbacks = [{"openai/openai/gpt-4o": ["claude-3-haiku"]}]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="openai/gpt-4o")
+
+    assert fallback_model_group is None
