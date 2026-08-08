@@ -16,7 +16,7 @@ How it works:
 
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 import litellm.constants as _c
@@ -27,6 +27,9 @@ from litellm.types.llms.anthropic import ANTHROPIC_ADVISOR_TOOL_TYPE
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 ADVISOR_MAX_USES: Final[int] = _c.ADVISOR_MAX_USES
 ADVISOR_NATIVE_PROVIDERS: Final[frozenset] = _c.ADVISOR_NATIVE_PROVIDERS
@@ -138,13 +141,10 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
 
             # --- Advisor sub-call (always non-streaming, no tools) ---
             try:
-                advisor_response: AnthropicMessagesResponse = await _call_messages_handler(
+                advisor_response: AnthropicMessagesResponse = await _call_advisor(
                     model=advisor_model,
                     messages=advisor_messages,
-                    tools=None,
-                    stream=False,
                     max_tokens=max_tokens,
-                    custom_llm_provider=None,  # let litellm resolve from model name
                     metadata={
                         **metadata_base,
                         "advisor_sub_call": True,
@@ -355,6 +355,75 @@ def _inject_max_uses_error(
             ],
         },
     ]
+
+
+def _resolve_advisor_router(advisor_model: str) -> "Router | None":
+    """Return the proxy router when it can resolve ``advisor_model``.
+
+    The advisor sub-call must honor the proxy's ``model_list`` (and its
+    fallbacks / credentials) exactly like a direct call to that model group
+    would. Without this, provider resolution falls back to the bare model
+    name, which for a ``claude-*`` advisor model means the public Anthropic
+    API, bypassing the configured deployment entirely.
+
+    Returns ``None`` for SDK callers (no proxy router) and for advisor models
+    the router doesn't know about, so those keep resolving through
+    ``litellm.anthropic_messages()`` provider inference.
+    """
+    try:
+        from litellm.proxy.proxy_server import llm_router
+    except (ImportError, ModuleNotFoundError):
+        return None
+    if llm_router is None:
+        return None
+    if llm_router.get_model_list(model_name=advisor_model):
+        return llm_router
+    if llm_router.model_group_alias and advisor_model in llm_router.model_group_alias:
+        return llm_router
+    if llm_router.pattern_router.route(advisor_model) is not None:
+        return llm_router
+    return None
+
+
+async def _call_advisor(
+    *,
+    model: str,
+    messages: list[dict],
+    max_tokens: int,
+    metadata: dict,
+    api_key: str | None,
+    api_base: str | None,
+) -> AnthropicMessagesResponse:
+    """Run the advisor sub-call, through the proxy router when it applies.
+
+    A caller-supplied ``api_key`` / ``api_base`` override is an explicit
+    request to bypass the configured deployment, so it keeps the direct
+    SDK-level path.
+    """
+    router: Final = None if (api_key or api_base) else _resolve_advisor_router(model)
+    response: Final = (
+        await router.aanthropic_messages(
+            model=model,
+            messages=messages,
+            tools=None,
+            stream=False,
+            max_tokens=max_tokens,
+            metadata=metadata,
+        )
+        if router is not None
+        else await _call_messages_handler(
+            model=model,
+            messages=messages,
+            tools=None,
+            stream=False,
+            max_tokens=max_tokens,
+            custom_llm_provider=None,
+            metadata=metadata,
+            api_key=api_key,
+            api_base=api_base,
+        )
+    )
+    return cast(AnthropicMessagesResponse, response)  # cast-ok: both /messages entry points are untyped
 
 
 async def _call_messages_handler(
