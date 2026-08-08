@@ -390,9 +390,12 @@ def _drop_unsupported_anthropic_messages_params(
         anthropic_messages_optional_request_params.pop("output_config", None)
     if not AnthropicConfig._supports_model_capability(model, "supports_reasoning", custom_llm_provider or "anthropic"):
         anthropic_messages_optional_request_params.pop("thinking", None)
-    if "context_management" in anthropic_messages_optional_request_params:
-        if custom_llm_provider in ["vertex_ai", "bedrock"] and "haiku" in model.lower():
-            anthropic_messages_optional_request_params.pop("context_management", None)
+    if (
+        "context_management" in anthropic_messages_optional_request_params
+        and custom_llm_provider in ["vertex_ai", "bedrock"]
+        and "haiku" in model.lower()
+    ):
+        anthropic_messages_optional_request_params.pop("context_management", None)
     return anthropic_messages_optional_request_params
 
 
