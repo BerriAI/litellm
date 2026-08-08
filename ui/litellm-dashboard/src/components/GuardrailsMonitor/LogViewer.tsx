@@ -68,10 +68,10 @@ export function LogViewer({
   const filters: Array<"all" | "blocked" | "flagged" | "passed"> = ["all", "blocked", "flagged", "passed"];
 
   const startTime = startDate
-    ? moment(startDate).utc().format("YYYY-MM-DD HH:mm:ss")
+    ? moment(startDate).startOf("day").utc().format("YYYY-MM-DD HH:mm:ss")
     : moment().subtract(24, "hours").utc().format("YYYY-MM-DD HH:mm:ss");
   const endTime = endDate
-    ? moment(endDate).utc().endOf("day").format("YYYY-MM-DD HH:mm:ss")
+    ? moment(endDate).endOf("day").utc().format("YYYY-MM-DD HH:mm:ss")
     : moment().utc().format("YYYY-MM-DD HH:mm:ss");
 
   const { data: fullLogResponse } = useQuery({
