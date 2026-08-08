@@ -2001,6 +2001,103 @@ async def test_acompletion_streaming_iterator_edge_cases():
 
 
 @pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_disable_mid_stream_continuation_uses_original_messages():
+    """With disable_mid_stream_continuation=True, a mid-stream failure after
+    partial content is NOT re-raised: the fallback re-entry must retry with the
+    original conversation messages (no assistant prefill/continuation block)."""
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+        disable_mid_stream_continuation=True,
+        set_verbose=True,
+    )
+    assert router.disable_mid_stream_continuation is True
+
+    messages = [{"role": "user", "content": "Test"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    error = MidStreamFallbackError(
+        message="Connection lost",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="Hello",
+    )
+
+    class AsyncIteratorWithError:
+        def __init__(self, items, error_after_index):
+            self.items = items
+            self.index = 0
+            self.error_after_index = error_after_index
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self.index >= len(self.items):
+                raise StopAsyncIteration
+            if self.index == self.error_after_index:
+                raise error
+            item = self.items[self.index]
+            self.index += 1
+            return item
+
+    mock_chunks = [
+        MagicMock(choices=[MagicMock(delta=MagicMock(content="Hello"))]),
+        MagicMock(choices=[MagicMock(delta=MagicMock(content=" there"))]),
+    ]
+    mock_error_response = AsyncIteratorWithError(mock_chunks, 1)
+
+    # Mock empty fallback response using AsyncIterator
+    class EmptyAsyncIterator:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=EmptyAsyncIterator(),
+    ) as mock_fallback_utils:
+        collected_chunks = []
+        iterator = await router._acompletion_streaming_iterator(
+            model_response=mock_error_response,
+            messages=messages,
+            initial_kwargs=initial_kwargs,
+        )
+
+        async for chunk in iterator:
+            collected_chunks.append(chunk)
+
+        # Fallback must be attempted (not re-raised) even though content was
+        # generated mid-stream, because continuation is disabled.
+        assert mock_fallback_utils.called
+        fallback_kwargs = mock_fallback_utils.call_args.kwargs["kwargs"]
+        fallback_messages = fallback_kwargs["messages"]
+
+        # Original messages only — no assistant prefill / continuation block.
+        assert fallback_messages == messages
+        assert all(
+            msg.get("role") != "assistant" or "prefix" not in msg
+            for msg in fallback_messages
+        )
+    print("✓ disable_mid_stream_continuation retries fallback with original messages")
+
+
+@pytest.mark.asyncio
 async def test_acompletion_streaming_iterator_preserves_hidden_params():
     """
     Regression test: FallbackStreamWrapper must copy _hidden_params from the
