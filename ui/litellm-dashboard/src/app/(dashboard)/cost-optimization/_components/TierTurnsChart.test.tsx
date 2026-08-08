@@ -143,8 +143,6 @@ describe("TierTurnsChart", () => {
       />,
     );
 
-    // No complexity_router_config on the quality deployment, so no tier labels are read,
-    // falling back to canonical names. No models are shown (quality config doesn't have tiers).
     expect(screen.getByText("Simple 75%")).toBeInTheDocument();
     expect(screen.queryByText("gpt-4o")).not.toBeInTheDocument();
   });
