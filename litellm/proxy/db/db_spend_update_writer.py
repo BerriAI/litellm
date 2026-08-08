@@ -1124,6 +1124,23 @@ class DBSpendUpdateWriter:
         except Exception as e:
             verbose_proxy_logger.debug("_flush_tool_discovery_queue error (non-blocking): %s", e)
 
+    @staticmethod
+    async def _handle_spend_update_failure(
+        e: Exception,
+        attempt: int,
+        n_retry_times: int,
+        start_time: float,
+        proxy_logging_obj: ProxyLogging,
+    ) -> None:
+        """Retry a failed spend-update transaction on connection errors or deadlocks, else re-raise."""
+        from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+        from litellm.proxy.utils import _raise_failed_update_spend_exception
+
+        is_retryable = isinstance(e, DB_RETRY_SAFE_ERROR_TYPES) or PrismaDBExceptionHandler.is_deadlock_error(e)
+        if not is_retryable or attempt >= n_retry_times:
+            _raise_failed_update_spend_exception(e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj)
+        await asyncio.sleep(random.uniform(2**attempt, 2 ** (attempt + 1)))
+
     async def _commit_spend_updates_to_db(
         self,
         prisma_client: PrismaClient,
@@ -1135,10 +1152,7 @@ class DBSpendUpdateWriter:
         Commits all the spend `UPDATE` transactions to the Database
 
         """
-        from litellm.proxy.utils import (
-            ProxyUpdateSpend,
-            _raise_failed_update_spend_exception,
-        )
+        from litellm.proxy.utils import ProxyUpdateSpend
 
         ### UPDATE USER TABLE ###
         user_list_transactions: Final = db_spend_update_transactions["user_list_transactions"]
@@ -1158,18 +1172,13 @@ class DBSpendUpdateWriter:
                                     data={"spend": {"increment": response_cost}},
                                 )
                     break
-                except DB_RETRY_SAFE_ERROR_TYPES as e:
-                    if i >= n_retry_times:  # If we've reached the maximum number of retries
-                        _raise_failed_update_spend_exception(
-                            e=e,
-                            start_time=start_time,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                    # Optionally, sleep for a bit before retrying
-                    await asyncio.sleep(2**i)  # Exponential backoff
                 except Exception as e:
-                    _raise_failed_update_spend_exception(
-                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    await self._handle_spend_update_failure(
+                        e=e,
+                        attempt=i,
+                        n_retry_times=n_retry_times,
+                        start_time=start_time,
+                        proxy_logging_obj=proxy_logging_obj,
                     )
 
         ### UPDATE END-USER TABLE ###
@@ -1201,18 +1210,13 @@ class DBSpendUpdateWriter:
                                     },
                                 )
                     break
-                except DB_RETRY_SAFE_ERROR_TYPES as e:
-                    if i >= n_retry_times:  # If we've reached the maximum number of retries
-                        _raise_failed_update_spend_exception(
-                            e=e,
-                            start_time=start_time,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                    # Optionally, sleep for a bit before retrying
-                    await asyncio.sleep(2**i)  # Exponential backoff
                 except Exception as e:
-                    _raise_failed_update_spend_exception(
-                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    await self._handle_spend_update_failure(
+                        e=e,
+                        attempt=i,
+                        n_retry_times=n_retry_times,
+                        start_time=start_time,
+                        proxy_logging_obj=proxy_logging_obj,
                     )
 
         ### UPDATE TEAM TABLE ###
@@ -1234,18 +1238,13 @@ class DBSpendUpdateWriter:
                                     data={"spend": {"increment": response_cost}},
                                 )
                     break
-                except DB_RETRY_SAFE_ERROR_TYPES as e:
-                    if i >= n_retry_times:  # If we've reached the maximum number of retries
-                        _raise_failed_update_spend_exception(
-                            e=e,
-                            start_time=start_time,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                    # Optionally, sleep for a bit before retrying
-                    await asyncio.sleep(2**i)  # Exponential backoff
                 except Exception as e:
-                    _raise_failed_update_spend_exception(
-                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    await self._handle_spend_update_failure(
+                        e=e,
+                        attempt=i,
+                        n_retry_times=n_retry_times,
+                        start_time=start_time,
+                        proxy_logging_obj=proxy_logging_obj,
                     )
 
         ### UPDATE TEAM Membership TABLE with spend ###
@@ -1281,18 +1280,13 @@ class DBSpendUpdateWriter:
                                 )
                     # Transaction succeeded, break out of retry loop
                     break
-                except DB_RETRY_SAFE_ERROR_TYPES as e:
-                    if i >= n_retry_times:  # If we've reached the maximum number of retries
-                        _raise_failed_update_spend_exception(
-                            e=e,
-                            start_time=start_time,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                    # Optionally, sleep for a bit before retrying
-                    await asyncio.sleep(2**i)  # Exponential backoff
                 except Exception as e:
-                    _raise_failed_update_spend_exception(
-                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    await self._handle_spend_update_failure(
+                        e=e,
+                        attempt=i,
+                        n_retry_times=n_retry_times,
+                        start_time=start_time,
+                        proxy_logging_obj=proxy_logging_obj,
                     )
 
             # Invalidate cache for updated team memberships
@@ -1323,25 +1317,13 @@ class DBSpendUpdateWriter:
                                     data={"spend": {"increment": response_cost}},
                                 )
                     break
-                except DB_RETRY_SAFE_ERROR_TYPES as e:
-                    if i >= n_retry_times:  # If we've reached the maximum number of retries
-                        _raise_failed_update_spend_exception(
-                            e=e,
-                            start_time=start_time,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                    # Optionally, sleep for a bit before retrying
-                    await asyncio.sleep(
-                        # Sleep a random amount to avoid retrying and deadlocking again: when two transactions deadlock they are
-                        # cancelled basically at the same time, so if they wait the same time they will also retry at the same time
-                        # and thus they are more likely to deadlock again.
-                        # Instead, we sleep a random amount so that they retry at slightly different times, lowering the chance of
-                        # repeated deadlocks, and therefore of exceeding the retry limit.
-                        random.uniform(2**i, 2 ** (i + 1))
-                    )
                 except Exception as e:
-                    _raise_failed_update_spend_exception(
-                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    await self._handle_spend_update_failure(
+                        e=e,
+                        attempt=i,
+                        n_retry_times=n_retry_times,
+                        start_time=start_time,
+                        proxy_logging_obj=proxy_logging_obj,
                     )
 
         ### UPDATE TAG TABLE ###
@@ -1390,8 +1372,6 @@ class DBSpendUpdateWriter:
             prisma_client: Prisma client instance
             proxy_logging_obj: Proxy logging object
         """
-        from litellm.proxy.utils import _raise_failed_update_spend_exception
-
         verbose_proxy_logger.debug("%s Spend transactions: %s", entity_name, transactions)
         if transactions is not None and len(transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
@@ -1413,17 +1393,13 @@ class DBSpendUpdateWriter:
                                     data={"spend": {"increment": response_cost}},
                                 )
                     break
-                except DB_RETRY_SAFE_ERROR_TYPES as e:
-                    if i >= n_retry_times:
-                        _raise_failed_update_spend_exception(
-                            e=e,
-                            start_time=start_time,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                    await asyncio.sleep(2**i)  # Exponential backoff
                 except Exception as e:
-                    _raise_failed_update_spend_exception(
-                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    await DBSpendUpdateWriter._handle_spend_update_failure(
+                        e=e,
+                        attempt=i,
+                        n_retry_times=n_retry_times,
+                        start_time=start_time,
+                        proxy_logging_obj=proxy_logging_obj,
                     )
 
     # fmt: off
@@ -1694,7 +1670,16 @@ class DBSpendUpdateWriter:
 
                         break
 
-                    except DB_RETRY_SAFE_ERROR_TYPES as e:
+                    except Exception as e:
+                        from litellm.proxy.db.exception_handler import (
+                            PrismaDBExceptionHandler,
+                        )
+
+                        is_retryable = isinstance(
+                            e, DB_RETRY_SAFE_ERROR_TYPES
+                        ) or PrismaDBExceptionHandler.is_deadlock_error(e)
+                        if not is_retryable:
+                            raise
                         if i >= n_retry_times:
                             _raise_failed_update_spend_exception(
                                 e=e,

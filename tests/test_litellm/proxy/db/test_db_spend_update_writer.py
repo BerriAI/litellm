@@ -2236,3 +2236,155 @@ async def test_daily_transaction_compression_saved_tokens_zero_when_absent():
     assert transaction["compression_saved_tokens"] == 0
     assert transaction["compression_savings_spend"] == 0
     assert transaction["prompt_caching_savings_spend"] == 0
+
+
+def _deadlock_error():
+    from prisma.errors import RawQueryError
+
+    return RawQueryError(
+        data={"user_facing_error": {"error_code": "P2034", "meta": {"table": "LiteLLM_VerificationToken"}}}
+    )
+
+
+def _empty_spend_transactions(**overrides):
+    base = {
+        "user_list_transactions": {},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {},
+        "org_list_transactions": {},
+        "tag_list_transactions": {},
+        "agent_list_transactions": {},
+    }
+    return {**base, **overrides}
+
+
+def _good_tx(mock_batcher):
+    tx = AsyncMock()
+    tx.__aenter__ = AsyncMock(return_value=tx)
+    tx.__aexit__ = AsyncMock(return_value=False)
+    tx.batch_ = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_batcher),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+    return tx
+
+
+def _failing_tx(error):
+    tx = MagicMock()
+    tx.__aenter__ = AsyncMock(side_effect=error)
+    tx.__aexit__ = AsyncMock(return_value=False)
+    return tx
+
+
+@pytest.mark.asyncio
+async def test_commit_spend_updates_retries_deadlock_then_commits(monkeypatch):
+    """Regression: a deadlock on the key-spend UPDATE is retried and commits the increment exactly once."""
+    slept = []
+    monkeypatch.setattr(
+        "litellm.proxy.db.db_spend_update_writer.asyncio.sleep",
+        AsyncMock(side_effect=lambda s: slept.append(s)),
+    )
+
+    mock_batcher = MagicMock()
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(side_effect=[_failing_tx(_deadlock_error()), _good_tx(mock_batcher)])
+
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    await DBSpendUpdateWriter()._commit_spend_updates_to_db(
+        prisma_client=mock_prisma_client,
+        n_retry_times=3,
+        proxy_logging_obj=proxy_logging,
+        db_spend_update_transactions=_empty_spend_transactions(key_list_transactions={"sk-abc": 0.5}),
+    )
+
+    assert mock_prisma_client.db.tx.call_count == 2
+    mock_batcher.litellm_verificationtoken.update_many.assert_called_once()
+    call_kwargs = mock_batcher.litellm_verificationtoken.update_many.call_args[1]
+    assert call_kwargs["where"] == {"token": "sk-abc"}
+    assert call_kwargs["data"]["spend"] == {"increment": 0.5}
+    assert len(slept) == 1
+    proxy_logging.failure_handler.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_commit_spend_updates_raises_after_exhausting_deadlock_retries(monkeypatch):
+    """A deadlock that never clears must surface after the retry budget is spent, not loop or swallow."""
+    monkeypatch.setattr("litellm.proxy.db.db_spend_update_writer.asyncio.sleep", AsyncMock(return_value=None))
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(side_effect=lambda *a, **k: _failing_tx(_deadlock_error()))
+
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    from prisma.errors import RawQueryError
+
+    with pytest.raises(RawQueryError):
+        await DBSpendUpdateWriter()._commit_spend_updates_to_db(
+            prisma_client=mock_prisma_client,
+            n_retry_times=2,
+            proxy_logging_obj=proxy_logging,
+            db_spend_update_transactions=_empty_spend_transactions(key_list_transactions={"sk-abc": 0.5}),
+        )
+
+    assert mock_prisma_client.db.tx.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_commit_spend_updates_does_not_retry_non_deadlock_data_error(monkeypatch):
+    """A non-retryable data-layer error raises on the first attempt, never retried against the increment."""
+    monkeypatch.setattr("litellm.proxy.db.db_spend_update_writer.asyncio.sleep", AsyncMock(return_value=None))
+
+    from prisma.errors import UniqueViolationError
+
+    non_deadlock = UniqueViolationError(
+        data={"user_facing_error": {"error_code": "P2002", "meta": {"table": "LiteLLM_VerificationToken"}}}
+    )
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(side_effect=lambda *a, **k: _failing_tx(non_deadlock))
+
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    with pytest.raises(UniqueViolationError):
+        await DBSpendUpdateWriter()._commit_spend_updates_to_db(
+            prisma_client=mock_prisma_client,
+            n_retry_times=3,
+            proxy_logging_obj=proxy_logging,
+            db_spend_update_transactions=_empty_spend_transactions(key_list_transactions={"sk-abc": 0.5}),
+        )
+
+    mock_prisma_client.db.tx.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_update_daily_spend_retries_deadlock(monkeypatch):
+    """The daily-spend upsert path retries a deadlock and then drains successfully."""
+    mock_batcher = MagicMock()
+    good_ctx = MagicMock()
+    good_ctx.__aenter__ = AsyncMock(return_value=mock_batcher)
+    good_ctx.__aexit__ = AsyncMock(return_value=None)
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.batch_ = MagicMock(side_effect=[_deadlock_error(), good_ctx])
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    monkeypatch.setattr("litellm.proxy.db.db_spend_update_writer.asyncio.sleep", AsyncMock(return_value=None))
+    await DBSpendUpdateWriter._update_daily_spend(
+        n_retry_times=3,
+        prisma_client=mock_prisma_client,
+        proxy_logging_obj=proxy_logging,
+        daily_spend_transactions={"k1": _daily_txn()},
+        entity_type="user",
+        entity_id_field="user_id",
+        table_name="litellm_dailyuserspend",
+        unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
+    )
+
+    assert mock_prisma_client.db.batch_.call_count == 2
