@@ -76,7 +76,7 @@ impl ResponsesWebSocketConnection {
             ));
         };
         socket
-            .send(Message::Text(text))
+            .send(Message::Text(text.into()))
             .await
             .map_err(|error| CoreError::Network(error.to_string()))
     }
@@ -87,7 +87,7 @@ impl ResponsesWebSocketConnection {
             return Ok(None);
         };
         match socket.next().await {
-            Some(Ok(Message::Text(text))) => Ok(Some(text)),
+            Some(Ok(Message::Text(text))) => Ok(Some(text.to_string())),
             Some(Ok(Message::Binary(bytes))) => String::from_utf8(bytes.to_vec())
                 .map(Some)
                 .map_err(|error| CoreError::InvalidResponse(error.to_string())),
@@ -211,7 +211,7 @@ where
                 {
                     let payload = serde_json::to_string(&outbound)
                         .map_err(|error| CoreError::InvalidResponse(error.to_string()))?;
-                    upstream_tx.send(Message::Text(payload))
+                    upstream_tx.send(Message::Text(payload.into()))
                         .await
                         .map_err(|error| CoreError::Network(error.to_string()))?;
                 }
@@ -269,7 +269,7 @@ where
             let payload = serde_json::to_string(&outbound)
                 .map_err(|error| CoreError::InvalidResponse(error.to_string()))?;
             upstream_tx
-                .send(Message::Text(payload))
+                .send(Message::Text(payload.into()))
                 .await
                 .map_err(|error| CoreError::Network(error.to_string()))?;
         }
@@ -356,7 +356,8 @@ mod tests {
                                 "extra": "preserved"
                             }
                         })
-                        .to_string(),
+                        .to_string()
+                        .into(),
                     ))
                     .await
                     .expect("created event");
@@ -374,7 +375,8 @@ mod tests {
                                 }
                             }
                         })
-                        .to_string(),
+                        .to_string()
+                        .into(),
                     ))
                     .await
                     .expect("completed event");

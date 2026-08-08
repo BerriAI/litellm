@@ -1,13 +1,13 @@
 //! `simple-shuffle`: a uniform random pick among the candidate deployments.
 
-use rand::seq::SliceRandom;
+use rand::seq::IndexedRandom;
 
 use crate::router::Deployment;
 
 /// Uniform random choice among `candidates` (all sharing the requested
 /// `model_name`). Returns `None` when there are no candidates.
 pub fn select<'a>(candidates: &[&'a Deployment]) -> Option<&'a Deployment> {
-    candidates.choose(&mut rand::thread_rng()).copied()
+    candidates.choose(&mut rand::rng()).copied()
 }
 
 #[cfg(test)]
