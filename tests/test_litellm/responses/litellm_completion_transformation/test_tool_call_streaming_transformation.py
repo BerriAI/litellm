@@ -8,6 +8,7 @@ Also ensures that tool calls that only appear in the final built response still 
 before response.completed.
 """
 
+import json
 from unittest.mock import AsyncMock
 
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
@@ -397,3 +398,36 @@ def test_reused_index_with_new_call_id_marks_fallback_ambiguous():
     assert arguments_by_call_id["call_b"] == '{"b":'
     assert arguments_by_call_id["call_a"] != '{"a":1}'
     assert arguments_by_call_id["call_b"] != '{"b":1}'
+
+
+def test_object_tool_call_arguments_stream_as_valid_json():
+    """A provider that sends decoded object arguments must still stream valid JSON.
+
+    `str()` on a dict yields a Python repr with single quotes, which clients
+    parsing function_call_arguments reject with errors like
+    "Expecting ',' delimiter".
+    """
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 0,
+                "id": "call_obj",
+                "type": "function",
+                "function": {"name": "shell", "arguments": {"command": "ls", "flags": ["-l"]}},
+            }
+        ]
+    )
+
+    streamed_arguments = "".join(
+        evt.delta
+        for evt in iterator._pending_tool_events
+        if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
+    )
+
+    assert json.loads(streamed_arguments) == {"command": "ls", "flags": ["-l"]}
