@@ -1461,7 +1461,10 @@ async def call_list(
 
 # --------------------------------------------------------------------------- #
 # Branch 1 - ManagedObjectTable listing. This is the default production path
-# (the managed_files hook is registered) and wins over every other branch.
+# (the managed_files hook is registered) and wins over every other branch, as
+# long as the request carries no provider / target_model_names filter: the
+# managed objects table cannot satisfy either, so filtered requests fall
+# through to the provider seams instead of 500ing out of the hook.
 # --------------------------------------------------------------------------- #
 
 
@@ -1476,8 +1479,6 @@ async def test_list__managed_files_path(list_harness):
         user=user,
         limit=7,
         after="batch-cursor",
-        provider="openai",
-        target_model_names="m1,m2",
     )
 
     # DISPATCH - managed-files seam fired, neither provider seam did.
@@ -1485,13 +1486,34 @@ async def test_list__managed_files_path(list_harness):
         user_api_key_dict=user,
         limit=7,
         after="batch-cursor",
-        provider="openai",
-        target_model_names="m1,m2",
+        provider=None,
+        target_model_names=None,
         llm_router=list_harness.router,
     )
     list_harness.litellm_alist.assert_not_called()
     list_harness.router_alist.assert_not_called()
     assert resp is page
+
+
+@pytest.mark.asyncio
+async def test_list__provider_filter_skips_managed_files(list_harness):
+    list_user_batches = list_harness.set_managed_files(FakeListPage([]))
+
+    await call_list(list_harness, provider="vertex_ai")
+
+    list_user_batches.assert_not_called()
+    assert list_harness.alist_kwargs()["custom_llm_provider"] == "vertex_ai"
+
+
+@pytest.mark.asyncio
+async def test_list__target_model_names_filter_skips_managed_files(list_harness):
+    list_user_batches = list_harness.set_managed_files(FakeListPage([]))
+
+    await call_list(list_harness, target_model_names="m1,m2")
+
+    list_user_batches.assert_not_called()
+    list_harness.litellm_alist.assert_not_called()
+    assert list_harness.router_kwargs()["model"] == "m1"
 
 
 @pytest.mark.asyncio
