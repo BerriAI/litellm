@@ -98,8 +98,20 @@ async def test_budget_cascade_dependents_and_window_advance_share_one_batch():
         ("litellm_organizationtable.update_many", linked, {"spend": 0}),
         ("litellm_tagtable.update_many", linked, {"spend": 0}),
         ("litellm_endusertable.update_many", {"user_id": {"in": ["enduser-1"]}}, {"spend": 0}),
-        ("litellm_budgettable", {"budget_id": "budget-1"}, {"budget_reset_at": reset_at}),
+        ("litellm_budgettable.update_many", {"budget_id": "budget-1"}, {"budget_reset_at": reset_at}),
     ]
+
+
+async def test_budget_window_advance_tolerates_a_tier_deleted_mid_chunk():
+    """A tier deleted between the read and the commit must not abort the batch:
+    ``update`` raises P2025 on a missing row and takes every other write in the
+    chunk down with it, while ``update_many`` just matches nothing."""
+    batch = FakeBatch()
+
+    async with budget_cascade_unit_of_work(lambda: batch) as uow:
+        uow.budgets.queue_window_advance(budget_id="budget-1", budget_reset_at=datetime.now(timezone.utc))
+
+    assert [call[0] for call in batch.calls] == ["litellm_budgettable.update_many"]
 
 
 async def test_budget_cascade_raising_inside_block_skips_commit():

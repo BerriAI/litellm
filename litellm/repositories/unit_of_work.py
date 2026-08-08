@@ -60,7 +60,9 @@ class BudgetWindowWrites:
     table: BatchTable
 
     def queue_window_advance(self, budget_id: str, budget_reset_at: datetime) -> None:
-        self.table.update(where={"budget_id": budget_id}, data={"budget_reset_at": budget_reset_at})
+        """``update_many`` so a tier deleted between the read and the commit is a
+        no-op row count instead of a P2025 that aborts the whole chunk."""
+        self.table.update_many(where={"budget_id": budget_id}, data={"budget_reset_at": budget_reset_at})
 
 
 @dataclass(frozen=True, slots=True)

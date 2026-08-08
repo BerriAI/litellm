@@ -1471,7 +1471,7 @@ def test_budget_cascade_writes_land_in_a_single_transaction(reset_budget_job, mo
         ("org", "update_many"),
         ("tag", "update_many"),
         ("enduser", "update_many"),
-        ("budget", "update"),
+        ("budget", "update_many"),
     }
     budget_write = next(call for call in batcher.calls if call["table"] == "budget")
     assert budget_write["data"]["budget_reset_at"] > now
@@ -1531,20 +1531,11 @@ def _asserts_null_reset_is_due(where):
     branches = where.get("OR")
     assert isinstance(branches, list), f"expected an OR filter, got {where!r}"
 
-    has_null_branch = any(
-        b.get("AND")
-        == [
-            {"budget_reset_at": None},
-            {"NOT": {"budget_duration": None}},
-        ]
-        for b in branches
-        if isinstance(b, dict)
-    )
-    has_expired_branch = any(
-        isinstance(b, dict) and "budget_reset_at" in b and b["budget_reset_at"] is not None for b in branches
-    )
+    has_null_branch = {"budget_reset_at": None} in branches
+    has_expired_branch = any(isinstance(b, dict) and isinstance(b.get("budget_reset_at"), dict) for b in branches)
     assert has_null_branch, f"missing NULL-reset_at branch in {where!r}"
     assert has_expired_branch, f"missing expired-reset_at branch in {where!r}"
+    assert where.get("NOT") == {"budget_duration": None}, f"NULL reset_at is only due with a duration: {where!r}"
 
 
 _RESET_TABLE_ATTRS = {
@@ -1579,6 +1570,18 @@ def test_get_data_reset_query_applies_the_row_limit(table_name):
     find_many = _run_reset_query(table_name, limit=7)
 
     assert find_many.await_args.kwargs["take"] == 7
+
+
+@pytest.mark.parametrize("table_name", ["user", "team", "budget", "key"])
+def test_get_data_reset_query_skips_rows_with_no_budget_duration(table_name):
+    """A row with a past budget_reset_at but no budget_duration has no next
+    window to move to, so it stays due forever. Fetching it means re-reading and
+    re-zeroing it on every tick, and a full chunk of such rows makes the paged
+    scan report no progress and starve the whole phase.
+    """
+    find_many = _run_reset_query(table_name)
+
+    assert find_many.await_args.kwargs["where"]["NOT"] == {"budget_duration": None}
 
 
 @pytest.mark.parametrize("table_name", ["user", "team", "budget", "key"])
@@ -1619,18 +1622,40 @@ def test_get_data_reset_query_selects_null_budget_reset_at(table_name):
 # ---------------------------------------------------------------------------
 
 
-class FakePodLockManager:
-    """Records the cron lock handshake without needing Redis."""
+class FakeRedisCache:
+    """The one read the lock path makes when an acquire comes back false."""
 
-    def __init__(self, acquired: Any = True, redis_cache: Any = "redis"):
-        self.redis_cache = redis_cache
-        self._acquired = acquired
+    def __init__(self, holder: Any = None, error: Exception | None = None):
+        self.holder = holder
+        self.error = error
+        self.get_calls: List[str] = []
+
+    async def async_get_cache(self, key: str) -> Any:
+        self.get_calls.append(key)
+        if self.error is not None:
+            raise self.error
+        return self.holder
+
+
+_DEFAULT_REDIS = object()
+
+
+class FakePodLockManager:
+    """Records the cron lock handshake without needing Redis.
+
+    ``acquired`` takes a list to script successive answers (the last one
+    repeats), which is how the between-phase heartbeat gets tested.
+    """
+
+    def __init__(self, acquired: Any = True, redis_cache: Any = _DEFAULT_REDIS):
+        self.redis_cache = FakeRedisCache() if redis_cache is _DEFAULT_REDIS else redis_cache
+        self._acquired = acquired if isinstance(acquired, list) else [acquired]
         self.acquire_calls: List[Dict[str, Any]] = []
         self.release_calls: List[str] = []
 
     async def acquire_lock(self, cronjob_id: str, ttl: int | None = None) -> Any:
         self.acquire_calls.append({"cronjob_id": cronjob_id, "ttl": ttl})
-        return self._acquired
+        return self._acquired[min(len(self.acquire_calls) - 1, len(self._acquired) - 1)]
 
     async def release_lock(self, cronjob_id: str) -> None:
         self.release_calls.append(cronjob_id)
@@ -1688,16 +1713,46 @@ def _leader_job(prisma_client, pod_lock_manager):
 
 
 def test_reset_budget_runs_and_releases_the_lock_when_this_pod_is_the_leader(mock_prisma_client):
-    """One acquire per run (not per phase), the work happens, and the lock goes
-    back so the next tick is not deadlocked for the whole TTL."""
+    """The work happens under the lock, and the lock goes back so the next tick
+    is not deadlocked for the whole TTL."""
     lock = FakePodLockManager(acquired=True)
     mock_prisma_client.data["key"] = [_key_row("tok-leader")]
 
     asyncio.run(_leader_job(mock_prisma_client, lock).reset_budget())
 
-    assert lock.acquire_calls == [{"cronjob_id": RESET_BUDGET_JOB_NAME, "ttl": RESET_BUDGET_JOB_LOCK_TTL_SECONDS}]
+    expected_acquire = {"cronjob_id": RESET_BUDGET_JOB_NAME, "ttl": RESET_BUDGET_JOB_LOCK_TTL_SECONDS}
+    assert lock.acquire_calls[0] == expected_acquire
+    assert all(call == expected_acquire for call in lock.acquire_calls)
     assert lock.release_calls == [RESET_BUDGET_JOB_NAME]
     assert [w["where"] for w in _batch_writes(mock_prisma_client, "key", op="update")] == [{"token": "tok-leader"}]
+
+
+def test_reset_budget_stops_when_the_lock_is_lost_mid_run(mock_prisma_client):
+    """A run slower than the TTL can be taken over by another pod. Re-asserting
+    the lock between phases catches that, so the two pods do not fire the same
+    reset transactions at each other.
+    """
+    lock = FakePodLockManager(acquired=[True, False])
+    mock_prisma_client.data["key"] = [_key_row("tok-1")]
+    mock_prisma_client.data["user"] = [_user_row("uid-1")]
+
+    asyncio.run(_leader_job(mock_prisma_client, lock).reset_budget())
+
+    assert [call["table_name"] for call in mock_prisma_client.get_data_calls] == ["key"]
+    assert _batch_writes(mock_prisma_client, "user") == []
+    assert lock.release_calls == [RESET_BUDGET_JOB_NAME]
+
+
+def test_reset_budget_heartbeat_does_not_run_when_there_is_no_lock(mock_prisma_client):
+    """An unguarded run must not start talking to Redis between phases."""
+    lock = FakePodLockManager(redis_cache=None)
+    mock_prisma_client.data["key"] = [_key_row("tok-1")]
+    mock_prisma_client.data["user"] = [_user_row("uid-1")]
+
+    asyncio.run(_leader_job(mock_prisma_client, lock).reset_budget())
+
+    assert lock.acquire_calls == []
+    assert len(_batch_writes(mock_prisma_client, "user", op="update")) == 1
 
 
 def test_reset_budget_releases_the_lock_when_a_phase_raises(mock_prisma_client):
@@ -1724,13 +1779,38 @@ def test_reset_budget_releases_the_lock_when_a_phase_raises(mock_prisma_client):
 def test_reset_budget_does_nothing_when_another_pod_holds_the_lock(mock_prisma_client):
     """The whole point of the lock: a follower must not read or write the
     budget tables, since concurrent runs are what pile up lock contention."""
-    lock = FakePodLockManager(acquired=False)
+    redis = FakeRedisCache(holder="another-pod")
+    lock = FakePodLockManager(acquired=False, redis_cache=redis)
     mock_prisma_client.data["key"] = [_key_row("tok-follower")]
 
     asyncio.run(_leader_job(mock_prisma_client, lock).reset_budget())
 
+    assert redis.get_calls == ["cronjob_lock:reset_budget_job"]
     assert mock_prisma_client.get_data_calls == []
     assert mock_prisma_client.db.batchers == []
+    assert lock.release_calls == []
+
+
+@pytest.mark.parametrize(
+    "make_redis",
+    [
+        lambda: FakeRedisCache(error=ConnectionError("redis is down")),
+        lambda: FakeRedisCache(holder=None),
+    ],
+    ids=["redis_unreachable", "lock_key_gone"],
+)
+@pytest.mark.parametrize("acquired", [False, None], ids=["acquire_false", "acquire_none"])
+def test_reset_budget_runs_unguarded_when_no_pod_actually_holds_the_lock(acquired, make_redis, mock_prisma_client):
+    """acquire_lock() reports a broken Redis exactly like real contention, so
+    trusting it blindly would let one unhealthy Redis stop budget resets across
+    the whole fleet. Only a live lock holder may skip a run.
+    """
+    lock = FakePodLockManager(acquired=acquired, redis_cache=make_redis())
+    mock_prisma_client.data["key"] = [_key_row("tok-fail-open")]
+
+    asyncio.run(_leader_job(mock_prisma_client, lock).reset_budget())
+
+    assert [w["where"] for w in _batch_writes(mock_prisma_client, "key", op="update")] == [{"token": "tok-fail-open"}]
     assert lock.release_calls == []
 
 
@@ -1887,7 +1967,7 @@ def test_budget_table_reset_walks_chunks_until_it_runs_dry(monkeypatch):
     assert _fetch_limits(client, "budget") == [2, 2]
     assert len(client.db.batchers) == 2
     assert all(batcher.committed for batcher in client.db.batchers)
-    assert [w["where"]["budget_id"] for w in _batch_writes(client, "budget", op="update")] == ["b1", "b2", "b3"]
+    assert [w["where"]["budget_id"] for w in _batch_writes(client, "budget", op="update_many")] == ["b1", "b2", "b3"]
 
 
 def test_budget_table_reset_stops_when_a_full_chunk_advances_no_window(monkeypatch):
@@ -1901,7 +1981,7 @@ def test_budget_table_reset_stops_when_a_full_chunk_advances_no_window(monkeypat
     asyncio.run(job.reset_budget_for_litellm_budget_table())
 
     assert client.fetches_by_table["budget"] == 1
-    assert _batch_writes(client, "budget", op="update") == []
+    assert _batch_writes(client, "budget", op="update_many") == []
 
 
 def test_budget_table_reset_stops_when_the_cascade_fails(monkeypatch):
@@ -1912,3 +1992,119 @@ def test_budget_table_reset_stops_when_the_cascade_fails(monkeypatch):
     asyncio.run(job.reset_budget_for_litellm_budget_table())
 
     assert client.fetches_by_table["budget"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Progress means "no longer due", not "was written"
+# ---------------------------------------------------------------------------
+
+
+def test_key_reset_stops_when_the_new_reset_time_is_not_in_the_future(monkeypatch):
+    """A "0s" budget_duration resolves to the current time, so the row is written
+    and comes straight back on the next fetch. Treating a written row as progress
+    burns the whole per-run chunk cap on rows that never move.
+    """
+    monkeypatch.setattr(reset_budget_job_module, "RESET_BUDGET_JOB_BATCH_SIZE", 2)
+    stuck_chunk = [_key_row("k1", budget_duration="0s"), _key_row("k2", budget_duration="0s")]
+    client, job = _chunked_job({"key": [stuck_chunk]})
+
+    asyncio.run(job.reset_budget_for_litellm_keys())
+
+    assert client.fetches_by_table["key"] == 1
+    assert len(_batch_writes(client, "key", op="update")) == 2
+
+
+def test_budget_table_reset_stops_when_the_new_window_is_not_in_the_future(monkeypatch):
+    """Same zero-length window on the budget tier: advancing it to now leaves it
+    due, so the cascade must not report progress."""
+    monkeypatch.setattr(reset_budget_job_module, "RESET_BUDGET_JOB_BATCH_SIZE", 2)
+    stuck_chunk = [_budget_row("b1", budget_duration="0s"), _budget_row("b2", budget_duration="0s")]
+    client, job = _chunked_job({"budget": [stuck_chunk]})
+
+    asyncio.run(job.reset_budget_for_litellm_budget_table())
+
+    assert client.fetches_by_table["budget"] == 1
+    assert len(_batch_writes(client, "budget", op="update_many")) == 2
+
+
+class PoisonRow:
+    """A row the in-memory reset cannot write, like the DataError rows in #27730."""
+
+    token = "poison"
+    budget_duration = "30d"
+    budget_reset_at = None
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise RuntimeError("simulated failure resetting this row")
+
+
+class RecordingServiceLogging:
+    def __init__(self):
+        self.success_calls: List[Dict[str, Any]] = []
+        self.failure_calls: List[Dict[str, Any]] = []
+
+    async def async_service_success_hook(self, **kwargs):
+        self.success_calls.append(kwargs)
+
+    async def async_service_failure_hook(self, **kwargs):
+        self.failure_calls.append(kwargs)
+
+
+class RecordingProxyLogging:
+    def __init__(self):
+        self.service_logging_obj = RecordingServiceLogging()
+
+
+def _run_and_drain_hooks(make_coro):
+    """The service hooks are fired as tasks; give them a turn before asserting."""
+
+    async def _run():
+        await make_coro()
+        await asyncio.sleep(0.05)
+
+    asyncio.run(_run())
+
+
+def test_key_reset_keeps_paging_when_some_rows_in_a_chunk_fail(monkeypatch):
+    """One row that cannot be reset must not cost the phase its remaining chunks:
+    the rows that did reset are committed and are real progress, and the failure
+    is reported instead of aborting the run.
+    """
+    monkeypatch.setattr(reset_budget_job_module, "RESET_BUDGET_JOB_BATCH_SIZE", 2)
+    client = ChunkedPrismaClient({"key": [[PoisonRow(), _key_row("k1")], [_key_row("k2")]]})
+    logging_obj = RecordingProxyLogging()
+    job = ResetBudgetJob(proxy_logging_obj=logging_obj, prisma_client=client)
+
+    _run_and_drain_hooks(job.reset_budget_for_litellm_keys)
+
+    assert client.fetches_by_table["key"] == 2
+    assert [w["where"]["token"] for w in _batch_writes(client, "key", op="update")] == ["k1", "k2"]
+    assert [call["call_type"] for call in logging_obj.service_logging_obj.failure_calls] == ["reset_budget_keys"]
+    assert set(logging_obj.service_logging_obj.failure_calls[0]["event_metadata"]) == {
+        "num_keys_found",
+        "keys_found",
+    }
+    assert [call["call_type"] for call in logging_obj.service_logging_obj.success_calls] == ["reset_budget_keys"]
+
+
+@pytest.mark.parametrize(
+    "phase, table_name, row_factory, call_type",
+    [
+        ("reset_budget_for_litellm_users", "user", _user_row, "reset_budget_users"),
+        ("reset_budget_for_litellm_teams", "team", _team_row, "reset_budget_teams"),
+    ],
+    ids=["users", "teams"],
+)
+def test_user_and_team_chunks_report_progress_despite_a_failed_row(
+    monkeypatch, phase, table_name, row_factory, call_type
+):
+    monkeypatch.setattr(reset_budget_job_module, "RESET_BUDGET_JOB_BATCH_SIZE", 2)
+    client = ChunkedPrismaClient({table_name: [[PoisonRow(), row_factory("a")], [row_factory("b")]]})
+    logging_obj = RecordingProxyLogging()
+    job = ResetBudgetJob(proxy_logging_obj=logging_obj, prisma_client=client)
+
+    _run_and_drain_hooks(getattr(job, phase))
+
+    assert client.fetches_by_table[table_name] == 2
+    assert len(_batch_writes(client, table_name, op="update")) == 2
+    assert [call["call_type"] for call in logging_obj.service_logging_obj.failure_calls] == [call_type]

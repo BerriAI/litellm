@@ -1,15 +1,16 @@
 import asyncio
 import json
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, TypeVar
+from typing import Final, Literal, Protocol, TypeVar, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     GLOBAL_PROXY_SPEND_CACHE_KEY,
     LITELLM_PROXY_BUDGET_NAME,
@@ -140,6 +141,7 @@ class _BudgetCascade:
 @dataclass(frozen=True, slots=True)
 class _BudgetCascadeCommitted:
     cascade: _BudgetCascade
+    advanced: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,24 +164,59 @@ class _LeaderLockUnavailable:
 
 
 @dataclass(frozen=True, slots=True)
-class _LeaderLockNotConfigured:
-    pass
+class _LeaderLockUnguarded:
+    """No election happened: either no Redis is configured, or Redis could not
+    be reached. Both fall back to what every pod did before the lock existed."""
 
 
-_LeaderLock = _LeaderLockHeld | _LeaderLockUnavailable | _LeaderLockNotConfigured
+_LeaderLock = _LeaderLockHeld | _LeaderLockUnavailable | _LeaderLockUnguarded
+
+
+async def _leader_lock_after_failed_acquire(redis_cache: RedisCache) -> _LeaderLock:
+    """A failed acquire is either real contention or a broken Redis, and
+    acquire_lock() reports both as False. Only an actual holder proves another
+    pod is running, so anything else runs unguarded rather than letting a Redis
+    outage stop budgets from resetting fleet-wide."""
+    try:
+        holder: Final = await redis_cache.async_get_cache(PodLockManager.get_redis_lock_key(RESET_BUDGET_JOB_NAME))
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            "Budget reset: could not read the '%s' lock holder (%s), running unguarded.",
+            RESET_BUDGET_JOB_NAME,
+            e,
+        )
+        return _LeaderLockUnguarded()
+    if holder is None:
+        return _LeaderLockUnguarded()
+    return _LeaderLockUnavailable()
 
 
 @dataclass(frozen=True, slots=True)
 class _ChunkOutcome:
-    """One chunk of a reset phase: rows read, and rows the write actually moved
-    past the due cutoff (a row with no budget_duration is rewritten but stays
-    due, so it does not count as progress)."""
+    """One chunk of a reset phase: rows read, and rows whose new budget_reset_at
+    cleared the due cutoff. Anything else is still due and would come straight
+    back on the next fetch, so it is not progress."""
 
     fetched: int
     advanced: int
 
 
 _NO_PROGRESS: Final = _ChunkOutcome(fetched=0, advanced=0)
+
+
+def _as_utc(moment: datetime) -> datetime:
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+def _count_advanced(reset_ats: Iterable[object], cutoff: datetime) -> int:
+    """How many rows the write actually moved past the due cutoff.
+
+    A budget_duration of "0s" (or one the parser cannot read) resolves to the
+    current time, so the row is written and stays due. Counting it as progress
+    would re-read the same chunk until the per-run cap on every tick.
+    """
+    utc_cutoff: Final = _as_utc(cutoff)
+    return sum(1 for reset_at in reset_ats if isinstance(reset_at, datetime) and _as_utc(reset_at) > utc_cutoff)
 
 
 def _phase_is_drained(outcome: _ChunkOutcome) -> bool:
@@ -229,15 +266,33 @@ class ResetBudgetJob:
         Without Redis there is nothing to elect on, so every pod keeps running
         the job as it always has.
         """
-        if self.pod_lock_manager is None or self.pod_lock_manager.redis_cache is None:
-            return _LeaderLockNotConfigured()
-        acquired: Final = await self.pod_lock_manager.acquire_lock(
+        manager: Final = self.pod_lock_manager
+        if manager is None:
+            return _LeaderLockUnguarded()
+        redis_cache: Final = manager.redis_cache
+        if redis_cache is None:
+            return _LeaderLockUnguarded()
+        acquired: Final = await manager.acquire_lock(
             cronjob_id=RESET_BUDGET_JOB_NAME,
             ttl=RESET_BUDGET_JOB_LOCK_TTL_SECONDS,
         )
         if acquired is True:
-            return _LeaderLockHeld(manager=self.pod_lock_manager)
-        return _LeaderLockUnavailable()
+            return _LeaderLockHeld(manager=manager)
+        return await _leader_lock_after_failed_acquire(redis_cache)
+
+    @staticmethod
+    async def _still_leads(lock: _LeaderLock) -> bool:
+        """Re-assert the lock between phases so a run that outlives the TTL stops
+        instead of working alongside the pod that took over."""
+        if not isinstance(lock, _LeaderLockHeld):
+            return True
+        return (
+            await lock.manager.acquire_lock(
+                cronjob_id=RESET_BUDGET_JOB_NAME,
+                ttl=RESET_BUDGET_JOB_LOCK_TTL_SECONDS,
+            )
+            is True
+        )
 
     async def reset_budget(
         self,
@@ -264,21 +319,24 @@ class ResetBudgetJob:
             )
             return
 
+        phases: Final = (
+            self.reset_budget_for_litellm_keys,
+            self.reset_budget_for_litellm_users,
+            self.reset_budget_for_litellm_teams,
+            self.reset_budget_for_litellm_budget_table,
+            self.reset_budget_windows,
+        )
         try:
-            ### RESET KEY BUDGET ###
-            await self.reset_budget_for_litellm_keys()
-
-            ### RESET USER BUDGET ###
-            await self.reset_budget_for_litellm_users()
-
-            ## Reset Team Budget
-            await self.reset_budget_for_litellm_teams()
-
-            ### RESET ENDUSER (Customer) BUDGET and corresponding Budget duration ###
-            await self.reset_budget_for_litellm_budget_table()
-
-            ### RESET MULTI-WINDOW BUDGETS ###
-            await self.reset_budget_windows()
+            for phase in phases:
+                await phase()
+                if not await self._still_leads(lock):
+                    verbose_proxy_logger.warning(
+                        "Budget reset: lost the '%s' lock after %s, stopping this run. "
+                        "The remaining phases run on the next tick.",
+                        RESET_BUDGET_JOB_NAME,
+                        phase.__name__,
+                    )
+                    return
         finally:
             if isinstance(lock, _LeaderLockHeld):
                 await lock.manager.release_lock(cronjob_id=RESET_BUDGET_JOB_NAME)
@@ -467,7 +525,13 @@ class ResetBudgetJob:
             return _BudgetCascadeFailed(cascade=cascade, error=e)
 
         await self._invalidate_budget_cascade_caches(cascade)
-        return _BudgetCascadeCommitted(cascade=cascade)
+        return _BudgetCascadeCommitted(
+            cascade=cascade,
+            advanced=_count_advanced(
+                (reset_at for _, reset_at in cascade.budget_resets),
+                cutoff=datetime.now(timezone.utc),
+            ),
+        )
 
     async def reset_budget_for_litellm_budget_table(self) -> None:
         """
@@ -485,7 +549,7 @@ class ResetBudgetJob:
         end_time: Final = time.time()
 
         match outcome:
-            case _BudgetCascadeCommitted(cascade=cascade):
+            case _BudgetCascadeCommitted(cascade=cascade, advanced=advanced):
                 asyncio.create_task(
                     self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
                         service=ServiceTypes.RESET_BUDGET_JOB,
@@ -500,7 +564,7 @@ class ResetBudgetJob:
                         },
                     )
                 )
-                return _ChunkOutcome(fetched=len(cascade.budgets), advanced=len(cascade.budget_resets))
+                return _ChunkOutcome(fetched=len(cascade.budgets), advanced=advanced)
             case _BudgetCascadeFailed(cascade=cascade, error=error):
                 verbose_proxy_logger.exception(
                     "Failed to reset the budget table cascade (team member, enduser, org and tag spend, plus "
@@ -520,6 +584,8 @@ class ResetBudgetJob:
                     )
                 )
                 return _NO_PROGRESS
+            case _:
+                assert_never(outcome)
 
     async def _get_endusers_with_no_budget_id(
         self,
@@ -580,6 +646,31 @@ class ResetBudgetJob:
             for t in updated_teams:
                 uow.teams.queue_spend_reset(team_id=t.team_id, budget_reset_at=t.budget_reset_at)
 
+    def _emit_phase_failure(
+        self,
+        call_type: str,
+        error: Exception,
+        start_time: float,
+        end_time: float,
+        event_metadata: dict[str, object],
+    ) -> None:
+        """Report rows that could not be reset without failing the chunk: the
+        rows that did reset are already committed, and raising here would cost
+        the phase every remaining chunk this tick.
+        """
+        verbose_proxy_logger.error("%s: %s", call_type, error)
+        asyncio.create_task(
+            self.proxy_logging_obj.service_logging_obj.async_service_failure_hook(
+                service=ServiceTypes.RESET_BUDGET_JOB,
+                duration=end_time - start_time,
+                error=error,
+                call_type=call_type,
+                start_time=start_time,
+                end_time=end_time,
+                event_metadata=event_metadata,
+            )
+        )
+
     async def reset_budget_for_litellm_keys(self) -> None:
         """
         Resets the budget for all the litellm keys
@@ -629,8 +720,25 @@ class ResetBudgetJob:
                             await self._invalidate_spend_counter(f"spend:key:{token}")
 
             end_time = time.time()
-            if len(failed_keys) > 0:  # If any keys failed to reset
-                raise Exception(f"Failed to reset {len(failed_keys)} keys: {json.dumps(failed_keys, default=str)}")
+            outcome: Final = _ChunkOutcome(
+                fetched=len(keys_to_reset) if keys_to_reset else 0,
+                advanced=_count_advanced(
+                    (k.budget_reset_at for k in updated_keys),
+                    cutoff=datetime.now(timezone.utc),
+                ),
+            )
+            if len(failed_keys) > 0:
+                self._emit_phase_failure(
+                    call_type="reset_budget_keys",
+                    error=Exception(f"Failed to reset {len(failed_keys)} keys: {json.dumps(failed_keys, default=str)}"),
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata={
+                        "num_keys_found": len(keys_to_reset) if keys_to_reset else 0,
+                        "keys_found": json.dumps(keys_to_reset, indent=4, default=str),
+                    },
+                )
+                return outcome
 
             asyncio.create_task(
                 self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
@@ -649,10 +757,7 @@ class ResetBudgetJob:
                     },
                 )
             )
-            return _ChunkOutcome(
-                fetched=len(keys_to_reset) if keys_to_reset else 0,
-                advanced=sum(1 for k in updated_keys if k.budget_duration is not None),
-            )
+            return outcome
         except Exception as e:
             end_time = time.time()
             asyncio.create_task(
@@ -723,8 +828,27 @@ class ResetBudgetJob:
                             await self._invalidate_global_proxy_spend_cache()
 
             end_time = time.time()
-            if len(failed_users) > 0:  # If any users failed to reset
-                raise Exception(f"Failed to reset {len(failed_users)} users: {json.dumps(failed_users, default=str)}")
+            outcome: Final = _ChunkOutcome(
+                fetched=len(users_to_reset) if users_to_reset else 0,
+                advanced=_count_advanced(
+                    (u.budget_reset_at for u in updated_users),
+                    cutoff=datetime.now(timezone.utc),
+                ),
+            )
+            if len(failed_users) > 0:
+                self._emit_phase_failure(
+                    call_type="reset_budget_users",
+                    error=Exception(
+                        f"Failed to reset {len(failed_users)} users: {json.dumps(failed_users, default=str)}"
+                    ),
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata={
+                        "num_users_found": len(users_to_reset) if users_to_reset else 0,
+                        "users_found": json.dumps(users_to_reset, indent=4, default=str),
+                    },
+                )
+                return outcome
 
             asyncio.create_task(
                 self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
@@ -743,10 +867,7 @@ class ResetBudgetJob:
                     },
                 )
             )
-            return _ChunkOutcome(
-                fetched=len(users_to_reset) if users_to_reset else 0,
-                advanced=sum(1 for u in updated_users if u.budget_duration is not None),
-            )
+            return outcome
         except Exception as e:
             end_time = time.time()
             asyncio.create_task(
@@ -815,8 +936,27 @@ class ResetBudgetJob:
                             await self._invalidate_spend_counter(f"spend:team:{team_id}")
 
             end_time = time.time()
-            if len(failed_teams) > 0:  # If any teams failed to reset
-                raise Exception(f"Failed to reset {len(failed_teams)} teams: {json.dumps(failed_teams, default=str)}")
+            outcome: Final = _ChunkOutcome(
+                fetched=len(teams_to_reset) if teams_to_reset else 0,
+                advanced=_count_advanced(
+                    (t.budget_reset_at for t in updated_teams),
+                    cutoff=datetime.now(timezone.utc),
+                ),
+            )
+            if len(failed_teams) > 0:
+                self._emit_phase_failure(
+                    call_type="reset_budget_teams",
+                    error=Exception(
+                        f"Failed to reset {len(failed_teams)} teams: {json.dumps(failed_teams, default=str)}"
+                    ),
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata={
+                        "num_teams_found": len(teams_to_reset) if teams_to_reset else 0,
+                        "teams_found": json.dumps(teams_to_reset, indent=4, default=str),
+                    },
+                )
+                return outcome
 
             asyncio.create_task(
                 self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
@@ -835,10 +975,7 @@ class ResetBudgetJob:
                     },
                 )
             )
-            return _ChunkOutcome(
-                fetched=len(teams_to_reset) if teams_to_reset else 0,
-                advanced=sum(1 for t in updated_teams if t.budget_duration is not None),
-            )
+            return outcome
         except Exception as e:
             end_time = time.time()
             asyncio.create_task(

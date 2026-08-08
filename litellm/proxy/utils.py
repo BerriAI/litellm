@@ -3487,6 +3487,7 @@ class PrismaClient:
                                 {"expires": {"gt": expires}},
                             ],
                             "budget_reset_at": {"lt": reset_at},
+                            "NOT": {"budget_duration": None},
                         },
                     )
                     if response is not None and len(response) > 0:
@@ -3548,13 +3549,9 @@ class PrismaClient:
                             # of the row, silently exceeding max_budget. Treat a
                             # NULL budget_reset_at with a non-NULL budget_duration
                             # as due, matching the budget-table query below.
+                            "NOT": {"budget_duration": None},
                             "OR": [
-                                {
-                                    "AND": [
-                                        {"budget_reset_at": None},
-                                        {"NOT": {"budget_duration": None}},
-                                    ]
-                                },
+                                {"budget_reset_at": None},
                                 {"budget_reset_at": {"lt": reset_at}},
                             ],
                         },
@@ -3615,15 +3612,11 @@ class PrismaClient:
                     response = await BudgetRepository(self).table.find_many(
                         take=limit,
                         where={
+                            "NOT": {"budget_duration": None},
                             "OR": [
-                                {
-                                    "AND": [
-                                        {"budget_reset_at": None},
-                                        {"NOT": {"budget_duration": None}},
-                                    ]
-                                },
+                                {"budget_reset_at": None},
                                 {"budget_reset_at": {"lt": reset_at}},
-                            ]
+                            ],
                         },
                     )
                     return response
@@ -3647,13 +3640,9 @@ class PrismaClient:
                             # Same NULL budget_reset_at gap as the user query
                             # above: a team with a budget_duration but no
                             # initialized budget_reset_at would never be reset.
+                            "NOT": {"budget_duration": None},
                             "OR": [
-                                {
-                                    "AND": [
-                                        {"budget_reset_at": None},
-                                        {"NOT": {"budget_duration": None}},
-                                    ]
-                                },
+                                {"budget_reset_at": None},
                                 {"budget_reset_at": {"lt": reset_at}},
                             ],
                         },
