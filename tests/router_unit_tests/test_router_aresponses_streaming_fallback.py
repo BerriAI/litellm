@@ -90,6 +90,50 @@ def test_extract_partial_responses_usage_no_completed_response():
     assert usage is None
 
 
+def test_bridge_iterator_initializes_completed_response():
+    """
+    LiteLLMCompletionStreamingIterator must expose completed_response, the
+    attribute BaseResponsesAPIStreamingIterator guarantees. It overrides
+    __init__ without calling super().__init__(), so a missing initializer
+    leaves the attribute unset (regression for #35411).
+    """
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+
+    assert iterator.completed_response is None
+
+
+def test_extract_partial_responses_usage_bridge_no_chunks_returns_none():
+    """
+    Bridge iterator with no recoverable chunks must fall through to the native
+    completed_response check and return None, not raise AttributeError. Before
+    #35411 this read an uninitialized attribute and the AttributeError masked
+    the real mid-stream provider error, bypassing retry/fallback.
+    """
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+    assert iterator.collected_chat_completion_chunks == []
+
+    usage = Router._extract_partial_responses_usage(iterator)
+    assert usage is None
+
+
 # -------- _combine_responses_fallback_usage --------
 
 
