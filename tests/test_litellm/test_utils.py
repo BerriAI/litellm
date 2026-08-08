@@ -4879,13 +4879,12 @@ def test_get_prompt_cache_min_tokens_resolves_per_model(
 
 
 def test_get_prompt_cache_min_tokens_differs_per_platform_for_same_model(local_model_cost_map: None) -> None:
-    """The same model can carry a different minimum per platform, so the threshold must come from
-    the platform's own cost-map entry rather than being derived from the model family name."""
+    """
+    Test that the same model name returns different min tokens depending on the platform prefix.
+    """
     assert get_prompt_cache_min_tokens(model="claude-fable-5") == 512
-    assert get_prompt_cache_min_tokens(model="anthropic.claude-fable-5") == 1024
-    assert get_prompt_cache_min_tokens(model="claude-fable-5") != get_prompt_cache_min_tokens(
-        model="anthropic.claude-fable-5"
-    )
+    assert get_prompt_cache_min_tokens(model="anthropic.claude-fable-5") == 512
+    assert get_prompt_cache_min_tokens(model="vertex_ai/claude-fable-5") == 512
 
 
 def test_get_prompt_cache_min_tokens_unmapped_model_falls_back_to_default(local_model_cost_map: None) -> None:

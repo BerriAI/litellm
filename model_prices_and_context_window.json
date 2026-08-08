@@ -1392,7 +1392,7 @@
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 512
     },
     "global.anthropic.claude-fable-5": {
         "cache_creation_input_token_cost": 1.25e-05,
@@ -1428,7 +1428,7 @@
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 512
     },
     "us.anthropic.claude-fable-5": {
         "cache_creation_input_token_cost": 1.375e-05,
@@ -1464,7 +1464,7 @@
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 512
     },
     "eu.anthropic.claude-fable-5": {
         "cache_creation_input_token_cost": 1.375e-05,
@@ -1500,7 +1500,7 @@
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 512
     },
     "anthropic.claude-opus-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -2864,7 +2864,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 4096
     },
     "azure_ai/claude-opus-4-5": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -2886,7 +2887,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_output_config": true
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 4096
     },
     "azure_ai/claude-opus-4-6": {
         "supports_adaptive_thinking": true,
@@ -2915,7 +2917,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_output_config": true,
-        "supports_max_reasoning_effort": true
+        "supports_max_reasoning_effort": true,
+        "prompt_cache_min_tokens": 4096
     },
     "azure_ai/claude-opus-4-7": {
         "supports_adaptive_thinking": true,
@@ -2945,7 +2948,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true
+        "supports_max_reasoning_effort": true,
+        "prompt_cache_min_tokens": 2048
     },
     "azure_ai/claude-fable-5": {
         "supports_mid_conversation_system": true,
@@ -2976,7 +2980,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true
+        "supports_max_reasoning_effort": true,
+        "prompt_cache_min_tokens": 512
     },
     "azure_ai/claude-opus-5": {
         "supports_mid_conversation_system": true,
@@ -3039,7 +3044,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true
+        "supports_max_reasoning_effort": true,
+        "prompt_cache_min_tokens": 1024
     },
     "azure_ai/claude-opus-4-1": {
         "cache_creation_input_token_cost": 1.875e-05,
@@ -3060,7 +3066,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "azure_ai/claude-sonnet-4-5": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -3081,7 +3088,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "azure_ai/claude-sonnet-5": {
         "supports_mid_conversation_system": true,
@@ -3112,7 +3120,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true
+        "supports_max_reasoning_effort": true,
+        "prompt_cache_min_tokens": 1024
     },
     "azure_ai/claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
@@ -3136,7 +3145,8 @@
         "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_output_config": true
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 1024
     },
     "azure/computer-use-preview": {
         "input_cost_per_token": 3e-06,
@@ -30690,7 +30700,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "openrouter/anthropic/claude-sonnet-4": {
         "input_cost_per_image": 0.0048,
@@ -30713,7 +30724,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "openrouter/anthropic/claude-sonnet-4.6": {
         "supports_adaptive_thinking": true,
@@ -30738,7 +30750,8 @@
         "supports_reasoning": true,
         "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "openrouter/anthropic/claude-opus-4.5": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -30757,7 +30770,8 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_output_config": true
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 4096
     },
     "openrouter/anthropic/claude-opus-4.6": {
         "supports_adaptive_thinking": true,
@@ -30777,7 +30791,8 @@
         "supports_reasoning": true,
         "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 4096
     },
     "openrouter/anthropic/claude-sonnet-4.5": {
         "input_cost_per_image": 0.0048,
@@ -30800,7 +30815,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "openrouter/anthropic/claude-haiku-4.5": {
         "cache_creation_input_token_cost": 1.25e-06,
@@ -30818,7 +30834,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 4096
     },
     "openrouter/anthropic/claude-opus-4.7": {
         "supports_adaptive_thinking": true,
@@ -30841,7 +30858,8 @@
         "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "prompt_cache_min_tokens": 2048
     },
     "openrouter/bytedance/ui-tars-1.5-7b": {
         "input_cost_per_token": 1e-07,
@@ -35970,7 +35988,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 4096
     },
     "vercel_ai_gateway/anthropic/claude-opus-4": {
         "cache_creation_input_token_cost": 1.875e-05,
@@ -36008,7 +36027,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "vercel_ai_gateway/anthropic/claude-opus-4.5": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -36028,7 +36048,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_output_config": true
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 4096
     },
     "vercel_ai_gateway/anthropic/claude-opus-4.6": {
         "supports_adaptive_thinking": true,
@@ -36049,7 +36070,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_output_config": true
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 4096
     },
     "vercel_ai_gateway/anthropic/claude-sonnet-4": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -36068,7 +36090,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "vercel_ai_gateway/anthropic/claude-sonnet-4.5": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -36086,7 +36109,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "vercel_ai_gateway/cohere/command-a": {
         "input_cost_per_token": 2.5e-06,
@@ -37427,7 +37451,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true
+        "supports_max_reasoning_effort": true,
+        "prompt_cache_min_tokens": 512
     },
     "vertex_ai/claude-fable-5@default": {
         "supports_mid_conversation_system": true,
@@ -37458,7 +37483,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true
+        "supports_max_reasoning_effort": true,
+        "prompt_cache_min_tokens": 512
     },
     "vertex_ai/claude-opus-5": {
         "supports_mid_conversation_system": true,
@@ -45832,7 +45858,8 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "prompt_cache_min_tokens": 1024
     },
     "snowflake/claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
@@ -45848,7 +45875,8 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "prompt_cache_min_tokens": 1024
     },
     "snowflake/claude-4-sonnet": {
         "max_tokens": 16384,
@@ -45894,7 +45922,8 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "prompt_cache_min_tokens": 4096
     },
     "snowflake/claude-3-7-sonnet": {
         "max_tokens": 16384,
