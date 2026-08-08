@@ -58,28 +58,36 @@ def _extract_requested_format(
     logging_obj: "LiteLLMLoggingObj | None",
     default_format: str,
 ) -> str:
-    try:
-        req: Final[httpx.Request | None] = raw_response.request
-    except RuntimeError:
-        req: Final[httpx.Request | None] = None
-
+    req: Final[httpx.Request | None] = getattr(raw_response, "_request", None)
     if req is not None:
         try:
             req_content: Final = getattr(req, "content", None)
-            if req_content:
+            if isinstance(req_content, (bytes, bytearray, str)) and req_content:
                 req_json: Final = json.loads(req_content)
-                fmt: Final = req_json.get("req_params", {}).get("audio_params", {}).get("format")
-                if isinstance(fmt, str) and fmt.strip():
-                    return fmt.strip()
+                if isinstance(req_json, dict):
+                    req_params: Final = req_json.get("req_params")
+                    if isinstance(req_params, dict):
+                        audio_params: Final = req_params.get("audio_params")
+                        if isinstance(audio_params, dict):
+                            fmt: Final = audio_params.get("format")
+                            if isinstance(fmt, str) and fmt.strip():
+                                return fmt.strip()
         except (json.JSONDecodeError, ValueError, AttributeError, TypeError):  # noqa: BLE001  # fallback if unparseable
             pass
 
     if logging_obj is not None:
-        mcd: Final = getattr(logging_obj, "model_call_details", {}) or {}
-        opts: Final = getattr(logging_obj, "optional_params", None) or mcd.get("optional_params", {}) or {}
-        fmt_opts: Final = opts.get("response_format") or opts.get("format")
-        if isinstance(fmt_opts, str) and fmt_opts.strip():
-            return fmt_opts.strip()
+        opts: Final = getattr(logging_obj, "optional_params", None)
+        if isinstance(opts, dict):
+            fmt_opts: Final = opts.get("response_format") or opts.get("format")
+            if isinstance(fmt_opts, str) and fmt_opts.strip():
+                return fmt_opts.strip()
+        mcd: Final = getattr(logging_obj, "model_call_details", None)
+        if isinstance(mcd, dict):
+            mcd_opts: Final = mcd.get("optional_params")
+            if isinstance(mcd_opts, dict):
+                fmt_mcd_opts: Final = mcd_opts.get("response_format") or mcd_opts.get("format")
+                if isinstance(fmt_mcd_opts, str) and fmt_mcd_opts.strip():
+                    return fmt_mcd_opts.strip()
 
     return default_format
 

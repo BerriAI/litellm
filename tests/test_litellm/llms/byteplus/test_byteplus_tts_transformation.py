@@ -132,9 +132,13 @@ class TestBytePlusTextToSpeechConfig:
         response = httpx.Response(status_code=200, text=raw_lines)
 
         class DummyLoggingObj:
-            optional_params = {"response_format": "pcm"}
+            optional_params: dict[str, str] = {"response_format": "pcm"}
 
-        binary_res = config.transform_text_to_speech_response("seed-tts-2.0", response, DummyLoggingObj())
+        binary_res = config.transform_text_to_speech_response(
+            "seed-tts-2.0",
+            response,
+            DummyLoggingObj(),  # pyright: ignore[reportArgumentType]  # mock logging object for testing
+        )
         assert binary_res.response.headers["content-type"] == "audio/pcm"
 
     def test_transform_text_to_speech_response_error_code(self):
