@@ -13,6 +13,37 @@ from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUs
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 
 
+def _response_failed_message(error_obj: Any) -> str:
+    if error_obj is None:
+        return "The upstream provider reported the response as failed."
+    error_message: Final = getattr(error_obj, "message", None) or (
+        error_obj.get("message") if isinstance(error_obj, dict) else None
+    )
+    error_code: Final = getattr(error_obj, "code", None) or (
+        error_obj.get("code") if isinstance(error_obj, dict) else None
+    )
+    if error_message:
+        return f"{error_code}: {error_message}" if error_code else str(error_message)
+    return "The upstream provider reported the response as failed."
+
+
+def _error_event_message(event: Any) -> str:
+    direct_message: Final = getattr(event, "message", None) or (
+        event.get("message") if isinstance(event, dict) else None
+    )
+    if direct_message is not None:
+        return str(direct_message)
+    nested_error: Final = getattr(event, "error", None) or (
+        event.get("error") if isinstance(event, dict) else None
+    )
+    nested_message: Final = getattr(nested_error, "message", None) or (
+        nested_error.get("message") if isinstance(nested_error, dict) else None
+    )
+    if nested_message is not None:
+        return str(nested_message)
+    return "The upstream provider returned an error while streaming."
+
+
 class AnthropicResponsesStreamWrapper:
     """
     Wraps a Responses API streaming iterator and re-emits events in Anthropic SSE format.
@@ -228,39 +259,26 @@ class AnthropicResponsesStreamWrapper:
 
         # ---- response failed -> error ----
         if event_type == "response.failed":
-            response_obj = getattr(event, "response", None) or (
+            response_obj: Final = getattr(event, "response", None) or (
                 event.get("response") if isinstance(event, dict) else None
             )
-            error_obj = None
-            if response_obj is not None:
-                error_obj = getattr(response_obj, "error", None) or (
+            error_obj: Final = (
+                getattr(response_obj, "error", None)
+                or (
                     response_obj.get("error") if isinstance(response_obj, dict) else None
                 )
-            message = "The upstream provider reported the response as failed."
-            if error_obj is not None:
-                error_message = getattr(error_obj, "message", None) or (
-                    error_obj.get("message") if isinstance(error_obj, dict) else None
-                )
-                error_code = getattr(error_obj, "code", None) or (
-                    error_obj.get("code") if isinstance(error_obj, dict) else None
-                )
-                if error_message:
-                    message = f"{error_code}: {error_message}" if error_code else str(error_message)
+                if response_obj is not None
+                else None
+            )
+            message: Final = _response_failed_message(error_obj)
             self._chunk_queue.append(self._make_error_chunk(message))
             self._sent_message_stop = True
             return
 
         # ---- error event -> error ----
         if event_type == "error":
-            nested_error = getattr(event, "error", None) or (event.get("error") if isinstance(event, dict) else None)
-            message = getattr(event, "message", None) or (event.get("message") if isinstance(event, dict) else None)
-            if message is None and nested_error is not None:
-                message = getattr(nested_error, "message", None) or (
-                    nested_error.get("message") if isinstance(nested_error, dict) else None
-                )
-            if message is None:
-                message = "The upstream provider returned an error while streaming."
-            self._chunk_queue.append(self._make_error_chunk(str(message)))
+            message: Final = _error_event_message(event)
+            self._chunk_queue.append(self._make_error_chunk(message))
             self._sent_message_stop = True
             return
 
