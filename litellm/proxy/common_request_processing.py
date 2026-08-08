@@ -40,6 +40,9 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+    AgenticAnthropicStreamingIterator,
+)
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
@@ -93,6 +96,10 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: Final[StandardLoggingPayloadErrorInforma
     "error_message": "Client disconnected the request",
     "error_class": "ClientDisconnected",
 }
+
+
+def _withheld_provider_output(response: object) -> bool:
+    return isinstance(response, AgenticAnthropicStreamingIterator) and response.has_buffered_provider_output
 
 
 def _should_return_raw_model_name(request_data: dict[str, object]) -> bool:
@@ -2970,7 +2977,7 @@ class ProxyBaseLLMRequestProcessing:
             # only sees GeneratorExit on GC) cannot own the refund.
             if not stream_completed:
                 client_disconnected = True
-            if not delivered_chunk:
+            if not delivered_chunk and not _withheld_provider_output(response):
                 from litellm.proxy.spend_tracking.budget_reservation import (
                     release_budget_reservation_on_cancel,
                 )
