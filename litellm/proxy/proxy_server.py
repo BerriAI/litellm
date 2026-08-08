@@ -4944,6 +4944,19 @@ class ProxyConfig:
                     deleted_deployments += 1
         return deleted_deployments
 
+    def _resolve_db_litellm_param(self, key: str, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+
+        decrypted_value = decrypt_value_helper(
+            value=value, key=key, return_original_value=True
+        )
+        if isinstance(decrypted_value, str) and decrypted_value.startswith(
+            "os.environ/"
+        ):
+            return get_secret(decrypted_value)
+        return decrypted_value
+
     def _add_deployment(self, db_models: list) -> int:
         """
         Iterate through db models
@@ -4964,12 +4977,7 @@ class ProxyConfig:
             if isinstance(_litellm_params, dict):
                 # decrypt values
                 for k, v in _litellm_params.items():
-                    if isinstance(v, str):
-                        # decrypt value - returns original value if decryption fails or no key is set
-                        _value = decrypt_value_helper(
-                            value=v, key=k, return_original_value=True
-                        )
-                        _litellm_params[k] = _value
+                    _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
                 _litellm_params = LiteLLM_Params(**_litellm_params)
 
             else:
@@ -5002,10 +5010,7 @@ class ProxyConfig:
             if isinstance(_litellm_params, dict):
                 # decrypt values
                 for k, v in _litellm_params.items():
-                    decrypted_value = decrypt_value_helper(
-                        value=v, key=k, return_original_value=True
-                    )
-                    _litellm_params[k] = decrypted_value
+                    _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
                 _litellm_params = LiteLLM_Params(**_litellm_params)
             else:
                 verbose_proxy_logger.error(

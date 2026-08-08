@@ -17,7 +17,9 @@ How it works:
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
+import litellm
 import litellm.constants as _c
+from litellm.litellm_core_utils.url_utils import validate_url
 from litellm.llms.anthropic.common_utils import strip_advisor_blocks_from_messages
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -82,10 +84,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
         max_uses: int = (
             ADVISOR_MAX_USES if _raw_max_uses is None else int(_raw_max_uses)
         )
-        # Optional routing overrides for the advisor sub-call (e.g. proxy routing).
-        # If not set in the tool definition, litellm resolves from env vars.
-        advisor_api_key: Optional[str] = advisor_tool.get("api_key")
-        advisor_api_base: Optional[str] = advisor_tool.get("api_base")
+        advisor_api_key, advisor_api_base = _resolve_advisor_credentials(advisor_tool)
 
         # Build the synthetic tool definition the provider will receive.
         synthetic_advisor_tool = _make_synthetic_advisor_tool()
@@ -179,6 +178,67 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _allow_client_side_advisor_credentials() -> bool:
+    """Whether a caller-supplied advisor api_base/api_key may be honored.
+
+    Gated on the proxy's ``allow_client_side_credentials`` opt-in. When the
+    interceptor runs outside the proxy (SDK use), there is no admin boundary
+    to protect, so client-supplied routing is allowed.
+    """
+    try:
+        from litellm.proxy.proxy_server import general_settings
+    except (ImportError, ModuleNotFoundError):
+        return True
+    return general_settings.get("allow_client_side_credentials") is True
+
+
+def _resolve_advisor_credentials(
+    advisor_tool: dict,
+) -> tuple[Optional[str], Optional[str]]:
+    """Resolve the (api_key, api_base) override for the advisor sub-call.
+
+    A caller-supplied ``api_base`` is only honored alongside a caller-supplied
+    ``api_key``: without one, ``AnthropicModelInfo.get_auth_header()`` falls
+    back to the proxy's own Anthropic credentials, which would then be sent to
+    the caller-chosen ``api_base``. A caller-supplied ``api_base`` is also
+    required to be https with TLS verification on, and SSRF-validated so it
+    can't target a private/internal/cloud-metadata address, mirroring
+    ``proxy.auth.auth_utils.check_complete_credentials``. https with TLS
+    verification is required because ``validate_url`` only rewrites the
+    connection to a DNS-pinned IP for http, or for https with
+    ``litellm.ssl_verify`` disabled; otherwise it returns the URL unchanged
+    and relies on certificate validation to block DNS rebinding, so this
+    closes the same gap without threading the pinned URL through the whole
+    ``anthropic_messages()`` call chain.
+    """
+    if not _allow_client_side_advisor_credentials():
+        return None, None
+    api_key: Optional[str] = advisor_tool.get("api_key")
+    api_base: Optional[str] = advisor_tool.get("api_base")
+    if api_base is None:
+        return api_key, None
+    if not api_key:
+        raise ValueError(
+            "advisor tool definition sets 'api_base' without 'api_key'. A "
+            "caller-supplied api_base is only honored alongside a "
+            "caller-supplied api_key, so the proxy's own credentials are "
+            "never sent to a caller-chosen destination."
+        )
+    if not api_base.startswith("https://"):
+        raise ValueError(
+            f"advisor tool definition sets 'api_base'={api_base!r}, which must use the https scheme."
+        )
+    if getattr(litellm, "ssl_verify", True) is False:
+        raise ValueError(
+            "advisor tool definition sets 'api_base' but the proxy has TLS verification "
+            "disabled (litellm.ssl_verify=False), so a caller-supplied api_base can't be "
+            "safely validated against DNS rebinding."
+        )
+    if getattr(litellm, "user_url_validation", True):
+        validate_url(api_base)
+    return api_key, api_base
 
 
 def _make_synthetic_advisor_tool() -> Dict:

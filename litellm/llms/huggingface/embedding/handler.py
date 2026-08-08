@@ -348,7 +348,7 @@ class HuggingFaceEmbedding(BaseLLM):
         )
         # print_verbose(f"{model}, {task}")
         embed_url = ""
-        if "https" in model:
+        if model.startswith(("http://", "https://")):
             embed_url = model
         elif api_base:
             embed_url = api_base

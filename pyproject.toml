@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.88.5"
+version = "1.88.6"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.14"
@@ -23,7 +23,7 @@ dependencies = [
     "tokenizers>=0.21.0,<1.0",
     "click>=8.0.0,<9.0",
     "jinja2>=3.1.6,<4.0",
-    "aiohttp>=3.10,<4.0",
+    "aiohttp>=3.14.2,<4.0",
     "pydantic>=2.10.0,<3.0.0",
     "jsonschema>=4.0.0,<5.0",
 ]
@@ -55,7 +55,7 @@ proxy = [
     "fastapi-sso>=0.19.0,<1.0",
     "PyJWT>=2.13.0,<3.0",
     "python-multipart>=0.0.27,<1.0",
-    "cryptography>=48.0.1,<49.0",
+    "cryptography>=50.0.0,<51.0",
     "pynacl>=1.6.2,<2.0",
     "websockets>=15.0.1,<16.0",
     "boto3>=1.43.1,<2.0",
@@ -120,7 +120,7 @@ proxy-runtime = [
     "opentelemetry-sdk==1.28.0",
     "opentelemetry-exporter-otlp==1.28.0",
     "opentelemetry-instrumentation-fastapi==0.49b0",
-    "ddtrace>=2.19.0,<3.0",
+    "ddtrace>=4.8.2,<5.0",
     "sentry-sdk>=2.21.0,<3.0",
     "mangum>=0.17.0,<1.0",
     "azure-ai-contentsafety>=1.0.0,<2.0",
@@ -190,13 +190,13 @@ ci = [
     # protobuf, Pillow is a compiled C extension).
     "tenacity==8.5.0",
     "google-generativeai==0.8.6",
-    "Pillow==12.2.0",
+    "Pillow==12.3.0",
     # Azure batch E2E tests still import psycopg2 directly.
     "psycopg2-binary==2.9.11",
     "pytest-codspeed==4.3.0",
     "pytest-retry==1.7.0",
     "pyarrow==23.0.1",
-    "langchain==1.2.10",
+    "langchain==1.3.9",
     "lunary==1.4.36; python_version == '3.10'",
     "lunary==1.4.37; python_version >= '3.11'",
     "logfire==4.6.0",
@@ -214,11 +214,11 @@ ci = [
     "pyright==1.1.408",
     "langchain-mcp-adapters==0.2.1",
     "langchain-openai==1.1.14",
-    "langgraph==1.0.10",
+    "langgraph>=1.2.4,<1.3.0",
     # langgraph-prebuilt 1.0.9 imports ExecutionInfo/ServerInfo from
     # langgraph.runtime, which is not exported until langgraph 1.1.0.
     # Pin to 1.0.8 so it pairs correctly with langgraph==1.0.10.
-    "langgraph-prebuilt==1.0.8",
+    "langgraph-prebuilt>=1.1.0,<1.3.0",
     "claude-agent-sdk==0.1.44",
 ]
 healthcheck = [
@@ -233,7 +233,10 @@ build-backend = "uv_build"
 [tool.uv]
 constraint-dependencies = [
     "tornado>=6.5.6",
-    "aiohttp>=3.14.1,<4.0",
+    "aiohttp>=3.14.2,<4.0",
+]
+override-dependencies = [
+    "cryptography>=50.0.0,<51.0",
 ]
 default-groups = ["dev"]
 required-version = ">=0.10.9"
@@ -264,7 +267,7 @@ source-exclude = [
 profile = "black"
 
 [tool.commitizen]
-version = "1.88.5"
+version = "1.88.6"
 version_files = [
     "pyproject.toml:^version",
 ]
