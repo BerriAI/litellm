@@ -8081,7 +8081,7 @@ async def test_key_with_budget_id_does_not_store_budget_duration():
     budget_duration, the key does NOT get budget_duration stored on it.
 
     Keys with budget_id follow their linked budget tier's reset schedule;
-    reset_budget_for_keys_linked_to_budgets() resets them when the tier resets.
+    reset_budget_for_litellm_budget_table() resets them when the tier resets.
     This avoids duplicating budget_duration on keys so tier updates apply
     automatically to all linked keys.
     """
