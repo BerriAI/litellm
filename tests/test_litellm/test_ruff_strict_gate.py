@@ -17,8 +17,6 @@ def rule(name, limit):
 
 
 def test_paths_are_resolved_once_per_file_not_once_per_violation():
-    # resolve() is a filesystem round trip and ruff reports ~20k strict violations
-    # over far fewer files, so resolving per violation is pure overhead.
     gate._relative_to_repo.cache_clear()
     same_file = str(gate.REPO_ROOT / "litellm" / "a.py")
     assert {gate._relative_to_repo(same_file) for _ in range(20)} == {"litellm/a.py"}

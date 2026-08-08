@@ -20,9 +20,6 @@ def _budget(limit):
 
 
 def test_paths_are_resolved_once_per_file_not_once_per_violation():
-    # resolve() is a filesystem round trip and the checker reports tens of
-    # thousands of violations over ~2.2k files, so resolving per violation is
-    # pure overhead on the pre-commit and CI critical path.
     gate._relative_to_root.cache_clear()
     root = gate.REPO_ROOT.resolve()
     same_file = str(root / "litellm" / "a.py")

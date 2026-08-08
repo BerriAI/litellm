@@ -77,9 +77,6 @@ install-dev:
 bootstrap: bootstrap-python bootstrap-dashboard
 	@echo "bootstrap: done"
 
-# The halves are separate targets so a caller can provision only what it needs:
-# `make pre-commit` on a Python-only change takes bootstrap-python and never pays
-# for (nor hard-fails on) the dashboard's node toolchain.
 bootstrap-python:
 	$(UV) sync --inexact --frozen --extra proxy --group proxy-dev --group e2e-dev
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py

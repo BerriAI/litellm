@@ -6,7 +6,7 @@
 #   - litellm/ Python staged -> `make lint` (test-linting.yml's lint job)
 #   - tests/e2e Python staged -> `make lint-e2e-basedpyright` (test-linting.yml's e2e type-check step)
 #                                + raw HTTP client ban (test-code-quality.yml's check_e2e_no_raw_requests)
-#   - dashboard staged        -> prettier + eslint + lint budgets (test-litellm-ui-build.yml's frontend-lint)
+#   - dashboard staged        -> `make bootstrap-dashboard` + prettier + eslint + lint budgets (test-litellm-ui-build.yml's frontend-lint)
 #   - proxy/types staged      -> regenerate dashboard API types and fail on drift (check-ui-api-types.yml)
 #
 # Each block is skipped when no matching files are staged, so unrelated commits stay
@@ -98,8 +98,6 @@ EOF
         # counts are not diff-scoped, so a local pass here means the budget step will
         # pass in CI too.
         report=$(mktemp)
-        # Ctrl-C reaches this job as a SIGTERM from on_interrupt; bash skips EXIT
-        # traps on an uncaught fatal signal, so catch it and exit through one.
         trap 'rm -f "$report"' EXIT
         trap 'exit 130' INT TERM
         npx eslint . -f json -o "$report" || true
@@ -159,10 +157,6 @@ if [ -n "$e2e_py_files" ]; then
         || { echo "✗ Raw HTTP client import in tests/e2e. Route the call through tests/e2e/e2e_http.py, then re-run make pre-commit." >&2; status=1; }
 fi
 
-# `make pre-commit` provisions the Python env only, so top up the dashboard's
-# node_modules for the commits that reach it. Placed after the Python block forked
-# (so the install overlaps that lint) and before both node blocks fork (so two npm
-# installs never race in the same directory).
 if [ -n "$ui_prettier_files" ] || [ -n "$ui_eslint_files" ] || [ -n "$spec_files" ]; then
     echo "pre-commit: provisioning the dashboard toolchain (make bootstrap-dashboard)"
     make bootstrap-dashboard || status=1

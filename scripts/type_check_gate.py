@@ -32,9 +32,11 @@ diagnostics differ between a serial pass, a two-thread pass and a four-thread
 pass; passes at the same width agree exactly, run after run. Width is therefore
 part of the measurement in exactly the way the installed package set is, and
 letting it follow ``nproc`` would make a 16-core laptop and a 4-core CI runner
-report different totals for the same tree. It is a constant here and is folded
-into the fingerprint alongside the group set, so a cache entry or CI artifact
-recorded at another width is never matched, only recomputed.
+report different totals for the same tree. It is the constant
+``BASEDPYRIGHT_THREADS`` here, set to the GitHub-hosted runner's vCPU count so
+CI gets full parallelism, and it is folded into the fingerprint alongside the
+group set, so a cache entry or CI artifact recorded at another width is never
+matched, only recomputed.
 
 The gate runs basedpyright itself, for both the head and the base pass, with
 ``NODE_OPTIONS`` raised to the heap this repo needs: basedpyright's node
@@ -104,8 +106,6 @@ PRISMA_SCHEMA = REPO_ROOT / "litellm" / "proxy" / "schema.prisma"
 # caller-set value while preserving the caller's other NODE_OPTIONS flags.
 NODE_HEAP_OPTION = "--max-old-space-size=8192"
 
-# Worker threads every pass is measured at. Four is the GitHub-hosted runner's
-# vCPU count, so CI gets full parallelism and any dev box measures what CI does.
 BASEDPYRIGHT_THREADS: Final = 4
 
 # Bucket for a basedpyright diagnostic with no `rule`. Counted so it's gated.
@@ -124,11 +124,13 @@ class Breach(NamedTuple):
     added: int
 
 
-# Memoized because it is called once per diagnostic, and `resolve()` is a
-# filesystem round trip: this tree reports ~149k errors across ~2.2k files, so
-# the cache turns ~149k realpath walks into one per file (~6s -> ~0.3s).
 @functools.lru_cache(maxsize=None)
 def _to_relative(raw: str, root: Path) -> str | None:
+    """`raw` as a path relative to `root`, or None when it falls outside.
+
+    Memoized because it is called once per diagnostic while `resolve()` is a
+    filesystem round trip: this tree reports ~149k errors across ~2.2k files, so
+    the cache turns ~149k realpath walks into one per file (6.6s -> 0.9s)."""
     path = Path(raw)
     absolute = path if path.is_absolute() else root / path
     try:

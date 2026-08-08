@@ -78,11 +78,13 @@ def _ruff_json(cwd: Path, config: Path) -> list:
     return json.loads(raw or "[]")
 
 
-# Memoized because `resolve()` is a filesystem round trip and ruff reports many
-# more violations than there are files: the cache makes it one realpath walk per
-# file rather than one per violation.
 @functools.lru_cache(maxsize=None)
 def _relative_to_repo(filename: str) -> str:
+    """`filename` as a repo-relative path.
+
+    Memoized because `resolve()` is a filesystem round trip and ruff reports far
+    more violations than there are files, so the cache makes it one realpath walk
+    per file rather than one per violation."""
     name = Path(filename)
     return (
         (name if name.is_absolute() else REPO_ROOT / name)

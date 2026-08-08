@@ -89,11 +89,13 @@ def resolve_base_point(base_ref: str, cwd: Path = REPO_ROOT) -> str:
     return merge_point if older == head_point else head_point
 
 
-# Memoized because `resolve()` is a filesystem round trip and the checker reports
-# many more violations than there are files: the cache makes it one realpath walk
-# per file rather than one per violation.
 @functools.lru_cache(maxsize=None)
 def _relative_to_root(filename: str, root: Path) -> str:
+    """`filename` as a path relative to `root`.
+
+    Memoized because `resolve()` is a filesystem round trip and the checker
+    reports far more violations than there are files, so the cache makes it one
+    realpath walk per file rather than one per violation."""
     name = Path(filename)
     full = name if name.is_absolute() else root / name
     return full.resolve().relative_to(root).as_posix()

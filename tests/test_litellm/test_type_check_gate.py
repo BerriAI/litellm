@@ -47,8 +47,6 @@ def test_basedpyright_error_without_a_rule_is_bucketed():
 
 
 def test_counting_resolves_each_file_once_not_once_per_diagnostic():
-    # resolve() is a filesystem round trip and this tree reports ~149k errors over
-    # ~2.2k files, so a resolve per diagnostic costs ~6s of the gate for nothing.
     gate._to_relative.cache_clear()
     same_file = ROOT / "litellm" / "a.py"
     payload = json.dumps(
@@ -135,9 +133,6 @@ def test_run_basedpyright_pins_import_resolution_to_the_owned_env(tmp_path):
 
 
 def test_run_basedpyright_pins_the_thread_width_instead_of_inheriting_the_hosts(tmp_path):
-    # Partitioning files across threads reorders a few order-dependent inferences,
-    # so counts are only comparable at equal width; letting it follow the core
-    # count would make a 16-core laptop and a 4-core runner disagree on one tree.
     captured = tmp_path / "argv.txt"
     env_dir = _stub_env(
         tmp_path,
@@ -305,8 +300,6 @@ def test_fingerprints_carry_the_dependency_group_set():
 
 
 def test_fingerprints_carry_the_thread_width():
-    # Same reasoning as the group set: a count taken at another width is not
-    # comparable, so its cache entry and artifact name must not be reachable.
     assert f"threads:{gate.BASEDPYRIGHT_THREADS}" in gate.environment_fingerprints()
     assert gate.environment_fingerprints(threads=2) != gate.environment_fingerprints(threads=4)
 

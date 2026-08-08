@@ -157,9 +157,6 @@ def _make_invocations(tmp_path: Path, repo: Path, bin_dir: Path) -> list[str]:
 
 
 def test_a_python_only_commit_never_provisions_the_dashboard_toolchain(tmp_path: Path) -> None:
-    # npm install costs seconds this commit has no use for, and on a machine whose
-    # node predates the dashboard's engines floor it fails outright, which used to
-    # block `make pre-commit` for changes that never touch the dashboard.
     repo, bin_dir = _sandbox(tmp_path, stage=("litellm/foo.py",))
     invocations = _make_invocations(tmp_path, repo, bin_dir)
     assert "lint" in invocations
@@ -170,6 +167,12 @@ def test_a_python_only_commit_never_provisions_the_dashboard_toolchain(tmp_path:
 def test_a_commit_that_reaches_the_dashboard_provisions_it(tmp_path: Path, staged: str) -> None:
     repo, bin_dir = _sandbox(tmp_path, stage=(staged,))
     assert "bootstrap-dashboard" in _make_invocations(tmp_path, repo, bin_dir)
+
+
+def test_the_dashboard_is_provisioned_once_when_both_node_blocks_run(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    invocations = _make_invocations(tmp_path, repo, bin_dir)
+    assert invocations.count("bootstrap-dashboard") == 1
 
 
 def test_full_output_is_saved_to_a_log_file_in_the_git_dir(tmp_path: Path) -> None:
