@@ -13,7 +13,7 @@ import time
 import traceback
 import types
 import uuid
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -182,6 +182,34 @@ def _mcp_session_id_from_headers(
         if isinstance(key, str) and key.lower() == "mcp-session-id":
             return value or None
     return None
+
+
+def _request_tags_header(
+    raw_headers: Mapping[str, str] | None,
+) -> str | None:
+    """The caller's ``x-litellm-tags`` value, read case-insensitively like the other header
+    lookups in this module. ``None`` when the caller sent no tags."""
+    if not raw_headers:
+        return None
+    for key, value in raw_headers.items():
+        if isinstance(key, str) and key.lower() == "x-litellm-tags":
+            return value or None
+    return None
+
+
+def _request_tags_from_raw_headers(
+    raw_headers: Mapping[str, str] | None,
+) -> Sequence[str] | None:
+    """The caller's tags, parsed by the same helper the LLM routes use so an MCP operation and a
+    chat completion attribute an identical header identically."""
+    header_value = _request_tags_header(raw_headers)
+    if header_value is None:
+        return None
+    return LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
+        llm_router=None,
+        headers={"x-litellm-tags": header_value},  # mutable-ok: the shared parser reads a plain dict
+        data={},  # mutable-ok: no request body to read tags from on this path
+    )
 
 
 def _jsonrpc_text_has_top_level_method(text: str) -> bool:
@@ -1030,12 +1058,16 @@ if MCP_AVAILABLE:
                     body_data["litellm_trace_id"] = chain_id
                     body_data["litellm_session_id"] = chain_id
 
+                tags_header: Final = _request_tags_header(raw_headers)
+                tags_scope_header: Final = (
+                    ((b"x-litellm-tags", tags_header.encode("latin-1")),) if tags_header is not None else ()
+                )
                 request: Final = Request(
                     scope={
                         "type": "http",
                         "method": "POST",
                         "path": "/mcp/tools/call",
-                        "headers": [(b"content-type", b"application/json")],
+                        "headers": [(b"content-type", b"application/json"), *tags_scope_header],
                     }
                 )
                 if user_api_key_auth is not None:
@@ -1879,6 +1911,7 @@ if MCP_AVAILABLE:
             list_tools_call_id: Final = str(uuid.uuid4())
             # Derive trace_id from raw_headers when not explicitly passed (same as A2A / MCP call_tool)
             effective_litellm_trace_id: Final = litellm_trace_id or get_chain_id_from_headers(raw_headers)
+            effective_request_tags: Final = request_tags or _request_tags_from_raw_headers(raw_headers)
             spend_logs_metadata: Final[dict[str, Any]] = {
                 "mcp_operation": "list_tools",
             }
@@ -1894,7 +1927,7 @@ if MCP_AVAILABLE:
                 "litellm_trace_id": effective_litellm_trace_id,
                 "metadata": {
                     "spend_logs_metadata": spend_logs_metadata,
-                    **({"tags": request_tags} if request_tags else {}),
+                    **({"tags": effective_request_tags} if effective_request_tags else {}),
                 },
                 # Provide a small input payload for standard logging
                 "input": [
