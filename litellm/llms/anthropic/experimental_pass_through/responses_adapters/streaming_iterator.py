@@ -13,7 +13,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUs
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 
 
-def _response_failed_message(error_obj: Any) -> str:
+def _response_failed_message(error_obj: object) -> str:
     if error_obj is None:
         return "The upstream provider reported the response as failed."
     error_message: Final = getattr(error_obj, "message", None) or (
@@ -27,7 +27,7 @@ def _response_failed_message(error_obj: Any) -> str:
     return "The upstream provider reported the response as failed."
 
 
-def _error_event_message(event: Any) -> str:
+def _error_event_message(event: object) -> str:
     direct_message: Final = getattr(event, "message", None) or (
         event.get("message") if isinstance(event, dict) else None
     )
