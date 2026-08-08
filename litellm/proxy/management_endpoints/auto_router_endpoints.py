@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BudgetExceededError
+from litellm.integrations.shadow_eval_logger import JUDGE_MAX_OUTPUT_TOKENS
 from litellm.proxy._types import (
     CommonProxyErrors,
     LiteLLM_TeamTable,
@@ -492,6 +493,9 @@ async def get_auto_router_benchmarks(
 # entry in the price map: roughly one Sonnet-class call on a mid-sized prompt.
 _FALLBACK_JUDGE_COST_PER_CALL: Final = 0.01
 
+# Prompt side of the upfront estimate: the conversation plus both responses.
+_JUDGE_PROMPT_TOKENS_ESTIMATE: Final = 4000
+
 # The estimate projects from the key's request volume over this many trailing days.
 _ESTIMATE_LOOKBACK_DAYS: Final = 7
 
@@ -522,12 +526,12 @@ def _is_configured_pre_routing_strategy(llm_router: "Router", router_name: str) 
 
 
 def _estimate_judge_cost_per_call(judge_model: str) -> float:
-    """Price one judge call: ~4k prompt tokens (two responses + conversation) + 200 output."""
+    """Price one judge call: ~4k prompt tokens (two responses + conversation) + the judge's output budget."""
     try:
         import litellm as _litellm
 
         prompt_cost, completion_cost = _litellm.cost_per_token(
-            model=judge_model, prompt_tokens=4000, completion_tokens=200
+            model=judge_model, prompt_tokens=_JUDGE_PROMPT_TOKENS_ESTIMATE, completion_tokens=JUDGE_MAX_OUTPUT_TOKENS
         )
         estimated: Final = prompt_cost + completion_cost
         if estimated > 0:

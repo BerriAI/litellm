@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from litellm.integrations.shadow_eval_logger import (
+    JUDGE_MAX_OUTPUT_TOKENS,
     SHADOW_EVAL_INTERNAL_MARKER,
     ActiveShadowEvalJob,
     ShadowEvalLogger,
@@ -79,6 +80,35 @@ class TestParsePairwiseVerdict:
     def test_garbage_raises(self):
         with pytest.raises((json.JSONDecodeError, ValueError)):
             _parse_pairwise_verdict("no json here at all")
+
+
+@pytest.mark.asyncio
+class TestJudgeOutputBudget:
+    async def test_judge_call_uses_the_named_output_budget(self, monkeypatch: pytest.MonkeyPatch):
+        """Regression: a 200-token budget truncated ~12% of verdicts mid-JSON, losing them to failed_count."""
+        import litellm as litellm_module
+
+        acompletion = AsyncMock(
+            return_value={
+                "choices": [{"message": {"content": '{"preference": "A", "confidence": 0.8, "reasoning": "clearer"}'}}]
+            }
+        )
+        monkeypatch.setattr(litellm_module, "acompletion", acompletion)
+
+        logger = ShadowEvalLogger(router_provider=lambda: MagicMock(), prisma_provider=lambda: MagicMock())
+        verdict = await logger._call_judge(
+            "gpt-4o-mini", [{"role": "user", "content": "hi"}], "real text", "shadow text"
+        )
+
+        assert verdict is not None
+        _, kwargs = acompletion.call_args
+        assert kwargs["max_tokens"] == JUDGE_MAX_OUTPUT_TOKENS
+
+
+class TestJudgeOutputBudgetStaticChecks:
+    def test_budget_leaves_room_for_the_reasoning_field(self):
+        """A tight budget truncates the JSON object the judge is asked to emit."""
+        assert JUDGE_MAX_OUTPUT_TOKENS >= 500
 
 
 def _logger_with_mocks(job=None):

@@ -57,6 +57,12 @@ _MAX_CONCURRENT_SHADOW_TASKS: Final = 16
 # Truncation bound for text handed to the judge, to keep judge calls affordable.
 _MAX_JUDGE_CHARS: Final = 16_000
 
+# Output budget for a judge call. The judge answers with a small JSON object
+# (preference + confidence + a one-sentence reasoning), which fits well inside
+# this; a tighter budget truncates the JSON mid-object and the verdict is lost
+# to failed_count, while a larger one buys nothing but cost exposure.
+JUDGE_MAX_OUTPUT_TOKENS: Final = 500
+
 _SEEN_FLUSH_INTERVAL_SECONDS: Final = 10.0
 
 _EMPTY_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
@@ -436,7 +442,7 @@ class ShadowEvalLogger(CustomLogger):
                     {"role": "user", "content": user_prompt},  # mutable-ok: SDK message
                 ],
                 temperature=0,
-                max_tokens=200,
+                max_tokens=JUDGE_MAX_OUTPUT_TOKENS,
                 metadata={SHADOW_EVAL_INTERNAL_MARKER: True},  # mutable-ok: SDK metadata
             )
         except Exception as e:  # noqa: BLE001  # judge outages are a counted failure, not a crash

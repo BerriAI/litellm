@@ -320,12 +320,12 @@ const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ acces
         </div>
       </div>
 
-      <BenchmarksBody isPending={isPending} error={error} data={data} selectedKey={selectedKey} />
-
-      {/* Outside BenchmarksBody on purpose: pre-adoption keys have no router
-          sessions yet, and the shadow-eval section must render even when the
-          benchmarks body early-returns its empty state. */}
+      {/* Sits above BenchmarksBody, and outside it on purpose: pre-adoption keys
+          have no router sessions yet, so the shadow-eval section must render even
+          when the benchmarks body early-returns its loading, error, or empty state. */}
       <ShadowEvalSection accessToken={accessToken} />
+
+      <BenchmarksBody isPending={isPending} error={error} data={data} selectedKey={selectedKey} />
     </div>
   );
 };

@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -55,11 +56,24 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
   ...overrides,
 });
 
-const mockHooks = ({ jobs = [], detail = undefined }: { jobs?: ShadowEvalJob[]; detail?: ShadowEvalJob }) => {
+const mockHooks = ({
+  jobs = [],
+  detail = undefined,
+  detailsById = undefined,
+}: {
+  jobs?: ShadowEvalJob[];
+  detail?: ShadowEvalJob;
+  detailsById?: Record<string, ShadowEvalJob>;
+}) => {
   vi.mocked(useShadowEvalJobs).mockReturnValue({ data: jobs, error: null } as unknown as ReturnType<
     typeof useShadowEvalJobs
   >);
-  vi.mocked(useShadowEvalJob).mockReturnValue({ data: detail } as unknown as ReturnType<typeof useShadowEvalJob>);
+  vi.mocked(useShadowEvalJob).mockImplementation(
+    (_token, jobId) =>
+      ({
+        data: detailsById ? (jobId ? detailsById[jobId] : undefined) : detail,
+      }) as unknown as ReturnType<typeof useShadowEvalJob>,
+  );
   vi.mocked(useStartShadowEval).mockReturnValue({
     mutate: vi.fn(),
     isPending: false,
@@ -115,5 +129,33 @@ describe("ShadowEvalSection", () => {
     mockHooks({ jobs: [done], detail: done });
     render(<ShadowEvalSection accessToken="token" />);
     expect(screen.getByText("Start a shadow eval")).toBeInTheDocument();
+  });
+
+  it("keeps an older populated job reachable when the newest job has no verdicts", async () => {
+    const user = userEvent.setup();
+    const empty = job({
+      job_id: "job-new",
+      status: "pending",
+      completed_count: 0,
+      failed_count: 0,
+      results: null,
+      cost_actual: 0,
+    });
+    const older = job({ job_id: "job-old", status: "completed" });
+    mockHooks({
+      jobs: [empty, older],
+      detailsById: { "job-new": empty, "job-old": older },
+    });
+    render(<ShadowEvalSection accessToken="token" />);
+
+    // The newest job is empty, so its verdicts are absent from the primary card...
+    expect(screen.queryByText("SIMPLE")).not.toBeInTheDocument();
+
+    // ...but the older job with verdicts must still be reachable.
+    await user.click(screen.getByRole("button", { name: /Previous evaluations \(1\)/ }));
+    await user.click(screen.getByRole("button", { name: /job-old-row|10% via claude-auto/ }));
+
+    expect(await screen.findByText("SIMPLE")).toBeInTheDocument();
+    expect(screen.getByText("REASONING")).toBeInTheDocument();
   });
 });

@@ -318,9 +318,7 @@ class TestAutoRouterBenchmarks:
         from litellm.proxy.management_endpoints.auto_router_endpoints import _benchmark_totals
 
         totals = _benchmark_totals(self.ROW)
-        bucket_hits = (
-            totals.cache.same_model.hits + totals.cache.first_visit.hits + totals.cache.return_to_tier.hits
-        )
+        bucket_hits = totals.cache.same_model.hits + totals.cache.first_visit.hits + totals.cache.return_to_tier.hits
         assert bucket_hits == 27
         assert totals.cache.hit_rate_pct == pytest.approx(100.0 * 28 / 38, abs=0.1)
 
@@ -466,3 +464,39 @@ class TestAutoRouterBenchmarks:
             end_date="2026-08-01",
         )
         assert response.groups[0].tier_turns == expected
+
+
+class TestJudgeCostEstimate:
+    """The upfront estimate must price the judge's real output budget, not a stale hardcoded one."""
+
+    JUDGE_MODEL = "gpt-4o-mini"
+
+    def test_estimate_prices_the_configured_judge_output_budget(self):
+        import litellm as litellm_module
+        from litellm.integrations.shadow_eval_logger import JUDGE_MAX_OUTPUT_TOKENS
+        from litellm.proxy.management_endpoints.auto_router_endpoints import (
+            _JUDGE_PROMPT_TOKENS_ESTIMATE,
+            _estimate_judge_cost_per_call,
+        )
+
+        prompt_cost, completion_cost = litellm_module.cost_per_token(
+            model=self.JUDGE_MODEL,
+            prompt_tokens=_JUDGE_PROMPT_TOKENS_ESTIMATE,
+            completion_tokens=JUDGE_MAX_OUTPUT_TOKENS,
+        )
+        assert completion_cost > 0
+        assert _estimate_judge_cost_per_call(self.JUDGE_MODEL) == prompt_cost + completion_cost
+
+    def test_estimate_is_not_still_pinned_to_the_old_200_token_budget(self):
+        import litellm as litellm_module
+        from litellm.proxy.management_endpoints.auto_router_endpoints import (
+            _JUDGE_PROMPT_TOKENS_ESTIMATE,
+            _estimate_judge_cost_per_call,
+        )
+
+        stale = sum(
+            litellm_module.cost_per_token(
+                model=self.JUDGE_MODEL, prompt_tokens=_JUDGE_PROMPT_TOKENS_ESTIMATE, completion_tokens=200
+            )
+        )
+        assert _estimate_judge_cost_per_call(self.JUDGE_MODEL) > stale

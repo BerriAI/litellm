@@ -210,6 +210,82 @@ const StartForm: React.FC<{ accessToken: string | null }> = ({ accessToken }) =>
   );
 };
 
+const PreviousJob: React.FC<{
+  accessToken: string | null;
+  job: ShadowEvalJob;
+}> = ({ accessToken, job }) => {
+  const [expanded, setExpanded] = useState(false);
+  const { data: detail } = useShadowEvalJob(accessToken, expanded ? job.job_id : null);
+  const shown = detail ?? job;
+  const results = shown.results;
+  const okOrBetter = results ? results.overall_shadow_win_rate_pct + results.overall_tie_rate_pct : null;
+
+  return (
+    <div className="border-b last:border-b-0">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((open) => !open)}
+        className="flex w-full flex-wrap items-center justify-between gap-3 px-6 py-3 text-left hover:bg-muted/50"
+      >
+        <div className="flex items-center gap-3">
+          <StatusBadge status={shown.status} />
+          <div>
+            <p className="text-sm font-medium text-foreground">
+              {shown.shadow_percentage}% via <span className="font-mono text-xs">{shown.router_name}</span>
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {shown.completed_count.toLocaleString()} judged · {shown.failed_count.toLocaleString()} failed ·{" "}
+              {shown.cost_actual != null ? `${usd(shown.cost_actual)} judge spend` : "no judge spend yet"}
+              {shown.created_at ? ` · ${new Date(shown.created_at).toLocaleDateString()}` : ""}
+            </p>
+          </div>
+        </div>
+        <span className="text-sm font-medium text-foreground">
+          {okOrBetter != null ? pct(okOrBetter) : "no verdicts"}
+        </span>
+      </button>
+      {expanded ? (
+        <div className="px-6 pb-4">
+          {results && results.groups.length > 0 ? (
+            <TierResultsTable groups={results.groups} />
+          ) : (
+            <p className="text-xs text-muted-foreground">No verdicts were recorded for this evaluation.</p>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
+const PreviousJobs: React.FC<{
+  accessToken: string | null;
+  jobs: readonly ShadowEvalJob[];
+}> = ({ accessToken, jobs }) => {
+  const [open, setOpen] = useState(false);
+  if (jobs.length === 0) return null;
+  return (
+    <Card className="overflow-hidden py-0">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((prev) => !prev)}
+        className="flex w-full items-center justify-between gap-3 px-6 py-3 text-left hover:bg-muted/50"
+      >
+        <span className="text-sm font-medium text-foreground">Previous evaluations ({jobs.length})</span>
+        <span className="text-xs text-muted-foreground">{open ? "Hide" : "Show"}</span>
+      </button>
+      {open ? (
+        <div className="border-t">
+          {jobs.map((job) => (
+            <PreviousJob key={job.job_id} accessToken={accessToken} job={job} />
+          ))}
+        </div>
+      ) : null}
+    </Card>
+  );
+};
+
 interface ShadowEvalSectionProps {
   accessToken: string | null;
 }
@@ -220,6 +296,7 @@ const ShadowEvalSection: React.FC<ShadowEvalSectionProps> = ({ accessToken }) =>
 
   // Most recent job carries the section; older jobs list below it.
   const latest = useMemo(() => jobs?.[0] ?? null, [jobs]);
+  const previous = useMemo(() => jobs?.slice(1) ?? [], [jobs]);
   const { data: latestDetail } = useShadowEvalJob(accessToken, latest?.job_id ?? null);
 
   if (error instanceof ApiError && error.status === 403) return null; // admin-only section
@@ -244,6 +321,8 @@ const ShadowEvalSection: React.FC<ShadowEvalSectionProps> = ({ accessToken }) =>
       {!latest || (latestDetail && latestDetail.status !== "pending" && latestDetail.status !== "running") ? (
         <StartForm accessToken={accessToken} />
       ) : null}
+
+      <PreviousJobs accessToken={accessToken} jobs={previous} />
     </div>
   );
 };
