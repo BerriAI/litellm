@@ -78,26 +78,26 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict | None,
+        non_default_params: dict | None,  # mutable-ok: matches BaseRerankConfig's request contract
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: list[str | dict[str, Any]],  # mutable-ok: matches BaseRerankConfig's document contract
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
-        rank_fields: list[str] | None = None,
+        rank_fields: list[str] | None = None,  # mutable-ok: matches BaseRerankConfig's field contract
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: LiteLLM provider transforms return mutable request dictionaries
         """
         Keep Cohere's top_n as-is instead of mapping it to top_k.
 
         The native /v1/ranking endpoint rejects top_k, so top_n is applied
         client-side after the response is converted.
         """
-        optional_params = super().map_cohere_rerank_params(
+        optional_params: Final = super().map_cohere_rerank_params(
             non_default_params=non_default_params,
             model=model,
             drop_params=drop_params,
@@ -132,14 +132,14 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
         truncate. top_n is stashed and applied client-side in
         transform_rerank_response.
         """
-        top_n = optional_rerank_params.get("top_n")
+        top_n: Final = optional_rerank_params.get("top_n")
         if top_n is not None:
             if isinstance(top_n, bool) or not isinstance(top_n, int) or top_n < 1:
                 raise ValueError(f"top_n must be a positive integer, got: {top_n!r}")
             self._client_side_top_n = top_n
 
         clean_model: Final = self._get_clean_model_name(model)
-        filtered_params: Final = {
+        filtered_params: Final = {  # mutable-ok: the base transformer requires a mutable request dictionary
             k: v for k, v in optional_rerank_params.items() if k not in ("top_n", "top_k")
         }
         return super().transform_rerank_request(
@@ -156,9 +156,9 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: dict | None = None,  # mutable-ok: matches BaseRerankConfig's response contract
+        optional_params: dict | None = None,  # mutable-ok: matches BaseRerankConfig's response contract
+        litellm_params: dict | None = None,  # mutable-ok: matches BaseRerankConfig's response contract
     ) -> RerankResponse:
         """
         Convert the native ranking response, then apply top_n client-side.
@@ -166,18 +166,22 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
         /v1/ranking returns rankings sorted by relevance, but sort before
         truncating in case a server returns them unsorted.
         """
-        response = super().transform_rerank_response(
+        resolved_request_data: Final = request_data or {}  # mutable-ok: the base transformer requires a dictionary
+        resolved_optional_params: Final = optional_params or {}  # mutable-ok: response options are keyed lookups
+        resolved_litellm_params: Final = litellm_params or {}  # mutable-ok: the base transformer requires a dictionary
+
+        response: Final = super().transform_rerank_response(
             model=model,
             raw_response=raw_response,
             model_response=model_response,
             logging_obj=logging_obj,
             api_key=api_key,
-            request_data=request_data,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
+            request_data=resolved_request_data,
+            optional_params=resolved_optional_params,
+            litellm_params=resolved_litellm_params,
         )
 
-        top_n = optional_params.get("top_n") or self._client_side_top_n
+        top_n: Final = resolved_optional_params.get("top_n") or self._client_side_top_n
         if top_n is not None and response.results is not None and len(response.results) > top_n:
             response.results = sorted(
                 response.results,
