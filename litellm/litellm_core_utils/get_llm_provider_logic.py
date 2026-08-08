@@ -218,7 +218,7 @@ def get_llm_provider(
                 dynamic_api_key=dynamic_api_key,
                 litellm_params=litellm_params,
             )
-        elif model.split("/", 1)[0] in litellm.provider_list:
+        elif model.split("/", 1)[0] in litellm.provider_list and len(model.split("/")) > 1:
             custom_llm_provider = model.split("/", 1)[0]
             model = model.split("/", 1)[1]
             if api_base is not None and not isinstance(api_base, str):
