@@ -44,7 +44,7 @@ BRIDGE_COMPLETION_KWARGS: Final[frozenset[str]] = (
 )
 
 
-def _filter_bridge_kwargs(kwargs: Mapping[str, Any]) -> Mapping[str, Any]:
+def _filter_bridge_kwargs(kwargs: Mapping[str, object]) -> Mapping[str, object]:
     allowed: Final = BRIDGE_COMPLETION_KWARGS | frozenset(kwargs.get("allowed_openai_params") or ())
     dropped: Final = tuple(k for k in kwargs if k not in allowed)
     if dropped:
