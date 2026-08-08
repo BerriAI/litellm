@@ -7,9 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy.management_endpoints.common_daily_activity import (
     _adjust_dates_for_timezone,
@@ -108,8 +106,7 @@ async def test_get_daily_activity_order_has_id_tiebreaker():
     mock_table.find_many.assert_called_once()
     order = mock_table.find_many.call_args[1]["order"]
     assert order == [{"date": "desc"}, {"id": "asc"}], (
-        f"order must include the id tiebreaker after date for stable offset "
-        f"pagination (see #30164); got {order!r}"
+        f"order must include the id tiebreaker after date for stable offset pagination (see #30164); got {order!r}"
     )
 
 
@@ -301,9 +298,7 @@ async def test_get_api_key_metadata_returns_active_key_metadata():
     mock_active_key.key_alias = "my-active-key"
     mock_active_key.team_id = "team-abc"
 
-    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
-        return_value=[mock_active_key]
-    )
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[mock_active_key])
 
     result = await get_api_key_metadata(
         prisma_client=mock_prisma,
@@ -329,9 +324,7 @@ async def test_get_api_key_metadata_falls_back_to_deleted_keys():
     mock_deleted_key.key_alias = "toto-test-2"
     mock_deleted_key.team_id = "team-xyz"
 
-    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(
-        return_value=[mock_deleted_key]
-    )
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[mock_deleted_key])
 
     result = await get_api_key_metadata(
         prisma_client=mock_prisma,
@@ -360,9 +353,7 @@ async def test_get_api_key_metadata_mixed_active_and_deleted_keys():
     mock_active_key.key_alias = "active-alias"
     mock_active_key.team_id = "team-active"
 
-    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
-        return_value=[mock_active_key]
-    )
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[mock_active_key])
 
     # One deleted key found
     mock_deleted_key = MagicMock()
@@ -370,9 +361,7 @@ async def test_get_api_key_metadata_mixed_active_and_deleted_keys():
     mock_deleted_key.key_alias = "deleted-alias"
     mock_deleted_key.team_id = "team-deleted"
 
-    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(
-        return_value=[mock_deleted_key]
-    )
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[mock_deleted_key])
 
     result = await get_api_key_metadata(
         prisma_client=mock_prisma,
@@ -397,13 +386,9 @@ async def test_get_api_key_metadata_deleted_table_not_queried_when_all_keys_foun
     mock_active_key.key_alias = "alias-1"
     mock_active_key.team_id = "team-1"
 
-    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
-        return_value=[mock_active_key]
-    )
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[mock_active_key])
     mock_prisma.db.litellm_deletedverificationtoken = MagicMock()
-    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(
-        return_value=[]
-    )
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
 
     result = await get_api_key_metadata(
         prisma_client=mock_prisma,
@@ -425,9 +410,7 @@ async def test_get_api_key_metadata_deleted_table_error_handled_gracefully():
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
 
     # Deleted table raises an error (e.g., table doesn't exist in older schema)
-    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(
-        side_effect=Exception("Table not found")
-    )
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(side_effect=Exception("Table not found"))
 
     result = await get_api_key_metadata(
         prisma_client=mock_prisma,
@@ -458,9 +441,7 @@ async def test_get_api_key_metadata_regenerated_key_uses_most_recent_deleted_rec
     mock_deleted_2.team_id = "older-team"
 
     # Ordered by deleted_at desc, so first record is the most recent
-    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(
-        return_value=[mock_deleted_1, mock_deleted_2]
-    )
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[mock_deleted_1, mock_deleted_2])
 
     result = await get_api_key_metadata(
         prisma_client=mock_prisma,
@@ -633,9 +614,7 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
     mock_deleted_key.team_id = "69cd4b77-b095-4489-8c46-4f2f31d840a2"
 
     mock_prisma.db.litellm_deletedverificationtoken = MagicMock()
-    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(
-        return_value=[mock_deleted_key]
-    )
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[mock_deleted_key])
 
     result = await get_daily_activity_aggregated(
         prisma_client=mock_prisma,
@@ -754,15 +733,9 @@ async def test_model_groups_breakdown_keys_by_public_name_with_model_fallback():
     mock_prisma.db = MagicMock()
 
     records = [
-        _daily_user_spend_record(
-            user_id="u1", api_key="key-1", spend=7.0, model="gpt-5.2", model_group="gpt-5.2-eu"
-        ),
-        _daily_user_spend_record(
-            user_id="u1", api_key="key-1", spend=3.0, model="gpt-5.2", model_group=None
-        ),
-        _daily_user_spend_record(
-            user_id="u1", api_key="key-1", spend=2.0, model="claude-x", model_group=""
-        ),
+        _daily_user_spend_record(user_id="u1", api_key="key-1", spend=7.0, model="gpt-5.2", model_group="gpt-5.2-eu"),
+        _daily_user_spend_record(user_id="u1", api_key="key-1", spend=3.0, model="gpt-5.2", model_group=None),
+        _daily_user_spend_record(user_id="u1", api_key="key-1", spend=2.0, model="claude-x", model_group=""),
     ]
 
     mock_table = MagicMock()
@@ -829,9 +802,7 @@ class TestAdjustDatesForTimezone:
         ],
     )
     def test_returns_input_dates_unchanged_for_any_offset(self, offset_minutes):
-        start, end = _adjust_dates_for_timezone(
-            "2026-05-29", "2026-05-29", offset_minutes
-        )
+        start, end = _adjust_dates_for_timezone("2026-05-29", "2026-05-29", offset_minutes)
         assert start == "2026-05-29"
         assert end == "2026-05-29"
 
@@ -859,9 +830,7 @@ class TestAdjustDatesForTimezone:
         exceeded the multi-day total by ~50% over a 5-day IST window.
         """
         days = ["2026-05-29", "2026-05-30", "2026-05-31", "2026-06-01", "2026-06-02"]
-        single_day_ranges = [
-            _adjust_dates_for_timezone(d, d, offset_minutes) for d in days
-        ]
+        single_day_ranges = [_adjust_dates_for_timezone(d, d, offset_minutes) for d in days]
         multi_day_range = _adjust_dates_for_timezone(days[0], days[-1], offset_minutes)
 
         per_day_starts = [r[0] for r in single_day_ranges]
@@ -894,9 +863,7 @@ class TestAdjustDatesForTimezoneLiveEnd:
         assert (start, end) == ("2026-07-06", "2026-08-06")
 
     def test_without_opt_in_live_range_keeps_pass_through(self):
-        start, end = _adjust_dates_for_timezone(
-            "2026-07-06", "2026-08-05", 420, utc_now=self.PT_EVENING_UTC
-        )
+        start, end = _adjust_dates_for_timezone("2026-07-06", "2026-08-05", 420, utc_now=self.PT_EVENING_UTC)
         assert (start, end) == ("2026-07-06", "2026-08-05")
 
     def test_pt_historical_range_is_untouched(self):
@@ -1173,3 +1140,348 @@ class TestEverySavingsDriverSurvivesTheReadPath:
             assert f"total_{driver}" in DailySpendMetadata.model_fields, (
                 f"total_{driver} is missing, so the range summary omits the driver"
             )
+
+
+def _spend_record(api_key, *, model="gpt-4o-mini-ptu", spend=0.0, ptu_flat_cost=0.0):
+    return SimpleNamespace(
+        api_key=api_key,
+        model=model,
+        model_group=None,
+        mcp_namespaced_tool_name=None,
+        custom_llm_provider="openai",
+        endpoint=None,
+        spend=spend,
+        prompt_tokens=0,
+        completion_tokens=0,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        compression_saved_tokens=0,
+        compression_savings_spend=0,
+        prompt_caching_savings_spend=0,
+        autorouter_savings_spend=0,
+        total_tokens=0,
+        api_requests=0,
+        successful_requests=0,
+        failed_requests=0,
+        ptu_flat_cost=ptu_flat_cost,
+    )
+
+
+def test_update_metrics_accumulates_ptu_flat_cost():
+    metrics = update_metrics(SpendMetrics(), _spend_record("real-key", spend=1.0, ptu_flat_cost=240.0))
+    assert metrics.flat_cost == 240.0
+    assert metrics.spend == 1.0
+
+
+def test_ptu_sentinel_excluded_from_key_breakdown_but_flat_cost_aggregates():
+    from litellm.constants import PTU_SENTINEL_API_KEY
+    from litellm.proxy.management_endpoints.common_daily_activity import update_breakdown_metrics
+    from litellm.types.proxy.management_endpoints.common_daily_activity import BreakdownMetrics
+
+    breakdown = BreakdownMetrics()
+    update_breakdown_metrics(breakdown, _spend_record("real-key", spend=5.0, ptu_flat_cost=0.0), {}, {}, {})
+    update_breakdown_metrics(breakdown, _spend_record(PTU_SENTINEL_API_KEY, spend=0.0, ptu_flat_cost=240.0), {}, {}, {})
+
+    model_bucket = breakdown.models["gpt-4o-mini-ptu"]
+    # flat cost aggregates into the parent model metrics
+    assert model_bucket.metrics.flat_cost == 240.0
+    assert model_bucket.metrics.spend == 5.0
+    # the sentinel never appears as an api_key row; only the real key does
+    assert PTU_SENTINEL_API_KEY not in model_bucket.api_key_breakdown
+    assert "real-key" in model_bucket.api_key_breakdown
+
+
+def _grouping_row(
+    group_level,
+    *,
+    api_key=None,
+    model=None,
+    model_group=None,
+    custom_llm_provider="openai",
+    mcp_namespaced_tool_name=None,
+    endpoint=None,
+    spend=0.0,
+    ptu_flat_cost=0.0,
+):
+    from litellm.proxy.management_endpoints.common_daily_activity import _GroupingSetsRow
+
+    return _GroupingSetsRow(
+        date="2024-01-01",
+        api_key=api_key,
+        model=model,
+        model_group=model_group,
+        custom_llm_provider=custom_llm_provider,
+        mcp_namespaced_tool_name=mcp_namespaced_tool_name,
+        endpoint=endpoint,
+        group_level=group_level,
+        spend=spend,
+        ptu_flat_cost=ptu_flat_cost,
+        prompt_tokens=0,
+        completion_tokens=0,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        compression_saved_tokens=0,
+        compression_savings_spend=0.0,
+        prompt_caching_savings_spend=0.0,
+        autorouter_savings_spend=0.0,
+        api_requests=0,
+        successful_requests=0,
+        failed_requests=0,
+    )
+
+
+def test_grouping_sets_dispatcher_excludes_ptu_sentinel_from_key_breakdowns():
+    """The GROUPING SETS path must mirror the per-row path: the flat-cost sentinel
+    aggregates into the date/model/total metrics but never surfaces as an api_key."""
+    from litellm.constants import PTU_SENTINEL_API_KEY
+    from litellm.proxy.management_endpoints.common_daily_activity import (
+        _GROUP_DATE_API_KEY,
+        _GROUP_DATE_MODEL,
+        _GROUP_DATE_MODEL_API_KEY,
+        _GROUP_GRAND_TOTAL,
+        _aggregate_grouping_sets_records_sync,
+    )
+
+    records = [
+        _grouping_row(_GROUP_DATE_API_KEY, api_key="real-key", spend=5.0),
+        _grouping_row(_GROUP_DATE_API_KEY, api_key=PTU_SENTINEL_API_KEY, ptu_flat_cost=240.0),
+        _grouping_row(_GROUP_DATE_MODEL, model="gpt-4o-mini-ptu", spend=5.0, ptu_flat_cost=240.0),
+        _grouping_row(_GROUP_DATE_MODEL_API_KEY, model="gpt-4o-mini-ptu", api_key="real-key", spend=5.0),
+        _grouping_row(
+            _GROUP_DATE_MODEL_API_KEY, model="gpt-4o-mini-ptu", api_key=PTU_SENTINEL_API_KEY, ptu_flat_cost=240.0
+        ),
+        _grouping_row(_GROUP_GRAND_TOTAL, spend=5.0, ptu_flat_cost=240.0),
+    ]
+
+    aggregated = _aggregate_grouping_sets_records_sync(records=records, api_key_metadata={})
+
+    assert aggregated["totals"].flat_cost == 240.0
+    day = aggregated["results"][0]
+    assert PTU_SENTINEL_API_KEY not in day.breakdown.api_keys
+    assert "real-key" in day.breakdown.api_keys
+
+    model_bucket = day.breakdown.models["gpt-4o-mini-ptu"]
+    assert model_bucket.metrics.flat_cost == 240.0
+    assert model_bucket.metrics.spend == 5.0
+    assert PTU_SENTINEL_API_KEY not in model_bucket.api_key_breakdown
+    assert "real-key" in model_bucket.api_key_breakdown
+
+
+def test_grouping_sets_dispatcher_populates_every_breakdown_level():
+    """Every GROUPING SETS level lands in its bucket, and the flat-cost sentinel
+    is kept out of the model_group and provider api_key sub-breakdowns too."""
+    from litellm.constants import PTU_SENTINEL_API_KEY
+    from litellm.proxy.management_endpoints.common_daily_activity import (
+        _GROUP_DATE_ENDPOINT,
+        _GROUP_DATE_ENDPOINT_API_KEY,
+        _GROUP_DATE_MCP,
+        _GROUP_DATE_MCP_API_KEY,
+        _GROUP_DATE_MODEL_GROUP,
+        _GROUP_DATE_MODEL_GROUP_API_KEY,
+        _GROUP_DATE_PROVIDER,
+        _GROUP_DATE_PROVIDER_API_KEY,
+        _aggregate_grouping_sets_records_sync,
+    )
+
+    records = [
+        _grouping_row(_GROUP_DATE_MODEL_GROUP, model_group="grp", spend=4.0, ptu_flat_cost=240.0),
+        _grouping_row(_GROUP_DATE_MODEL_GROUP_API_KEY, model_group="grp", api_key="real-key", spend=4.0),
+        _grouping_row(
+            _GROUP_DATE_MODEL_GROUP_API_KEY, model_group="grp", api_key=PTU_SENTINEL_API_KEY, ptu_flat_cost=240.0
+        ),
+        _grouping_row(_GROUP_DATE_PROVIDER, custom_llm_provider="azure", spend=4.0),
+        _grouping_row(_GROUP_DATE_PROVIDER_API_KEY, custom_llm_provider="azure", api_key="real-key", spend=4.0),
+        _grouping_row(
+            _GROUP_DATE_PROVIDER_API_KEY,
+            custom_llm_provider="azure",
+            api_key=PTU_SENTINEL_API_KEY,
+            ptu_flat_cost=240.0,
+        ),
+        _grouping_row(_GROUP_DATE_MCP, mcp_namespaced_tool_name="srv/tool", spend=2.0),
+        _grouping_row(_GROUP_DATE_MCP_API_KEY, mcp_namespaced_tool_name="srv/tool", api_key="real-key", spend=2.0),
+        _grouping_row(_GROUP_DATE_ENDPOINT, endpoint="/v1/chat/completions", spend=3.0),
+        _grouping_row(_GROUP_DATE_ENDPOINT_API_KEY, endpoint="/v1/chat/completions", api_key="real-key", spend=3.0),
+    ]
+
+    aggregated = _aggregate_grouping_sets_records_sync(records=records, api_key_metadata={})
+    day = aggregated["results"][0]
+
+    group_bucket = day.breakdown.model_groups["grp"]
+    assert group_bucket.metrics.flat_cost == 240.0
+    assert PTU_SENTINEL_API_KEY not in group_bucket.api_key_breakdown
+    assert "real-key" in group_bucket.api_key_breakdown
+
+    provider_bucket = day.breakdown.providers["azure"]
+    assert PTU_SENTINEL_API_KEY not in provider_bucket.api_key_breakdown
+    assert "real-key" in provider_bucket.api_key_breakdown
+
+    assert "real-key" in day.breakdown.mcp_servers["srv/tool"].api_key_breakdown
+    assert "real-key" in day.breakdown.endpoints["/v1/chat/completions"].api_key_breakdown
+
+
+def test_grouping_sets_dispatcher_keeps_ptu_flat_cost_out_of_the_provider_breakdown():
+    """Sentinel rows carry no provider, so their flat cost must not surface under the
+    "unknown" provider - the per-row path skips them for exactly the same reason."""
+    from litellm.proxy.management_endpoints.common_daily_activity import (
+        _GROUP_DATE_PROVIDER,
+        _aggregate_grouping_sets_records_sync,
+    )
+
+    records = [
+        _grouping_row(_GROUP_DATE_PROVIDER, custom_llm_provider="azure", spend=4.0),
+        # the sentinel's own provider-level row: empty provider, flat cost only
+        _grouping_row(_GROUP_DATE_PROVIDER, custom_llm_provider="", ptu_flat_cost=240.0),
+    ]
+
+    aggregated = _aggregate_grouping_sets_records_sync(records=records, api_key_metadata={})
+    providers = aggregated["results"][0].breakdown.providers
+
+    # the bucket is still reported (a legacy all-zero row must not vanish); only the
+    # flat cost is withheld, so no provider is credited with PTU capacity cost
+    assert providers["azure"].metrics.spend == 4.0
+    assert sum(bucket.metrics.flat_cost for bucket in providers.values()) == 0.0
+
+
+def test_grouping_sets_dispatcher_keeps_a_real_provider_row_that_shares_the_sentinel_shape():
+    """A request row whose provider is empty still gets its "unknown" bucket - only the
+    flat cost is withheld, so provider attribution of real spend is unchanged."""
+    from litellm.proxy.management_endpoints.common_daily_activity import (
+        _GROUP_DATE_PROVIDER,
+        _aggregate_grouping_sets_records_sync,
+    )
+
+    records = [_grouping_row(_GROUP_DATE_PROVIDER, custom_llm_provider="", spend=4.0, ptu_flat_cost=240.0)]
+
+    aggregated = _aggregate_grouping_sets_records_sync(records=records, api_key_metadata={})
+    unknown = aggregated["results"][0].breakdown.providers["unknown"]
+
+    assert unknown.metrics.spend == 4.0
+    assert unknown.metrics.flat_cost == 0.0
+
+
+def test_update_breakdown_metrics_covers_mcp_endpoint_and_entity():
+    """A full request record fans out into the mcp, endpoint, provider and entity
+    breakdowns, while the flat-cost sentinel stays out of the entity api_key sub-map."""
+    from litellm.constants import PTU_SENTINEL_API_KEY
+    from litellm.proxy.management_endpoints.common_daily_activity import update_breakdown_metrics
+    from litellm.types.proxy.management_endpoints.common_daily_activity import BreakdownMetrics
+
+    breakdown = BreakdownMetrics()
+    record = SimpleNamespace(
+        api_key="real-key",
+        model="gpt-4o-mini-ptu",
+        model_group="grp",
+        mcp_namespaced_tool_name="srv/tool",
+        custom_llm_provider="azure",
+        endpoint="/v1/chat/completions",
+        spend=5.0,
+        prompt_tokens=0,
+        completion_tokens=0,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        compression_saved_tokens=0,
+        compression_savings_spend=0,
+        prompt_caching_savings_spend=0,
+        autorouter_savings_spend=0,
+        total_tokens=0,
+        api_requests=0,
+        successful_requests=0,
+        failed_requests=0,
+        ptu_flat_cost=0.0,
+        team_id="team-1",
+    )
+    update_breakdown_metrics(breakdown, record, {}, {}, {}, entity_id_field="team_id")
+
+    assert "srv/tool" in breakdown.mcp_servers
+    assert "real-key" in breakdown.mcp_servers["srv/tool"].api_key_breakdown
+    assert "/v1/chat/completions" in breakdown.endpoints
+    assert "azure" in breakdown.providers
+    assert "team-1" in breakdown.entities
+    assert "real-key" in breakdown.entities["team-1"].api_key_breakdown
+
+    sentinel = SimpleNamespace(**{**record.__dict__, "api_key": PTU_SENTINEL_API_KEY, "ptu_flat_cost": 240.0})
+    update_breakdown_metrics(breakdown, sentinel, {}, {}, {}, entity_id_field="team_id")
+    assert PTU_SENTINEL_API_KEY not in breakdown.entities["team-1"].api_key_breakdown
+    assert breakdown.entities["team-1"].metrics.flat_cost == 240.0
+
+
+def test_grouping_sets_dispatcher_keeps_an_all_zero_legacy_provider_bucket():
+    """LiteLLM_DailyTeamSpend predates its api_requests column; the migration that added it
+    backfilled NOT NULL DEFAULT 0, so a legacy keyless row is all zeroes. Dropping those
+    would silently remove a provider the base build reported."""
+    from litellm.proxy.management_endpoints.common_daily_activity import (
+        _GROUP_DATE_PROVIDER,
+        _aggregate_grouping_sets_records_sync,
+    )
+
+    records = [
+        _grouping_row(_GROUP_DATE_PROVIDER, custom_llm_provider="ollama"),  # spend/tokens/requests all 0
+        _grouping_row(_GROUP_DATE_PROVIDER, custom_llm_provider="openai", spend=0.25),
+    ]
+
+    providers = _aggregate_grouping_sets_records_sync(records=records, api_key_metadata={})["results"][
+        0
+    ].breakdown.providers
+
+    assert set(providers) == {"ollama", "openai"}
+    assert providers["ollama"].metrics.spend == 0.0
+    assert providers["ollama"].metrics.flat_cost == 0.0
+
+
+class TestSentinelRowsDisplayTheirModelName:
+    """A sentinel row keys on the deployment id so a rename cannot move it. The usage views
+    render the breakdown key directly as a label, so the read path has to show the name."""
+
+    @staticmethod
+    def _breakdown(records):
+        from litellm.proxy.management_endpoints.common_daily_activity import update_breakdown_metrics
+        from litellm.types.proxy.management_endpoints.common_daily_activity import BreakdownMetrics
+
+        breakdown = BreakdownMetrics()
+        for record in records:
+            update_breakdown_metrics(breakdown, record, {}, {}, {})
+        return breakdown
+
+    @staticmethod
+    def _sentinel(*, model_id, model_group, flat_cost=480.0):
+        from litellm.constants import PTU_SENTINEL_API_KEY
+
+        record = _spend_record(PTU_SENTINEL_API_KEY, model=model_id, spend=0.0, ptu_flat_cost=flat_cost)
+        record.model_group = model_group
+        return record
+
+    def test_models_breakdown_keys_a_sentinel_row_on_its_public_name(self):
+        models = self._breakdown([self._sentinel(model_id="dep-1", model_group="gpt-4o-ptu")]).models
+
+        assert "gpt-4o-ptu" in models, f"the UI would label this row a UUID: {list(models)}"
+        assert "dep-1" not in models
+        assert models["gpt-4o-ptu"].metrics.flat_cost == pytest.approx(480.0)
+
+    def test_two_deployments_sharing_a_name_merge_under_it(self):
+        """The write path stopped collapsing them, so the read path has to."""
+        models = self._breakdown(
+            [
+                self._sentinel(model_id="dep-a", model_group="gpt-4o-ptu", flat_cost=240.0),
+                self._sentinel(model_id="dep-b", model_group="gpt-4o-ptu", flat_cost=120.0),
+            ]
+        ).models
+
+        assert list(models) == ["gpt-4o-ptu"]
+        assert models["gpt-4o-ptu"].metrics.flat_cost == pytest.approx(360.0)
+
+    def test_a_request_row_still_keys_on_its_model(self):
+        """Scoped to sentinel rows: a request row keys on model as it always has, even
+        though it also carries a model_group."""
+        record = _spend_record("real-key", model="gemini/gemini-2.5-flash", spend=1.25)
+        record.model_group = "gemini-live"
+
+        models = self._breakdown([record]).models
+
+        assert "gemini/gemini-2.5-flash" in models
+        assert "gemini-live" not in models
+
+    def test_a_sentinel_row_without_a_model_group_falls_back_to_the_id(self):
+        """Never drop the charge: an unexpected row with no display name still reports."""
+        models = self._breakdown([self._sentinel(model_id="dep-1", model_group=None)]).models
+
+        assert models["dep-1"].metrics.flat_cost == pytest.approx(480.0)
