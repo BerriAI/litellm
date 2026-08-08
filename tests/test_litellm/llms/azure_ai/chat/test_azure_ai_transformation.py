@@ -262,3 +262,188 @@ def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
         assert "copilot_mcp_server_name" not in tool
     assert result["tools"][0]["type"] == "function"
     assert result["tools"][1]["function"]["name"] == "read_file"
+
+
+def test_transform_messages_strips_anthropic_replay_fields():
+    """Regression: Anthropic /v1/messages adapter attaches ``thinking_blocks``
+    (and ``provider_specific_fields`` / ``cache_control``) to the OpenAI-format
+    assistant messages it builds when replaying Claude Code turns. Azure AI
+    Foundry hosted model backends with strict chat-message schemas (e.g.
+    Fireworks GLM) reject them with
+    ``Extra inputs are not permitted, field: 'messages[n].thinking_blocks'``.
+    ``_transform_messages`` must drop them before the request is sent.
+    """
+    config = AzureAIStudioConfig()
+    messages = [
+        {"role": "user", "content": "Read a file."},
+        {
+            "role": "assistant",
+            "content": "I can help.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "The user wants me to read a file.",
+                    "signature": "",
+                    "cache_control": {},
+                }
+            ],
+            "reasoning_content": "internal reasoning",
+            "provider_specific_fields": {"thought_signature": "sig"},
+            "cache_control": {"type": "ephemeral"},
+        },
+        {"role": "user", "content": "go ahead"},
+    ]
+
+    out = config._transform_messages(messages, model="glm-5.2")
+
+    assert "thinking_blocks" not in out[1]
+    assert "reasoning_content" not in out[1]
+    assert "provider_specific_fields" not in out[1]
+    assert "cache_control" not in out[1]
+    assert out[1]["content"] == "I can help."
+
+
+def test_transform_request_drops_thinking_blocks_for_fireworks_model():
+    """End-to-end of the reported scenario: a Fireworks model deployed on Azure
+    AI Foundry receives a replayed assistant turn carrying ``thinking_blocks``.
+    The outgoing request payload built by ``transform_request`` must not carry
+    it, or the Fireworks backend 400s with
+    ``Extra inputs are not permitted, field: 'messages[2].thinking_blocks'``.
+    Also covers the nested ``tool_calls[].function.provider_specific_fields``
+    signature the Anthropic ``/v1/messages`` adapter attaches on tool-use
+    replays, which otherwise 400s with
+    ``Extra inputs are not permitted, field:
+    'messages[n].tool_calls[m].function.provider_specific_fields'``.
+    """
+    config = AzureAIStudioConfig()
+    messages = [
+        {"role": "user", "content": "Read a file."},
+        {
+            "role": "assistant",
+            "content": "I can help.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "The user wants me to read a file.",
+                    "signature": "",
+                    "cache_control": {},
+                }
+            ],
+            "tool_calls": [
+                {
+                    "id": "toolu_1",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": '{"path": "foo.txt"}',
+                        "provider_specific_fields": {"thought_signature": "sig"},
+                    },
+                }
+            ],
+        },
+        {"role": "user", "content": "go ahead"},
+    ]
+
+    payload = config.transform_request(
+        model="glm-5.2",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    # Match the production invariant exactly: ``_strip_unsupported_message_fields``
+    # pops ``thinking_blocks`` / ``reasoning_content`` at the message top level only,
+    # and strips ``provider_specific_fields`` / ``cache_control`` recursively (they
+    # nest inside ``tool_calls[].function`` / content blocks). Asserting the
+    # top-level-only fields are absent from every nested node would document a
+    # stronger invariant than the code enforces and give a false sense of security.
+    top_level_only_fields = ("thinking_blocks", "reasoning_content")
+    recursively_stripped_fields = ("provider_specific_fields", "cache_control")
+
+    def _assert_no_recursively_stripped_fields(node):
+        if isinstance(node, dict):
+            for field in recursively_stripped_fields:
+                assert field not in node
+            for value in node.values():
+                _assert_no_recursively_stripped_fields(value)
+        elif isinstance(node, list):
+            for item in node:
+                _assert_no_recursively_stripped_fields(item)
+
+    for message in payload["messages"]:
+        for field in top_level_only_fields:
+            assert field not in message
+        _assert_no_recursively_stripped_fields(message)
+
+
+def test_transform_messages_strips_nested_tool_call_provider_specific_fields():
+    """Regression: the Anthropic ``/v1/messages`` adapter attaches the thought
+    signature at ``tool_calls[].function.provider_specific_fields``
+    (``adapters/transformation.py``). A top-level ``pop`` of
+    ``provider_specific_fields`` from the message misses the nested copy, so
+    strict upstreams (Fireworks-on-Azure) still 400 with
+    ``Extra inputs are not permitted, field:
+    'messages[1].tool_calls[0].function.provider_specific_fields'``.
+    ``_transform_messages`` must strip it recursively.
+    """
+    config = AzureAIStudioConfig()
+    messages = [
+        {"role": "user", "content": "Run the tool."},
+        {
+            "role": "assistant",
+            "content": "Calling the tool now.",
+            "tool_calls": [
+                {
+                    "id": "toolu_1",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": '{"path": "foo.txt"}',
+                        "provider_specific_fields": {"thought_signature": "sig"},
+                    },
+                }
+            ],
+        },
+        {"role": "user", "content": "show me the result"},
+    ]
+
+    out = config._transform_messages(messages, model="glm-5.2")
+
+    tool_call = out[1]["tool_calls"][0]
+    assert "provider_specific_fields" not in tool_call
+    assert "provider_specific_fields" not in tool_call["function"]
+    assert tool_call["function"]["name"] == "read_file"
+
+
+def test_strip_unsupported_message_fields_top_level_only_fields_not_stipped_below_top_level():
+    """Document the production invariant Greptile flagged: ``thinking_blocks``
+    and ``reasoning_content`` are popped at the message top level only. They do
+    not appear nested in practice, and the production code does not recurse into
+    content blocks to remove them. A future change that nests them would need a
+    matching production change; pinning the current contract here keeps the test
+    suite and the code in sync rather than asserting a stronger invariant than
+    the code enforces.
+    """
+    from litellm.llms.azure_ai.chat.transformation import (
+        _strip_unsupported_message_fields,
+    )
+
+    # A message that carries a top-level-only field nested inside a content
+    # block; the helper must remove the top-level copy but leave the nested one
+    # (the contract is top-level-only for these fields).
+    message = {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "hi", "thinking_blocks": [{"type": "thinking"}]},
+        ],
+        "thinking_blocks": [{"type": "thinking", "thinking": "top"}],
+        "reasoning_content": "top-level reasoning",
+    }
+
+    _strip_unsupported_message_fields(message)  # type: ignore[arg-type]
+
+    assert "thinking_blocks" not in message
+    assert "reasoning_content" not in message
+    # The nested copy inside the content block is NOT touched (top-level-only):
+    assert "thinking_blocks" in message["content"][0]
