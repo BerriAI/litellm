@@ -672,6 +672,80 @@ async def test_reconcile_budget_reservation_for_counter_update_failure_invalidat
     assert fake_invalidate.called is True
 
 
+@pytest.mark.asyncio
+async def test_reconcile_budget_reservation_keeps_keys_reserved_when_invalidation_fails(
+    monkeypatch,
+):
+    """When invalidation also raises, the reservation is still on the counter. Returning
+    an empty set would tell the caller to add the full actual cost on top of it, leaving
+    previous_spend + reserved_cost + actual_cost and a counter that can 429 forever."""
+    import litellm.proxy.spend_tracking.budget_reservation as br
+
+    monkeypatch.setattr(
+        br, "get_reserved_counter_keys", MagicMock(return_value={"spend:key:abc"})
+    )
+    monkeypatch.setattr(
+        br, "reconcile_budget_reservation", AsyncMock(side_effect=RuntimeError("boom"))
+    )
+    monkeypatch.setattr(
+        br,
+        "invalidate_budget_reservation_counters",
+        AsyncMock(side_effect=RuntimeError("delete failed")),
+    )
+
+    result = await ps._reconcile_budget_reservation_for_counter_update(
+        budget_reservation={"foo": "bar"}, response_cost=1.0
+    )
+
+    assert result == {"spend:key:abc"}
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_does_not_double_count_when_cleanup_fails(
+    monkeypatch,
+):
+    """End-to-end guard: with both reconcile and invalidation failing, the key counter
+    still holds its reservation, so increment_spend_counters must not increment it a
+    second time with the actual cost."""
+    import litellm.proxy.spend_tracking.budget_reservation as br
+
+    fake_cache = _make_spend_counter_cache(redis_get_value=None, redis_increment_value=5.0)
+    fake_user_cache = _make_user_api_key_cache(get_value=None)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
+
+    key_counter = "spend:key:hashed-tok"
+    monkeypatch.setattr(
+        br, "get_reserved_counter_keys", MagicMock(return_value={key_counter})
+    )
+    monkeypatch.setattr(
+        br, "reconcile_budget_reservation", AsyncMock(side_effect=RuntimeError("boom"))
+    )
+    monkeypatch.setattr(
+        br,
+        "invalidate_budget_reservation_counters",
+        AsyncMock(side_effect=RuntimeError("delete failed")),
+    )
+
+    await ps.increment_spend_counters(
+        token="hashed-tok",
+        team_id="t1",
+        user_id="u1",
+        response_cost=5.0,
+        budget_reservation={"entries": [{"counter_key": key_counter}]},
+    )
+
+    incremented = [
+        call.kwargs.get("key", call.args[0] if call.args else None)
+        for call in fake_cache.redis_cache.async_increment.call_args_list
+    ]
+    assert key_counter not in incremented, (
+        f"reserved counter was incremented on top of its reservation: {incremented}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # _increment_end_user_and_tag_spend_counters
 # ---------------------------------------------------------------------------

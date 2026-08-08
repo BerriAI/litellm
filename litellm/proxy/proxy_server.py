@@ -2637,8 +2637,11 @@ async def _reconcile_budget_reservation_for_counter_update(
             await invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
         except Exception:
             verbose_proxy_logger.exception(
-                "Failed to invalidate reserved counters after reservation reconciliation failed"
+                "Failed to invalidate reserved counters after reservation reconciliation failed; "
+                "treating them as still reserved so the caller does not add actual cost on top of "
+                "a reservation that is still on the counter"
             )
+            return reserved_counter_keys
         return set()
     return reserved_counter_keys
 
