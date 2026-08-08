@@ -1709,6 +1709,51 @@ def test_get_model_access_groups_cache_invalidation_upsert_deployment():
     assert "updated-group" in result2
 
 
+def test_upsert_deployment_replaces_wildcard_pattern_router_entry():
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {"model": "anthropic/*", "api_key": "old-key"},
+                "model_info": {"id": "wildcard-deployment-id"},
+            },
+        ]
+    )
+
+    upserted = router.upsert_deployment(
+        Deployment(
+            model_name="anthropic/*",
+            litellm_params=LiteLLM_Params(model="anthropic/*", api_key="new-key"),
+            model_info={"id": "wildcard-deployment-id"},
+        )
+    )
+
+    assert upserted is not None
+    pattern_deployments = [
+        deployment for deployments in router.pattern_router.patterns.values() for deployment in deployments
+    ]
+    assert len(pattern_deployments) == 1
+    assert pattern_deployments[0]["litellm_params"]["api_key"] == "new-key"
+
+
+def test_delete_deployment_removes_wildcard_pattern_router_entry():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {"model": "anthropic/*", "api_key": "old-key"},
+                "model_info": {"id": "wildcard-deployment-id"},
+            },
+        ]
+    )
+
+    router.delete_deployment(id="wildcard-deployment-id")
+
+    assert router.pattern_router.patterns == {}
+
+
 @pytest.mark.asyncio
 async def test_acompletion_streaming_iterator():
     """Test _acompletion_streaming_iterator for normal streaming and fallback behavior."""
