@@ -503,22 +503,30 @@ async def test_get_form_data():
     Test that get_form_data correctly handles form data with array notation.
     Tests audio transcription parameters as a specific example.
     """
+    from starlette.datastructures import FormData
+
     # Create a mock request with transcription form data
     mock_request = MagicMock()
 
-    # Create mock form data with array notation for timestamp_granularities
-    mock_form_data = {
-        "file": "file_object",  # In a real request this would be an UploadFile
-        "model": "gpt-4o-transcribe",
-        "include[]": "logprobs",  # Array notation
-        "language": "en",
-        "prompt": "Transcribe this audio file",
-        "response_format": "json",
-        "stream": "false",
-        "temperature": "0.2",
-        "timestamp_granularities[]": "word",  # First array item
-        "timestamp_granularities[]": "segment",  # Second array item (would overwrite in dict, but handled by the function)
-    }
+    # Real multipart/form-data requests can repeat the same field name (e.g. the
+    # OpenAI SDK sends `timestamp_granularities[]=word` and
+    # `timestamp_granularities[]=segment` as two separate parts). Starlette
+    # represents this as a FormData multidict, not a plain dict, so the mock must
+    # preserve repeated keys the way a real request.form() would.
+    mock_form_data = FormData(
+        [
+            ("file", "file_object"),  # In a real request this would be an UploadFile
+            ("model", "gpt-4o-transcribe"),
+            ("include[]", "logprobs"),  # Array notation
+            ("language", "en"),
+            ("prompt", "Transcribe this audio file"),
+            ("response_format", "json"),
+            ("stream", "false"),
+            ("temperature", "0.2"),
+            ("timestamp_granularities[]", "word"),  # First array item
+            ("timestamp_granularities[]", "segment"),  # Second array item
+        ]
+    )
 
     # Mock the form method to return the test data
     mock_request.form = AsyncMock(return_value=mock_form_data)
@@ -540,11 +548,12 @@ async def test_get_form_data():
     assert isinstance(result["include"], list)
     assert "logprobs" in result["include"]
 
+    # Regression test for https://github.com/BerriAI/litellm/issues/35937:
+    # both repeated timestamp_granularities[] values must be preserved, not just
+    # the last one.
     assert "timestamp_granularities" in result
     assert isinstance(result["timestamp_granularities"], list)
-    # Note: In a real MultiDict, both values would be present
-    # But in our mock dictionary the second value overwrites the first
-    assert "segment" in result["timestamp_granularities"]
+    assert result["timestamp_granularities"] == ["word", "segment"]
 
 
 def test_get_tags_from_request_body_with_metadata_tags():
@@ -1022,10 +1031,12 @@ class TestGetRequestBody:
 
     @pytest.mark.asyncio
     async def test_form_post_routes_to_form_data(self):
+        from starlette.datastructures import FormData
+
         mock_request = MagicMock()
         mock_request.method = "POST"
         mock_request.headers = {"content-type": "multipart/form-data; boundary=x"}
-        mock_request.form = AsyncMock(return_value={"k": "v"})
+        mock_request.form = AsyncMock(return_value=FormData([("k", "v")]))
         mock_request.scope = {}
 
         result = await get_request_body(mock_request)
