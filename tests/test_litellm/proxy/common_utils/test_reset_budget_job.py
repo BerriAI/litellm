@@ -12,6 +12,10 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
+from litellm.constants import (
+    RESET_BUDGET_JOB_LOCK_TTL_SECONDS,
+    RESET_BUDGET_JOB_NAME,
+)
 from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.proxy.common_utils import reset_budget_job as reset_budget_job_module
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
@@ -1613,6 +1617,50 @@ def test_get_data_reset_query_selects_null_budget_reset_at(table_name):
     _asserts_null_reset_is_due(_extract_reset_where(find_many))
 
 
+# ---------------------------------------------------------------------------
+# Leader election
+# ---------------------------------------------------------------------------
+
+
+class FakeRedisCache:
+    """The one read the lock path makes when an acquire comes back false."""
+
+    def __init__(self, holder: Any = None, error: Exception | None = None):
+        self.holder = holder
+        self.error = error
+        self.get_calls: List[str] = []
+
+    async def async_get_cache(self, key: str) -> Any:
+        self.get_calls.append(key)
+        if self.error is not None:
+            raise self.error
+        return self.holder
+
+
+_DEFAULT_REDIS = object()
+
+
+class FakePodLockManager:
+    """Records the cron lock handshake without needing Redis.
+
+    ``acquired`` takes a list to script successive answers (the last one
+    repeats), which is how the between-phase heartbeat gets tested.
+    """
+
+    def __init__(self, acquired: Any = True, redis_cache: Any = _DEFAULT_REDIS):
+        self.redis_cache = FakeRedisCache() if redis_cache is _DEFAULT_REDIS else redis_cache
+        self._acquired = acquired if isinstance(acquired, list) else [acquired]
+        self.acquire_calls: List[Dict[str, Any]] = []
+        self.release_calls: List[str] = []
+
+    async def acquire_lock(self, cronjob_id: str, ttl: int | None = None) -> Any:
+        self.acquire_calls.append({"cronjob_id": cronjob_id, "ttl": ttl})
+        return self._acquired[min(len(self.acquire_calls) - 1, len(self._acquired) - 1)]
+
+    async def release_lock(self, cronjob_id: str) -> None:
+        self.release_calls.append(cronjob_id)
+
+
 def _key_row(token: str, budget_duration: Any = "30d"):
     """A key that is already due for a reset, shaped like a get_data() row."""
     now = datetime.now(timezone.utc)
@@ -1654,6 +1702,148 @@ def _team_row(team_id: str, budget_duration: Any = "30d"):
             "team_id": team_id,
         },
     )
+
+
+def _leader_job(prisma_client, pod_lock_manager):
+    return ResetBudgetJob(
+        proxy_logging_obj=MockProxyLogging(),
+        prisma_client=prisma_client,
+        pod_lock_manager=pod_lock_manager,
+    )
+
+
+def test_reset_budget_runs_and_releases_the_lock_when_this_pod_is_the_leader(mock_prisma_client):
+    """The work happens under the lock, and the lock goes back so the next tick
+    is not deadlocked for the whole TTL."""
+    lock = FakePodLockManager(acquired=True)
+    mock_prisma_client.data["key"] = [_key_row("tok-leader")]
+
+    asyncio.run(_leader_job(mock_prisma_client, lock).reset_budget())
+
+    expected_acquire = {"cronjob_id": RESET_BUDGET_JOB_NAME, "ttl": RESET_BUDGET_JOB_LOCK_TTL_SECONDS}
+    assert lock.acquire_calls[0] == expected_acquire
+    assert all(call == expected_acquire for call in lock.acquire_calls)
+    assert lock.release_calls == [RESET_BUDGET_JOB_NAME]
+    assert [w["where"] for w in _batch_writes(mock_prisma_client, "key", op="update")] == [{"token": "tok-leader"}]
+
+
+def test_reset_budget_renews_the_lease_after_every_phase(mock_prisma_client):
+    """Re-acquiring a lock this pod already holds extends its TTL, so the
+    between-phase re-assert is what keeps a run longer than the TTL from having
+    the lock expire underneath it. One acquire to take it, one per phase after.
+    """
+    lock = FakePodLockManager(acquired=True)
+    mock_prisma_client.data["key"] = [_key_row("tok-1")]
+
+    asyncio.run(_leader_job(mock_prisma_client, lock).reset_budget())
+
+    assert len(lock.acquire_calls) == 6
+    assert all(call["ttl"] == RESET_BUDGET_JOB_LOCK_TTL_SECONDS for call in lock.acquire_calls)
+
+
+def test_reset_budget_stops_when_the_lock_is_lost_mid_run(mock_prisma_client):
+    """A run slower than the TTL can be taken over by another pod. Re-asserting
+    the lock between phases catches that, so the two pods do not fire the same
+    reset transactions at each other.
+    """
+    lock = FakePodLockManager(acquired=[True, False])
+    mock_prisma_client.data["key"] = [_key_row("tok-1")]
+    mock_prisma_client.data["user"] = [_user_row("uid-1")]
+
+    asyncio.run(_leader_job(mock_prisma_client, lock).reset_budget())
+
+    assert [call["table_name"] for call in mock_prisma_client.get_data_calls] == ["key"]
+    assert _batch_writes(mock_prisma_client, "user") == []
+    assert lock.release_calls == [RESET_BUDGET_JOB_NAME]
+
+
+def test_reset_budget_heartbeat_does_not_run_when_there_is_no_lock(mock_prisma_client):
+    """An unguarded run must not start talking to Redis between phases."""
+    lock = FakePodLockManager(redis_cache=None)
+    mock_prisma_client.data["key"] = [_key_row("tok-1")]
+    mock_prisma_client.data["user"] = [_user_row("uid-1")]
+
+    asyncio.run(_leader_job(mock_prisma_client, lock).reset_budget())
+
+    assert lock.acquire_calls == []
+    assert len(_batch_writes(mock_prisma_client, "user", op="update")) == 1
+
+
+def test_reset_budget_releases_the_lock_when_a_phase_raises(mock_prisma_client):
+    """A phase blowing up must not strand the lock: every pod would then skip
+    the reset until the TTL expires."""
+
+    class ExplodingPhaseJob(ResetBudgetJob):
+        async def reset_budget_for_litellm_users(self) -> None:
+            raise RuntimeError("phase blew up")
+
+    lock = FakePodLockManager(acquired=True)
+    job = ExplodingPhaseJob(
+        proxy_logging_obj=MockProxyLogging(),
+        prisma_client=mock_prisma_client,
+        pod_lock_manager=lock,
+    )
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(job.reset_budget())
+
+    assert lock.release_calls == [RESET_BUDGET_JOB_NAME]
+
+
+def test_reset_budget_does_nothing_when_another_pod_holds_the_lock(mock_prisma_client):
+    """The whole point of the lock: a follower must not read or write the
+    budget tables, since concurrent runs are what pile up lock contention."""
+    redis = FakeRedisCache(holder="another-pod")
+    lock = FakePodLockManager(acquired=False, redis_cache=redis)
+    mock_prisma_client.data["key"] = [_key_row("tok-follower")]
+
+    asyncio.run(_leader_job(mock_prisma_client, lock).reset_budget())
+
+    assert redis.get_calls == ["cronjob_lock:reset_budget_job"]
+    assert mock_prisma_client.get_data_calls == []
+    assert mock_prisma_client.db.batchers == []
+    assert lock.release_calls == []
+
+
+@pytest.mark.parametrize(
+    "make_redis",
+    [
+        lambda: FakeRedisCache(error=ConnectionError("redis is down")),
+        lambda: FakeRedisCache(holder=None),
+    ],
+    ids=["redis_unreachable", "lock_key_gone"],
+)
+@pytest.mark.parametrize("acquired", [False, None], ids=["acquire_false", "acquire_none"])
+def test_reset_budget_runs_unguarded_when_no_pod_actually_holds_the_lock(acquired, make_redis, mock_prisma_client):
+    """acquire_lock() reports a broken Redis exactly like real contention, so
+    trusting it blindly would let one unhealthy Redis stop budget resets across
+    the whole fleet. Only a live lock holder may skip a run.
+    """
+    lock = FakePodLockManager(acquired=acquired, redis_cache=make_redis())
+    mock_prisma_client.data["key"] = [_key_row("tok-fail-open")]
+
+    asyncio.run(_leader_job(mock_prisma_client, lock).reset_budget())
+
+    assert [w["where"] for w in _batch_writes(mock_prisma_client, "key", op="update")] == [{"token": "tok-fail-open"}]
+    assert lock.release_calls == []
+
+
+@pytest.mark.parametrize(
+    "make_lock",
+    [lambda: None, lambda: FakePodLockManager(redis_cache=None)],
+    ids=["no_lock_manager", "lock_manager_without_redis"],
+)
+def test_reset_budget_runs_unguarded_when_there_is_nothing_to_elect_on(make_lock, mock_prisma_client):
+    """Without Redis there is no leader to elect, so every pod keeps running the
+    job exactly as it did before."""
+    lock = make_lock()
+    mock_prisma_client.data["key"] = [_key_row("tok-unguarded")]
+
+    asyncio.run(_leader_job(mock_prisma_client, lock).reset_budget())
+
+    assert [w["where"] for w in _batch_writes(mock_prisma_client, "key", op="update")] == [{"token": "tok-unguarded"}]
+    if lock is not None:
+        assert lock.acquire_calls == []
 
 
 # ---------------------------------------------------------------------------
