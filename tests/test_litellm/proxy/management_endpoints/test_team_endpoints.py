@@ -984,7 +984,8 @@ async def test_add_team_member_budget_table_exception_handling():
 
         # Verify the error was logged
         mock_logger.info.assert_called_once_with(
-            "Team member budget table not found, passed team_member_budget_id=nonexistent-budget-456"
+            "Team member budget table not found, passed team_member_budget_id=%s",
+            "nonexistent-budget-456",
         )
 
         # Verify database call was attempted
@@ -9863,11 +9864,14 @@ async def _drive_team_write(
     raw_body=None,
     user=None,
     find_returns_none=False,
+    mock_sink=None,
 ):
     """Drive POST ``update_team`` or PATCH ``patch_team`` against a mocked team.
 
     Returns ``(endpoint_result, update_mock)``; propagates whatever the endpoint
     raises. Inspect ``update_mock.call_args.kwargs["data"]`` for the DB write.
+    Pass a dict as ``mock_sink`` to receive the update mock even when the
+    endpoint raises.
     """
     from unittest.mock import AsyncMock, MagicMock, Mock
     from unittest.mock import patch as _patch
@@ -9913,6 +9917,8 @@ async def _drive_team_write(
             return_value=LiteLLM_TeamTable(team_id=_PATCH_TEAM_ID, team_alias="t")
         )
         pc.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
+        if mock_sink is not None:
+            mock_sink["update"] = pc.db.litellm_teamtable.update
 
         req = Mock(spec=Request)
         if kind == "post":
@@ -10176,6 +10182,249 @@ async def test_patch_returns_full_team_object_not_wrapper():
 
 
 # ---------------------------------------------------------------------------
+# custom_team_metadata_validate wiring: the configured validator must gate
+# every team write path (POST /team/new, POST /team/update, PATCH /team/{id})
+# and must see the metadata that will actually be written.
+# ---------------------------------------------------------------------------
+
+from contextlib import contextmanager
+
+from litellm.proxy.management_helpers.team_metadata_validation import (
+    TEAM_METADATA_VALIDATOR_REGISTRY,
+    TeamMetadataValidationResult,
+)
+
+
+@contextmanager
+def _configured_team_metadata_validator(validator):
+    TEAM_METADATA_VALIDATOR_REGISTRY.set(validator)
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.general_settings", {}),
+        ):
+            yield
+    finally:
+        TEAM_METADATA_VALIDATOR_REGISTRY.set(None)
+
+
+def _recording_validator(recorded, valid=True, error_message=None):
+    async def validator(payload):
+        recorded.append(payload)
+        return TeamMetadataValidationResult(valid=valid, error_message=error_message)
+
+    return validator
+
+
+@pytest.mark.asyncio
+async def test_update_validator_sees_replacement_on_post_and_merged_on_patch():
+    """POST hands the validator the wholesale replacement; PATCH hands it the
+    RFC 7386 merged result including preserved keys."""
+    existing = {"cost_center": "OLD", "keep": 1}
+    body = {"metadata": {"cost_center": "NEW"}}
+
+    recorded_post = []
+    with _configured_team_metadata_validator(_recording_validator(recorded_post)):
+        await _drive_team_write("post", existing_metadata=existing, payload=body)
+
+    recorded_patch = []
+    with _configured_team_metadata_validator(_recording_validator(recorded_patch)):
+        await _drive_team_write("patch", existing_metadata=existing, payload=body)
+
+    assert len(recorded_post) == 1
+    assert recorded_post[0].operation == "update"
+    assert recorded_post[0].metadata == {"cost_center": "NEW"}
+    assert recorded_post[0].existing_metadata == existing
+
+    assert len(recorded_patch) == 1
+    assert recorded_patch[0].operation == "update"
+    assert recorded_patch[0].metadata == {"cost_center": "NEW", "keep": 1}
+    assert recorded_patch[0].existing_metadata == existing
+
+
+@pytest.mark.asyncio
+async def test_patch_null_delete_removes_key_from_validated_metadata():
+    """Deleting a key via PATCH null must be visible to the validator as the
+    key's absence in the resulting metadata, so a required key cannot be
+    silently dropped."""
+    recorded = []
+    with _configured_team_metadata_validator(_recording_validator(recorded)):
+        await _drive_team_write(
+            "patch",
+            existing_metadata={"cost_center": "OLD", "keep": 1},
+            payload={"metadata": {"cost_center": None}},
+        )
+
+    assert len(recorded) == 1
+    assert recorded[0].metadata == {"keep": 1}
+    assert recorded[0].existing_metadata == {"cost_center": "OLD", "keep": 1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["post", "patch"])
+async def test_update_without_metadata_skips_validator(kind):
+    recorded = []
+    with _configured_team_metadata_validator(_recording_validator(recorded)):
+        await _drive_team_write(kind, existing_metadata={"k": "v"}, payload={"tpm_limit": 5})
+
+    assert recorded == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["post", "patch"])
+async def test_update_validator_rejection_blocks_db_write(kind):
+    recorded = []
+    validator = _recording_validator(recorded, valid=False, error_message="cost center rejected, contact FinOps")
+    sink = {}
+
+    with _configured_team_metadata_validator(validator):
+        with pytest.raises(ProxyException) as exc_info:
+            await _drive_team_write(
+                kind,
+                existing_metadata={"cost_center": "OLD"},
+                payload={"metadata": {"cost_center": "BAD"}},
+                mock_sink=sink,
+            )
+
+    assert str(exc_info.value.code) == "400"
+    assert "cost center rejected, contact FinOps" in str(exc_info.value.message)
+    assert len(recorded) == 1
+    sink["update"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_new_team_validator_runs_without_metadata_and_rejection_blocks_create():
+    """Create always validates, even when the request carries no metadata, so a
+    required-key policy can reject a team created without one."""
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    recorded = []
+    validator = _recording_validator(recorded, valid=False, error_message="cost_center is required")
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch("litellm.proxy.proxy_server._license_check") as mock_license,
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        _configured_team_metadata_validator(validator),
+    ):
+        mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        mock_prisma.db.litellm_teamtable.create = AsyncMock()
+        mock_license.is_team_count_over_limit.return_value = False
+
+        with pytest.raises(ProxyException) as exc_info:
+            await new_team(
+                data=NewTeamRequest(team_alias="no-metadata-team"),
+                http_request=MagicMock(spec=Request),
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1"),
+            )
+
+        assert str(exc_info.value.code) == "400"
+        assert "cost_center is required" in str(exc_info.value.message)
+        assert len(recorded) == 1
+        assert recorded[0].operation == "create"
+        assert recorded[0].metadata == {}
+        assert recorded[0].existing_metadata is None
+        mock_prisma.db.litellm_teamtable.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_new_team_validator_accept_proceeds_to_create(mock_db_client, mock_admin_auth):
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    mock_db_client.get_data = AsyncMock(return_value=None)
+    mock_db_client.update_data = AsyncMock(return_value=MagicMock())
+    mock_db_client.db = MagicMock()
+
+    team_create_result = MagicMock(team_id="team-accept-1")
+    team_create_result.model_dump.return_value = {"team_id": "team-accept-1"}
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.create = AsyncMock(return_value=team_create_result)
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=team_create_result)
+    mock_db_client.db.litellm_usertable = MagicMock()
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    recorded = []
+    with _configured_team_metadata_validator(_recording_validator(recorded)):
+        await new_team(
+            data=NewTeamRequest(team_alias="accepted-team", metadata={"cost_center": "CC-1001"}),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    assert len(recorded) == 1
+    assert recorded[0].operation == "create"
+    assert recorded[0].metadata == {"cost_center": "CC-1001"}
+    mock_db_client.db.litellm_teamtable.create.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_new_team_rejection_precedes_model_alias_write():
+    """A rejected create must not leave an orphaned LiteLLM_ModelTable row:
+    validation runs before the model_aliases insert."""
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    validator = _recording_validator([], valid=False, error_message="cost_center is required")
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch("litellm.proxy.proxy_server._license_check") as mock_license,
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        _configured_team_metadata_validator(validator),
+    ):
+        mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        mock_prisma.db.litellm_teamtable.create = AsyncMock()
+        mock_prisma.db.litellm_modeltable.create = AsyncMock(return_value=MagicMock(id="model-1"))
+        mock_license.is_team_count_over_limit.return_value = False
+
+        with pytest.raises(ProxyException):
+            await new_team(
+                data=NewTeamRequest(
+                    team_alias="alias-orphan-check",
+                    model_aliases={"alias-model": "gpt-4o"},
+                ),
+                http_request=MagicMock(spec=Request),
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1"),
+            )
+
+        mock_prisma.db.litellm_modeltable.create.assert_not_awaited()
+        mock_prisma.db.litellm_teamtable.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["post", "patch"])
+async def test_update_existing_metadata_excludes_system_managed_keys(kind):
+    """The validator's existing_metadata must be symmetric with metadata:
+    server-owned keys (team_member_budget_id) are stripped from both, so a
+    key-preservation validator never sees them 'disappear'."""
+    recorded = []
+    stored = {"cost_center": "CC-1001", "team_member_budget_id": "budget-abc"}
+
+    with _configured_team_metadata_validator(_recording_validator(recorded)):
+        await _drive_team_write(
+            kind,
+            existing_metadata=dict(stored),
+            payload={"metadata": {"notes": "x"}},
+        )
+
+    assert len(recorded) == 1
+    assert recorded[0].existing_metadata == {"cost_center": "CC-1001"}
+    assert "team_member_budget_id" not in recorded[0].metadata
+
+
+# ---------------------------------------------------------------------------
 # PATCH body is validated through PatchTeamRequest before it is handed to
 # update_team. The write below must stay byte-identical to what the untyped
 # **body construction produced, or a partial update starts writing columns the
@@ -10338,6 +10587,76 @@ async def test_list_available_teams_filters_joined_and_validates_rows(monkeypatc
     assert result[0].team_alias == "open team"
     find_many_kwargs = mock_prisma_client.db.litellm_teamtable.find_many.call_args.kwargs
     assert find_many_kwargs["where"] == {"team_id": {"in": ["team-open"]}}
+
+
+@pytest.mark.asyncio
+async def test_get_team_metadata_schema_returns_configured_fields():
+    from litellm.proxy.management_endpoints.team_endpoints import get_team_metadata_schema
+    from litellm.proxy.management_helpers.team_metadata_validation import (
+        TEAM_METADATA_SCHEMA_REGISTRY,
+        parse_team_metadata_schema,
+    )
+
+    TEAM_METADATA_SCHEMA_REGISTRY.set(
+        parse_team_metadata_schema(
+            [
+                {"key": "cost_center", "label": "Cost Center"},
+                {"key": "app_name", "label": "Application Name"},
+            ]
+        )
+    )
+    try:
+        result = await get_team_metadata_schema()
+    finally:
+        TEAM_METADATA_SCHEMA_REGISTRY.set(())
+
+    assert [field.key for field in result.fields] == ["cost_center", "app_name"]
+    assert result.fields[0].label == "Cost Center"
+    assert result.fields[1].label == "Application Name"
+
+
+@pytest.mark.asyncio
+async def test_get_team_metadata_schema_empty_when_unconfigured():
+    from litellm.proxy.management_endpoints.team_endpoints import get_team_metadata_schema
+    from litellm.proxy.management_helpers.team_metadata_validation import (
+        TEAM_METADATA_SCHEMA_REGISTRY,
+    )
+
+    TEAM_METADATA_SCHEMA_REGISTRY.set(())
+    result = await get_team_metadata_schema()
+
+    assert result.fields == ()
+
+
+def test_get_team_metadata_schema_route_requires_auth():
+    from litellm.proxy.management_helpers.team_metadata_validation import (
+        TEAM_METADATA_SCHEMA_REGISTRY,
+        parse_team_metadata_schema,
+    )
+
+    with patch("litellm.proxy.proxy_server.master_key", "sk-1234"):
+        response = client.get("/team/metadata_schema")
+    assert response.status_code == 401
+
+    TEAM_METADATA_SCHEMA_REGISTRY.set(parse_team_metadata_schema([{"key": "cost_center", "label": "Cost Center"}]))
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1"
+    )
+    try:
+        authed = client.get("/team/metadata_schema")
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+        TEAM_METADATA_SCHEMA_REGISTRY.set(())
+
+    assert authed.status_code == 200
+    assert authed.json() == {"fields": [{"key": "cost_center", "label": "Cost Center"}]}
+
+
+def test_team_metadata_schema_route_is_readable_by_non_admins():
+    from litellm.proxy._types import LiteLLMRoutes
+
+    assert "/team/metadata_schema" in LiteLLMRoutes.info_routes.value
+    assert "/team/metadata_schema" in LiteLLMRoutes.management_routes.value
 
 
 def _provisioning_caller(role: LitellmUserRoles) -> UserAPIKeyAuth:

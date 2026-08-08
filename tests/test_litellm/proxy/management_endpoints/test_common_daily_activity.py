@@ -1,6 +1,8 @@
 import os
 import sys
+from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,7 +21,10 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity_aggregated,
     update_metrics,
 )
-from litellm.types.proxy.management_endpoints.common_daily_activity import SpendMetrics
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    DailySpendMetadata,
+    SpendMetrics,
+)
 
 
 @pytest.mark.asyncio
@@ -153,6 +158,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
         "compression_saved_tokens": 0,
         "compression_savings_spend": 0.0,
         "prompt_caching_savings_spend": 0.0,
+        "autorouter_savings_spend": 0.0,
         "failed_requests": 0,
     }
     mock_rows = [
@@ -498,6 +504,7 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_1.compression_saved_tokens = 0
     mock_record_1.compression_savings_spend = 0.0
     mock_record_1.prompt_caching_savings_spend = 0.0
+    mock_record_1.autorouter_savings_spend = 0.0
     mock_record_1.api_requests = 10
     mock_record_1.successful_requests = 9
     mock_record_1.failed_requests = 1
@@ -520,6 +527,7 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_2.compression_saved_tokens = 0
     mock_record_2.compression_savings_spend = 0.0
     mock_record_2.prompt_caching_savings_spend = 0.0
+    mock_record_2.autorouter_savings_spend = 0.0
     mock_record_2.api_requests = 5
     mock_record_2.successful_requests = 5
     mock_record_2.failed_requests = 0
@@ -582,6 +590,7 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
         "compression_saved_tokens": 0,
         "compression_savings_spend": 0.0,
         "prompt_caching_savings_spend": 0.0,
+        "autorouter_savings_spend": 0.0,
         "failed_requests": 0,
     }
     mock_rows = [
@@ -669,6 +678,7 @@ def _daily_user_spend_record(*, user_id, api_key, spend, model="gpt-4", model_gr
         compression_saved_tokens=0,
         compression_savings_spend=0.0,
         prompt_caching_savings_spend=0.0,
+        autorouter_savings_spend=0.0,
         api_requests=1,
         successful_requests=1,
         failed_requests=0,
@@ -862,6 +872,66 @@ class TestAdjustDatesForTimezone:
         assert per_day_ends == days
 
 
+class TestAdjustDatesForTimezoneLiveEnd:
+    """
+    Regression tests for the stale-evening bug: a caller west of UTC whose range
+    ends on their local "today" was capped at that local date's UTC bucket, so
+    once UTC rolled past their local midnight (5pm PT), everything sent that
+    evening sat in the next UTC bucket and the dashboard reported $0 for it
+    until local midnight. A range that reaches the caller's current day and
+    opts in via include_current_utc_day must extend to today's UTC bucket; the
+    only part of that bucket outside the range is the future, which is empty,
+    so the extension cannot over-count. Callers that do not opt in keep the
+    pass-through byte for byte.
+    """
+
+    PT_EVENING_UTC: Final = datetime(2026, 8, 6, 4, 30, tzinfo=timezone.utc)
+
+    def test_pt_evening_range_ending_today_extends_to_utc_today(self):
+        start, end = _adjust_dates_for_timezone(
+            "2026-07-06", "2026-08-05", 420, include_current_utc_day=True, utc_now=self.PT_EVENING_UTC
+        )
+        assert (start, end) == ("2026-07-06", "2026-08-06")
+
+    def test_without_opt_in_live_range_keeps_pass_through(self):
+        start, end = _adjust_dates_for_timezone(
+            "2026-07-06", "2026-08-05", 420, utc_now=self.PT_EVENING_UTC
+        )
+        assert (start, end) == ("2026-07-06", "2026-08-05")
+
+    def test_pt_historical_range_is_untouched(self):
+        start, end = _adjust_dates_for_timezone(
+            "2026-07-01", "2026-08-04", 420, include_current_utc_day=True, utc_now=self.PT_EVENING_UTC
+        )
+        assert (start, end) == ("2026-07-01", "2026-08-04")
+
+    def test_east_of_utc_local_today_already_covers_utc_today(self):
+        ist_evening_utc: Final = datetime(2026, 8, 5, 17, 0, tzinfo=timezone.utc)
+        start, end = _adjust_dates_for_timezone(
+            "2026-07-07", "2026-08-06", -330, include_current_utc_day=True, utc_now=ist_evening_utc
+        )
+        assert (start, end) == ("2026-07-07", "2026-08-06")
+
+    def test_missing_offset_stays_pass_through_even_for_live_range(self):
+        start, end = _adjust_dates_for_timezone(
+            "2026-07-06", "2026-08-05", None, include_current_utc_day=True, utc_now=self.PT_EVENING_UTC
+        )
+        assert (start, end) == ("2026-07-06", "2026-08-05")
+
+    def test_utc_caller_range_ending_today_is_unchanged(self):
+        utc_noon: Final = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
+        start, end = _adjust_dates_for_timezone(
+            "2026-07-06", "2026-08-05", 0, include_current_utc_day=True, utc_now=utc_noon
+        )
+        assert (start, end) == ("2026-07-06", "2026-08-05")
+
+    def test_future_end_date_extends_no_further_than_requested(self):
+        start, end = _adjust_dates_for_timezone(
+            "2026-07-06", "2026-08-09", 420, include_current_utc_day=True, utc_now=self.PT_EVENING_UTC
+        )
+        assert (start, end) == ("2026-07-06", "2026-08-09")
+
+
 class TestBuildAggregatedSqlQuery:
     """
     Asserts the SQL emitted by the aggregated query path stays anchored to the
@@ -973,6 +1043,7 @@ async def test_get_daily_activity_aggregated_empty_result_set():
             "compression_saved_tokens": None,
             "compression_savings_spend": None,
             "prompt_caching_savings_spend": None,
+            "autorouter_savings_spend": None,
             "api_requests": None,
             "successful_requests": None,
             "failed_requests": None,
@@ -1016,6 +1087,7 @@ def _no_spend_record():
         compression_saved_tokens=None,
         compression_savings_spend=None,
         prompt_caching_savings_spend=None,
+        autorouter_savings_spend=None,
         api_requests=None,
         successful_requests=None,
         failed_requests=None,
@@ -1050,3 +1122,54 @@ def test_update_metrics_handles_none_values():
     assert metrics.cache_read_input_tokens == 0
     assert metrics.cache_creation_input_tokens == 0
     assert metrics.compression_saved_tokens == 0
+
+
+class TestEverySavingsDriverSurvivesTheReadPath:
+    """A savings driver is only real if it survives the whole read path.
+
+    The write path can price a driver correctly and persist it to all six rollup
+    tables, and the dashboard can still render a permanent $0.00 because the
+    aggregation query never summed the column or the response model never
+    declared it. That failure is silent: the card renders, the number is just
+    always zero, which is indistinguishable from having saved nothing. These
+    tests enumerate the drivers from the response model itself, so a driver added
+    later cannot be half-wired.
+    """
+
+    def _drivers(self) -> list[str]:
+        drivers = [field for field in SpendMetrics.model_fields if field.endswith("_savings_spend")]
+        assert drivers, "expected the dashboard response to expose at least one savings driver"
+        return drivers
+
+    def test_every_driver_is_summed_by_the_rollup_query(self):
+        sql, _ = _build_aggregated_sql_query(
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id="user-1",
+            start_date="2026-07-01",
+            end_date="2026-07-31",
+            model=None,
+            api_key=None,
+            timezone_offset_minutes=None,
+        )
+        for driver in self._drivers():
+            assert f"SUM({driver})" in sql, f"{driver} is never summed, so it reads as zero"
+
+    def test_every_driver_is_accumulated_across_rows(self):
+        for driver in self._drivers():
+            record = _no_spend_record()
+            setattr(record, driver, 1.25)
+            metrics = update_metrics(SpendMetrics(), record)
+            assert getattr(metrics, driver) == pytest.approx(1.25), f"{driver} is dropped when accumulating rows"
+
+    def test_every_driver_is_carried_by_a_single_row_conversion(self):
+        for driver in self._drivers():
+            record = _no_spend_record()
+            setattr(record, driver, 2.5)
+            assert getattr(_record_to_spend_metrics(record), driver) == pytest.approx(2.5)
+
+    def test_every_driver_has_a_range_total(self):
+        for driver in self._drivers():
+            assert f"total_{driver}" in DailySpendMetadata.model_fields, (
+                f"total_{driver} is missing, so the range summary omits the driver"
+            )

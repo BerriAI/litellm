@@ -86,6 +86,59 @@ def test_compliance_routes_open_to_non_admin_roles(role, route):
     )
 
 
+@pytest.mark.parametrize(
+    "role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+def test_user_banner_read_open_to_non_admin_roles(role):
+    """The dashboard banner renders for every authenticated user, so the read
+    route must be reachable by non-admin roles."""
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=role,
+    )
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=role)
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=role,
+        route="/get/user_banner",
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+def test_user_banner_update_rejected_for_non_admin():
+    """Publishing the banner stays admin-only at the route layer."""
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(Exception) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/update/user_banner",
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+    assert "Route=/update/user_banner" in str(exc_info.value)
+
+
 def test_proxy_admin_viewer_config_update_route_rejected():
     """Test that proxy admin viewer users are rejected when trying to call /config/update"""
 
@@ -3139,3 +3192,109 @@ def test_internal_user_blocked_from_search_tool_writes(route):
     assert "Only proxy admin" in str(exc_info.value)
     assert f"Route={route}" in str(exc_info.value)
     assert "Your role=internal_user" in str(exc_info.value)
+
+
+def test_proxy_admin_viewer_can_read_another_users_info():
+    """Admin Viewer has read parity with Proxy Admin, so the /user/info
+    key-ownership gate must not apply to it — the Users page reads every row."""
+    user_obj = LiteLLM_UserTable(
+        user_id="viewer_user",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="viewer_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {"user_id": "some_other_user"}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        route="/user/info",
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+def test_internal_user_still_blocked_from_another_users_info():
+    """The Admin Viewer carve-out above must stay scoped to that role; internal
+    users keep hitting the ownership 403."""
+    user_obj = LiteLLM_UserTable(
+        user_id="internal_user",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="internal_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {"user_id": "some_other_user"}
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/user/info",
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "key not allowed to access this user's info" in str(exc_info.value.detail)
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/user/daily/activity",
+        "/user/daily/activity/aggregated",
+    ],
+)
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+def test_user_daily_activity_routes_reachable_by_non_admin(route, user_role):
+    """Both /user/daily/activity and its /aggregated sibling power the default
+    "Your Usage" dashboard view, and both handlers self-scope to the caller
+    (_user_has_admin_view -> require_caller_user_id_for_non_admin -> 403 on a
+    user_id mismatch). self_managed_routes is the ONLY list that grants either
+    route to a non-admin, so dropping one from it 401s every internal user's
+    main Usage page before the handler ever runs.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=user_role,
+    )
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=user_role)
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=user_role,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+def test_user_daily_activity_aggregated_not_covered_by_prefix_match():
+    """check_route_access is exact-match plus explicit wildcards, so listing the
+    parent /user/daily/activity does not implicitly cover the /aggregated
+    sub-path. Pins the reason the sibling needs its own entry.
+    """
+    assert not RouteChecks.check_route_access(
+        route="/user/daily/activity/aggregated",
+        allowed_routes=["/user/daily/activity"],
+    )
