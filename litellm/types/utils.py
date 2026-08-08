@@ -3710,6 +3710,7 @@ class LlmProviders(str, Enum):
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
     GDC = "gdc"
+    IMPOSSIBL = "impossibl"
 
 
 # Create a set of all provider values for quick lookup

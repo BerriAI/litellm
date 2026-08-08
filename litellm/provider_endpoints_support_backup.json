@@ -2534,6 +2534,15 @@
         "messages": true,
         "responses": true
       }
+    },
+    "impossibl": {
+      "display_name": "Impossibl (`impossibl`)",
+      "url": "https://docs.litellm.ai/docs/providers/impossibl",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true
+      }
     }
   },
   "endpoints": {
