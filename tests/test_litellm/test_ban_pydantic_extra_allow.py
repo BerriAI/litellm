@@ -61,6 +61,21 @@ _REPO_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."
             id="module_constant_extra_value",
         ),
         pytest.param(
+            'ALLOW = ConfigDict(extra="allow")\n\n\nclass Foo(BaseModel):\n'
+            '    model_config = ALLOW\n\n\nALLOW = ConfigDict(extra="forbid")\n',
+            id="constant_rebound_to_forbid_after_the_class",
+        ),
+        pytest.param(
+            'ALLOW = ConfigDict(extra="forbid")\nALLOW = ConfigDict(extra="allow")\n\n\n'
+            "class Foo(BaseModel):\n    model_config = ALLOW\n",
+            id="constant_rebound_to_allow_before_the_class",
+        ),
+        pytest.param(
+            'EXTRA = "allow"\n\n\nclass Foo(BaseModel):\n'
+            '    model_config = ConfigDict(extra=EXTRA)\n\n\nEXTRA = "forbid"\n',
+            id="extra_value_constant_rebound_after_the_class",
+        ),
+        pytest.param(
             'EXTRA = "allow"\n\n\nclass Foo(BaseModel, extra=EXTRA):\n    pass\n',
             id="module_constant_class_keyword",
         ),
