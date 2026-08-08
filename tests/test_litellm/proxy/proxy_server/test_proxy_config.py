@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock
@@ -1464,6 +1465,28 @@ def test_ProxyConfig_get_model_info_with_id_returns_router_model_info():
         "blocked": dumped.get("blocked"),
     }
     assert snapshot == {"id": "m-1", "db_model": True, "blocked": False}
+
+
+def test_ProxyConfig_get_model_info_with_id_hydrates_metadata_without_premium(monkeypatch):
+    """Row-level created_at/created_by/updated_at/updated_by must be served
+    regardless of license status so the Admin UI never shows "Unknown" for
+    models added via direct API calls (regression for #35623)."""
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    pc = ProxyConfig()
+    model = SimpleNamespace(
+        model_id="m-2",
+        model_info={"id": "m-2"},
+        blocked=False,
+        created_at=datetime(2026, 8, 3, 1, 59, 57),
+        updated_at=datetime(2026, 8, 3, 1, 59, 57),
+        created_by="default_user_id",
+        updated_by="default_user_id",
+    )
+    out = pc.get_model_info_with_id(model=model, db_model=True)
+    assert out.created_at == datetime(2026, 8, 3, 1, 59, 57)
+    assert out.updated_at == datetime(2026, 8, 3, 1, 59, 57)
+    assert out.created_by == "default_user_id"
+    assert out.updated_by == "default_user_id"
 
 
 def test_ProxyConfig_get_model_info_with_id_missing_model_id_raises(monkeypatch):

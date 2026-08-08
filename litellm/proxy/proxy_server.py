@@ -5447,12 +5447,20 @@ class ProxyConfig:
             model.model_info["db_model"] = True
             model.model_info["blocked"] = bool(getattr(model, "blocked", False))
 
-        if premium_user is True:
-            # seeing "created_at", "updated_at", "created_by", "updated_by" is a LiteLLM Enterprise Feature
-            model.model_info["created_at"] = getattr(model, "created_at", None)
-            model.model_info["updated_at"] = getattr(model, "updated_at", None)
-            model.model_info["created_by"] = getattr(model, "created_by", None)
-            model.model_info["updated_by"] = getattr(model, "updated_by", None)
+        # Hydrate model metadata from the DB row's top-level columns
+        # (created_at / created_by / updated_at / updated_by) so it is always
+        # served, not only for premium users. /v1/model/info and /v2/model/info
+        # are admin-scoped endpoints and the Admin UI renders these columns
+        # unconditionally; without the fallback, models created outside the
+        # "Add Model" form (e.g. via direct API calls) show "Unknown" for
+        # Created By / Updated At even though the row has the values.
+        # Config-file models have no row attributes, so getattr(...) yields
+        # None and nothing is injected into their model_info dict.
+        if isinstance(model.model_info, dict):
+            for key in ("created_at", "updated_at", "created_by", "updated_by"):
+                row_value = getattr(model, key, None)
+                if row_value is not None:
+                    model.model_info[key] = row_value
 
         if model.model_info is not None and isinstance(model.model_info, dict):
             if "id" not in model.model_info:
