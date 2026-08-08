@@ -56,9 +56,9 @@ export function SearchSelect({
       <ComboboxInput
         placeholder={placeholder}
         showClear={value != null && value !== ""}
-        className={`w-full ${className ?? ""}`}
+        className={`h-8 w-full text-sm ${className ?? ""}`}
       />
-      <ComboboxContent>
+      <ComboboxContent side="bottom" collisionAvoidance={{ side: "shift", align: "shift", fallbackAxisSide: "none" }}>
         <ComboboxEmpty>{emptyText}</ComboboxEmpty>
         <ComboboxList>
           {(item: SearchSelectOption) => (
