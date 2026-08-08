@@ -17,7 +17,12 @@ from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 from .llms.openai import OpenAIFileObject
 from .search import SearchProvider
-from .utils import CustomPricingLiteLLMParams, ModelResponse, StandardLoggingRoutingDecision
+from .utils import (
+    CustomPricingLiteLLMParams,
+    MirroredPricingParams,
+    ModelResponse,
+    StandardLoggingRoutingDecision,
+)
 
 
 class ConfigurableClientsideParamsCustomAuth(TypedDict):
@@ -122,7 +127,7 @@ class UpdateRouterConfig(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
 
-class ModelInfo(BaseModel):
+class ModelInfo(MirroredPricingParams):
     id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
     updated_at: datetime.datetime | None = None
@@ -424,14 +429,7 @@ class DeploymentTypedDict(TypedDict, total=False):
     model_info: dict
 
 
-SPECIAL_MODEL_INFO_PARAMS = [
-    "input_cost_per_token",
-    "output_cost_per_token",
-    "input_cost_per_character",
-    "output_cost_per_character",
-    "cache_read_input_token_cost",
-    "cache_creation_input_token_cost",
-]
+SPECIAL_MODEL_INFO_PARAMS = tuple(MirroredPricingParams.model_fields)
 
 
 class Deployment(BaseModel):

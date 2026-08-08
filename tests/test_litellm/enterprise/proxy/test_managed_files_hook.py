@@ -8,6 +8,7 @@ async_post_call_success_hook when processing completed batch responses.
 import asyncio
 import base64
 import json
+import logging
 
 import pytest
 from typing import Optional
@@ -187,6 +188,47 @@ async def test_get_user_created_file_ids_remaps_stored_raw_provider_id_to_unifie
     assert [file.id for file in files] == [unified_id]
     assert files[0].filename == raw_provider_object.filename
     assert files[0].purpose == raw_provider_object.purpose
+
+
+@pytest.mark.asyncio
+async def test_parse_managed_file_object_warning_omits_rejected_values(caplog):
+    from litellm_enterprise.proxy.hooks.managed_files import (
+        _parse_managed_file_object,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        parsed = _parse_managed_file_object(
+            {"id": "file-corrupt", "object": "file", "filename": "confidential.jsonl"},
+            "unified-corrupt",
+        )
+
+    assert parsed is None
+    assert "unified-corrupt" in caplog.text
+    assert "bytes" in caplog.text
+    assert "confidential.jsonl" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_get_user_created_file_ids_skips_unparseable_rows():
+    managed_files = _make_managed_files_instance()
+    managed_files.prisma_client.db.litellm_managedfiletable.find_many = AsyncMock(
+        return_value=[
+            MagicMock(
+                file_object={"id": "file-corrupt", "object": "file"},
+                unified_file_id="unified-corrupt",
+            ),
+            MagicMock(
+                file_object=_make_file_object().model_dump(),
+                unified_file_id="unified-valid",
+            ),
+        ]
+    )
+
+    files = await managed_files.get_user_created_file_ids(
+        _make_user_api_key_dict(), ["file-output-abc"]
+    )
+
+    assert [file.id for file in files] == ["unified-valid"]
 
 
 @pytest.mark.asyncio

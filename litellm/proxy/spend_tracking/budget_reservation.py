@@ -156,6 +156,7 @@ async def reserve_budget_for_request(
     proxy_logging_obj: ProxyLogging,
     end_user_id: str | None = None,
     end_user_object: Any | None = None,
+    apply_user_budget_to_team_keys: bool = False,
     fail_closed_budget_enforcement: bool = False,
 ) -> dict | None:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
@@ -175,6 +176,7 @@ async def reserve_budget_for_request(
         proxy_logging_obj=proxy_logging_obj,
         end_user_id=end_user_id,
         end_user_object=end_user_object,
+        apply_user_budget_to_team_keys=apply_user_budget_to_team_keys,
     )
     if not counters:
         return None
@@ -332,6 +334,7 @@ async def _get_budget_counters(
     proxy_logging_obj: ProxyLogging,
     end_user_id: str | None = None,
     end_user_object: Any | None = None,
+    apply_user_budget_to_team_keys: bool = False,
 ) -> list[_BudgetCounter]:
     counters: Final[list[_BudgetCounter]] = []
 
@@ -380,8 +383,9 @@ async def _get_budget_counters(
             )
         )
 
+    is_team_key: Final = team_object is not None and team_object.team_id is not None
     if (
-        (team_object is None or team_object.team_id is None)
+        (not is_team_key or apply_user_budget_to_team_keys)
         and user_object is not None
         and user_object.user_id is not None
         and user_object.max_budget is not None
