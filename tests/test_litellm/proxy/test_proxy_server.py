@@ -6143,6 +6143,38 @@ def test_get_config_normalizes_string_callbacks(monkeypatch):
     assert "datadog" in success_and_failure_callbacks
 
 
+def test_update_config_fields_unions_callbacks_from_config_and_db():
+    """Issue #12118: callbacks added from the Admin UI land in the DB litellm_settings
+    row, which previously replaced the config.yaml callback lists on config load, so
+    only the UI-added loggers ran."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    updated = proxy_config._update_config_fields(
+        current_config={
+            "litellm_settings": {
+                "success_callback": ["langfuse"],
+                "failure_callback": ["sentry"],
+                "callbacks": ["otel"],
+                "drop_params": True,
+            }
+        },
+        param_name="litellm_settings",
+        db_param_value={
+            "success_callback": ["datadog", "Langfuse"],
+            "failure_callback": ["datadog"],
+            "callbacks": ["prometheus"],
+        },
+    )
+
+    ls = updated["litellm_settings"]
+    assert ls["success_callback"] == ["langfuse", "datadog"]
+    assert ls["failure_callback"] == ["sentry", "datadog"]
+    assert ls["callbacks"] == ["otel", "prometheus"]
+    assert ls["drop_params"] is True
+
+
 def test_deep_merge_dicts_skips_none_and_empty_lists(monkeypatch):
     """
     Test that _update_config_fields deep merge skips None values and empty lists.

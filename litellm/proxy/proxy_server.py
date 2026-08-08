@@ -3603,6 +3603,41 @@ _DB_OVERLAY_REMOTE_MODULE_LIST_FIELDS: Final[dict[str, tuple[str, ...]]] = {
     ),
 }
 
+_ADDITIVE_LITELLM_SETTINGS_LIST_FIELDS: tuple[str, ...] = (
+    "callbacks",
+    "success_callback",
+    "failure_callback",
+    "service_callback",
+    "audit_log_callbacks",
+)
+
+
+def _callback_dedup_key(callback: Any) -> Any:
+    return callback.lower() if isinstance(callback, str) else id(callback)
+
+
+def _union_callback_lists(config_value: Any, db_value: Any) -> Any:
+    """Union a config.yaml callback list with the DB-overlay one, config entries
+    first, deduped case-insensitively for plain string callback names."""
+    if not isinstance(config_value, list) or not isinstance(db_value, list):
+        return db_value
+    seen = frozenset(_callback_dedup_key(callback) for callback in config_value)
+    # mutable-ok: config consumers isinstance-check these callback entries for `list`
+    return [*config_value, *(cb for cb in db_value if _callback_dedup_key(cb) not in seen)]
+
+
+def _merge_additive_litellm_settings(current_config: dict[str, Any], db_param_value: dict[str, Any]) -> None:
+    """Fold the config.yaml callback lists into the DB-overlay ones, in place.
+
+    The DB row only holds the callbacks added from the Admin UI, so letting it
+    replace the config.yaml lists drops every YAML-declared logger."""
+    config_litellm_settings = current_config.get("litellm_settings")
+    if not isinstance(config_litellm_settings, dict):
+        return
+    for field in _ADDITIVE_LITELLM_SETTINGS_LIST_FIELDS:
+        if field in db_param_value:
+            db_param_value[field] = _union_callback_lists(config_litellm_settings.get(field), db_param_value[field])
+
 
 def _is_remote_module_url(value: Any) -> bool:
     return isinstance(value, str) and (value.startswith("s3://") or value.startswith("gcs://"))
@@ -6241,6 +6276,8 @@ class ProxyConfig:
             for key, value in db_param_value.items():
                 if key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:  # params that are safe to override with db values
                     setattr(litellm, key, value)
+
+            _merge_additive_litellm_settings(current_config, db_param_value)
 
         # If param doesn't exist in config, add it
         if param_name not in current_config:
