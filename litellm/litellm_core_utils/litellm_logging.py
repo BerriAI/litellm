@@ -4719,6 +4719,18 @@ class StandardLoggingPayloadSetup:
             )
 
         usage: Final = response_obj.get("usage", None) or {}
+        if not usage:
+            _meta: Final = response_obj.get("meta", None)
+            if isinstance(_meta, dict):
+                _billed = _meta.get("billed_units", {}) or {}
+                _tokens = _meta.get("tokens", {}) or {}
+                _total = _billed.get("total_tokens") or _tokens.get("input_tokens")
+                if _total is not None:
+                    return Usage(
+                        prompt_tokens=_tokens.get("input_tokens", 0) or 0,
+                        completion_tokens=0,
+                        total_tokens=_total,
+                    )
         if usage is None or (not isinstance(usage, dict) and not isinstance(usage, Usage)):
             return Usage(
                 prompt_tokens=0,
@@ -4746,21 +4758,40 @@ class StandardLoggingPayloadSetup:
         the Pydantic Usage construction on the hot path.
         """
         _empty: Final[dict] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
         if combined_usage_object is not None:
             return combined_usage_object.model_dump()
+
         if not response_obj:
             return _empty
+
         _raw: Final = response_obj.get("usage", None)
+
         if _raw is None:
+            _meta: Final = response_obj.get("meta", None)
+            if isinstance(_meta, dict):
+                _billed = _meta.get("billed_units", {}) or {}
+                _tokens = _meta.get("tokens", {}) or {}
+                _total = _billed.get("total_tokens") or _tokens.get("input_tokens")
+                if _total is not None:
+                    return {
+                        "prompt_tokens": _tokens.get("input_tokens", 0) or 0,
+                        "completion_tokens": 0,
+                        "total_tokens": _total,
+                    }
             return _empty
+
         if isinstance(_raw, ResponseAPIUsage):
             return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(_raw).model_dump()
+
         if isinstance(_raw, dict):
             if ResponseAPILoggingUtils._is_response_api_usage(_raw):
                 return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(_raw).model_dump()
             return _raw
+
         if isinstance(_raw, Usage):
             return _raw.model_dump()
+
         return _empty
 
     @staticmethod

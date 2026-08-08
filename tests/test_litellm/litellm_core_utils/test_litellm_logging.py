@@ -4230,3 +4230,38 @@ def test_pre_call_does_not_pin_request_in_module_state(logging_obj):
     logging_obj.post_call(original_response='{"ok": true}', input=big_input, api_key="sk-test")
 
     assert litellm.error_logs == {}
+
+
+def test_get_usage_from_response_obj_reads_rerank_meta():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    response_obj = {
+        "id": "rerank-123",
+        "results": [{"index": 0, "relevance_score": 0.9}],
+        "meta": {"billed_units": {"total_tokens": 42}, "tokens": {"input_tokens": 42}},
+    }
+    usage = StandardLoggingPayloadSetup.get_usage_from_response_obj(response_obj=response_obj)
+    assert usage.total_tokens == 42
+    assert usage.prompt_tokens == 42
+    assert usage.completion_tokens == 0
+
+
+def test_get_usage_as_dict_reads_rerank_meta():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    response_obj = {
+        "id": "rerank-123",
+        "results": [{"index": 0, "relevance_score": 0.9}],
+        "meta": {"billed_units": {"total_tokens": 42}, "tokens": {"input_tokens": 42}},
+    }
+    usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj=response_obj)
+    assert usage_dict["total_tokens"] == 42
+    assert usage_dict["prompt_tokens"] == 42
+    assert usage_dict["completion_tokens"] == 0
+
+
+def test_get_usage_as_dict_still_zero_when_no_usage_or_meta():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj={"id": "x"})
+    assert usage_dict == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
