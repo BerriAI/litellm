@@ -9,7 +9,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 import json
 import os
 import re
-from typing import Any, Final, cast
+from typing import Annotated, Any, Final, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
@@ -27,7 +27,7 @@ from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, user_api_key_auth_websocket
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -1931,6 +1931,55 @@ async def openai_proxy_route(
         base_target_url=base_target_url,
         api_key=openai_api_key,
         custom_llm_provider=litellm.LlmProviders.OPENAI,
+    )
+
+
+@router.websocket("/openai_passthrough/{endpoint:path}")
+@router.websocket("/openai/{endpoint:path}")
+async def openai_websocket_proxy_route(
+    websocket: WebSocket,
+    endpoint: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth_websocket)],
+) -> None:
+    """WebSocket passthrough for OpenAI prefixes (realtime / responses.connect)."""
+    base_target_url: Final = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
+    openai_api_key: Final = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider=litellm.LlmProviders.OPENAI.value,
+        region_name=None,
+    )
+    if openai_api_key is None:
+        await websocket.close(code=1011)
+        raise ValueError("Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.")
+
+    raw_path: Final = httpx.URL(endpoint).path
+    encoded_endpoint: Final = raw_path if raw_path.startswith("/") else f"/{raw_path}"
+    base_url: Final = httpx.URL(base_target_url)
+    updated_url: Final = BaseOpenAIPassThroughHandler._join_url_paths(
+        base_url=base_url,
+        path=encoded_endpoint,
+        custom_llm_provider=litellm.LlmProviders.OPENAI,
+    )
+    wss_base: Final = (
+        "wss://" + updated_url[len("https://") :]
+        if updated_url.startswith("https://")
+        else "ws://" + updated_url[len("http://") :]
+        if updated_url.startswith("http://")
+        else updated_url
+    )
+    query_string: Final = websocket.url.query
+    wss_target: Final = f"{wss_base}{'&' if '?' in wss_base else '?'}{query_string}" if query_string else wss_base
+    custom_headers: Final = {  # mutable-ok: websocket_passthrough_request requires a plain dict of upstream headers
+        "Authorization": f"Bearer {openai_api_key}"
+    }
+
+    await websocket_passthrough_request(
+        websocket=websocket,
+        target=wss_target,
+        custom_headers=custom_headers,
+        user_api_key_dict=user_api_key_dict,
+        forward_headers=False,
+        endpoint=f"/openai/{endpoint}",
+        accept_websocket=True,
     )
 
 
