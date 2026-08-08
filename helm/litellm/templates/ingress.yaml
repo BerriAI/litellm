@@ -6,6 +6,41 @@
 {{- $backendPort := .Values.backend.service.port -}}
 {{- $uiPort := .Values.ui.service.port -}}
 {{/*
+  Backends addressable from ingress.extraPaths, keyed by the `service` field.
+*/}}
+{{- $extraPathBackends := dict
+    "gateway" (dict "name" $gatewayName "port" $gatewayPort)
+    "backend" (dict "name" $backendName "port" $backendPort)
+    "ui" (dict "name" $uiName "port" $uiPort)
+-}}
+{{/*
+  UI paths (Next.js static export).
+
+  /ui/* is where the SPA serves its login + dashboard routes (e.g. /ui/login).
+  Without it, /ui/* falls into the catch-all → backend → 404.
+
+  The App Router (output: "export", basePath: "") emits the RSC/flight payload
+  for every route as a ROOT-level <route>.txt (/index.txt, /teams.txt,
+  /__next._tree.txt, ...). The client router fetches these on every soft
+  navigation / prefetch as <route>.txt?_rsc=<hash> (the query string is
+  irrelevant to path matching). They are not under /ui, /_next, or
+  /litellm-asset-prefix, so without /*.txt they fall to the backend catch-all
+  → 404 → client-side navigation never settles and the login flow spins in an
+  infinite redirect loop (/ ⇄ /ui/login). ui/nginx.conf already serves *.txt
+  from the export; the rule only routes the request to it. Needs an ingress
+  controller whose ImplementationSpecific path is a wildcard pattern
+  (AWS ALB: `*` = 0+ chars); this chart targets the AWS Load Balancer
+  Controller.
+*/}}
+{{- $uiPaths := list
+    (dict "path" "/" "pathType" "Exact")
+    (dict "path" "/favicon.ico" "pathType" "Exact")
+    (dict "path" "/litellm-asset-prefix" "pathType" "Prefix")
+    (dict "path" "/_next" "pathType" "Prefix")
+    (dict "path" "/ui" "pathType" "Prefix")
+    (dict "path" "/*.txt" "pathType" "ImplementationSpecific")
+-}}
+{{/*
   Gateway data-plane prefixes — must mirror gateway/routes/allowlist.py.
   Versioned paths are listed explicitly to avoid routing management routes
   (e.g. /v1/access_group, /v2/key/info, /v1/tool/*, /v1/agents, /v1/workflows,
@@ -39,6 +74,21 @@
   routes at startup -> 404. So /test is rendered as a standalone Exact path
   and /test/* falls through to the backend catch-all.
 */}}
+{{/*
+  Every "<path>|<pathType>" this template renders on its own. An
+  ingress.extraPaths entry that repeats one of these is rejected: duplicates
+  in a single rule are resolved by position or by controller-specific tie
+  breaking, so the operator entry could take over a built-in route (an entry
+  at "/" Prefix would swallow the whole backend management API) instead of
+  adding to it.
+*/}}
+{{- $builtinPathKeys := list "/test|Exact" "/|Prefix" -}}
+{{- range $uiPaths }}
+{{- $builtinPathKeys = append $builtinPathKeys (printf "%s|%s" .path .pathType) }}
+{{- end }}
+{{- range $gatewayPrefixes }}
+{{- $builtinPathKeys = append $builtinPathKeys (printf "%s|Prefix" .) }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -64,65 +114,15 @@ spec:
       http:
         paths:
           # --- UI (Next.js static export) ---
-          - path: /
-            pathType: Exact
+          {{- range $uiPaths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
             backend:
               service:
                 name: {{ $uiName }}
                 port:
                   number: {{ $uiPort }}
-          - path: /favicon.ico
-            pathType: Exact
-            backend:
-              service:
-                name: {{ $uiName }}
-                port:
-                  number: {{ $uiPort }}
-          - path: /litellm-asset-prefix
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ $uiName }}
-                port:
-                  number: {{ $uiPort }}
-          - path: /_next
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ $uiName }}
-                port:
-                  number: {{ $uiPort }}
-          # /ui/* is where the Next.js SPA serves its login + dashboard
-          # routes (e.g. /ui/login). Without this, /ui/* falls into the
-          # catch-all → backend → 404.
-          - path: /ui
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ $uiName }}
-                port:
-                  number: {{ $uiPort }}
-          # Next.js App Router (output: "export", basePath: "") emits the
-          # RSC/flight payload for every route as a ROOT-level <route>.txt
-          # (/index.txt, /teams.txt, /__next._tree.txt, ...). The client
-          # router fetches these on every soft navigation / prefetch as
-          # <route>.txt?_rsc=<hash> (the query string is irrelevant to path
-          # matching). They are not under /ui, /_next, or
-          # /litellm-asset-prefix, so without this rule they fall to the
-          # backend catch-all → 404 → client-side navigation never settles
-          # and the login flow spins in an infinite redirect loop
-          # (/ ⇄ /ui/login). ui/nginx.conf already serves *.txt from the
-          # export; this rule only routes the request to it. Needs an
-          # ingress controller whose ImplementationSpecific path is a
-          # wildcard pattern (AWS ALB: `*` = 0+ chars); this chart targets
-          # the AWS Load Balancer Controller.
-          - path: /*.txt
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $uiName }}
-                port:
-                  number: {{ $uiPort }}
+          {{- end }}
           # --- Gateway data plane ---
           # Exact /test only (see the $gatewayPrefixes comment above);
           # /test/* MCP management endpoints fall to the backend catch-all.
@@ -141,6 +141,46 @@ spec:
                 name: {{ $gatewayName }}
                 port:
                   number: {{ $gatewayPort }}
+          {{- end }}
+          {{- /*
+            --- Operator-supplied extra paths (ingress.extraPaths) ---
+            Rendered after every built-in path so an entry can never take
+            precedence over a default, and before the backend catch-all.
+            Position only decides the match on controllers that honour manifest
+            order: the AWS Load Balancer Controller this chart targets sorts
+            Exact paths first and Prefix paths longest-first, but keeps
+            ImplementationSpecific paths in manifest order, which is what the
+            /*.txt rule above already depends on.
+          */}}
+          {{- range $idx, $extra := .Values.ingress.extraPaths }}
+          {{- if not (kindIs "map" $extra) }}
+          {{- fail (printf "ingress.extraPaths[%d]: each entry must be a mapping with a 'path' key" $idx) }}
+          {{- end }}
+          {{- if not $extra.path }}
+          {{- fail (printf "ingress.extraPaths[%d]: 'path' is required" $idx) }}
+          {{- end }}
+          {{- $service := $extra.service | default "gateway" }}
+          {{- $target := get $extraPathBackends $service }}
+          {{- if not $target }}
+          {{- fail (printf "ingress.extraPaths[%d] (path %s): unknown service %q, expected one of backend, gateway, ui" $idx $extra.path $service) }}
+          {{- end }}
+          {{- $pathType := $extra.pathType | default "Prefix" }}
+          {{- if not (has $pathType (list "Prefix" "Exact" "ImplementationSpecific")) }}
+          {{- fail (printf "ingress.extraPaths[%d] (path %s): unknown pathType %q, expected one of Exact, ImplementationSpecific, Prefix" $idx $extra.path $pathType) }}
+          {{- end }}
+          {{- if eq $extra.path "/" }}
+          {{- fail (printf "ingress.extraPaths[%d]: path / is already routed in both directions, Exact to ui and Prefix to backend, so no pathType leaves a request for an entry here to capture" $idx) }}
+          {{- end }}
+          {{- if has (printf "%s|%s" $extra.path $pathType) $builtinPathKeys }}
+          {{- fail (printf "ingress.extraPaths[%d]: path %s with pathType %s is already routed by this chart, and a duplicate would take it over rather than add to it" $idx $extra.path $pathType) }}
+          {{- end }}
+          - path: {{ $extra.path | quote }}
+            pathType: {{ $pathType }}
+            backend:
+              service:
+                name: {{ $target.name }}
+                port:
+                  number: {{ $target.port }}
           {{- end }}
           # --- Catch-all → backend (management API: /key/*, /user/*, /team/*, ...) ---
           - path: /
