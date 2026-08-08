@@ -13,7 +13,7 @@ This module decodes them into float arrays for OpenAI-compatible responses.
 
 import base64
 import struct
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -128,9 +128,9 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         if isinstance(embedding_value, list):
             return embedding_value
         if isinstance(embedding_value, str):
-            raw_bytes = base64.b64decode(embedding_value)
-            count = len(raw_bytes)
-            int8_values = struct.unpack(f"{count}b", raw_bytes)
+            raw_bytes: Final = base64.b64decode(embedding_value)
+            count: Final = len(raw_bytes)
+            int8_values: Final = struct.unpack(f"{count}b", raw_bytes)
             return [float(v) / 127.0 for v in int8_values]
         return embedding_value
 
@@ -146,23 +146,23 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict = {},
     ) -> EmbeddingResponse:
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
             raise PerplexityEmbeddingError(message=raw_response.text, status_code=raw_response.status_code)
 
         model_response.model = raw_response_json.get("model", model)
         model_response.object = raw_response_json.get("object", "list")
 
-        raw_data = raw_response_json.get("data", [])
-        decoded_data: list[dict[str, Any]] = []
+        raw_data: Final = raw_response_json.get("data", [])
+        decoded_data: Final[list[dict[str, Any]]] = []
         for item in raw_data:
             decoded_item = dict(item)
             decoded_item["embedding"] = self._decode_base64_embedding(item.get("embedding"))
             decoded_data.append(decoded_item)
         model_response.data = decoded_data
 
-        usage_data = raw_response_json.get("usage", {})
-        usage = Usage(
+        usage_data: Final = raw_response_json.get("usage", {})
+        usage: Final = Usage(
             prompt_tokens=usage_data.get("prompt_tokens", 0) or usage_data.get("total_tokens", 0),
             total_tokens=usage_data.get("total_tokens", 0),
         )

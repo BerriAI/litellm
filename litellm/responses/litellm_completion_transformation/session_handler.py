@@ -1,5 +1,5 @@
 import json
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -24,7 +24,7 @@ else:
 ########################################################
 # Cold Storage Handler
 ########################################################
-COLD_STORAGE_HANDLER = ColdStorageHandler()
+COLD_STORAGE_HANDLER: Final = ColdStorageHandler()
 ########################################################
 
 
@@ -92,7 +92,7 @@ class ResponsesSessionHandler:
             LiteLLMCompletionResponsesConfig,
         )
 
-        proxy_server_request_dict = await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(
+        proxy_server_request_dict: Final = await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(
             spend_log=spend_log,
         )
         response_input_param: str | ResponseInputParam | None = None
@@ -102,7 +102,7 @@ class ResponsesSessionHandler:
         # Add Input messages for this Spend Log
         ############################################################
         if proxy_server_request_dict:
-            _response_input_param = proxy_server_request_dict.get("input", None)
+            _response_input_param: Final = proxy_server_request_dict.get("input", None)
             _messages = proxy_server_request_dict.get("messages", None)
             if isinstance(_response_input_param, str):
                 response_input_param = _response_input_param
@@ -131,10 +131,10 @@ class ResponsesSessionHandler:
         ############################################################
         # Add Output messages for this Spend Log
         ############################################################
-        _response_output = spend_log.get("response", "{}")
+        _response_output: Final = spend_log.get("response", "{}")
         if isinstance(_response_output, dict) and _response_output and _response_output != {}:
             # transform `ChatCompletion Response` to `ResponsesAPIResponse`
-            model_response = ModelResponse(**_response_output)
+            model_response: Final = ModelResponse(**_response_output)
             for choice in model_response.choices:
                 if hasattr(choice, "message"):
                     chat_completion_message_history.append(getattr(choice, "message"))
@@ -147,7 +147,7 @@ class ResponsesSessionHandler:
         """
         Get the parsed proxy server request from the spend log
         """
-        proxy_server_request: str | dict = spend_log.get("proxy_server_request") or "{}"
+        proxy_server_request: Final[str | dict] = spend_log.get("proxy_server_request") or "{}"
         proxy_server_request_dict: dict | None = None
         if isinstance(proxy_server_request, dict):
             proxy_server_request_dict = proxy_server_request
@@ -187,9 +187,9 @@ class ResponsesSessionHandler:
             Optional[str]: The cold storage object key if found, None otherwise
         """
         try:
-            metadata_str = spend_log.get("metadata", "{}")
+            metadata_str: Final = spend_log.get("metadata", "{}")
             if isinstance(metadata_str, str):
-                metadata_dict = json.loads(metadata_str)
+                metadata_dict: Final = json.loads(metadata_str)
                 return metadata_dict.get("cold_storage_object_key")
             elif isinstance(metadata_str, dict):
                 return metadata_str.get("cold_storage_object_key")
@@ -213,7 +213,7 @@ class ResponsesSessionHandler:
         """
         verbose_proxy_logger.debug("inside get_proxy_server_request_from_cold_storage_with_object_key...")
 
-        proxy_server_request_dict = (
+        proxy_server_request_dict: Final = (
             await COLD_STORAGE_HANDLER.get_proxy_server_request_from_cold_storage_with_object_key(
                 object_key=object_key,
             )
@@ -232,7 +232,7 @@ class ResponsesSessionHandler:
         """
         from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
 
-        configured_cold_storage_custom_logger = litellm.cold_storage_custom_logger
+        configured_cold_storage_custom_logger: Final = litellm.cold_storage_custom_logger
         if configured_cold_storage_custom_logger is None:
             return False
         if proxy_server_request_dict is None:
@@ -259,12 +259,12 @@ class ResponsesSessionHandler:
 
         verbose_proxy_logger.debug("decoding response id=%s", previous_response_id)
 
-        decoded_response_id = ResponsesAPIRequestUtils._decode_responses_api_response_id(previous_response_id)
+        decoded_response_id: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(previous_response_id)
         previous_response_id = decoded_response_id.get("response_id", previous_response_id)
         if prisma_client is None:
             return []
 
-        query = """
+        query: Final = """
             WITH matching_session AS (
                 SELECT session_id
                 FROM "LiteLLM_SpendLogs"
@@ -276,7 +276,7 @@ class ResponsesSessionHandler:
             ORDER BY "endTime" ASC;
         """
 
-        spend_logs = await prisma_client.db.query_raw(query, previous_response_id)
+        spend_logs: Final = await prisma_client.db.query_raw(query, previous_response_id)
 
         verbose_proxy_logger.debug(
             "Found the following spend logs for previous response id %s: %s",

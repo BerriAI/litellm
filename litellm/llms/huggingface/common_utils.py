@@ -1,12 +1,12 @@
 import os
 from functools import lru_cache
-from typing import Literal
+from typing import Final, Literal
 
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
-HF_HUB_URL = "https://huggingface.co"
+HF_HUB_URL: Final = "https://huggingface.co"
 
 
 class HuggingFaceError(BaseLLMException):
@@ -34,7 +34,7 @@ hf_tasks = Literal[
     "text-generation",
 ]
 
-hf_task_list = [
+hf_task_list: Final = [
     "text-generation-inference",
     "conversational",
     "text-classification",
@@ -48,7 +48,7 @@ def output_parser(generated_text: str):
 
     Initial issue that prompted this - https://github.com/BerriAI/litellm/issues/763
     """
-    chat_template_tokens = ["<|assistant|>", "<|system|>", "<|user|>", "<s>", "</s>"]
+    chat_template_tokens: Final = ["<|assistant|>", "<|system|>", "<|user|>", "<s>", "</s>"]
     for token in chat_template_tokens:
         if generated_text.strip().startswith(token):
             generated_text = generated_text.replace(token, "", 1)
@@ -76,13 +76,13 @@ def _fetch_inference_provider_mapping(model: str) -> dict:
     if os.getenv("HUGGINGFACE_API_KEY"):
         headers["Authorization"] = f"Bearer {os.getenv('HUGGINGFACE_API_KEY')}"
 
-    path = f"{HF_HUB_URL}/api/models/{model}"
-    params = {"expand": ["inferenceProviderMapping"]}
+    path: Final = f"{HF_HUB_URL}/api/models/{model}"
+    params: Final = {"expand": ["inferenceProviderMapping"]}
 
     try:
-        response = httpx.get(path, headers=headers, params=params)
+        response: Final = httpx.get(path, headers=headers, params=params)
         response.raise_for_status()
-        provider_mapping = response.json().get("inferenceProviderMapping")
+        provider_mapping: Final = response.json().get("inferenceProviderMapping")
 
         if provider_mapping is None:
             raise ValueError(f"No provider mapping found for model {model}")

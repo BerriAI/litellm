@@ -2,7 +2,7 @@
 Base Search transformation configuration.
 """
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -27,10 +27,10 @@ def _is_trusted_search_api_base(
     default_api_base: str | None,
     base_env_var: str | None,
 ) -> bool:
-    candidate = _search_host(caller_api_base)
+    candidate: Final = _search_host(caller_api_base)
     if not candidate:
         return False
-    trusted = {
+    trusted: Final = {
         _search_host(base)
         for base in (
             default_api_base,
@@ -154,7 +154,7 @@ class BaseSearchConfig:
         """
         if caller_api_key:
             return caller_api_key
-        server_key = next(
+        server_key: Final = next(
             (key for key in (get_secret_str(var) for var in key_env_vars) if key),
             None,
         )

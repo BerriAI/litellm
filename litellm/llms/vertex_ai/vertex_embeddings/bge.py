@@ -10,6 +10,8 @@ Model name handling:
 - This module focuses on request/response transformation only
 """
 
+from typing import Final
+
 from litellm.types.utils import EmbeddingResponse, Usage
 
 from .types import (
@@ -50,7 +52,7 @@ class VertexBGEConfig:
         Returns:
             bool: True if the model is a BGE model
         """
-        model_lower = model.lower()
+        model_lower: Final = model.lower()
         # Check for "bge/" prefix (endpoint pattern) or "bge" in model name
         return model_lower.startswith("bge/") or "bge" in model_lower
 
@@ -69,10 +71,10 @@ class VertexBGEConfig:
         Returns:
             VertexEmbeddingRequest: The transformed request
         """
-        vertex_request: VertexEmbeddingRequest = VertexEmbeddingRequest()
-        vertex_text_embedding_input_list: list[TextEmbeddingBGEInput] = []
-        task_type: TaskType | None = optional_params.get("task_type")
-        title = optional_params.get("title")
+        vertex_request: Final[VertexEmbeddingRequest] = VertexEmbeddingRequest()
+        vertex_text_embedding_input_list: Final[list[TextEmbeddingBGEInput]] = []
+        task_type: Final[TaskType | None] = optional_params.get("task_type")
+        title: Final = optional_params.get("title")
 
         if isinstance(input, str):
             input = [input]
@@ -105,7 +107,7 @@ class VertexBGEConfig:
         Returns:
             TextEmbeddingBGEInput: A TextEmbeddingBGEInput object
         """
-        text_embedding_input = TextEmbeddingBGEInput(prompt=prompt)
+        text_embedding_input: Final = TextEmbeddingBGEInput(prompt=prompt)
         if task_type is not None:
             text_embedding_input["task_type"] = task_type
         if title is not None:
@@ -140,14 +142,14 @@ class VertexBGEConfig:
         if "predictions" not in response:
             raise KeyError("Response missing 'predictions' field")
 
-        _predictions = response["predictions"]
+        _predictions: Final = response["predictions"]
 
         if not isinstance(_predictions, list):
             raise ValueError(f"Expected 'predictions' to be a list, got {type(_predictions)}")
 
-        embedding_response = []
+        embedding_response: Final = []
         # BGE models don't return token counts, so we estimate or set to 0
-        input_tokens = 0
+        input_tokens: Final = 0
 
         for idx, embedding_values in enumerate(_predictions):
             if not isinstance(embedding_values, list):
@@ -164,6 +166,6 @@ class VertexBGEConfig:
         model_response.object = "list"
         model_response.data = embedding_response
         model_response.model = model
-        usage = Usage(prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens)
+        usage: Final = Usage(prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens)
         setattr(model_response, "usage", usage)
         return model_response

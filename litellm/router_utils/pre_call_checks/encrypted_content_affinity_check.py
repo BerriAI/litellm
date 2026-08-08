@@ -37,7 +37,7 @@ Safe to enable globally:
 """
 
 import time
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, Final, Optional, cast
 
 import httpx
 
@@ -93,7 +93,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         return any("encrypted_content_affinity" in checks for checks in model_group_affinity_config.values())
 
     def _is_enabled_for_model_group(self, model_group: str) -> bool:
-        group_checks = self.model_group_affinity_config.get(model_group)
+        group_checks: Final = self.model_group_affinity_config.get(model_group)
         return self.enable_global_affinity or (
             group_checks is not None and "encrypted_content_affinity" in group_checks
         )
@@ -166,11 +166,11 @@ class EncryptedContentAffinityCheck(CustomLogger):
         i.e. trigger the exact ``invalid_encrypted_content`` failure this
         check exists to prevent.
         """
-        getter = getattr(litellm_params, "get", None)
+        getter: Final = getattr(litellm_params, "get", None)
         if not callable(getter):
             return None
-        api_base = getter("api_base")
-        api_key = getter("api_key")
+        api_base: Final = getter("api_base")
+        api_key: Final = getter("api_key")
         if not api_base or not api_key:
             return None
         return (api_base, api_key)
@@ -190,13 +190,13 @@ class EncryptedContentAffinityCheck(CustomLogger):
         """
         if self.router is None:
             return [], None
-        originating = self.router.get_deployment(model_id=model_id)
+        originating: Final = self.router.get_deployment(model_id=model_id)
         if originating is None:
             return [], None
-        boundary = self._encryption_boundary_key(originating.litellm_params.model_dump(exclude_none=True))
+        boundary: Final = self._encryption_boundary_key(originating.litellm_params.model_dump(exclude_none=True))
         if boundary is None:
             return [], originating
-        matches = [
+        matches: Final = [
             d for d in healthy_deployments if self._encryption_boundary_key(d.get("litellm_params", {})) == boundary
         ]
         return matches, originating
@@ -225,7 +225,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         retry after the deployment is eligible again.
         """
         request_kwargs = request_kwargs or {}
-        typed_healthy_deployments = cast(list[dict], healthy_deployments)
+        typed_healthy_deployments: Final = cast(list[dict], healthy_deployments)
         if not self._is_enabled_for_model_group(model):
             return typed_healthy_deployments
 
@@ -239,8 +239,8 @@ class EncryptedContentAffinityCheck(CustomLogger):
         if "litellm_metadata" in request_kwargs:
             request_kwargs["litellm_metadata"]["encrypted_content_affinity_enabled"] = True
 
-        request_input = request_kwargs.get("input")
-        model_id = self._extract_model_id_from_input(request_input)
+        request_input: Final = request_kwargs.get("input")
+        model_id: Final = self._extract_model_id_from_input(request_input)
         if not model_id:
             return typed_healthy_deployments
 
@@ -249,7 +249,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
             model_id,
         )
 
-        deployment = self._find_deployment_by_model_id(
+        deployment: Final = self._find_deployment_by_model_id(
             healthy_deployments=typed_healthy_deployments,
             model_id=model_id,
         )
@@ -308,10 +308,10 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 llm_provider="",
             )
 
-        cooldown = await self._get_origin_cooldown(model_id=model_id, parent_otel_span=parent_otel_span)
+        cooldown: Final = await self._get_origin_cooldown(model_id=model_id, parent_otel_span=parent_otel_span)
 
         if cooldown is not None and str(cooldown.get("status_code")) == "429":
-            retry_after = self._cooldown_seconds_remaining(cooldown)
+            retry_after: Final = self._cooldown_seconds_remaining(cooldown)
             return RateLimitError(
                 message=(
                     "The deployment that produced this encrypted_content is "
@@ -347,11 +347,11 @@ class EncryptedContentAffinityCheck(CustomLogger):
     ) -> CooldownCacheValue | None:
         if self.router is None:
             return None
-        cooldown_cache = getattr(self.router, "cooldown_cache", None)
+        cooldown_cache: Final = getattr(self.router, "cooldown_cache", None)
         if cooldown_cache is None:
             return None
         try:
-            active = await cooldown_cache.async_get_active_cooldowns(
+            active: Final = await cooldown_cache.async_get_active_cooldowns(
                 model_ids=[model_id], parent_otel_span=parent_otel_span
             )
         except Exception:

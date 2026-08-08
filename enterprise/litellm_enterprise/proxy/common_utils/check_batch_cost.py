@@ -296,17 +296,13 @@ class CheckBatchCost:
         underlying provider model (e.g. ``gpt-5.5``), which no key is allowed to call.
         """
         from litellm.proxy.openai_files_endpoints.common_utils import (
-            convert_b64_uid_to_unified_uid,
-            get_models_from_unified_file_id,
+            resolve_managed_output_file_model_name,
         )
 
-        input_file_id = cls._get_input_file_id(job)
-        target_model_names = (
-            get_models_from_unified_file_id(convert_b64_uid_to_unified_uid(input_file_id)) if input_file_id else []
+        return resolve_managed_output_file_model_name(
+            unified_input_file_id=cls._get_input_file_id(job),
+            fallback_model_name=deployment_info.model_name or None,
         )
-        if target_model_names:
-            return ",".join(target_model_names)
-        return deployment_info.model_name or None
 
     @staticmethod
     def _get_input_file_id(job: "LiteLLM_ManagedObjectTable") -> Optional[str]:
@@ -502,6 +498,7 @@ class CheckBatchCost:
                 },
                 "metadata": {
                     "user_api_key_user_id": creator_user_id,
+                    "user_api_key_team_id": getattr(job, "team_id", None),
                     **user_info,
                 },
             },
@@ -660,6 +657,20 @@ class CheckBatchCost:
 
             elif response.status in ("failed", "expired", "cancelled"):
                 try:
+                    from litellm.proxy.openai_files_endpoints.common_utils import (
+                        _is_base64_encoded_unified_file_id,
+                        ensure_batch_response_managed_file_ids,
+                    )
+
+                    response.id = job.unified_object_id
+                    await ensure_batch_response_managed_file_ids(
+                        response=response,
+                        managed_files_obj=self.proxy_logging_obj.get_proxy_hook("managed_files"),
+                        prisma_client=self.prisma_client,
+                        verbose_proxy_logger=verbose_proxy_logger,
+                        db_batch_object=job,
+                        unified_batch_id=_is_base64_encoded_unified_file_id(job.unified_object_id),
+                    )
                     update_data = {
                         "status": response.status,
                         "file_object": response.model_dump_json(),

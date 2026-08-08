@@ -1,5 +1,5 @@
 # litellm/proxy/guardrails/guardrail_initializers.py
-from typing import Any
+from typing import Any, Final
 
 import litellm
 from litellm.proxy._types import CommonProxyErrors
@@ -11,7 +11,7 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
         BedrockGuardrail,
     )
 
-    _bedrock_callback = BedrockGuardrail(
+    _bedrock_callback: Final = BedrockGuardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
         guardrailIdentifier=litellm_params.guardrailIdentifier,
@@ -20,6 +20,7 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
         content_filter_threshold=litellm_params.content_filter_threshold,
         prompt_attack_threshold=litellm_params.prompt_attack_threshold,
         pii_confidence_threshold=litellm_params.pii_confidence_threshold,
+        chunk_budget_chars=litellm_params.chunk_budget_chars,
         default_on=litellm_params.default_on,
         disable_exception_on_block=litellm_params.disable_exception_on_block,
         mask_request_content=litellm_params.mask_request_content,
@@ -44,7 +45,7 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
 def initialize_lakera(litellm_params: LitellmParams, guardrail: Guardrail):
     from litellm.proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
 
-    _lakera_callback = lakeraAI_Moderation(
+    _lakera_callback: Final = lakeraAI_Moderation(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
         guardrail_name=guardrail.get("guardrail_name", ""),
@@ -59,7 +60,7 @@ def initialize_lakera(litellm_params: LitellmParams, guardrail: Guardrail):
 def initialize_lakera_v2(litellm_params: LitellmParams, guardrail: Guardrail):
     from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import LakeraAIGuardrail
 
-    _lakera_v2_callback = LakeraAIGuardrail(
+    _lakera_v2_callback: Final = LakeraAIGuardrail(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
         guardrail_name=guardrail.get("guardrail_name", ""),
@@ -81,12 +82,12 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
         _OPTIONAL_PresidioPIIMasking,
     )
 
-    filter_scope = getattr(litellm_params, "presidio_filter_scope", None) or "both"
-    run_input = filter_scope in ("input", "both")
-    run_output = filter_scope in ("output", "both")
+    filter_scope: Final = getattr(litellm_params, "presidio_filter_scope", None) or "both"
+    run_input: Final = filter_scope in ("input", "both")
+    run_output: Final = filter_scope in ("output", "both")
 
     def _make_presidio_callback(**overrides):
-        params = dict(
+        params: Final = dict(
             guardrail_name=guardrail.get("guardrail_name", ""),
             event_hook=litellm_params.mode,
             output_parse_pii=litellm_params.output_parse_pii,
@@ -102,7 +103,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
             apply_to_output=False,
         )
         params.update(overrides)
-        callback = _OPTIONAL_PresidioPIIMasking(**params)
+        callback: Final = _OPTIONAL_PresidioPIIMasking(**params)
         litellm.logging_callback_manager.add_litellm_callback(callback)
         return callback
 
@@ -118,7 +119,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
             )
 
     if run_output:
-        output_callback = _make_presidio_callback(
+        output_callback: Final = _make_presidio_callback(
             apply_to_output=True,
             event_hook=GuardrailEventHooks.post_call.value,
             output_parse_pii=False,
@@ -137,7 +138,7 @@ def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail)
     except ImportError:
         raise Exception("Trying to use Secret Detection" + CommonProxyErrors.missing_enterprise_package.value)
 
-    _secret_detection_object = _ENTERPRISE_SecretDetection(
+    _secret_detection_object: Final = _ENTERPRISE_SecretDetection(
         detect_secrets_config=litellm_params.detect_secrets_config,
         event_hook=litellm_params.mode,
         guardrail_name=guardrail.get("guardrail_name", ""),
@@ -161,7 +162,7 @@ def initialize_tool_permission(litellm_params: LitellmParams, guardrail: Guardra
             else:
                 rules.append(dict(rule))
 
-    _tool_permission_callback = ToolPermissionGuardrail(
+    _tool_permission_callback: Final = ToolPermissionGuardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
         rules=rules,
@@ -180,7 +181,7 @@ def initialize_lasso(
 ):
     from litellm.proxy.guardrails.guardrail_hooks.lasso import LassoGuardrail
 
-    _lasso_callback = LassoGuardrail(
+    _lasso_callback: Final = LassoGuardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),
         lasso_api_key=litellm_params.api_key,
         api_base=litellm_params.api_base,
@@ -205,7 +206,7 @@ def initialize_panw_prisma_airs(litellm_params, guardrail):
     if not litellm_params.profile_name:
         raise ValueError("PANW Prisma AIRS: profile_name is required")
 
-    _panw_callback = PanwPrismaAirsHandler(
+    _panw_callback: Final = PanwPrismaAirsHandler(
         guardrail_name=guardrail.get("guardrail_name", "panw_prisma_airs"),  # Use .get() with default
         api_key=litellm_params.api_key,
         api_base=litellm_params.api_base or "https://service.api.aisecurity.paloaltonetworks.com/v1/scan/sync/request",

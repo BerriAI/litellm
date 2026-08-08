@@ -6,7 +6,7 @@ Inherits from `AmazonInvokeConfig`
 Qwen3 + Invoke API Tutorial: https://docs.aws.amazon.com/bedrock/latest/userguide/invoke-imported-model.html
 """
 
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -40,7 +40,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
         top_k: int | None = None,
         stop: list[str] | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -90,10 +90,10 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
         Transform OpenAI format to Qwen3 Bedrock invoke format
         """
         # Convert messages to prompt format
-        prompt = self._convert_messages_to_prompt(messages)
+        prompt: Final = self._convert_messages_to_prompt(messages)
 
         # Build the request body
-        request_body = {
+        request_body: Final = {
             "prompt": prompt,
         }
 
@@ -116,7 +116,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
         Convert OpenAI messages format to Qwen3 prompt format
         Supports tool calls, multimodal content, and various message types
         """
-        prompt_parts = []
+        prompt_parts: Final = []
 
         for message in messages:
             role = message.get("role", "")
@@ -175,7 +175,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
         Transform Qwen3 Bedrock response to OpenAI format
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
 
             # Extract the generated text - Qwen3 uses "generation" field
             generated_text = response_data.get("generation", "")
@@ -186,13 +186,13 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
 
             # Set the content in the existing model_response structure
             if hasattr(model_response, "choices") and len(model_response.choices) > 0:
-                choice = model_response.choices[0]
+                choice: Final = model_response.choices[0]
                 choice.message.content = generated_text
                 choice.finish_reason = "stop"
 
             # Set usage information if available in response
             if "usage" in response_data:
-                usage_data = response_data["usage"]
+                usage_data: Final = response_data["usage"]
                 setattr(
                     model_response,
                     "usage",
