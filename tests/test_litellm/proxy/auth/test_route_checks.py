@@ -3298,3 +3298,75 @@ def test_user_daily_activity_aggregated_not_covered_by_prefix_match():
         route="/user/daily/activity/aggregated",
         allowed_routes=["/user/daily/activity"],
     )
+
+
+# --- Credential route gating (PR #30873: /credentials is proxy-admin only) --- #
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["/credentials", "/credentials/{credential_name}", "/credentials/my-dest"],
+)
+def test_credentials_routes_are_not_self_managed(route):
+    """Credentials are proxy-admin only: no ``/credentials`` route is in the
+    self-managed set, so a non-admin never reaches the handler for any method
+    (GET/POST/PATCH/DELETE). Admin-owned logging destinations are managed
+    exclusively by the proxy admin."""
+    assert (
+        RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.self_managed_routes.value
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["/credentials/by_name/my-dest", "/credentials/by_model/model-123"],
+)
+def test_by_name_by_model_forbidden_for_internal_user(route):
+    """A plain internal user (also the role a team-admin/org-admin key carries) is
+    denied by_name/by_model: the route matches no allow-list, so the gate raises."""
+    user_obj = LiteLLM_UserTable(
+        user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER.value
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER.value
+    )
+    request = MagicMock(spec=Request)
+    request.method = "GET"
+    request.query_params = {}
+    with pytest.raises(Exception) as exc:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    assert "Only proxy admin" in str(exc.value)
+    assert f"Route={route}" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["/credentials/by_name/my-dest", "/credentials/by_model/model-123"],
+)
+def test_by_name_by_model_reachable_by_admin_viewer(route):
+    """PROXY_ADMIN_VIEW_ONLY reaches by_name/by_model via the read-parity safe-GET
+    default-allow (documented in the PR body as a masking inconsistency, not a
+    cross-tenant leak). Pins that the viewer is NOT blocked at the route gate."""
+    request = MagicMock(spec=Request)
+    request.method = "GET"
+    request.query_params = {}
+    # returns None (allow) rather than raising
+    assert (
+        RouteChecks._check_proxy_admin_viewer_access(
+            route=route,
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            request_data={},
+            request=request,
+        )
+        is None
+    )

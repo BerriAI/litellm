@@ -13382,6 +13382,87 @@ async def test_regenerate_applies_normalized_mcp_object_permission():
     assert regenerated_data.object_permission.mcp_servers == ["server-id"]
 
 
+@pytest.mark.asyncio
+async def test_regenerate_propagates_team_not_found():
+    """Regenerating a key whose team no longer exists must surface the team-lookup
+    404 rather than swallowing it and regenerating against a dangling team. The
+    access_group_ids/object_permission gate depends on the resolved team, so a missing
+    team must abort the regenerate (matching /key/generate and /key/update) instead of
+    silently continuing with team_table=None."""
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        regenerate_key_fn,
+    )
+
+    data = RegenerateKeyRequest(key="sk-old", access_group_ids=["ag-1"])
+    existing_key = LiteLLM_VerificationToken(
+        token="abc123",
+        user_id="user-1",
+        models=["gpt-4"],
+        team_id="dangling-team",
+        max_budget=None,
+        tags=None,
+    )
+    mock_prisma_client = AsyncMock()
+    mock_repo = MagicMock()
+    mock_repo.table.find_unique = AsyncMock(return_value=existing_key)
+    execute_mock = AsyncMock(return_value=MagicMock())
+    enforce_mock = MagicMock()
+
+    async def _raise_team_not_found(*args, **kwargs):
+        raise HTTPException(status_code=404, detail={"error": "Team not found"})
+
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.master_key", None),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.hash_token", lambda token: "hashed-old"),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.VerificationTokenRepository",
+            return_value=mock_repo,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.enforce_member_can_assign_access_groups",
+            enforce_mock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.can_modify_verification_token",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+            _raise_team_not_found,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._execute_virtual_key_regeneration",
+            execute_mock,
+        ),
+    ):
+        with pytest.raises((HTTPException, ProxyException)) as exc_info:
+            await regenerate_key_fn(
+                key="sk-old",
+                data=data,
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN.value,
+                    api_key="sk-admin",
+                    user_id="admin",
+                ),
+            )
+
+    err = exc_info.value
+    code = getattr(err, "status_code", None) or getattr(err, "code", None)
+    assert str(code) == "404"
+    enforce_mock.assert_not_called()
+    execute_mock.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # Regression tests for GHSA-q775-qw9r-2r4g: budget escalation via key/generate
 # ---------------------------------------------------------------------------
