@@ -20,6 +20,43 @@ def _get_field(obj: Any, key: str, default: Any = None) -> Any:
     return getattr(obj, key, default)
 
 
+def _translate_usage(raw_usage: Any) -> AnthropicUsage:
+    if raw_usage is None or isinstance(raw_usage, ResponseAPIUsage):
+        return LiteLLMAnthropicToResponsesAPIAdapter.translate_responses_api_usage_to_anthropic_usage(raw_usage)
+
+    input_tokens: Final = int(_get_field(raw_usage, "input_tokens", 0) or 0)
+    output_tokens: Final = int(_get_field(raw_usage, "output_tokens", 0) or 0)
+    input_tokens_details: Final = _get_field(raw_usage, "input_tokens_details")
+    cache_creation_tokens: Final = int(_get_field(raw_usage, "cache_creation_input_tokens", 0) or 0) or int(
+        _get_field(input_tokens_details, "cache_write_tokens", 0) or 0
+    )
+    cache_read_tokens: Final = int(_get_field(raw_usage, "cache_read_input_tokens", 0) or 0) or int(
+        _get_field(input_tokens_details, "cached_tokens", 0) or 0
+    )
+    uncached_input_tokens: Final = max(input_tokens - cache_read_tokens - cache_creation_tokens, 0)
+
+    if cache_creation_tokens and cache_read_tokens:
+        return AnthropicUsage(
+            input_tokens=uncached_input_tokens,
+            output_tokens=output_tokens,
+            cache_creation_input_tokens=cache_creation_tokens,
+            cache_read_input_tokens=cache_read_tokens,
+        )
+    if cache_creation_tokens:
+        return AnthropicUsage(
+            input_tokens=uncached_input_tokens,
+            output_tokens=output_tokens,
+            cache_creation_input_tokens=cache_creation_tokens,
+        )
+    if cache_read_tokens:
+        return AnthropicUsage(
+            input_tokens=uncached_input_tokens,
+            output_tokens=output_tokens,
+            cache_read_input_tokens=cache_read_tokens,
+        )
+    return AnthropicUsage(input_tokens=uncached_input_tokens, output_tokens=output_tokens)
+
+
 class AnthropicResponsesStreamWrapper:
     """
     Wraps a Responses API streaming iterator and re-emits events in Anthropic SSE format.
@@ -237,36 +274,13 @@ class AnthropicResponsesStreamWrapper:
                 event.get("response") if isinstance(event, dict) else None
             )
             stop_reason = "end_turn"
-            anthropic_usage: AnthropicUsage = AnthropicUsage(input_tokens=0, output_tokens=0)
+            raw_usage: Final = _get_field(response_obj, "usage") if response_obj is not None else None
+            anthropic_usage: Final = _translate_usage(raw_usage)
 
             if response_obj is not None:
                 status: Final = _get_field(response_obj, "status")
                 if status == "incomplete":
                     stop_reason = "max_tokens"
-                raw_usage: Final = _get_field(response_obj, "usage")
-                if raw_usage is not None and not isinstance(raw_usage, ResponseAPIUsage):
-                    input_tokens = int(_get_field(raw_usage, "input_tokens", 0) or 0)
-                    output_tokens = int(_get_field(raw_usage, "output_tokens", 0) or 0)
-                    cache_creation_tokens = int(_get_field(raw_usage, "cache_creation_input_tokens", 0) or 0)
-                    cache_read_tokens = int(_get_field(raw_usage, "cache_read_input_tokens", 0) or 0)
-                    input_tokens_details = _get_field(raw_usage, "input_tokens_details")
-                    if input_tokens_details is not None:
-                        if cache_creation_tokens == 0:
-                            cache_creation_tokens = int(_get_field(input_tokens_details, "cache_write_tokens", 0) or 0)
-                        if cache_read_tokens == 0:
-                            cache_read_tokens = int(_get_field(input_tokens_details, "cached_tokens", 0) or 0)
-                    anthropic_usage = AnthropicUsage(
-                        input_tokens=max(input_tokens - cache_read_tokens - cache_creation_tokens, 0),
-                        output_tokens=output_tokens,
-                    )
-                    if cache_creation_tokens:
-                        anthropic_usage["cache_creation_input_tokens"] = cache_creation_tokens
-                    if cache_read_tokens:
-                        anthropic_usage["cache_read_input_tokens"] = cache_read_tokens
-                else:
-                    anthropic_usage = (
-                        LiteLLMAnthropicToResponsesAPIAdapter.translate_responses_api_usage_to_anthropic_usage(raw_usage)
-                    )
 
             # Check if tool_use was in the output to override stop_reason
             if response_obj is not None:
