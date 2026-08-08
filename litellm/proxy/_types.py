@@ -4557,10 +4557,10 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
 
     user_role: (
         Literal[
-            LitellmUserRoles.INTERNAL_USER,
-            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
             LitellmUserRoles.PROXY_ADMIN,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         ]
         | None
     ) = Field(
