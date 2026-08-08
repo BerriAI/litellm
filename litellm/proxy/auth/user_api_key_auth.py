@@ -2531,6 +2531,72 @@ def _resolve_request_principal(request: Request, valid_token: UserAPIKeyAuth) ->
     )
 
 
+async def _authorize_authenticated_request(
+    user_api_key_auth_obj: UserAPIKeyAuth,
+    request: Request,
+    request_data: dict,
+    route: str,
+    api_key: str,
+) -> UserAPIKeyAuth | None:
+    """Authorize an already-authenticated request: disabled-route check, the single
+    ``common_checks`` gate (which also reserves budget), and end-user fallback
+    resolution. Returns the auth object the exception handler recovered when a check
+    failed but the request may proceed anyway, else ``None``.
+    """
+    ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
+    RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj, request=request)
+
+    # Single authorization point. Builder paths MUST NOT call common_checks.
+    # Route through the same exception handler the builder uses so
+    # authorization failures (ProxyException, or plain Exception from
+    # admin-only-route / model-access / budget checks) surface as
+    # ProxyException consistently with pre-refactor behavior.
+    try:
+        await _run_centralized_common_checks(
+            user_api_key_auth_obj=user_api_key_auth_obj,
+            request=request,
+            request_data=request_data,
+            route=route,
+        )
+    except Exception as e:
+        return await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+            e=e,
+            request=request,
+            request_data=request_data,
+            route=route,
+            parent_otel_span=user_api_key_auth_obj.parent_otel_span,
+            api_key=api_key,
+            resolved_identity=user_api_key_auth_obj,
+        )
+
+    # Defense-in-depth: ``_user_api_key_auth_builder`` has multiple early-return
+    # paths (no master key, /user/auth route, JWT short-circuits) that bypass
+    # the end-user resolution block. If those paths produced an auth obj
+    # without an ``end_user_id`` set, fall back to extracting from the request
+    # body so spend logs are still attributed correctly. Validation honours
+    # ``litellm.validate_end_user_id_in_db``.
+    if user_api_key_auth_obj.end_user_id is None:
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        raw_end_user_id: Final = get_end_user_id_from_request_body(request_data, _safe_get_request_headers(request))
+        if raw_end_user_id is not None:
+            resolved_end_user_id: Final = await resolve_and_validate_end_user_id(
+                raw_end_user_id=raw_end_user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth_obj.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                route=route,
+            )
+            if resolved_end_user_id is not None:
+                user_api_key_auth_obj.end_user_id = resolved_end_user_id
+    return None
+
+
 @tracer.wrap()
 async def user_api_key_auth(
     request: Request,
@@ -2559,72 +2625,41 @@ async def user_api_key_auth(
     # triggers (key/user/team object reads) nest under it instead of flattening
     # onto the server span. No-op when OTel V2 isn't active.
     with phase_span(f"auth {route}"):
-        user_api_key_auth_obj: Final = await _user_api_key_auth_builder(
-            request=request,
-            api_key=api_key,
-            azure_api_key_header=azure_api_key_header,
-            anthropic_api_key_header=anthropic_api_key_header,
-            google_ai_studio_api_key_header=google_ai_studio_api_key_header,
-            azure_apim_header=azure_apim_header,
-            request_data=request_data,
-            custom_litellm_key_header=custom_litellm_key_header,
-        )
+        try:
+            user_api_key_auth_obj: Final = await _user_api_key_auth_builder(
+                request=request,
+                api_key=api_key,
+                azure_api_key_header=azure_api_key_header,
+                anthropic_api_key_header=anthropic_api_key_header,
+                google_ai_studio_api_key_header=google_ai_studio_api_key_header,
+                azure_apim_header=azure_apim_header,
+                request_data=request_data,
+                custom_litellm_key_header=custom_litellm_key_header,
+            )
+        except Exception:
+            # The body was read first, so a caller who sent both a malformed body and
+            # a rejected key used to get the 400; the response is unchanged, and the
+            # auth failure is still recorded on the trace by the handler that ran.
+            if body_parse_exception is not None:
+                raise body_parse_exception
+            raise
         user_api_key_auth_obj.budget_reservation = None
 
-        ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
-        RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj, request=request)
-
-        # Single authorization point. Builder paths MUST NOT call common_checks.
-        # Route through the same exception handler the builder uses so
-        # authorization failures (ProxyException, or plain Exception from
-        # admin-only-route / model-access / budget checks) surface as
-        # ProxyException consistently with pre-refactor behavior.
-        try:
-            await _run_centralized_common_checks(
+        # A body that never parsed is authenticated (so the trace carries identity
+        # and this ``auth`` span) but not authorized: there is no model to check it
+        # against, and budget reservation would increment live spend counters that
+        # only the endpoint's post-call path releases; the endpoint never runs, since
+        # the parse failure is raised below.
+        if body_parse_exception is None:
+            recovered_auth_obj: Final = await _authorize_authenticated_request(
                 user_api_key_auth_obj=user_api_key_auth_obj,
                 request=request,
                 request_data=request_data,
                 route=route,
-            )
-        except Exception as e:
-            recovered_auth_obj: Final = await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
-                e=e,
-                request=request,
-                request_data=request_data,
-                route=route,
-                parent_otel_span=user_api_key_auth_obj.parent_otel_span,
                 api_key=api_key,
-                resolved_identity=user_api_key_auth_obj,
             )
-            if body_parse_exception is not None:
-                raise body_parse_exception
-            return recovered_auth_obj
-
-        # Defense-in-depth: ``_user_api_key_auth_builder`` has multiple early-return
-        # paths (no master key, /user/auth route, JWT short-circuits) that bypass
-        # the end-user resolution block. If those paths produced an auth obj
-        # without an ``end_user_id`` set, fall back to extracting from the request
-        # body so spend logs are still attributed correctly. Validation honours
-        # ``litellm.validate_end_user_id_in_db``.
-        if user_api_key_auth_obj.end_user_id is None:
-            from litellm.proxy.proxy_server import (
-                prisma_client,
-                proxy_logging_obj,
-                user_api_key_cache,
-            )
-
-            raw_end_user_id: Final = get_end_user_id_from_request_body(request_data, _safe_get_request_headers(request))
-            if raw_end_user_id is not None:
-                resolved_end_user_id: Final = await resolve_and_validate_end_user_id(
-                    raw_end_user_id=raw_end_user_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=user_api_key_auth_obj.parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                    route=route,
-                )
-                if resolved_end_user_id is not None:
-                    user_api_key_auth_obj.end_user_id = resolved_end_user_id
+            if recovered_auth_obj is not None:
+                return recovered_auth_obj
 
     # Identity is now resolved. Seed it AFTER the auth span closes so the Baggage
     # persists on the request task (detaching the span's context token inside the

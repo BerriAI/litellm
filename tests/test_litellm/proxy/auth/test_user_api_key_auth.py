@@ -4783,7 +4783,7 @@ async def test_user_api_key_auth_authenticates_before_raising_malformed_body_err
             patch(
                 "litellm.proxy.auth.user_api_key_auth._run_centralized_common_checks",
                 new_callable=AsyncMock,
-            ),
+            ) as mock_common_checks,
             patch(
                 "litellm.proxy.auth.user_api_key_auth.RouteChecks.should_call_route",
             ),
@@ -4798,16 +4798,20 @@ async def test_user_api_key_auth_authenticates_before_raising_malformed_body_err
         assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
         mock_builder.assert_awaited_once()
         assert mock_seed.call_args.args[0] is builder_token
+        # authorization must not run for a request that is about to be rejected:
+        # ``common_checks`` reserves budget against live spend counters that only the
+        # endpoint's post-call path releases, and the endpoint never runs here
+        mock_common_checks.assert_not_awaited()
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
 
 
 @pytest.mark.asyncio
-async def test_user_api_key_auth_still_rejects_malformed_body_when_auth_error_is_recovered():
-    """``_handle_authentication_error`` can swallow an auth failure and return a
-    usable auth object (e.g. ``allow_requests_on_db_unavailable``). A request whose
-    body never parsed must still be rejected on that path, never let through."""
+async def test_user_api_key_auth_malformed_body_with_rejected_key_still_returns_the_parse_error():
+    """The body is read before the key is authenticated, so a caller who sends both a
+    malformed body and a key that fails auth gets the 400. Authenticating the request
+    first (LIT-4780) must not turn that into the auth status code."""
     from fastapi import Request
     from starlette.datastructures import URL
 
@@ -4832,29 +4836,22 @@ async def test_user_api_key_auth_still_rejects_malformed_body_when_auth_error_is
             patch(
                 "litellm.proxy.auth.user_api_key_auth._user_api_key_auth_builder",
                 new_callable=AsyncMock,
-                return_value=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
-            ),
-            patch(
-                "litellm.proxy.auth.user_api_key_auth._run_centralized_common_checks",
-                new_callable=AsyncMock,
-                side_effect=Exception("db down"),
+                side_effect=ProxyException(
+                    message="Authentication Error, invalid key",
+                    type="auth_error",
+                    param="None",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                ),
             ),
             patch(
                 "litellm.proxy.auth.user_api_key_auth.RouteChecks.should_call_route",
             ),
-            patch(
-                "litellm.proxy.auth.user_api_key_auth.UserAPIKeyAuthExceptionHandler._handle_authentication_error",
-                new_callable=AsyncMock,
-                return_value=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
-            ),
-            patch(
-                "litellm.proxy.auth.user_api_key_auth.seed_request_identity",
-            ),
         ):
             with pytest.raises(ProxyException) as exc_info:
-                await user_api_key_auth(request=request, api_key="Bearer sk-test")
+                await user_api_key_auth(request=request, api_key="Bearer sk-bad")
 
         assert "Invalid JSON payload" in str(exc_info.value.message)
+        assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
