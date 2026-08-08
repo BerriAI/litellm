@@ -7,14 +7,10 @@ all bytes, and on stream exhaustion rebuilds the full Anthropic response
 to run through agentic completion hooks. If an agentic hook fires, the
 follow-up response is chained as Phase 2 of the same iterator.
 
-In hold-back mode (``hold_back=True``), chunks are buffered instead of
-yielded live, with SSE ping events emitted while the upstream message is
-in flight and while the agentic hooks run. On exhaustion the hooks run
-first: if a follow-up response replaces the message, only the follow-up
-is yielded and the buffered message is dropped; otherwise the buffer is
-replayed verbatim, unless it holds a tool_use for a server-fulfilled tool
-(e.g. ``headroom_retrieve``), in which case an SSE ``error`` event is
-emitted because such a block must never reach a client that cannot
+In hold-back mode (``hold_back=True``) chunks are buffered instead of yielded
+live, keepalive pings run until the hooks finish, and then either the follow-up
+replaces the message or the buffer replays, except that a buffered tool_use for
+a server-fulfilled tool fails the turn rather than reaching a client that cannot
 execute it.
 """
 
@@ -328,11 +324,6 @@ class AgenticAnthropicStreamingIterator:
             if rebuilt is None:
                 verbose_logger.debug("AgenticStreamingIterator: Could not rebuild response from SSE bytes")
                 return
-
-            [
-                (f"{b.get('type')}({b.get('name', '')})" if b.get("type") == "tool_use" else b.get("type"))
-                for b in rebuilt.get("content", [])
-            ]
 
             result: Final = await self._http_handler._call_agentic_completion_hooks(
                 response=rebuilt,
