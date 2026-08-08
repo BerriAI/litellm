@@ -832,7 +832,7 @@ class APIConnectionError(openai.APIConnectionError):
         self.model = model
         self.status_code = 500
         self.litellm_debug_info = litellm_debug_info
-        self.request = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        self.request = request if request is not None else httpx.Request(method="POST", url="https://api.openai.com/v1")
         self.max_retries = max_retries
         self.num_retries = num_retries
         super().__init__(message=self.message, request=self.request)
