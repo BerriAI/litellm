@@ -3577,7 +3577,14 @@ async def _assert_user_can_view_request_id(
         include=None,
     )
     if row is None:
-        return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "Not authorized to view spend log for request_id={}".format(
+                    request_id
+                )
+            },
+        )
 
     if row.user is not None and row.user == user_api_key_dict.user_id:
         return
