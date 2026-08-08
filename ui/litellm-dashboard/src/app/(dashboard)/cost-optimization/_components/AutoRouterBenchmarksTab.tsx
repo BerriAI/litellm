@@ -115,7 +115,6 @@ const QualityMetric: React.FC<{
   baseline: number | null | undefined;
   baselineUnavailableReason: string | null | undefined;
 }> = ({ label, hint, routed, baseline, baselineUnavailableReason }) => {
-  const worseThanBaseline = routed != null && baseline != null && routed > baseline;
   return (
     <div className="flex flex-col gap-1.5">
       <TooltipProvider>
@@ -133,11 +132,7 @@ const QualityMetric: React.FC<{
           <TooltipContent className="max-w-xs">{hint}</TooltipContent>
         </Tooltip>
       </TooltipProvider>
-      <p
-        className={`text-2xl font-semibold tabular-nums ${worseThanBaseline ? "text-destructive" : "text-foreground"}`}
-      >
-        {ratePctLabel(routed)}
-      </p>
+      <p className="text-2xl font-semibold tabular-nums text-foreground">{ratePctLabel(routed)}</p>
       <p className="text-[11px] text-muted-foreground">
         {baseline == null
           ? (baselineUnavailableReason && BASELINE_UNAVAILABLE_COPY[baselineUnavailableReason]) ||
@@ -159,8 +154,8 @@ const QualityCard: React.FC<{ signals: AutoRouterQualitySignals }> = ({ signals 
       baselineUnavailableReason={signals.baseline_unavailable_reason}
     />
     <QualityMetric
-      label="Stream abandonment"
-      hint="Share of turns where the caller hung up before the response finished. Catches the giving-up that escalation misses, but a dropped connection and 'I read enough' look the same from here."
+      label="Potential Turn Abandons"
+      hint="Share of turns where the caller hung up after content started streaming but before it finished. Disconnects before any content arrived are excluded — those are a latency or connectivity event, not a judgment on the response. Note: User abandons and dropped connections are conflated in this metric."
       routed={signals.routed.abandonment_rate_pct}
       baseline={signals.baseline?.abandonment_rate_pct}
       baselineUnavailableReason={signals.baseline_unavailable_reason}

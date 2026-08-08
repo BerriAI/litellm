@@ -9,9 +9,12 @@ both are already recorded on every request:
                 do the job. High precision, low recall: it only sees callers who *can* switch
                 and bother to, so an API-only integration can report zero while suffering.
 
-``abandonment`` the caller hung up before the stream finished. Low precision, high recall:
-                it catches the giving-up that escalation structurally misses, but a dropped
-                connection and "I read enough" look the same from here.
+``abandonment`` the caller hung up after content started streaming but before it finished.
+                Low precision, high recall: it catches the giving-up that escalation
+                structurally misses, but a dropped connection and "I read enough" look the
+                same from here. Disconnects before any content arrived are excluded --
+                those are a latency or connectivity event, not a judgment on the response,
+                since the caller never saw one.
 
 They are reported side by side rather than blended, because the two fail in opposite
 directions and one number would hide which of them fired.
@@ -46,13 +49,16 @@ MIN_SESSION_ID_COVERAGE: Final = 0.8
 class Turn:
     """One request, reduced to what the two signals need.
 
-    ``escalation`` needs the model and the order; ``abandonment`` needs the disconnect flag.
+    ``escalation`` needs the model and the order; ``abandonment`` needs the disconnect flag
+    plus ``completion_tokens``, since a disconnect that delivered nothing is not the same
+    event as one that cut off a response in progress -- see ``was_abandoned``.
     Kept as a plain object rather than a row dict so the signal functions state their inputs.
     """
 
     __slots__ = (
         "api_key",
         "client_disconnected",
+        "completion_tokens",
         "has_client_session_id",
         "model",
         "router_name",
@@ -68,6 +74,7 @@ class Turn:
         model: str,
         started_at: float,
         client_disconnected: bool,
+        completion_tokens: int,
         router_name: str | None,
         has_client_session_id: bool,
     ) -> None:
@@ -76,8 +83,19 @@ class Turn:
         self.model = model
         self.started_at = started_at
         self.client_disconnected = client_disconnected
+        self.completion_tokens = completion_tokens
         self.router_name = router_name
         self.has_client_session_id = has_client_session_id
+
+    @property
+    def was_abandoned(self) -> bool:
+        """True for a disconnect that cut off a response already in progress.
+
+        A disconnect with zero completion tokens delivered nothing for the caller to judge --
+        that is a latency or connectivity failure, not evidence about response quality, so it
+        is excluded from the abandonment signal even though ``client_disconnected`` is True.
+        """
+        return self.client_disconnected and self.completion_tokens > 0
 
 
 class CohortSignals:
@@ -191,7 +209,7 @@ def signals_for_cohort(
 
     escalated: Final = sum(1 for session_turns in eligible if session_escalated(session_turns, ranks))
     eligible_turns: Final = tuple(turn for session_turns in eligible for turn in session_turns)
-    abandoned: Final = sum(1 for turn in eligible_turns if turn.client_disconnected)
+    abandoned: Final = sum(1 for turn in eligible_turns if turn.was_abandoned)
     return CohortSignals(
         sessions=len(eligible),
         escalation_rate_pct=round(100.0 * escalated / len(eligible), 1),

@@ -489,11 +489,14 @@ class _QualityTurnRow(BaseModel):
     started_at: float
     router_name: str | None
     client_disconnected: bool
+    completion_tokens: int
     session_turn_count: int
     api_key: str
 
 
 _QUALITY_TURN_ROWS: Final = TypeAdapter(list[_QualityTurnRow])
+
+MAX_QUALITY_SIGNAL_ROWS: Final = 100_000
 
 _QUALITY_SIGNALS_SQL: Final = """
 SELECT
@@ -502,12 +505,14 @@ SELECT
     EXTRACT(EPOCH FROM "startTime")::float8 AS started_at,
     (metadata #>> '{routing_decision,router_model_name}') AS router_name,
     COALESCE(metadata #>> '{error_information,error_code}' = '499', false) AS client_disconnected,
+    completion_tokens,
     COUNT(*) OVER (PARTITION BY api_key, session_id)::int AS session_turn_count,
     api_key
 FROM "LiteLLM_SpendLogs"
 WHERE "startTime" >= $1::timestamp AND "startTime" < $2::timestamp
   AND session_id IS NOT NULL
   AND model <> ''
+LIMIT $3
 """
 
 
@@ -564,6 +569,7 @@ def _quality_signals_for(
                 model=row.model,
                 started_at=row.started_at,
                 client_disconnected=row.client_disconnected,
+                completion_tokens=row.completion_tokens,
                 router_name=row.router_name,
                 has_client_session_id=row.session_turn_count > 1,
             )
@@ -650,7 +656,17 @@ async def get_auto_router_quality_signals(
         _QUALITY_SIGNALS_SQL,
         start_day.isoformat(),
         (end_day + timedelta(days=1)).isoformat(),
+        MAX_QUALITY_SIGNAL_ROWS + 1,
     )
+    if raw_rows is not None and len(raw_rows) > MAX_QUALITY_SIGNAL_ROWS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Window contains more than {MAX_QUALITY_SIGNAL_ROWS:,} session-bearing requests; "
+                "narrow the date range. Truncating would silently drop the turns these signals "
+                "are computed from."
+            ),
+        )
     turns: Final = _QUALITY_TURN_ROWS.validate_python(raw_rows or ())
     router_names: Final = tuple(sorted(frozenset(row.router_name for row in turns if row.router_name is not None)))
     return AutoRouterQualitySignalsResponse(

@@ -358,7 +358,7 @@ describe("AutoRouterBenchmarksTab", () => {
       expect(screen.getAllByText("Not enough comparable non-router traffic in this window to compare")).toHaveLength(2);
     });
 
-    it("flags escalation as worse than baseline visually distinctly from a healthy rate", () => {
+    it("renders escalation and abandonment rates without flagging them as regressions", () => {
       mockHook({ data: response([group()]) });
       mockQualityHook(
         qualityResponse({
@@ -368,7 +368,8 @@ describe("AutoRouterBenchmarksTab", () => {
       );
       renderTab();
 
-      expect(screen.getByText("9.0%")).toHaveClass("text-destructive");
+      expect(screen.getByText("9.0%")).toHaveClass("text-foreground");
+      expect(screen.getByText("9.0%")).not.toHaveClass("text-destructive");
     });
   });
 });

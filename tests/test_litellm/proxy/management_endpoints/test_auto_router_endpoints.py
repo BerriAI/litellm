@@ -485,6 +485,7 @@ class TestAutoRouterQualitySignals:
         *,
         router_name: str | None = "live-auto",
         client_disconnected: bool = False,
+        completion_tokens: int = 10,
         session_turn_count: int = 2,
         api_key: str = "key-1",
     ) -> dict:
@@ -494,6 +495,7 @@ class TestAutoRouterQualitySignals:
             "started_at": started_at,
             "router_name": router_name,
             "client_disconnected": client_disconnected,
+            "completion_tokens": completion_tokens,
             "session_turn_count": session_turn_count,
             "api_key": api_key,
         }
@@ -553,6 +555,20 @@ class TestAutoRouterQualitySignals:
                 user_api_key_dict=ADMIN, start_date="2026-08-05", end_date="2026-08-01"
             )
         assert err.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_a_window_over_the_row_cap_is_rejected_not_silently_truncated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import (
+            MAX_QUALITY_SIGNAL_ROWS,
+        )
+
+        rows = [self._row(f"s{i}", self.CHEAP, float(i)) for i in range(MAX_QUALITY_SIGNAL_ROWS + 1)]
+        with pytest.raises(HTTPException) as err:
+            await self._call(rows, monkeypatch)
+        assert err.value.status_code == 400
+        assert "narrow the date range" in err.value.detail
 
     @pytest.mark.asyncio
     async def test_routed_escalation_is_measured_from_routed_rows(self, monkeypatch: pytest.MonkeyPatch):
@@ -677,3 +693,19 @@ class TestAutoRouterQualitySignals:
         response = await self._call(rows, monkeypatch)
         assert response.totals.routed.sessions == 1
         assert response.totals.routed.abandonment_rate_pct == 50.0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_before_first_token_is_excluded_from_abandonment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Same shape as the test above, but the disconnect delivered nothing: the caller
+        # never saw a response to judge, so it must not read as abandonment.
+        rows = [
+            self._row("s1", self.CHEAP, 1.0, client_disconnected=True, completion_tokens=0),
+            self._row("s1", self.CHEAP, 2.0, client_disconnected=False),
+            self._row("s2", self.PRICEY, 1.0),
+            self._row("s2", self.PRICEY, 2.0),
+        ]
+        response = await self._call(rows, monkeypatch)
+        assert response.totals.routed.sessions == 1
+        assert response.totals.routed.abandonment_rate_pct == 0.0

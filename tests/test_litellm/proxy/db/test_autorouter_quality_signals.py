@@ -29,6 +29,7 @@ def _turn(
     model="sonnet",
     started_at=0.0,
     client_disconnected=False,
+    completion_tokens=10,
     has_client_session_id=True,
     api_key="key1",
 ):
@@ -38,9 +39,21 @@ def _turn(
         model=model,
         started_at=started_at,
         client_disconnected=client_disconnected,
+        completion_tokens=completion_tokens,
         router_name="auto-router",
         has_client_session_id=has_client_session_id,
     )
+
+
+class TestTurnWasAbandoned:
+    def test_disconnect_with_delivered_tokens_is_abandoned(self):
+        assert _turn(client_disconnected=True, completion_tokens=1).was_abandoned is True
+
+    def test_disconnect_with_zero_tokens_is_not_abandoned(self):
+        assert _turn(client_disconnected=True, completion_tokens=0).was_abandoned is False
+
+    def test_completed_turn_with_zero_tokens_is_not_abandoned(self):
+        assert _turn(client_disconnected=False, completion_tokens=0).was_abandoned is False
 
 
 class TestRankModelsByCost:
@@ -150,6 +163,26 @@ class TestSignalsForCohort:
         result = signals_for_cohort(turns, RANKS, REACHABLE_BY_KEY)
         assert result.sessions == 1
         assert result.abandonment_rate_pct == 50.0
+
+    def test_disconnect_before_first_token_is_not_counted_as_abandonment(self):
+        # A disconnect that delivered zero completion tokens never showed the caller a
+        # response to judge -- it's a latency/connectivity event, not quality evidence.
+        turns = [
+            _turn(session_id="s1", model="haiku", started_at=1, client_disconnected=True, completion_tokens=0),
+            _turn(session_id="s1", model="haiku", started_at=2, client_disconnected=False),
+            _turn(
+                session_id="s2",
+                api_key="key1",
+                model="haiku",
+                started_at=1,
+                client_disconnected=True,
+                completion_tokens=5,
+            ),
+            _turn(session_id="s2", api_key="key1", model="haiku", started_at=2, client_disconnected=False),
+        ]
+        result = signals_for_cohort(turns, RANKS, REACHABLE_BY_KEY)
+        assert result.sessions == 2
+        assert result.abandonment_rate_pct == 25.0
 
     def test_no_eligible_sessions_returns_none_rates_not_zero(self):
         # Every session already on the ceiling model: zero would misleadingly claim
