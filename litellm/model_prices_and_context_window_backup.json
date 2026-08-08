@@ -46247,6 +46247,37 @@
         "supports_reasoning": true,
         "supports_vision": false
     },
+    "cognition/swe-1.5": {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.5e-06,
+        "cache_creation_input_token_cost": 3.75e-07,
+        "cache_read_input_token_cost": 3e-08,
+        "litellm_provider": "cognition",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "source": "https://docs.devin.ai/windsurf/plugins/cascade/models"
+    },
+    "cognition/swe-1.6": {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.5e-06,
+        "cache_read_input_token_cost": 3e-08,
+        "litellm_provider": "cognition",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "source": "https://docs.devin.ai/windsurf/plugins/cascade/models"
+    },
+    "cognition/swe-1.7": {
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 1.25e-05,
+        "cache_read_input_token_cost": 1e-06,
+        "litellm_provider": "cognition",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "source": "https://docs.devin.ai/windsurf/plugins/cascade/models"
+    },
     "pinstripes/ps/glm-4.5-air": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
