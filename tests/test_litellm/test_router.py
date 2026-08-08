@@ -7259,6 +7259,58 @@ class TestPreRoutingStrategyRegistryLifecycle:
             )
             assert actual is expected, params["model"]
 
+    def test_upsert_of_deployment_unknown_to_this_pod_lands(self):
+        """The DB reload upserts every row into every pod, so a row created on one pod
+        arrives at the others as an upsert whose model_id is absent from their model_list.
+        Releasing the outgoing strategy slot must stay behind the "already on this router"
+        guard: reaching it with no outgoing deployment raises, and
+        ignore_invalid_deployments turns that into a deployment that silently never
+        goes live on that pod."""
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = litellm.Router(model_list=[], ignore_invalid_deployments=True)
+
+        returned = router.upsert_deployment(
+            deployment=Deployment(
+                model_name="database-model",
+                litellm_params=LiteLLM_Params(model="openai/gpt-4o"),
+                model_info=ModelInfo(id="database-model-1", db_model=True),
+            )
+        )
+
+        assert returned is not None
+        assert router.get_deployment(model_id="database-model-1") is not None
+        assert self._model_names(router) == ["database-model"]
+
+    def test_upsert_of_auto_router_unknown_to_this_pod_registers_its_strategy(self):
+        """Same cross-pod arrival for an auto-router-family row: the pod that never saw it
+        must both add it to the model_list and build its pre-routing strategy, or the alias
+        resolves to nothing on that pod while the DB row looks fine."""
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = litellm.Router(
+            model_list=[
+                {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o"}},
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "openai/gpt-4o-mini"}},
+            ],
+            ignore_invalid_deployments=True,
+        )
+        assert "smart-router" not in router.complexity_routers
+
+        returned = router.upsert_deployment(
+            deployment=Deployment(
+                model_name="smart-router",
+                litellm_params=LiteLLM_Params(**self._complexity_router_params("gpt-4o")),
+                model_info=ModelInfo(id="router-1", db_model=True),
+            )
+        )
+
+        assert returned is not None
+        assert "smart-router" in self._model_names(router)
+        registered = router.complexity_routers["smart-router"]
+        assert len(registered) == 1
+        assert registered[0].strategy.config.default_model == "gpt-4o"
+
 
 def test_model_info_is_active_for_environment_matrix(monkeypatch):
     """The model-write endpoints consult this predicate to tell a deliberately
