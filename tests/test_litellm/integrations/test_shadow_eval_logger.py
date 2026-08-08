@@ -138,6 +138,129 @@ class TestSuccessHookSkipPaths:
         assert logger._pending_seen == {"j1": 1}
 
 
+@pytest.mark.asyncio
+class TestCallRouterShadowForwardsParameters:
+    async def test_forwards_non_default_params(self):
+        router = MagicMock()
+        router.acompletion = AsyncMock(return_value={"choices": [{"message": {"content": "shadow reply"}}]})
+        logger = ShadowEvalLogger(router_provider=lambda: router, prisma_provider=lambda: MagicMock())
+
+        await logger._call_router_shadow(
+            "claude-auto",
+            [{"role": "user", "content": "hi"}],
+            {"temperature": 0.2, "tools": [{"type": "function"}], "max_tokens": 500},
+        )
+
+        _, kwargs = router.acompletion.call_args
+        assert kwargs["temperature"] == 0.2
+        assert kwargs["tools"] == [{"type": "function"}]
+        assert kwargs["max_tokens"] == 500
+
+    async def test_drops_stream_and_metadata_from_forwarded_params(self):
+        router = MagicMock()
+        router.acompletion = AsyncMock(return_value={"choices": [{"message": {"content": "shadow reply"}}]})
+        logger = ShadowEvalLogger(router_provider=lambda: router, prisma_provider=lambda: MagicMock())
+
+        await logger._call_router_shadow(
+            "claude-auto",
+            [{"role": "user", "content": "hi"}],
+            {"stream": True, "metadata": {"user_api_key_hash": "leaked"}, "temperature": 0.5},
+        )
+
+        _, kwargs = router.acompletion.call_args
+        assert "stream" not in kwargs
+        assert kwargs["temperature"] == 0.5
+        # metadata must stay the logger's own internal marker, not the caller's
+        assert kwargs["metadata"] == {SHADOW_EVAL_INTERNAL_MARKER: True}
+
+
+@pytest.mark.asyncio
+class TestInflightTaskBacklog:
+    async def test_drops_sample_when_at_capacity(self):
+        job = {"id": "j1", "router_name": "r", "shadow_percentage": 100.0, "judge_model": "m", "status": "running"}
+        logger, _, _ = _logger_with_mocks(job)
+        logger._inflight_shadow_tasks = 999999  # simulate saturation regardless of the real cap
+
+        kwargs = {
+            "standard_logging_object": {
+                "id": "req-1",
+                "model": "gpt-4o",
+                "call_type": "acompletion",
+                "metadata": {"user_api_key_hash": "key-hash"},
+            },
+            "litellm_params": {"metadata": {}},
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+        before = logger._inflight_shadow_tasks
+        await logger.async_log_success_event(kwargs, MagicMock(), None, None)
+        # No task should have been scheduled; the counter is untouched by the hook itself.
+        assert logger._inflight_shadow_tasks == before
+
+    async def test_schedules_and_decrements_when_under_capacity(self):
+        job = {"id": "j1", "router_name": "r", "shadow_percentage": 100.0, "judge_model": "m", "status": "running"}
+        logger, _, router = _logger_with_mocks(job)
+        router.acompletion = AsyncMock(side_effect=asyncio.sleep(0))  # keep the task alive briefly
+
+        async def fake_run(*args, **kwargs):
+            await asyncio.sleep(0.01)
+
+        logger._run_shadow_eval = AsyncMock(side_effect=fake_run)
+
+        kwargs = {
+            "standard_logging_object": {
+                "id": "req-1",
+                "model": "gpt-4o",
+                "call_type": "acompletion",
+                "metadata": {"user_api_key_hash": "key-hash"},
+            },
+            "litellm_params": {"metadata": {}},
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+        await logger.async_log_success_event(kwargs, MagicMock(), None, None)
+        assert logger._inflight_shadow_tasks == 1
+        await asyncio.sleep(0.05)
+        assert logger._inflight_shadow_tasks == 0
+
+
+@pytest.mark.asyncio
+class TestStoppedJobCannotBeReactivated:
+    async def test_verdict_write_uses_conditional_status_guard(self):
+        """Regression: a verdict written after stop() must not resurrect a completed job.
+
+        stop_shadow_eval_job() sets status="completed". If a pipeline that started
+        before the stop finishes afterwards, its counter update must not blindly
+        set status back to "running" -- it has to filter on the job still being
+        pending/running, so an already-completed job stays completed.
+        """
+        prisma = MagicMock()
+        prisma.db.litellm_shadowevalverdict.create = AsyncMock()
+        prisma.db.litellm_shadowevaljob.update_many = AsyncMock()
+        # If the fix regresses to `.update(...)`, this test must fail loudly
+        # rather than silently pass by mocking away the missing method.
+        del prisma.db.litellm_shadowevaljob.update
+
+        logger = ShadowEvalLogger(router_provider=lambda: MagicMock(), prisma_provider=lambda: prisma)
+        logger._call_router_shadow = AsyncMock(return_value=("shadow text", "shadow-model", "SIMPLE", 10))
+        logger._call_judge = AsyncMock(return_value=("real", 0.9, "clearer", 0.01))
+
+        job = {"id": "j1", "router_name": "r", "judge_model": "m", "shadow_percentage": 100.0, "status": "running"}
+        await logger._run_shadow_eval(
+            job=job,
+            request_id="req-1",
+            messages=[{"role": "user", "content": "hi"}],
+            response_obj={"choices": [{"message": {"content": "real text"}}]},
+            real_model="gpt-4o",
+            model_parameters={},
+        )
+
+        prisma.db.litellm_shadowevaljob.update_many.assert_awaited_once()
+        _, call_kwargs = prisma.db.litellm_shadowevaljob.update_many.call_args
+        where = call_kwargs["where"]
+        assert where["id"] == "j1"
+        assert set(where["status"]["in"]) == {"pending", "running"}
+        assert call_kwargs["data"]["status"] == "running"
+
+
 class TestExtractResponseText:
     def test_dict_response(self):
         resp = {"choices": [{"message": {"content": "hello"}}]}

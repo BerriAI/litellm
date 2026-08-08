@@ -482,13 +482,11 @@ def _require_admin_viewer(user_api_key_dict: UserAPIKeyAuth, action: str) -> Non
 
 
 def _require_admin_writer(user_api_key_dict: UserAPIKeyAuth, action: str) -> None:
-    """Starting or stopping a shadow eval spends money (judge calls); view-only admins may not."""
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(status_code=403, detail=f"Only a proxy admin can {action}")
 
 
 def _is_configured_pre_routing_strategy(llm_router: "Router", router_name: str) -> bool:
-    """True when `router_name` is any configured pre-routing strategy (auto, complexity, adaptive, quality)."""
     return any(
         router_name in registry
         for registry in (

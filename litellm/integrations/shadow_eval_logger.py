@@ -54,8 +54,6 @@ _MAX_CONCURRENT_SHADOW_TASKS: Final = 16
 # Truncation bound for text handed to the judge, to keep judge calls affordable.
 _MAX_JUDGE_CHARS: Final = 16_000
 
-# request_count is display-only, so it is buffered in memory and flushed at most
-# once per interval instead of one UPDATE per request on the shadowed key.
 _SEEN_FLUSH_INTERVAL_SECONDS: Final = 10.0
 
 PAIRWISE_JUDGE_SYSTEM_PROMPT: Final = """You are an impartial quality judge comparing two responses to the same conversation.
@@ -140,9 +138,7 @@ class ShadowEvalLogger(CustomLogger):
         self._prisma_provider = prisma_provider or _default_prisma_provider
         # api_key_hash -> (fetched_at_monotonic, job_record_or_None)
         self._job_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
-        self._semaphore = asyncio.Semaphore(_MAX_CONCURRENT_SHADOW_TASKS)
-        # job_id -> requests seen since last flush. Flushed opportunistically so a
-        # high-traffic key costs one UPDATE per flush interval, not one per request.
+        self._inflight_shadow_tasks: int = 0
         self._pending_seen: dict[str, int] = {}
         self._last_seen_flush: float = 0.0
 
@@ -167,8 +163,7 @@ class ShadowEvalLogger(CustomLogger):
             if not request_id:
                 return
             # The job tracks every request it saw, sampled or not, so the UI can
-            # show "N of M requests shadowed". Buffered: one UPDATE per flush
-            # interval, not one per request.
+            # show "N of M requests shadowed".
             self._pending_seen[job["id"]] = self._pending_seen.get(job["id"], 0) + 1
             now: Final = asyncio.get_event_loop().time()
             if now - self._last_seen_flush >= _SEEN_FLUSH_INTERVAL_SECONDS:
@@ -178,15 +173,20 @@ class ShadowEvalLogger(CustomLogger):
                 return
             if payload.get("call_type") not in (None, "completion", "acompletion", "chat_completion"):
                 return  # only chat-shaped traffic is comparable
-            asyncio.create_task(
+            if self._inflight_shadow_tasks >= _MAX_CONCURRENT_SHADOW_TASKS:
+                return
+            self._inflight_shadow_tasks += 1
+            task = asyncio.create_task(
                 self._run_shadow_eval(
                     job=dict(job),
                     request_id=request_id,
                     messages=list(kwargs.get("messages") or []),
                     response_obj=response_obj,
                     real_model=payload.get("model") or "",
+                    model_parameters=dict(payload.get("model_parameters") or {}),
                 )
             )
+            task.add_done_callback(lambda _: setattr(self, "_inflight_shadow_tasks", self._inflight_shadow_tasks - 1))
         except Exception as e:  # noqa: BLE001  # logging hooks must never fail the request
             verbose_logger.debug("shadow_eval: failed to schedule task: %s", e)
 
@@ -221,7 +221,6 @@ class ShadowEvalLogger(CustomLogger):
         return job
 
     async def _flush_seen_counts(self) -> None:
-        """Write buffered request-seen counts, one UPDATE per job with pending counts."""
         prisma: Final = self._prisma_provider()
         if prisma is None:
             return
@@ -245,59 +244,59 @@ class ShadowEvalLogger(CustomLogger):
         messages: list[dict[str, Any]],
         response_obj: Any,
         real_model: str,
+        model_parameters: dict[str, Any],
     ) -> None:
         """Detached background task: shadow call -> blind judge -> verdict row."""
-        async with self._semaphore:
-            prisma: Final = self._prisma_provider()
-            try:
-                real_text: Final = self._extract_response_text(response_obj)
-                if not real_text or not messages:
-                    return
+        prisma: Final = self._prisma_provider()
+        try:
+            real_text: Final = self._extract_response_text(response_obj)
+            if not real_text or not messages:
+                return
 
-                shadow = await self._call_router_shadow(job["router_name"], messages)
-                if shadow is None:
-                    await self._bump_failed(job["id"])
-                    return
-                shadow_text, shadow_model, tier, shadow_tokens = shadow
-
-                verdict = await self._call_judge(
-                    judge_model=job["judge_model"],
-                    messages=messages,
-                    real_text=real_text,
-                    shadow_text=shadow_text,
-                )
-                if verdict is None:
-                    await self._bump_failed(job["id"])
-                    return
-                preference, confidence, reasoning, judge_cost = verdict
-
-                if prisma is None:
-                    return
-                await prisma.db.litellm_shadowevalverdict.create(
-                    data={
-                        "job_id": job["id"],
-                        "request_id": request_id,
-                        "tier_classification": tier,
-                        "real_model": real_model,
-                        "shadow_model": shadow_model,
-                        "shadow_response_tokens": shadow_tokens,
-                        "judge_preference": preference,
-                        "judge_confidence": confidence,
-                        "judge_reasoning": reasoning[:1000] if reasoning else None,
-                        "judge_model": job["judge_model"],
-                    }
-                )
-                await prisma.db.litellm_shadowevaljob.update(
-                    where={"id": job["id"]},
-                    data={
-                        "completed_count": {"increment": 1},
-                        "cost_actual": {"increment": judge_cost},
-                        "status": "running",
-                    },
-                )
-            except Exception as e:  # noqa: BLE001  # detached task: log, count, never raise
-                verbose_logger.debug("shadow_eval: pipeline failed for %s: %s", request_id, e)
+            shadow = await self._call_router_shadow(job["router_name"], messages, model_parameters)
+            if shadow is None:
                 await self._bump_failed(job["id"])
+                return
+            shadow_text, shadow_model, tier, shadow_tokens = shadow
+
+            verdict = await self._call_judge(
+                judge_model=job["judge_model"],
+                messages=messages,
+                real_text=real_text,
+                shadow_text=shadow_text,
+            )
+            if verdict is None:
+                await self._bump_failed(job["id"])
+                return
+            preference, confidence, reasoning, judge_cost = verdict
+
+            if prisma is None:
+                return
+            await prisma.db.litellm_shadowevalverdict.create(
+                data={
+                    "job_id": job["id"],
+                    "request_id": request_id,
+                    "tier_classification": tier,
+                    "real_model": real_model,
+                    "shadow_model": shadow_model,
+                    "shadow_response_tokens": shadow_tokens,
+                    "judge_preference": preference,
+                    "judge_confidence": confidence,
+                    "judge_reasoning": reasoning[:1000] if reasoning else None,
+                    "judge_model": job["judge_model"],
+                }
+            )
+            await prisma.db.litellm_shadowevaljob.update_many(
+                where={"id": job["id"], "status": {"in": ["pending", "running"]}},
+                data={
+                    "completed_count": {"increment": 1},
+                    "cost_actual": {"increment": judge_cost},
+                    "status": "running",
+                },
+            )
+        except Exception as e:  # noqa: BLE001  # detached task: log, count, never raise
+            verbose_logger.debug("shadow_eval: pipeline failed for %s: %s", request_id, e)
+            await self._bump_failed(job["id"])
 
     async def _bump_failed(self, job_id: str) -> None:
         prisma: Final = self._prisma_provider()
@@ -312,7 +311,7 @@ class ShadowEvalLogger(CustomLogger):
             verbose_logger.debug("shadow_eval: failed_count increment failed: %s", e)
 
     async def _call_router_shadow(
-        self, router_name: str, messages: list[dict[str, Any]]
+        self, router_name: str, messages: list[dict[str, Any]], model_parameters: dict[str, Any]
     ) -> tuple[str, str, str | None, int | None] | None:
         """Send the prompt through the auto-router; return (text, model, tier, completion_tokens)."""
         router: Final = self._router_provider()
@@ -322,11 +321,13 @@ class ShadowEvalLogger(CustomLogger):
         # The router's pre-routing hook writes its routing decision into this
         # metadata dict; read it back after the call for tier attribution.
         shadow_metadata: dict[str, Any] = {SHADOW_EVAL_INTERNAL_MARKER: True}
+        shadow_params: Final = {k: v for k, v in model_parameters.items() if k not in ("stream", "metadata")}
         try:
             response = await router.acompletion(
                 model=router_name,
                 messages=messages,
                 metadata=shadow_metadata,
+                **shadow_params,
             )
         except Exception as e:  # noqa: BLE001  # provider errors are a counted failure, not a crash
             verbose_logger.debug("shadow_eval: router call failed: %s", e)
