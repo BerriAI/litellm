@@ -174,7 +174,7 @@ async def test_vector_store_file_list_resolves_credentials_from_model_query_para
 
     assert result["api_key"] == "sk-team-openai"
     assert result["api_base"] == "https://api.openai.com/v1"
-    assert result["model"] == "openai/gpt-4o-mini"
+    assert result["model"] == "team-openai"
     assert "custom_llm_provider" not in result
     llm_router.get_deployment_credentials_with_provider.assert_called_once_with(
         model_id="team-openai"
@@ -207,7 +207,7 @@ async def test_vector_store_file_list_resolves_single_openai_team_deployment():
 
     assert result["api_key"] == "sk-team-openai"
     assert result["api_base"] == "https://api.openai.com/v1"
-    assert result["model"] == "openai/gpt-4o-mini"
+    assert result["model"] == "team-openai"
     assert "custom_llm_provider" not in result
     llm_router.get_deployment_credentials_with_provider.assert_called_once_with(
         model_id="team-openai", team_id=None
@@ -245,9 +245,58 @@ async def test_vector_store_file_list_wildcard_model_hint_falls_back_to_team_dep
 
     assert result["api_key"] == "sk-team-openai"
     assert result["api_base"] == "https://api.openai.com/v1"
-    assert result["model"] == "openai/gpt-4o-mini"
+    assert result["model"] == "team-openai"
     assert "custom_llm_provider" not in result
     assert llm_router.get_deployment_credentials_with_provider.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_keeps_requested_model_group_when_groups_share_a_model():
+    """
+    Two model groups can point at the same ``litellm_params.model``. Merging the
+    deployment credentials must not replace the requested group name with that
+    shared provider model, otherwise the Router resolves the deployment by
+    litellm model and can serve the request from the other group (#36103).
+    """
+    llm_router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vip-embeddings",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "sk-vip",
+                },
+                "model_info": {"id": "vip-dep"},
+            },
+            {
+                "model_name": "public-embeddings",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "sk-public",
+                },
+                "model_info": {"id": "public-dep"},
+            },
+        ]
+    )
+
+    request = MagicMock(spec=Request)
+    request.query_params = {"model": "public-embeddings"}
+    request.headers = {}
+
+    result = await _update_request_data_with_model_routing_hint(
+        data={"vector_store_id": "vs_123"},
+        request=request,
+        llm_router=llm_router,
+    )
+
+    assert result["api_key"] == "sk-public"
+    assert result["model"] == "public-embeddings"
+
+    for _ in range(20):
+        deployment = await llm_router.async_get_available_deployment(
+            model=result["model"], request_kwargs={}
+        )
+        assert deployment["model_info"]["id"] == "public-dep"
 
 
 @pytest.mark.asyncio
