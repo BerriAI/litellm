@@ -1,0 +1,160 @@
+name: e2e-changed-tests
+
+on:
+  pull_request:
+    paths:
+      - "tests/e2e/**"
+
+concurrency:
+  group: e2e-changed-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    name: Detect changed e2e tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tests: ${{ steps.changed.outputs.tests }}
+      any: ${{ steps.changed.outputs.any }}
+    steps:
+      - name: List added or modified test files
+        id: changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          tests="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate \
+            --jq '.[] | select(.status != "removed") | .filename' \
+            | grep -E '^tests/e2e/([A-Za-z0-9_.-]+/)*test_[A-Za-z0-9_.-]+\.py$' \
+            | grep -v '^tests/e2e/ui/' | sort -u | tr '\n' ' ' | sed 's/ $//')" || true
+          echo "tests=${tests}" >> "${GITHUB_OUTPUT}"
+          if [ -n "${tests}" ]; then
+            echo "any=true" >> "${GITHUB_OUTPUT}"
+            echo "changed e2e tests: ${tests}"
+          else
+            echo "any=false" >> "${GITHUB_OUTPUT}"
+            echo "no changed e2e test files"
+          fi
+
+  run:
+    name: Run changed e2e tests against the stage-mirror stack
+    needs: detect
+    if: needs.detect.outputs.any == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    services:
+      postgres:
+        image: postgres:16.6
+        env:
+          POSTGRES_USER: litellm
+          POSTGRES_PASSWORD: dbpassword9090
+          POSTGRES_DB: litellm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U litellm"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      jaeger:
+        image: jaegertracing/jaeger:2.10.0
+        ports:
+          - 4318:4318
+          - 16686:16686
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Install dependencies
+        run: |
+          .github/scripts/uv_sync_with_retries.sh --frozen \
+            --extra proxy --extra proxy-runtime --extra extra_proxy \
+            --extra semantic-router --extra bedrock-realtime \
+            --group ci --group e2e-dev
+          uv pip install redis==7.4.1 prometheus-client "pipecat-ai[openai]==1.4.0"
+
+      - name: Generate Prisma client
+        env:
+          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
+        run: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Install Playwright chromium
+        run: uv run --no-sync playwright install --with-deps chromium
+
+      - name: Validate configuration
+        env:
+          ROLE: ${{ vars.E2E_AWS_ROLE_TO_ASSUME }}
+        run: test -n "${ROLE}" || { echo "::error::Set repo variable E2E_AWS_ROLE_TO_ASSUME to an OIDC role with read access to the e2e secrets"; exit 1; }
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+        with:
+          role-to-assume: ${{ vars.E2E_AWS_ROLE_TO_ASSUME }}
+          aws-region: us-east-1
+          role-session-name: litellm-e2e-changed-${{ github.run_id }}
+
+      - name: Fetch provider credentials from AWS Secrets Manager
+        run: |
+          aws secretsmanager get-secret-value --secret-id berrie-litellm-stage-provider-keys \
+            --query SecretString --output text \
+            | uv run --no-sync python .github/e2e-stack/secrets_to_env.py tests/e2e/.env
+          aws secretsmanager get-secret-value --secret-id litellm-license \
+            --query SecretString --output text \
+            | jq -R -s '{"LITELLM_LICENSE": rtrimstr("\n")}' \
+            | uv run --no-sync python .github/e2e-stack/secrets_to_env.py tests/e2e/.env
+
+      - name: Boot the stage-mirror stack
+        run: bash .github/e2e-stack/up.sh
+
+      - name: Export stack environment
+        run: |
+          master_key="$(grep '^LITELLM_MASTER_KEY=' "${RUNNER_TEMP}/litellm-e2e-stack/stack.env" | cut -d= -f2-)"
+          echo "::add-mask::${master_key}"
+          cat "${RUNNER_TEMP}/litellm-e2e-stack/stack.env" >> "${GITHUB_ENV}"
+
+      - name: Run the changed tests
+        env:
+          TESTS: ${{ needs.detect.outputs.tests }}
+        run: |
+          read -r -a test_files <<< "${TESTS}"
+          set +e
+          uv run --no-sync pytest "${test_files[@]}" -v -rA --tb=short -p no:cacheprovider
+          status=$?
+          set -e
+          if [ "${status}" = "5" ]; then
+            echo "changed files collected no runnable tests"
+            exit 0
+          fi
+          exit "${status}"
+
+      - name: Show stack logs on failure
+        if: failure()
+        run: tail -n 200 "${RUNNER_TEMP}/litellm-e2e-stack/logs"/*.log
+
+      - name: Upload stack logs
+        if: failure()
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: e2e-stack-logs
+          path: ${{ runner.temp }}/litellm-e2e-stack/logs/
+          retention-days: 7
