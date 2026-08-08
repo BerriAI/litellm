@@ -347,3 +347,65 @@ class TestMigrationSQLIdempotency:
             "DROP CONSTRAINT without DO $$ IF EXISTS guard found in migrations:\n"
             + "\n".join(violations)
         )
+
+
+class TestJWTKeyMappingCascade:
+    """Regression tests for issue #33702.
+
+    A virtual key referenced by a LiteLLM_JWTKeyMapping row could not be deleted
+    because LiteLLM_JWTKeyMapping_token_fkey was created ON DELETE RESTRICT, so
+    deleting the key (Admin UI, /key/delete, team delete, ...) raised a foreign
+    key violation. The mapping must be removed automatically when its key is
+    deleted, which the FK now enforces via ON DELETE CASCADE.
+    """
+
+    _FK_NAME = "LiteLLM_JWTKeyMapping_token_fkey"
+
+    def _effective_on_delete(self):
+        """Replay every migration in order and return the last ON DELETE action
+        declared for the JWT key mapping FK."""
+        action = None
+        for _migration_name, sql in _get_all_migrations():
+            for match in re.finditer(
+                rf'ADD\s+CONSTRAINT\s+"{re.escape(self._FK_NAME)}".*?'
+                r"ON\s+DELETE\s+(CASCADE|RESTRICT|SET\s+NULL|NO\s+ACTION|SET\s+DEFAULT)",
+                sql,
+                re.IGNORECASE | re.DOTALL,
+            ):
+                action = re.sub(r"\s+", " ", match.group(1).upper())
+        return action
+
+    def test_fk_effective_on_delete_is_cascade(self):
+        """The final FK definition across all migrations must cascade deletes."""
+        assert self._effective_on_delete() == "CASCADE", (
+            f"{self._FK_NAME} must end up ON DELETE CASCADE so deleting a "
+            "virtual key removes its JWT key mapping (issue #33702)"
+        )
+
+    def test_schema_declares_cascade_on_relation(self):
+        """schema.prisma must declare onDelete: Cascade on the mapping relation
+        so the generated client and DB agree."""
+        schema_paths = glob.glob(
+            os.path.abspath(
+                os.path.join(
+                    os.path.dirname(__file__), "../../**/schema.prisma"
+                )
+            ),
+            recursive=True,
+        )
+        checked = []
+        for path in schema_paths:
+            with open(path) as f:
+                schema = f.read()
+            match = re.search(
+                r"litellm_verification_token\s+LiteLLM_VerificationToken\s+@relation\(([^)]*)\)",
+                schema,
+            )
+            if match is None:
+                continue
+            checked.append(path)
+            assert "onDelete: Cascade" in match.group(1), (
+                f"{path} must declare onDelete: Cascade on the JWT key mapping "
+                "relation (issue #33702)"
+            )
+        assert checked, "No schema.prisma with the JWT key mapping relation found"
