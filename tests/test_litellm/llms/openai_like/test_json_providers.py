@@ -338,6 +338,85 @@ class TestDarkbloom:
             assert model_cost[model]["output_cost_per_token"] == output_cost
 
 
+class TestAtlas:
+    def test_atlas_json_config_exists(self):
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        atlas = JSONProviderRegistry.get("atlas")
+        assert atlas is not None
+        assert atlas.base_url == "https://api.tts.runatlas.com/v1"
+        assert atlas.api_key_env == "ATLAS_API_KEY"
+        assert atlas.api_base_env == "ATLAS_API_BASE"
+        assert "/v1/audio/speech" in atlas.supported_endpoints
+
+    def test_atlas_provider_resolution(self):
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        with patch.dict(os.environ, {"ATLAS_API_KEY": "sk_test_key"}):
+            model, provider, api_key, api_base = get_llm_provider(
+                model="atlas/atlas-tts",
+                custom_llm_provider=None,
+                api_base=None,
+                api_key=None,
+            )
+
+        assert model == "atlas-tts"
+        assert provider == "atlas"
+        assert api_key == "sk_test_key"
+        assert api_base == "https://api.tts.runatlas.com/v1"
+
+    def test_atlas_registered_for_speech_routing(self):
+        from litellm import LlmProviders
+
+        assert "atlas" in litellm.openai_compatible_providers
+        assert LlmProviders("atlas") is LlmProviders.ATLAS
+
+    def test_atlas_speech_dispatch(self):
+        import httpx
+
+        mock_client = MagicMock()
+        mock_client.audio.speech.create.return_value.response = httpx.Response(
+            200,
+            content=b"RIFF-fake-wav-bytes",
+            request=httpx.Request("POST", "https://api.tts.runatlas.com/v1/audio/speech"),
+        )
+
+        with patch.dict(os.environ, {"ATLAS_API_KEY": "sk_test_key"}):
+            response = litellm.speech(
+                model="atlas/atlas-tts",
+                voice="dax",
+                input="Hello from Atlas.",
+                response_format="wav",
+                client=mock_client,
+            )
+
+        call_kwargs = mock_client.audio.speech.create.call_args.kwargs
+        assert call_kwargs["model"] == "atlas-tts"
+        assert call_kwargs["voice"] == "dax"
+        assert call_kwargs["input"] == "Hello from Atlas."
+        assert call_kwargs["response_format"] == "wav"
+        assert response.read() == b"RIFF-fake-wav-bytes"
+
+    def test_atlas_model_cost_map(self):
+        with open(
+            os.path.join(workspace_path, "model_prices_and_context_window.json")
+        ) as f:
+            model_cost = json.load(f)
+
+        assert "atlas/atlas-tts" in model_cost
+        assert model_cost["atlas/atlas-tts"]["litellm_provider"] == "atlas"
+        assert model_cost["atlas/atlas-tts"]["mode"] == "audio_speech"
+        assert model_cost["atlas/atlas-tts"]["supported_endpoints"] == ["/v1/audio/speech"]
+
+    def test_atlas_endpoints_support_documents_speech_only(self):
+        with open(os.path.join(workspace_path, "provider_endpoints_support.json")) as f:
+            support = json.load(f)
+
+        endpoints = support["providers"]["atlas"]["endpoints"]
+        assert endpoints["audio_speech"] is True
+        assert endpoints["chat_completions"] is False
+
+
 class TestPublicAIIntegration:
     """Integration tests for PublicAI provider"""
 

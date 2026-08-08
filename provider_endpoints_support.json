@@ -193,6 +193,22 @@
         "a2a": false
       }
     },
+    "atlas": {
+      "display_name": "Atlas TTS (`atlas`)",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": true,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "aihubmix": {
       "display_name": "AIHubMix (`aihubmix`)",
       "url": "https://docs.litellm.ai/docs/providers/aihubmix",
