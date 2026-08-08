@@ -2179,6 +2179,10 @@ class BaseLLMHTTPHandler:
                 AgenticAnthropicStreamingIterator,
             )
 
+            held_back_tool_names: Final = self._server_fulfilled_tools_in_request(
+                logging_obj=logging_obj,
+                tools=anthropic_messages_optional_request_params.get("tools"),
+            )
             initial_response = AgenticAnthropicStreamingIterator(
                 completion_stream=completion_stream,
                 http_handler=self,
@@ -2189,10 +2193,8 @@ class BaseLLMHTTPHandler:
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
                 kwargs={**kwargs, "api_key": api_key} if api_key else kwargs,
-                hold_back=self._should_hold_back_stream(
-                    logging_obj=logging_obj,
-                    tools=anthropic_messages_optional_request_params.get("tools"),
-                ),
+                hold_back=bool(held_back_tool_names),
+                server_fulfilled_tool_names=held_back_tool_names,
             )
             return AnthropicMessagesStreamingResponse(
                 completion_stream=initial_response,
@@ -5038,22 +5040,23 @@ class BaseLLMHTTPHandler:
         return False
 
     @staticmethod
-    def _should_hold_back_stream(logging_obj: LiteLLMLoggingObj, tools: object) -> bool:
+    def _server_fulfilled_tools_in_request(logging_obj: LiteLLMLoggingObj, tools: object) -> frozenset[str]:
         """
-        True when the request carries a tool that a registered callback fulfills
-        server-side (e.g. ``headroom_retrieve``). The model's tool_use for such a
-        tool must never reach the client, which cannot execute it: the agentic
-        loop replaces the whole message with a follow-up response, so the stream
-        is buffered (with ping keepalives) instead of forwarded live.
+        The request's tools that a registered callback fulfills server-side (e.g.
+        ``headroom_retrieve``). The model's tool_use for such a tool must never
+        reach the client, which cannot execute it: the agentic loop replaces the
+        whole message with a follow-up response, so a stream carrying any of
+        these is buffered (with ping keepalives) instead of forwarded live.
         """
         if not isinstance(tools, list) or not tools:
-            return False
+            return frozenset()
         from litellm.litellm_core_utils.prompt_templates.factory import has_tool_with_name
 
-        return any(
-            has_tool_with_name(tools, name)
+        return frozenset(
+            name
             for cb in _custom_logger_callbacks(logging_obj)
             for name in getattr(cb, "server_fulfilled_tool_names", frozenset())
+            if has_tool_with_name(tools, name)
         )
 
     @staticmethod

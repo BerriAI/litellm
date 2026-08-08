@@ -2073,9 +2073,9 @@ async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_reques
     assert retry_authorization != first_attempt_headers["Authorization"]
 
 
-class TestShouldHoldBackStream:
-    """_should_hold_back_stream gates the buffered (non-leaking) streaming mode
-    for server-fulfilled tools like headroom_retrieve."""
+class TestServerFulfilledToolsInRequest:
+    """_server_fulfilled_tools_in_request gates the buffered (non-leaking) streaming
+    mode for server-fulfilled tools like headroom_retrieve."""
 
     @staticmethod
     def _logging_obj_with(callbacks):
@@ -2093,12 +2093,9 @@ class TestShouldHoldBackStream:
             {"name": "Bash", "input_schema": {"type": "object"}},
             {"name": "headroom_retrieve", "input_schema": {"type": "object"}},
         ]
-        assert (
-            BaseLLMHTTPHandler._should_hold_back_stream(
-                logging_obj=self._logging_obj_with([RetrievalCallback()]), tools=tools
-            )
-            is True
-        )
+        assert BaseLLMHTTPHandler._server_fulfilled_tools_in_request(
+            logging_obj=self._logging_obj_with([RetrievalCallback()]), tools=tools
+        ) == frozenset({"headroom_retrieve"})
 
     def test_should_stream_live_when_tool_absent_from_request(self):
         from litellm.integrations.custom_logger import CustomLogger
@@ -2108,10 +2105,10 @@ class TestShouldHoldBackStream:
 
         tools = [{"name": "Bash", "input_schema": {"type": "object"}}]
         assert (
-            BaseLLMHTTPHandler._should_hold_back_stream(
+            BaseLLMHTTPHandler._server_fulfilled_tools_in_request(
                 logging_obj=self._logging_obj_with([RetrievalCallback()]), tools=tools
             )
-            is False
+            == frozenset()
         )
 
     def test_should_stream_live_when_no_callback_declares_tool_names(self):
@@ -2119,14 +2116,17 @@ class TestShouldHoldBackStream:
 
         tools = [{"name": "headroom_retrieve", "input_schema": {"type": "object"}}]
         assert (
-            BaseLLMHTTPHandler._should_hold_back_stream(
+            BaseLLMHTTPHandler._server_fulfilled_tools_in_request(
                 logging_obj=self._logging_obj_with([CustomLogger()]), tools=tools
             )
-            is False
+            == frozenset()
         )
 
     def test_should_stream_live_without_tools(self):
-        assert BaseLLMHTTPHandler._should_hold_back_stream(logging_obj=self._logging_obj_with([]), tools=None) is False
+        assert (
+            BaseLLMHTTPHandler._server_fulfilled_tools_in_request(logging_obj=self._logging_obj_with([]), tools=None)
+            == frozenset()
+        )
 
     def test_interception_callbacks_declare_their_retrieval_tools(self):
         from litellm.integrations.compression_interception.handler import (
