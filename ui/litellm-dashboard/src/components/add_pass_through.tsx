@@ -11,7 +11,7 @@ import NumericalInput from "./shared/numerical_input";
 import { InfoCircleOutlined, ApiOutlined } from "@ant-design/icons";
 import KeyValueInput from "./key_value_input";
 import QueryParamInput from "./query_param_input";
-import { passThroughItem } from "./pass_through_settings";
+import { passThroughItem } from "./PassThroughSettings/PassThroughSettings";
 import RoutePreview from "./route_preview";
 import NotificationsManager from "./molecules/notifications_manager";
 import PassThroughSecuritySection from "./common_components/PassThroughSecuritySection";
@@ -37,7 +37,6 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [selectedModel, setSelectedModel] = useState("");
   const [pathValue, setPathValue] = useState("");
   const [targetValue, setTargetValue] = useState("");
   const [includeSubpath, setIncludeSubpath] = useState(true);
@@ -105,11 +104,6 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    NotificationsManager.success("Copied to clipboard!");
   };
 
   return (

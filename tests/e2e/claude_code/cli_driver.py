@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -39,6 +40,29 @@ CLAUDE_CLI_DEFAULT = "claude"
 DEFAULT_TIMEOUT_SECONDS = float(
     os.environ.get("LITELLM_COMPAT_CLI_TIMEOUT_SECONDS") or 120
 )
+
+RATE_LIMIT_SHAPED_RE = re.compile(
+    r"(?:\b429\b|rate[\s_-]?limit|too\s+many\s+requests|throttl(?:ed|ing)|"
+    r"claude\s+CLI\s+timed\s+out)",
+    re.IGNORECASE,
+)
+"""Heuristic shared with the conftest rate-limit summary: 429s and
+throttle markers anywhere in the failure text, plus CLI timeouts --
+the CLI retries 429s internally until the harness timeout kills it,
+so a saturated upstream usually surfaces as a timeout rather than a
+clean 429."""
+
+DEFAULT_RATE_LIMIT_RETRIES = int(
+    os.environ.get("LITELLM_COMPAT_RATE_LIMIT_RETRIES") or 2
+)
+DEFAULT_RATE_LIMIT_BACKOFF_SECONDS = float(
+    os.environ.get("LITELLM_COMPAT_RATE_LIMIT_BACKOFF_SECONDS") or 65
+)
+"""Rate-limit-shaped failures are retried after a backoff long enough
+for a per-minute quota window (the dominant 429 source across
+Anthropic / Bedrock / Vertex) to reset. Both knobs are env-tunable so
+a matrix run can trade wall time for resilience without code edits;
+retries=0 disables the behavior entirely."""
 
 # Env vars the `claude` Node CLI legitimately needs to function:
 # locating its own binary + node, basic locale/terminal plumbing.
@@ -265,6 +289,22 @@ def run_claude(
 ModelResult = Union[DriverResult, ClaudeCLIError]
 
 
+def is_rate_limit_shaped(outcome: ModelResult) -> bool:
+    """Classify an outcome as a retryable rate-limit-shaped failure.
+
+    A `ClaudeCLIError` matches on its message (which is where the
+    driver's own timeout diagnostic lands); a failing `DriverResult`
+    matches on its full `failure_diagnostic` so 429s buried in the
+    CLI's stdout text or `api_error_status` are both caught. Passing
+    results are never rate-limit-shaped.
+    """
+    if isinstance(outcome, ClaudeCLIError):
+        return bool(RATE_LIMIT_SHAPED_RE.search(str(outcome)))
+    if outcome.exit_code == 0:
+        return False
+    return bool(RATE_LIMIT_SHAPED_RE.search(failure_diagnostic(outcome)))
+
+
 def run_claude_models_parallel(
     *,
     models: Sequence[str],
@@ -277,6 +317,9 @@ def run_claude_models_parallel(
     cli_path: str = CLAUDE_CLI_DEFAULT,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     runner: Optional[Callable[..., Any]] = None,
+    rate_limit_retries: Optional[int] = None,
+    rate_limit_backoff_seconds: Optional[float] = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> Dict[str, ModelResult]:
     """Invoke `run_claude` for every `models[i]` concurrently and collect outcomes.
 
@@ -290,6 +333,14 @@ def run_claude_models_parallel(
     keep the synchronous CLI driver unchanged so unit tests can keep
     injecting a fake `runner`.
 
+    Rate-limit-shaped failures (see `is_rate_limit_shaped`) are retried
+    per model up to `rate_limit_retries` times, sleeping
+    `rate_limit_backoff_seconds` before each retry so per-minute quota
+    windows can reset; both default to the `LITELLM_COMPAT_RATE_LIMIT_*`
+    env knobs. Each retry goes back through `run_claude`, so it
+    re-acquires a token from the provider rate limiter like any other
+    invocation. `sleep` is an injection seam for unit tests.
+
     Returns a dict keyed by model id. Each value is either the
     `DriverResult` produced by `run_claude` or the `ClaudeCLIError`
     that aborted that model's run — callers decide how to map either
@@ -300,14 +351,20 @@ def run_claude_models_parallel(
     if not models:
         raise ValueError("models must be a non-empty sequence")
 
-    def _one(model: str) -> Tuple[str, ModelResult, float]:
-        # Per-model wall clock: this is what the matrix run actually pays for.
-        # We record it whether the run succeeded or raised so the breakdown
-        # log below covers both code paths and surfaces "which model is the
-        # long pole?" without requiring per-test instrumentation.
-        started = time.monotonic()
+    retries = (
+        DEFAULT_RATE_LIMIT_RETRIES
+        if rate_limit_retries is None
+        else max(0, rate_limit_retries)
+    )
+    backoff = (
+        DEFAULT_RATE_LIMIT_BACKOFF_SECONDS
+        if rate_limit_backoff_seconds is None
+        else max(0.0, rate_limit_backoff_seconds)
+    )
+
+    def _run_once(model: str) -> ModelResult:
         try:
-            result = run_claude(
+            return run_claude(
                 prompt=prompt,
                 model=model,
                 base_url=base_url,
@@ -319,14 +376,8 @@ def run_claude_models_parallel(
                 timeout=timeout,
                 runner=runner,
             )
-            elapsed = time.monotonic() - started
-            # Stamp the duration onto the DriverResult so callers (tests,
-            # diagnostics) can attribute slow cells without re-timing.
-            result.duration_ms = int(elapsed * 1000)
-            return model, result, elapsed
         except ClaudeCLIError as exc:
-            elapsed = time.monotonic() - started
-            return model, exc, elapsed
+            return exc
         except Exception as exc:
             # Honor the documented "errors as values" contract for any
             # exception type — not just ClaudeCLIError. The rate
@@ -334,13 +385,38 @@ def run_claude_models_parallel(
             # raise ValueError on edge-case model strings, and a future
             # bug elsewhere in the call stack must not abort the entire
             # parallel batch and lose the other models' outcomes.
-            elapsed = time.monotonic() - started
             wrapped = ClaudeCLIError(
                 f"unexpected error running model {model!r}: "
                 f"{type(exc).__name__}: {exc}"
             )
             wrapped.__cause__ = exc
-            return model, wrapped, elapsed
+            return wrapped
+
+    def _one(model: str) -> Tuple[str, ModelResult, float]:
+        # Per-model wall clock: this is what the matrix run actually pays
+        # for, retries and backoff sleeps included. We record it whether
+        # the run succeeded or raised so the breakdown log below covers
+        # both code paths and surfaces "which model is the long pole?"
+        # without requiring per-test instrumentation.
+        started = time.monotonic()
+        outcome = _run_once(model)
+        for attempt in range(retries):
+            if not is_rate_limit_shaped(outcome):
+                break
+            print(
+                f"[retry] {model}: rate-limit-shaped failure; sleeping "
+                f"{backoff:.0f}s before attempt {attempt + 2}/{retries + 1}",
+                file=sys.stderr,
+                flush=True,
+            )
+            sleep(backoff)
+            outcome = _run_once(model)
+        elapsed = time.monotonic() - started
+        if isinstance(outcome, DriverResult):
+            # Stamp the duration onto the DriverResult so callers (tests,
+            # diagnostics) can attribute slow cells without re-timing.
+            outcome.duration_ms = int(elapsed * 1000)
+        return model, outcome, elapsed
 
     outcomes: Dict[str, ModelResult] = {}
     durations: Dict[str, float] = {}

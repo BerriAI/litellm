@@ -80,5 +80,5 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 `proxy_batch_write_at` (~60s) means rows land late; every read polls to a deadline.
 Fresh scoped key per test (isolation, xdist-safe, cleaned up). Assert invariants
 (`spend > 0`, `total == prompt + completion`, aggregate == sum), not literal
-$/token values, so pricing drift is not a failure. Skip on environment (no proxy /
-no provider key), fail on behavior (a real 2xx call with a wrong/missing row).
+$/token values, so pricing drift is not a failure. Hard-fail when no proxy
+answers, fail on behavior (a real 2xx call with a wrong/missing row).

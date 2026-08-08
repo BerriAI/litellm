@@ -539,6 +539,48 @@ async def test_populate_team_access_sets_direct_access_false_by_default(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_populate_team_access_gives_view_only_admin_full_admin_scope(monkeypatch):
+    """proxy_admin_viewer reads with admin scope - every team ("*") plus direct access
+    to all non-team models - instead of being narrowed to its own user row."""
+    team_row = _team_row()
+    global_row = {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {"id": "global-id-1", "db_model": False},
+    }
+    router = MagicMock()
+    router.get_model_ids.return_value = ["global-id-1"]
+
+    get_all_team_models = AsyncMock(return_value={"byok-id-1": ["team-abc-123"]})
+    monkeypatch.setattr(ps, "get_all_team_models", get_all_team_models)
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(user_id="viewer", teams=[], models=[])
+    )
+
+    viewer = UserAPIKeyAuth(
+        user_id="viewer",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        team_models=[],
+    )
+    result = await ps._populate_team_access_on_models(
+        user_api_key_dict=viewer,
+        prisma_client=prisma_client,
+        llm_router=router,
+        all_models=[team_row, global_row],
+    )
+
+    assert get_all_team_models.await_args.kwargs["user_teams"] == "*"
+    router.get_model_ids.assert_called_once_with(exclude_team_models=True)
+    prisma_client.db.litellm_usertable.find_unique.assert_not_awaited()
+
+    by_id = {m["model_info"]["id"]: m for m in result}
+    assert by_id["byok-id-1"]["model_info"]["access_via_team_ids"] == ["team-abc-123"]
+    assert by_id["global-id-1"]["model_info"]["direct_access"] is True
+
+
+@pytest.mark.asyncio
 async def test_model_info_v1_team_id_without_db_fails_fast(monkeypatch):
     """`teamId` without a connected DB raises 500 before any enrichment work runs."""
     router = MagicMock()
@@ -725,6 +767,7 @@ async def test_v1_models_translates_team_model_for_access_group_key(monkeypatch)
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
+    router.get_configured_token_limits.return_value = (None, None)
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
 
@@ -766,6 +809,7 @@ async def test_v1_models_keeps_internal_names_when_public_name_flag_disabled(
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
+    router.get_configured_token_limits.return_value = (None, None)
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
 
@@ -800,6 +844,7 @@ async def test_v1_models_translates_team_model_with_metadata(monkeypatch):
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
+    router.get_configured_token_limits.return_value = (None, None)
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
     router.get_model_group_info.return_value = None
@@ -845,6 +890,7 @@ async def test_v1_models_metadata_fallbacks_use_internal_routing_key(monkeypatch
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
+    router.get_configured_token_limits.return_value = (None, None)
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
     # Fallbacks are keyed on the internal routing name, as the router stores them.
@@ -901,6 +947,7 @@ async def test_v1_models_metadata_does_not_leak_other_team_fallbacks(monkeypatch
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
+    router.get_configured_token_limits.return_value = (None, None)
     router.model_list = [team_x, team_y]
     router.get_model_list.return_value = [team_x, team_y]
     router.fallbacks = [
@@ -1155,6 +1202,7 @@ def test_translate_team_model_names_for_listing_respects_legacy_flag():
 def _public_named_router(*team_rows: dict) -> MagicMock:
     router = MagicMock()
     router.get_model_list.return_value = list(team_rows)
+    router.get_configured_token_limits.return_value = (None, None)
     return router
 
 

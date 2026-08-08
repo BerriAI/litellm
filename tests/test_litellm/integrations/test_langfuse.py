@@ -930,3 +930,67 @@ def test_max_langfuse_clients_limit():
         assert litellm.initialized_langfuse_clients == 2
 
     litellm.initialized_langfuse_clients = original_initialized_langfuse_clients
+
+
+class _RecordingLangfuse:
+    last_parameters: Optional[dict] = None
+
+    def __init__(self, **parameters):
+        type(self).last_parameters = parameters
+        self.client = MagicMock()
+
+
+def _build_langfuse_logger(monkeypatch) -> LangFuseLogger:
+    monkeypatch.setenv("LANGFUSE_MOCK", "false")
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
+    with patch("langfuse.Langfuse", _RecordingLangfuse):
+        return LangFuseLogger(
+            langfuse_public_key="pk-lit5228",
+            langfuse_secret="sk-lit5228",
+            langfuse_host="https://test.langfuse.com",
+        )
+
+
+def test_langfuse_sdk_client_survives_httpx_cache_eviction(monkeypatch):
+    import gc
+    import weakref
+
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
+    from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    logger = _build_langfuse_logger(monkeypatch)
+    sdk_client = _RecordingLangfuse.last_parameters["httpx_client"]
+
+    cached_handler = _get_httpx_client()
+    handler_ref = weakref.ref(cached_handler)
+
+    assert sdk_client is logger.langfuse_client
+    assert sdk_client is cached_handler.client
+
+    litellm.in_memory_llm_clients_cache = LLMClientCache()
+    del cached_handler
+    gc.collect()
+
+    assert litellm.in_memory_llm_clients_cache.get_cache("httpx_client") is None
+    assert handler_ref() is not None, "logger must keep the handler that owns the client it handed the SDK"
+    assert not sdk_client.is_closed
+
+
+def test_langfuse_logger_reuses_the_shared_cached_client(monkeypatch):
+    import gc
+
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+
+    first = _build_langfuse_logger(monkeypatch)
+    second = _build_langfuse_logger(monkeypatch)
+
+    assert first.langfuse_client is second.langfuse_client
+
+    del second
+    gc.collect()
+
+    assert not first.langfuse_client.is_closed

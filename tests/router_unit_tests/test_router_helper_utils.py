@@ -15,6 +15,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 from create_mock_standard_logging_payload import create_standard_logging_payload
 from litellm.types.utils import StandardLoggingPayload
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
 
 
 @pytest.fixture
@@ -1816,11 +1817,12 @@ def test_init_auto_router_deployment_success(mock_auto_router, model_list):
         default_model="gpt-5-mini",
         embedding_model="text-embedding-3-small",
         litellm_router_instance=router,
+        max_input_chars=DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     )
 
     # Verify the auto-router was added to the router's auto_routers dict
     assert "test-auto-router" in router.auto_routers
-    assert router.auto_routers["test-auto-router"] == mock_auto_router_instance
+    assert router.auto_routers["test-auto-router"][0].strategy == mock_auto_router_instance
 
 
 @patch("litellm.router_strategy.auto_router.auto_router.AutoRouter")
@@ -1833,7 +1835,11 @@ def test_init_auto_router_deployment_duplicate_model_name(mock_auto_router, mode
     mock_auto_router.return_value = mock_auto_router_instance
 
     # Add an existing auto-router
-    router.auto_routers["test-auto-router"] = mock_auto_router_instance
+    from litellm.types.router import TaggedPreRoutingStrategy
+
+    router.auto_routers["test-auto-router"] = [
+        TaggedPreRoutingStrategy(tags=(), strategy=mock_auto_router_instance)
+    ]
 
     # Try to add another auto-router with the same name
     litellm_params = LiteLLM_Params(
@@ -1849,7 +1855,7 @@ def test_init_auto_router_deployment_duplicate_model_name(mock_auto_router, mode
     )
 
     with pytest.raises(
-        ValueError, match="Auto-router deployment test-auto-router already exists"
+        ValueError, match="Auto-router deployment test-auto-router with tags .* already exists"
     ):
         router.init_auto_router_deployment(deployment)
 
@@ -2654,6 +2660,23 @@ def test_resolve_model_name_from_model_id():
 
     result = router.resolve_model_name_from_model_id("gpt-5-mini")
     assert result == "gpt-5-mini"
+
+    # Test case 10: model_id is a deployment ID (hash) that differs from the
+    # public model_name. Regression for #32580: managed batch/file IDs embed the
+    # deployment model_id, and it must resolve back to the public model_name so
+    # team model-access checks compare against the model group, not the hash.
+    model_list = [
+        {
+            "model_name": "bedrock-batch-model",
+            "litellm_params": {
+                "model": "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            },
+            "model_info": {"id": "8d0eaa7e6c6f54a425dfd0062cb6b0dc"},
+        },
+    ]
+    router = Router(model_list=model_list)
+    result = router.resolve_model_name_from_model_id("8d0eaa7e6c6f54a425dfd0062cb6b0dc")
+    assert result == "bedrock-batch-model"
 
 
 def test_get_valid_args():
