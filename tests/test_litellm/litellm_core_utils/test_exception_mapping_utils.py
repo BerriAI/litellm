@@ -373,6 +373,55 @@ def test_vertex_ai_rate_limit_error_mapping(error_message, should_raise_rate_lim
             )
 
 
+# Regression tests for https://github.com/BerriAI/litellm/issues/34954
+# A Gemini/Vertex 429 whose RESOURCE_EXHAUSTED body carries a sub-second retry
+# hint such as "Please retry in 18.403470473s." must still map to RateLimitError.
+# The digits "403" in that delay used to hit an unanchored `"403" in error_str`
+# branch that was evaluated before the quota branch, yielding BadRequestError(403)
+# and disabling Router retries for a transient rate limit.
+def _gemini_quota_body(retry_delay: str) -> str:
+    return (
+        '{"error": {"code": 429, "message": "You exceeded your current quota. '
+        "Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, "
+        "limit: 15. Please retry in " + retry_delay + '.", "status": "RESOURCE_EXHAUSTED"}}'
+    )
+
+
+@pytest.mark.parametrize(
+    "retry_delay",
+    [
+        "18.403470473s",  # digits contain "403" - the bug case
+        "18.9s",  # control: no "403" digits, already mapped correctly
+    ],
+)
+def test_gemini_429_quota_maps_to_rate_limit_regardless_of_retry_delay(retry_delay):
+    original_exception = Exception(_gemini_quota_body(retry_delay))
+
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+    assert excinfo.value.status_code == 429
+
+
+def test_vertex_genuine_403_still_maps_to_bad_request():
+    body = (
+        '{"error": {"code": 403, "message": "Permission denied on resource project foo.", '
+        '"status": "PERMISSION_DENIED"}}'
+    )
+    original_exception = Exception(body)
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+    assert excinfo.value.status_code == 403
+
+
 class TestGetBodyErrorCode:
     """Unit tests for _get_body_error_code helper."""
 

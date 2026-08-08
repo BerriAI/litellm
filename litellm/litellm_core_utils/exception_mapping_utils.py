@@ -1120,6 +1120,26 @@ def _map_vertex_exception(
             llm_provider=custom_llm_provider,
             litellm_debug_info=extra_information,
         )
+    elif (
+        "429 Quota exceeded" in error_str
+        or "Quota exceeded for" in error_str
+        or "Resource exhausted" in error_str
+        or "IndexError: list index out of range" in error_str
+        or "429 Unable to submit request because the service is temporarily out of capacity." in error_str
+    ):
+        raise RateLimitError(
+            message=f"litellm.RateLimitError: {custom_llm_provider}Exception - {error_str}",
+            model=model,
+            llm_provider=custom_llm_provider,
+            litellm_debug_info=extra_information,
+            response=httpx.Response(
+                status_code=429,
+                request=httpx.Request(
+                    method="POST",
+                    url=" https://cloud.google.com/vertex-ai/",
+                ),
+            ),
+        )
     elif "403" in error_str:
         raise BadRequestError(
             message=f"{custom_llm_provider.capitalize()}Exception BadRequestError - {error_str}",
@@ -1145,26 +1165,6 @@ def _map_vertex_exception(
             litellm_debug_info=extra_information,
             response=httpx.Response(
                 status_code=400,
-                request=httpx.Request(
-                    method="POST",
-                    url=" https://cloud.google.com/vertex-ai/",
-                ),
-            ),
-        )
-    elif (
-        "429 Quota exceeded" in error_str
-        or "Quota exceeded for" in error_str
-        or "Resource exhausted" in error_str
-        or "IndexError: list index out of range" in error_str
-        or "429 Unable to submit request because the service is temporarily out of capacity." in error_str
-    ):
-        raise RateLimitError(
-            message=f"litellm.RateLimitError: {custom_llm_provider}Exception - {error_str}",
-            model=model,
-            llm_provider=custom_llm_provider,
-            litellm_debug_info=extra_information,
-            response=httpx.Response(
-                status_code=429,
                 request=httpx.Request(
                     method="POST",
                     url=" https://cloud.google.com/vertex-ai/",
