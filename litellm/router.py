@@ -4786,6 +4786,7 @@ class Router:
             kwargs["model"] = model
             kwargs["input"] = input
             kwargs["original_function"] = self._aembedding
+            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response: Final = await self.async_function_with_fallbacks(**kwargs)
             return response
