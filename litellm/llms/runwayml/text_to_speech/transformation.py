@@ -17,6 +17,7 @@ from litellm.constants import (
     RUNWAYML_DEFAULT_API_VERSION,
     RUNWAYML_POLLING_TIMEOUT,
 )
+from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
@@ -496,11 +497,11 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         if not isinstance(audio_url, str):
             raise ValueError(f"RunwayML TTS audio URL is not a string: {audio_url}")
 
-        # Download the audio file
+        # Download the audio file with SSRF guards (provider output URLs are untrusted).
         from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
         client: Final = _get_httpx_client()
-        audio_response: Final = client.get(url=audio_url)
+        audio_response: Final = safe_get(client, audio_url)
         audio_response.raise_for_status()
 
         verbose_logger.debug("RunwayML TTS audio downloaded successfully")
@@ -565,11 +566,11 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         if not isinstance(audio_url, str):
             raise ValueError(f"RunwayML TTS audio URL is not a string: {audio_url}")
 
-        # Download the audio file (async)
+        # Download the audio file (async) with SSRF guards.
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 
         client: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.RUNWAYML)
-        audio_response: Final = await client.get(url=audio_url)
+        audio_response: Final = await async_safe_get(client, audio_url)
         audio_response.raise_for_status()
 
         verbose_logger.debug("RunwayML TTS audio downloaded successfully (async)")

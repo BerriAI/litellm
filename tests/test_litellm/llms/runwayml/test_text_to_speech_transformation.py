@@ -65,3 +65,95 @@ def test_runwayml_native_voice_passthrough():
         assert "runwayml_voice" in mapped_params
         assert mapped_params["runwayml_voice"]["type"] == "runway-preset"
         assert mapped_params["runwayml_voice"]["presetId"] == runway_voice
+
+def test_transform_text_to_speech_response():
+    """Test TTS audio download with SSRF-protected fetch."""
+    from unittest.mock import Mock, patch
+
+    import httpx
+
+    import litellm
+    from litellm.types.llms.openai import HttpxBinaryResponseContent
+
+    config = RunwayMLTextToSpeechConfig()
+
+    # Mock the initial response (task created)
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.json.return_value = {"id": "task-123", "status": "PENDING"}
+    mock_response.request.headers = {"Authorization": "Bearer test"}
+
+    # Mock the polled response (task completed)
+    mock_polled = Mock(spec=httpx.Response)
+    mock_polled.json.return_value = {
+        "id": "task-123",
+        "status": "SUCCEEDED",
+        "output": ["https://example.com/audio.mp3"],
+    }
+
+    # Mock the audio download response
+    mock_audio_response = Mock(spec=httpx.Response)
+    mock_audio_response.raise_for_status = Mock()
+
+    mock_client = Mock()
+    mock_client.get.return_value = mock_audio_response
+
+    with patch.object(litellm, "user_url_validation", False):
+        with patch.object(config, "_poll_task_sync", return_value=mock_polled):
+            with patch("litellm.llms.custom_httpx.http_handler._get_httpx_client", return_value=mock_client):
+                result = config.transform_text_to_speech_response(
+                    model="eleven_multilingual_v2",
+                    raw_response=mock_response,
+                    logging_obj=Mock(),
+                )
+
+    assert isinstance(result, HttpxBinaryResponseContent)
+    mock_client.get.assert_called_once()
+
+
+def test_async_transform_text_to_speech_response():
+    """Test async TTS audio download with SSRF-protected fetch."""
+    import asyncio
+    from unittest.mock import AsyncMock, Mock, patch
+
+    import httpx
+
+    import litellm
+    from litellm.types.llms.openai import HttpxBinaryResponseContent
+
+    config = RunwayMLTextToSpeechConfig()
+
+    # Mock the initial response (task created)
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.json.return_value = {"id": "task-123", "status": "PENDING"}
+    mock_response.request.headers = {"Authorization": "Bearer test"}
+
+    # Mock the polled response (task completed)
+    mock_polled = Mock(spec=httpx.Response)
+    mock_polled.json.return_value = {
+        "id": "task-123",
+        "status": "SUCCEEDED",
+        "output": ["https://example.com/audio.mp3"],
+    }
+
+    # Mock the audio download response
+    mock_audio_response = Mock(spec=httpx.Response)
+    mock_audio_response.raise_for_status = Mock()
+
+    mock_client = Mock()
+    mock_client.get = AsyncMock(return_value=mock_audio_response)
+
+    async def run_test():
+        with patch.object(litellm, "user_url_validation", False):
+            with patch.object(config, "_poll_task_async", new_callable=AsyncMock, return_value=mock_polled):
+                with patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", return_value=mock_client):
+                    result = await config.async_transform_text_to_speech_response(
+                        model="eleven_multilingual_v2",
+                        raw_response=mock_response,
+                        logging_obj=Mock(),
+                    )
+        return result
+
+    result = asyncio.run(run_test())
+    assert isinstance(result, HttpxBinaryResponseContent)
+    mock_client.get.assert_called_once()
+

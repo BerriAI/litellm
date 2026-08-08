@@ -6,7 +6,7 @@ from httpx._types import RequestFiles
 
 import litellm
 from litellm.constants import RUNWAYML_DEFAULT_API_VERSION
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import async_safe_get, encode_url_path_segment, safe_get
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
@@ -376,9 +376,9 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         response_data: Final = raw_response.json()
         video_url: Final = self._extract_video_url_from_response(response_data)
 
-        # Download the video from the CloudFront URL synchronously
+        # Download the video from the provider URL with SSRF guards (same as BFL image_edit).
         httpx_client: Final[HTTPHandler] = _get_httpx_client()
-        video_response: Final = httpx_client.get(video_url)
+        video_response: Final = safe_get(httpx_client, video_url)
         video_response.raise_for_status()
 
         return video_response.content
@@ -405,11 +405,11 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         response_data: Final = raw_response.json()
         video_url: Final = self._extract_video_url_from_response(response_data)
 
-        # Download the video from the CloudFront URL asynchronously
+        # Download the video from the provider URL with SSRF guards (same as BFL image_edit).
         async_httpx_client: Final[AsyncHTTPHandler] = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.RUNWAYML,
         )
-        video_response: Final = await async_httpx_client.get(video_url)
+        video_response: Final = await async_safe_get(async_httpx_client, video_url)
         video_response.raise_for_status()
 
         return video_response.content
