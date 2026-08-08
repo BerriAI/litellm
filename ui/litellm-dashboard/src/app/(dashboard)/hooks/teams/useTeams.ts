@@ -116,24 +116,32 @@ export const useTeams = (): UseQueryResult<Team[]> => {
 
 const ALL_TEAMS_PAGE_SIZE = 100;
 
-const fetchAllTeamsPaged = async (accessToken: string): Promise<Team[]> => {
-  const firstPage: TeamsResponse = await teamListCall(accessToken, 1, ALL_TEAMS_PAGE_SIZE);
+const fetchAllTeamsPaged = async (accessToken: string, userID?: string | null): Promise<Team[]> => {
+  const options: TeamListCallOptions = { userID: userID ?? undefined };
+  const firstPage: TeamsResponse = await teamListCall(accessToken, 1, ALL_TEAMS_PAGE_SIZE, options);
   const totalPages = firstPage.total_pages ?? 1;
   if (totalPages <= 1) return firstPage.teams;
 
   const remainingPages: TeamsResponse[] = await Promise.all(
-    Array.from({ length: totalPages - 1 }, (_, i) => teamListCall(accessToken, i + 2, ALL_TEAMS_PAGE_SIZE)),
+    Array.from({ length: totalPages - 1 }, (_, i) => teamListCall(accessToken, i + 2, ALL_TEAMS_PAGE_SIZE, options)),
   );
   return [firstPage, ...remainingPages].flatMap((page) => page.teams);
 };
 
 export const useAllTeams = (): UseQueryResult<Team[]> => {
-  const { accessToken } = useAuthorized();
+  const { accessToken, userId, userRole } = useAuthorized();
+  const isAdmin = userRole === "Admin" || userRole === "Admin Viewer";
+  const scopedUserId = isAdmin ? null : userId;
   return useQuery<Team[]>({
     queryKey: teamKeys.list({
-      filters: { scope: "all", pageSize: ALL_TEAMS_PAGE_SIZE, accessToken: accessToken ?? "" },
+      filters: {
+        scope: "all",
+        pageSize: ALL_TEAMS_PAGE_SIZE,
+        accessToken: accessToken ?? "",
+        userId: scopedUserId ?? "",
+      },
     }),
-    queryFn: async () => await fetchAllTeamsPaged(accessToken!),
+    queryFn: async () => await fetchAllTeamsPaged(accessToken!, scopedUserId),
     enabled: Boolean(accessToken),
     staleTime: 30000,
   });
