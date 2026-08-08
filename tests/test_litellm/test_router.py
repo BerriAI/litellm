@@ -7550,3 +7550,68 @@ async def test_fallback_failure_detail_from_upstream_is_bounded():
     assert capture.messages, "the fallback failure path did not log at ERROR"
     assert huge_message not in "".join(capture.messages)
     assert max(len(message) for message in capture.messages) < 5_000
+def test_stamp_or_clear_metadata_key_writes_and_clears_both_buckets():
+    request_kwargs = {"metadata": {}}
+    litellm.Router._stamp_or_clear_metadata_key(request_kwargs=request_kwargs, key="probe", value=7)
+    assert request_kwargs["metadata"]["probe"] == 7
+
+    stale_kwargs = {"metadata": {"probe": 7}, "litellm_metadata": {"probe": 7}}
+    litellm.Router._stamp_or_clear_metadata_key(request_kwargs=stale_kwargs, key="probe", value=None)
+    assert "probe" not in stale_kwargs["metadata"]
+    assert "probe" not in stale_kwargs["litellm_metadata"]
+
+
+@pytest.mark.parametrize(
+    "complexity_router_config,expect_callback",
+    [
+        ({"tiers": {"SIMPLE": "gpt-4o"}}, True),
+        ({"tiers": {"SIMPLE": "gpt-4o"}, "deployment_affinity": False}, False),
+        ({"tiers": {"SIMPLE": "gpt-4o"}, "deployment_affinity": False, "session_affinity": True}, True),
+    ],
+)
+def test_complexity_router_registers_affinity_callback_for_deployment_pin(complexity_router_config, expect_callback):
+    """The marker the complexity router stamps is inert unless a DeploymentAffinityCheck is
+    registered to read it, so deployment_affinity has to pull the callback in, and its default-on
+    means a bare config registers one. Opting out must skip the callback entirely rather than
+    register a filter that can never fire, including when session_affinity is on, since the two
+    pins are independent."""
+    from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+        DeploymentAffinityCheck,
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}},
+            {
+                "model_name": "my-complexity-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": complexity_router_config,
+                },
+            },
+        ]
+    )
+    try:
+        registered = any(isinstance(cb, DeploymentAffinityCheck) for cb in router.optional_callbacks or [])
+        assert registered is expect_callback
+    finally:
+        for cb in router.optional_callbacks or []:
+            litellm.logging_callback_manager.remove_callback_from_all_lists(cb)
+
+
+def test_ensure_deployment_affinity_callback_is_idempotent():
+    from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+        DeploymentAffinityCheck,
+    )
+
+    router = litellm.Router(model_list=[])
+    try:
+        router._ensure_deployment_affinity_callback()
+        router._ensure_deployment_affinity_callback()
+        affinity_callbacks = [
+            cb for cb in router.optional_callbacks or [] if isinstance(cb, DeploymentAffinityCheck)
+        ]
+        assert len(affinity_callbacks) == 1
+    finally:
+        for cb in router.optional_callbacks or []:
+            litellm.logging_callback_manager.remove_callback_from_all_lists(cb)
