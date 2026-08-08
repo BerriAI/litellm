@@ -1641,3 +1641,106 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
 
         decoded = _is_base64_encoded_unified_file_id(output_file_id)
         assert get_models_from_unified_file_id(decoded) == [self._PUBLIC_MODEL_GROUP]
+class TestBatchCostAttribution:
+    """CheckBatchCost rebuilds the creator's spend metadata from the managed-object row so
+    the batch-cost log is attributed like a non-batch request."""
+
+    def _instance(self, key_row=None, team_row=None, user_row=None):
+        from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+        prisma = MagicMock()
+        prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=key_row)
+        prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+        prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+        return CheckBatchCost(
+            proxy_logging_obj=MagicMock(),
+            prisma_client=prisma,
+            llm_router=MagicMock(),
+        )
+
+    def _job(self, **overrides):
+        from types import SimpleNamespace
+
+        fields = {
+            "created_by": "alice",
+            "team_id": "team-alpha",
+            "api_key": "hash-alice",
+            "request_tags": ["env:prod"],
+        }
+        fields.update(overrides)
+        return SimpleNamespace(unified_object_id="uoi", **fields)
+
+    @pytest.mark.asyncio
+    async def test_metadata_carries_key_team_and_tags(self):
+        """The spend row names the creating key, its team, both aliases, and the tags."""
+        from types import SimpleNamespace
+
+        instance = self._instance(
+            key_row=SimpleNamespace(key_alias="prod-key"),
+            team_row=SimpleNamespace(team_alias="Team Alpha"),
+            user_row=SimpleNamespace(user_email="alice@example.com", user_alias=None),
+        )
+
+        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+
+        assert metadata["user_api_key"] == "hash-alice"
+        assert metadata["user_api_key_user_id"] == "alice"
+        assert metadata["user_api_key_team_id"] == "team-alpha"
+        assert metadata["user_api_key_alias"] == "prod-key"
+        assert metadata["user_api_key_team_alias"] == "Team Alpha"
+        assert metadata["tags"] == ["env:prod"]
+
+    @pytest.mark.asyncio
+    async def test_metadata_tolerates_legacy_row_without_columns(self):
+        """Rows created before the columns existed carry only created_by/team_id and must
+        still produce an attributed row rather than raising."""
+        instance = self._instance()
+        job = self._job(api_key=None, request_tags=None)
+
+        metadata = await instance._build_creator_attribution_metadata(job, "batch-1")
+
+        assert metadata["user_api_key"] is None
+        assert metadata["user_api_key_user_id"] == "alice"
+        assert metadata["user_api_key_team_id"] == "team-alpha"
+        assert "tags" not in metadata
+
+    @pytest.mark.asyncio
+    async def test_metadata_keeps_key_when_team_key_has_no_user(self):
+        """A team-scoped key carries no user id. The user lookup is skipped (prisma rejects
+        a None user_id) and the key hash still drives key-level attribution."""
+        from types import SimpleNamespace
+
+        instance = self._instance(key_row=SimpleNamespace(key_alias="svc-key"))
+        job = self._job(created_by=None)
+
+        metadata = await instance._build_creator_attribution_metadata(job, "batch-1")
+
+        assert metadata["user_api_key"] == "hash-alice"
+        assert metadata["user_api_key_user_id"] is None
+        assert metadata["user_api_key_alias"] == "svc-key"
+        instance.prisma_client.db.litellm_usertable.find_unique.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_metadata_drops_non_string_tags(self):
+        """Non-string tags are dropped so a malformed stored value cannot slip past the
+        tag-budget checks that consume this metadata."""
+        instance = self._instance()
+        job = self._job(request_tags=["env:prod", 7, None, "team:ml"])
+
+        metadata = await instance._build_creator_attribution_metadata(job, "batch-1")
+
+        assert metadata["tags"] == ["env:prod", "team:ml"]
+
+    @pytest.mark.asyncio
+    async def test_key_alias_lookup_failure_does_not_break_attribution(self):
+        """An alias lookup failure must not lose the spend row; the key hash and team still
+        attribute it."""
+        instance = self._instance()
+        instance.prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+            side_effect=Exception("db down")
+        )
+
+        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+
+        assert metadata["user_api_key"] == "hash-alice"
+        assert metadata["user_api_key_alias"] is None
