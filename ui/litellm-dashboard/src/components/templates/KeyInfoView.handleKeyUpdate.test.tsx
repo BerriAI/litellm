@@ -507,6 +507,68 @@ describe("KeyInfoView handleKeyUpdate budget_duration", () => {
     const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
     expect(sentPayload.budget_duration).toBe("30d");
   });
+
+  it("should forward a cleared budget_duration as an explicit null the JSON body keeps", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      budget_duration: null,
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.budget_duration).toBeNull();
+    expect(JSON.stringify({ ...sentPayload })).toContain('"budget_duration":null');
+  });
+
+  it("should render the cleared budget as never resetting instead of snapping back to the old interval", async () => {
+    keyUpdateCallMock.mockResolvedValueOnce({
+      ...baseKeyData,
+      budget_duration: null,
+      budget_reset_at: null,
+    });
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "access_abc",
+      userId: "user_1",
+      userRole: "Admin",
+      premiumUser: true,
+      token: "token_123",
+      userEmail: "test@example.com",
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    });
+
+    render(
+      <KeyInfoView
+        keyId="tok_123"
+        onClose={() => {}}
+        keyData={{ ...baseKeyData, budget_duration: "30d", budget_reset_at: "2026-09-01T00:00:00Z" } as any}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Settings"));
+    expect(screen.getByText("Budget Reset").parentElement?.textContent).toContain("Every 30d");
+
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      budget_duration: null,
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Budget Reset").parentElement?.textContent).toBe("Budget ResetNever");
+    });
+  });
 });
 
 describe("KeyInfoView handleKeyUpdate empty strings", () => {

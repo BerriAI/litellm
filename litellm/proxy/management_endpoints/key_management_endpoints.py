@@ -3528,11 +3528,34 @@ async def info_key_fn(
 ):
     """
     Retrieve information about a key.
+
     Parameters:
-        key: Optional[str] = Query parameter representing the key in the request
-        user_api_key_dict: UserAPIKeyAuth = Dependency representing the user's API key
+    - key: str | None (query parameter) - The key to look up. Accepts the plaintext key or its hash.
+      Defaults to the key in the Authorization header.
+
     Returns:
-        Dict containing the key and its associated information
+    - key: str - The key that was looked up, echoed back as it was passed in
+    - info: dict - The key's row, minus the hashed token
+        - key_alias: str | None - User-friendly key alias
+        - spend: float - Amount spent by the key. When budget_duration is set this covers only the
+          current budget window, not the key's lifetime
+        - max_budget: float | None - Max budget for the key, enforced against spend
+        - budget_duration: str | None - Budget reset period ("30d", "1h", etc.)
+        - budget_reset_at: datetime | None - When the current budget window ends and spend is next
+          reset to 0, not when it was last reset. Reset times snap to standard boundaries in the
+          configured timezone (30d and 1mo land on the 1st of the month, 7d on Monday, 1h on the
+          hour), so subtracting budget_duration from it does not give the window's start
+        - model_max_budget: dict - Per-model budgets, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+        - model_max_budget_usage: dict | None - Current-window spend per model, present only when
+          the key has per-model budgets
+        - models: list - Model_name's the key is allowed to call
+        - tpm_limit / rpm_limit: int | None - Tokens and requests per minute limits
+        - metadata: dict - Metadata for the key, e.g. {"team": "core-infra"}
+        - blocked: bool | None - Whether the key is blocked
+        - expires: datetime | None - When the key stops authenticating requests
+        - last_active: datetime | None - When the key was last used
+        - object_permission: dict | None - Resolved vector store / MCP permissions when the key has
+          an object_permission_id
 
     Example Curl:
     ```

@@ -30,6 +30,7 @@ from litellm.utils import client
 
 if TYPE_CHECKING:
     from a2a.client import Client as A2AClientType
+    from a2a.client import ClientCallContext as A2ACallContextType
     from a2a.compat.v0_3.types import (
         AgentCard,
         Message,
@@ -45,7 +46,7 @@ A2A_SDK_AVAILABLE = False
 _a2a_conversions: Any = None
 
 try:
-    from a2a.client import Client, ClientConfig, create_client
+    from a2a.client import Client, ClientCallContext, ClientConfig, create_client
     from a2a.compat.v0_3 import conversions as _a2a_conversions
     from a2a.compat.v0_3.types import (
         Message,
@@ -60,6 +61,7 @@ try:
     A2A_SDK_AVAILABLE = True
 except ImportError:
     Client = None
+    ClientCallContext = None
     ClientConfig = None
     create_client = None
 
@@ -218,6 +220,10 @@ async def _send_message_via_completion_bridge(
     return LiteLLMSendMessageResponse.from_dict(response_dict, request_id=str(request.id))
 
 
+def _get_a2a_call_context(a2a_client: "A2AClientType") -> Optional["A2ACallContextType"]:
+    return getattr(a2a_client, "_litellm_call_context", None)
+
+
 async def _send_message(a2a_client: "A2AClientType", request: "SendMessageRequest") -> "SendMessageResponse":
     """Send a non-streaming message via a2a-sdk 1.x and return JSON-RPC response."""
     if _a2a_conversions is None:
@@ -227,7 +233,7 @@ async def _send_message(a2a_client: "A2AClientType", request: "SendMessageReques
 
     pb_request: Final = _a2a_conversions.to_core_send_message_request(request)
     last_event = None
-    async for event in a2a_client.send_message(pb_request):
+    async for event in a2a_client.send_message(pb_request, context=_get_a2a_call_context(a2a_client)):
         last_event = event
     if last_event is None:
         raise RuntimeError("A2A send_message failed: no response received from agent.")
@@ -301,7 +307,7 @@ async def _stream_messages(
         )
 
     pb_request: Final = _a2a_conversions.to_core_send_message_request(request)
-    async for event in a2a_client.send_message(pb_request):
+    async for event in a2a_client.send_message(pb_request, context=_get_a2a_call_context(a2a_client)):
         compat_chunk = _a2a_conversions.to_compat_stream_response(
             event,
             request_id=request.id,
@@ -756,26 +762,12 @@ async def create_a2a_client(
 
     verbose_logger.info("Creating A2A client for %s", base_url)
 
-    # Use get_async_httpx_client with per-agent params so that different agents
-    # (with different extra_headers) get separate cached clients.  The params
-    # dict is hashed into the cache key, keeping agent auth isolated while
-    # still reusing connections within the same agent.
-    #
-    # Only pass params that AsyncHTTPHandler.__init__ accepts (e.g. timeout).
-    # Use "disable_aiohttp_transport" key for cache-key-only data (it's
-    # filtered out before reaching the constructor).
-    _client_params: Final[dict] = {"timeout": timeout}
-    if extra_headers:
-        # Encode headers into a cache-key-only param so each unique header
-        # set produces a distinct cache key.
-        _client_params["disable_aiohttp_transport"] = str(sorted(extra_headers.items()))
     _async_handler: Final = get_async_httpx_client(
         llm_provider=httpxSpecialProvider.A2AProvider,
-        params=_client_params,
+        params={"timeout": timeout},
     )
     httpx_client: Final = _async_handler.client
     if extra_headers:
-        httpx_client.headers.update(extra_headers)
         verbose_proxy_logger.debug("A2A client created with extra_headers=%s", list(extra_headers.keys()))
 
     a2a_client: Final = await create_client(  # pyright: ignore[reportOptionalCall]
@@ -784,11 +776,17 @@ async def create_a2a_client(
             httpx_client=httpx_client,
             streaming=streaming,
         ),
+        resolver_http_kwargs={"headers": extra_headers} if extra_headers else None,
     )
     # Stash LiteLLM-owned handles on the client so the localhost-retry path can reuse
-    # the configured httpx client (with this agent's trace-id/auth headers) without
-    # excavating a2a-sdk private internals.
+    # the configured httpx client and this agent's headers without excavating
+    # a2a-sdk private internals.
     a2a_client._litellm_httpx_client = httpx_client
+    a2a_client._litellm_call_context = (  # pyright: ignore[reportAttributeAccessIssue]  # LiteLLM-owned stash
+        ClientCallContext(service_parameters=extra_headers)  # pyright: ignore[reportOptionalCall]  # SDK checked above
+        if extra_headers
+        else None
+    )
     agent_card: Final = getattr(a2a_client, "_card", None)
     if agent_card is not None:
         a2a_client._litellm_agent_card = agent_card

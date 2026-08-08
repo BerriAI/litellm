@@ -292,6 +292,7 @@ class TestAutoRouterBenchmarks:
     ROW = _SessionAggRow(
         router_name="live-auto",
         router_type="complexity",
+        tier_turns={},
         sessions=4,
         turns=40,
         unordered_turns=1,
@@ -377,6 +378,21 @@ class TestAutoRouterBenchmarks:
         assert totals.avg_turns_per_session == 10.0
         assert totals.spend == 10.0
 
+    def test_tier_names_stay_scoped_to_the_router_type_that_recorded_them(self):
+        quality = self.ROW.model_copy(
+            update={"router_name": "quality-auto", "router_type": "quality", "tier_turns": {"2": 7}}
+        )
+        complexity = self.ROW.model_copy(update={"tier_turns": {"medium": 7}})
+        assert complexity.tier_turns == {"medium": 7}
+        assert quality.tier_turns == {"2": 7}
+
+    def test_summed_totals_carry_no_tier_map_because_names_are_router_scoped(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import _summed_agg_row
+
+        quality = self.ROW.model_copy(update={"router_type": "quality", "tier_turns": {"2": 7}})
+        complexity = self.ROW.model_copy(update={"tier_turns": {"medium": 7}})
+        assert _summed_agg_row([complexity, quality]).tier_turns == {}
+
     @pytest.mark.asyncio
     async def test_non_admin_roles_cannot_read_benchmarks(self):
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
@@ -427,3 +443,26 @@ class TestAutoRouterBenchmarks:
         assert response.routers_in_scope == 1
         assert response.groups[0].router_name == "live-auto"
         assert response.groups[0].saved_pct == response.totals.saved_pct == 75.0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "wire_value, expected", [({"simple": 24, "complex": 16}, {"simple": 24, "complex": 16}), ({}, {})]
+    )
+    async def test_the_tier_map_reaches_the_response_as_the_jsonb_column_returns_it(
+        self, wire_value: dict, expected: dict, monkeypatch: pytest.MonkeyPatch
+    ):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
+
+        class _DB:
+            async def query_raw(self, sql: str, *params: object):
+                return [{**TestAutoRouterBenchmarks.ROW.model_dump(), "tier_turns": wire_value}]
+
+        monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": _DB()})())
+
+        response = await get_auto_router_benchmarks(
+            user_api_key_dict=ADMIN,
+            start_date="2026-07-01",
+            end_date="2026-08-01",
+        )
+        assert response.groups[0].tier_turns == expected

@@ -57,6 +57,7 @@ from litellm.proxy._types import (
     SpecialManagementEndpointEnums,
     SpecialModelNames,
     SpecialProxyStrings,
+    TeamAccessGroupModelGrant,
     TeamAddMemberResponse,
     TeamInfoResponseObject,
     TeamInfoResponseObjectTeamTable,
@@ -3829,7 +3830,7 @@ async def _add_team_member_budget_table(
 ) -> TeamInfoResponseObjectTeamTable:
     try:
         team_budget: Final = await _budget_db(prisma_client).find_unique(where={"budget_id": team_member_budget_id})
-        team_info_response_object.team_member_budget_table = team_budget
+        return team_info_response_object.model_copy(update={"team_member_budget_table": team_budget})
     except Exception:
         verbose_proxy_logger.info(
             "Team member budget table not found, passed team_member_budget_id=%s", team_member_budget_id
@@ -3838,21 +3839,34 @@ async def _add_team_member_budget_table(
     return team_info_response_object
 
 
-async def _resolve_team_access_group_resources(_team_info: TeamInfoResponseObjectTeamTable) -> None:
-    """Populate access_group_models / mcp_server_ids / agent_ids on the team
-    info response by resolving inherited resources from its access groups."""
+async def _resolve_team_access_group_resources(
+    _team_info: TeamInfoResponseObjectTeamTable,
+) -> TeamInfoResponseObjectTeamTable:
+    """Return a copy of the team info with access_group_models / mcp_server_ids /
+    agent_ids / details resolved from its access groups."""
     if not _team_info.access_group_ids:
-        return
+        return _team_info
     ag_lookup: Final = await _batch_resolve_access_group_resources(_team_info.access_group_ids)
-    models, mcp_ids, agent_ids = set(), set(), set()
-    for ag_id in _team_info.access_group_ids:
-        if ag_id in ag_lookup:
-            models.update(ag_lookup[ag_id]["models"])
-            mcp_ids.update(ag_lookup[ag_id]["mcp_server_ids"])
-            agent_ids.update(ag_lookup[ag_id]["agent_ids"])
-    _team_info.access_group_models = list(models)
-    _team_info.access_group_mcp_server_ids = list(mcp_ids)
-    _team_info.access_group_agent_ids = list(agent_ids)
+    resolved_groups: Final = tuple(
+        ag_lookup[ag_id] for ag_id in dict.fromkeys(_team_info.access_group_ids) if ag_id in ag_lookup
+    )
+    return _team_info.model_copy(
+        update={
+            "access_group_models": list({m for group in resolved_groups for m in (group.access_model_names or [])}),
+            "access_group_mcp_server_ids": list(
+                {s for group in resolved_groups for s in (group.access_mcp_server_ids or [])}
+            ),
+            "access_group_agent_ids": list({a for group in resolved_groups for a in (group.access_agent_ids or [])}),
+            "access_group_details": tuple(
+                TeamAccessGroupModelGrant(
+                    access_group_id=group.access_group_id,
+                    access_group_name=group.access_group_name,
+                    models=tuple(group.access_model_names or ()),
+                )
+                for group in resolved_groups
+            ),
+        }
+    )
 
 
 @router.get("/team/info", tags=["team management"], dependencies=[Depends(user_api_key_auth)])
@@ -3958,11 +3972,11 @@ async def team_info(
             )
 
         # Resolve resources inherited from access groups
-        await _resolve_team_access_group_resources(_team_info)
+        resolved_team_info: Final = await _resolve_team_access_group_resources(_team_info)
 
         response_object: Final = TeamInfoResponseObject(
             team_id=team_id,
-            team_info=_team_info,
+            team_info=resolved_team_info,
             keys=keys,
             team_memberships=returned_tm,
         )
@@ -4391,32 +4405,21 @@ async def _build_team_list_where_conditions(
 
 async def _batch_resolve_access_group_resources(
     all_access_group_ids: list[str],
-) -> dict[str, dict[str, list[str]]]:
+) -> dict[str, LiteLLM_AccessGroupTable]:
     """
-    Batch-fetch access groups in a single DB query and return a per-group
-    resource map.
-
-    Returns {ag_id: {"models": [...], "mcp_server_ids": [...], "agent_ids": [...]}}.
-    Missing/invalid groups are silently omitted.
+    Batch-fetch access groups in a single DB query and return them keyed by
+    access_group_id. Missing/invalid groups are silently omitted.
     """
     from litellm.proxy.proxy_server import prisma_client as _prisma_client
 
     if not all_access_group_ids or _prisma_client is None:
         return {}
 
-    unique_ids: Final = list(set(all_access_group_ids))
+    unique_ids: Final = tuple(frozenset(all_access_group_ids))
     rows: Final = await _access_group_db(_prisma_client).find_many(
         where={"access_group_id": {"in": unique_ids}},
     )
-
-    result: Final[dict[str, dict[str, list[str]]]] = {}
-    for row in rows:
-        result[row.access_group_id] = {
-            "models": list(row.access_model_names or []),
-            "mcp_server_ids": list(row.access_mcp_server_ids or []),
-            "agent_ids": list(row.access_agent_ids or []),
-        }
-    return result
+    return {row.access_group_id: row for row in rows}
 
 
 def _convert_teams_to_response_models(
@@ -4710,15 +4713,18 @@ async def list_team_v2(
             all_ag_ids: Final = [ag_id for t in team_items_with_ag for ag_id in (t.access_group_ids or [])]
             ag_lookup: Final = await _batch_resolve_access_group_resources(all_ag_ids)
             for team_item in team_items_with_ag:
-                models, mcp_ids, agent_ids = set(), set(), set()
-                for ag_id in team_item.access_group_ids or []:
-                    if ag_id in ag_lookup:
-                        models.update(ag_lookup[ag_id]["models"])
-                        mcp_ids.update(ag_lookup[ag_id]["mcp_server_ids"])
-                        agent_ids.update(ag_lookup[ag_id]["agent_ids"])
-                team_item.access_group_models = list(models)
-                team_item.access_group_mcp_server_ids = list(mcp_ids)
-                team_item.access_group_agent_ids = list(agent_ids)
+                team_groups = tuple(
+                    ag_lookup[ag_id] for ag_id in (team_item.access_group_ids or []) if ag_id in ag_lookup
+                )
+                team_item.access_group_models = list(
+                    {m for group in team_groups for m in (group.access_model_names or [])}
+                )
+                team_item.access_group_mcp_server_ids = list(
+                    {s for group in team_groups for s in (group.access_mcp_server_ids or [])}
+                )
+                team_item.access_group_agent_ids = list(
+                    {a for group in team_groups for a in (group.access_agent_ids or [])}
+                )
 
     return {
         "teams": team_list,

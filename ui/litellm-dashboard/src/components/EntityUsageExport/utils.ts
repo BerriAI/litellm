@@ -3,12 +3,18 @@ import type { DateRangePickerValue } from "@tremor/react";
 import Papa from "papaparse";
 import type { EntityBreakdown, EntitySpendData, EntityType, ExportMetadata, ExportScope } from "./types";
 
-// Resolve display name for an entity. For teams the teamAliasMap provides
-// a human-readable alias; for every other entity type the entity key itself
-// (tag name, org id, customer id, …) is already the correct label.
-const resolveEntityDisplay = (entity: string, teamAliasMap: Record<string, string>): { id: string; alias: string } => ({
+const resolveEntityDisplay = (
+  entity: string,
+  teamAliasMap: Record<string, string>,
+  entityMetadata?: Record<string, any>,
+): { id: string; alias: string } => ({
   id: entity,
-  alias: teamAliasMap[entity] || entity,
+  alias:
+    teamAliasMap[entity] ||
+    entityMetadata?.team_alias ||
+    entityMetadata?.user_email ||
+    entityMetadata?.user_alias ||
+    entity,
 });
 
 // Mirrors backend SpendMetrics fields (litellm/types/activity_tracking.py).
@@ -68,7 +74,7 @@ export const getEntityBreakdown = (
 
   spendData.results.forEach((day) => {
     Object.entries(resolveEntities(day.breakdown)).forEach(([entity, data]: [string, any]) => {
-      const { id, alias } = resolveEntityDisplay(entity, teamAliasMap);
+      const { id, alias } = resolveEntityDisplay(entity, teamAliasMap, data.metadata);
 
       if (!entitySpend[entity]) {
         entitySpend[entity] = {
@@ -113,7 +119,7 @@ export const generateDailyData = (
 
   spendData.results.forEach((day) => {
     Object.entries(resolveEntities(day.breakdown)).forEach(([entity, data]: [string, any]) => {
-      const { id, alias } = resolveEntityDisplay(entity, teamAliasMap);
+      const { id, alias } = resolveEntityDisplay(entity, teamAliasMap, data.metadata);
 
       dailyBreakdown.push({
         Date: day.date,
@@ -164,7 +170,7 @@ export const generateDailyWithKeysData = (
 
   spendData.results.forEach((day) => {
     Object.entries(resolveEntities(day.breakdown)).forEach(([entity, data]: [string, any]) => {
-      const { id: entityId, alias: entityAlias } = resolveEntityDisplay(entity, teamAliasMap);
+      const { id: entityId, alias: entityAlias } = resolveEntityDisplay(entity, teamAliasMap, data.metadata);
       const apiKeyBreakdown = data.api_key_breakdown || {};
 
       // Iterate through each API key in the breakdown
@@ -241,11 +247,13 @@ export const generateDailyWithModelsData = (
 
   spendData.results.forEach((day) => {
     const dailyEntityModels: { [key: string]: { [key: string]: any } } = {};
+    const dailyEntityMetadata: { [key: string]: Record<string, any> | undefined } = {};
 
     Object.entries(resolveEntities(day.breakdown)).forEach(([entity, entityData]: [string, any]) => {
       if (!dailyEntityModels[entity]) {
         dailyEntityModels[entity] = {};
       }
+      dailyEntityMetadata[entity] = entityData.metadata;
 
       Object.entries(day.breakdown.models || {}).forEach(([model, modelData]: [string, any]) => {
         const entityApiKeys = entityData.api_key_breakdown || {};
@@ -282,7 +290,7 @@ export const generateDailyWithModelsData = (
     });
 
     Object.entries(dailyEntityModels).forEach(([entity, models]) => {
-      const { id, alias } = resolveEntityDisplay(entity, teamAliasMap);
+      const { id, alias } = resolveEntityDisplay(entity, teamAliasMap, dailyEntityMetadata[entity]);
 
       Object.entries(models).forEach(([model, metrics]: [string, any]) => {
         dailyModelBreakdown.push({

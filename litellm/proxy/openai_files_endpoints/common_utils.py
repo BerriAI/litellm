@@ -1,6 +1,7 @@
 import base64
 import mimetypes
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
     from prisma.models import LiteLLM_ManagedObjectTable
 
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
     from litellm.types.utils import LiteLLMBatch
 
@@ -1002,6 +1004,34 @@ async def resolve_output_file_ids_to_unified(response, prisma_client) -> None:
             pass
 
 
+async def map_raw_file_ids_to_unified(
+    raw_file_ids: frozenset[str], prisma_client: "PrismaClient | None"
+) -> Mapping[str, str]:
+    if not raw_file_ids or not prisma_client:
+        return MappingProxyType({})
+    managed_files: Final = await ManagedFileRepository(prisma_client).table.find_many(
+        where={"flat_model_file_ids": {"hasSome": sorted(raw_file_ids)}}  # mutable-ok: prisma where is a plain dict
+    )
+    return MappingProxyType(
+        {
+            raw_id: managed_file.unified_file_id
+            for managed_file in managed_files
+            for raw_id in managed_file.flat_model_file_ids
+            if raw_id in raw_file_ids
+        }
+    )
+
+
+def apply_unified_file_ids(response: "LiteLLMBatch", unified_id_by_raw_id: Mapping[str, str]) -> None:
+    for file_attr, raw_id in (
+        ("input_file_id", getattr(response, "input_file_id", None)),
+        ("output_file_id", getattr(response, "output_file_id", None)),
+        ("error_file_id", getattr(response, "error_file_id", None)),
+    ):
+        if isinstance(raw_id, str) and raw_id in unified_id_by_raw_id:
+            setattr(response, file_attr, unified_id_by_raw_id[raw_id])
+
+
 async def ensure_batch_response_managed_file_ids(
     response,
     managed_files_obj,
@@ -1148,7 +1178,7 @@ async def update_batch_in_database(
         managed_files_obj: The managed_files proxy hook object
         prisma_client: Prisma database client
         verbose_proxy_logger: Logger instance
-        db_batch_object: Optional existing database object (for comparison)
+        db_batch_object: Optional existing database object; fetched by unified_object_id when omitted
         operation: Description of operation ("update", "cancel", etc.)
         user_api_key_dict: Optional auth context for creating managed file IDs
     """
@@ -1161,6 +1191,12 @@ async def update_batch_in_database(
         if not prisma_client:
             return
 
+        effective_db_batch_object: Final = (
+            db_batch_object
+            if db_batch_object is not None
+            else await ManagedObjectRepository(prisma_client).table.find_first(where={"unified_object_id": batch_id})
+        )
+
         # Always normalize the response's file IDs to unified managed IDs
         # (mutates in place) so the caller returns unified IDs to the user
         # even when we skip the DB update below for an unchanged status.
@@ -1170,16 +1206,17 @@ async def update_batch_in_database(
             prisma_client=prisma_client,
             verbose_proxy_logger=verbose_proxy_logger,
             user_api_key_dict=user_api_key_dict,
-            db_batch_object=db_batch_object,
+            db_batch_object=effective_db_batch_object,
+            unified_batch_id=unified_batch_id,
         )
 
         # Only update if status has changed (when db_batch_object is provided)
-        if db_batch_object and response.status == db_batch_object.status:
+        if effective_db_batch_object and response.status == effective_db_batch_object.status:
             return
 
-        if db_batch_object:
+        if effective_db_batch_object:
             verbose_proxy_logger.info(
-                "Updating batch %s status from %s to %s", batch_id, db_batch_object.status, response.status
+                "Updating batch %s status from %s to %s", batch_id, effective_db_batch_object.status, response.status
             )
         else:
             verbose_proxy_logger.info("Updating batch %s status to %s after %s", batch_id, response.status, operation)
