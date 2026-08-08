@@ -574,6 +574,42 @@ def _fix_enum_types(schema, depth=0):
                 _fix_enum_types(item, depth=depth + 1)
 
 
+def _convert_oneof_to_anyof(schema: dict[str, Any], depth: int = 0) -> None:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
+        )
+
+    if not isinstance(schema, dict):
+        return
+
+    oneof = schema.get("oneOf", None)
+    if (
+        isinstance(oneof, list)
+        and "anyOf" not in schema
+        and "type" not in schema
+        and "properties" not in schema
+        and "items" not in schema
+    ):
+        schema.pop("oneOf")
+        schema["anyOf"] = oneof
+
+    properties: Final = schema.get("properties", None)
+    if properties is not None:
+        for value in properties.values():
+            _convert_oneof_to_anyof(value, depth=depth + 1)
+
+    items: Final = schema.get("items", None)
+    if items is not None:
+        _convert_oneof_to_anyof(items, depth=depth + 1)
+
+    anyof: Final = schema.get("anyOf", None)
+    if anyof is not None and isinstance(anyof, list):
+        for item in anyof:
+            if isinstance(item, dict):
+                _convert_oneof_to_anyof(item, depth=depth + 1)
+
+
 def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
@@ -596,6 +632,8 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     # with circular references (see issue #19098). unpack_defs handles nested
     # refs recursively and correctly detects/skips circular references.
     unpack_defs(parameters, defs)
+
+    _convert_oneof_to_anyof(parameters)
 
     # 5. Nullable fields:
     #     * https://github.com/pydantic/pydantic/issues/1270
@@ -779,7 +817,7 @@ def convert_anyof_null_to_nullable(schema, depth=0):
     anyof: Final = schema.get("anyOf", None)
     if anyof is not None:
         contains_null = False
-        for atype in anyof:
+        for atype in tuple(anyof):
             if isinstance(atype, dict) and atype.get("type") == "null":
                 # remove null type
                 anyof.remove(atype)
