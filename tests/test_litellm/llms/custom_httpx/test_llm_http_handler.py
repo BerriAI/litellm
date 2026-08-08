@@ -2071,3 +2071,34 @@ async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_reques
     retry_authorization = posts[1]["headers"]["Authorization"]
     assert retry_authorization.startswith("AWS4-HMAC-SHA256")
     assert retry_authorization != first_attempt_headers["Authorization"]
+
+
+@pytest.mark.asyncio
+async def test_async_rerank_records_llm_api_duration():
+    """arerank must feed the httpx timing into the logging obj, so the proxy can emit
+    x-litellm-overhead-duration-ms / x-litellm-timing-* on /rerank."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "rerank-1",
+                "results": [{"index": 0, "relevance_score": 0.9}],
+                "meta": {"api_version": {"version": "2"}, "billed_units": {"search_units": 1}},
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response = await litellm.arerank(
+        model="cohere/rerank-v3.5",
+        query="what is the capital of france",
+        documents=["paris", "berlin"],
+        top_n=1,
+        api_key="fake-key",
+        client=client,
+    )
+
+    assert response._hidden_params["litellm_overhead_time_ms"] is not None
+    assert response._hidden_params["_response_ms"] >= response._hidden_params["litellm_overhead_time_ms"]
