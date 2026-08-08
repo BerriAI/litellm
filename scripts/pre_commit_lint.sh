@@ -6,8 +6,8 @@
 #   - litellm/ Python staged -> `make lint` (test-linting.yml's lint job)
 #   - tests/e2e Python staged -> `make lint-e2e-basedpyright` (test-linting.yml's e2e type-check step)
 #                                + raw HTTP client ban (test-code-quality.yml's check_e2e_no_raw_requests)
-#   - litellm/ Python or this
-#     check's own list staged -> extra="allow" ban (test-code-quality.yml's ban_pydantic_extra_allow)
+#   - litellm/ Python or the
+#     grandfathered list staged -> extra="allow" ban (test-code-quality.yml's ban_pydantic_extra_allow)
 #   - dashboard staged        -> prettier + eslint + lint budgets (test-litellm-ui-build.yml's frontend-lint)
 #   - proxy/types staged      -> regenerate dashboard API types and fail on drift (check-ui-api-types.yml)
 #
@@ -49,9 +49,9 @@ litellm_py_files=$(staged_match '^litellm/.*\.py$')
 e2e_py_files=$(staged_match '^tests/e2e/.*\.py$')
 # ruff format (and CI's format step) skip enterprise; the rest of make lint covers it.
 fmt_files=$(printf '%s\n' "$litellm_py_files" | grep -v '^litellm/enterprise/' || true)
-# The extra="allow" ban reads all of litellm/, and its grandfathered list is data the
-# check itself gates, so editing either can turn ban_pydantic_extra_allow red.
-extra_allow_files=$(staged_match '^(litellm/.*\.py|tests/code_coverage_tests/ban_pydantic_extra_allow\.py)$')
+# The extra="allow" ban reads all of litellm/, and its grandfathered models are a budget
+# the check reads, so editing either can turn ban_pydantic_extra_allow red.
+extra_allow_files=$(staged_match '^(litellm/.*\.py|extra-allow-budget\.json|tests/code_coverage_tests/ban_pydantic_extra_allow\.py)$')
 # check-ui-api-types.yml triggers on any file under litellm/proxy or litellm/types
 # (Prisma schema and configs included, not just Python) plus the generator and its
 # lockfiles, so match that whole trigger set rather than a Python subset.
@@ -162,14 +162,11 @@ if [ -n "$e2e_py_files" ]; then
 fi
 
 # Around two seconds over all of litellm/, so it runs inline rather than behind a job.
-# CI ratchets the grandfathered list against the base branch tip; locally the closest
-# equivalent is the merge-base, and the check reports the ref it couldn't read.
+# Growing the list is the budget-ratchet job's business, which is non-gating and CI-only.
 if [ -n "$extra_allow_files" ]; then
     echo "pre-commit: checking new pydantic models don't set extra=\"allow\" (ban_pydantic_extra_allow)"
-    extra_allow_base=$(git merge-base origin/litellm_internal_staging HEAD 2>/dev/null || true)
     uv run --no-sync python tests/code_coverage_tests/ban_pydantic_extra_allow.py \
-        ${extra_allow_base:+--base "$extra_allow_base"} \
-        || { echo "✗ New extra=\"allow\" model or a grown grandfathered list. Declare the fields the model accepts, then re-run make pre-commit." >&2; status=1; }
+        || { echo "✗ New extra=\"allow\" model, or extra-allow-budget.json is stale. Declare the fields the model accepts, then re-run make pre-commit." >&2; status=1; }
 fi
 
 dashboard_checks() {

@@ -1,7 +1,8 @@
 """Tests for the extra="allow" ban at tests/code_coverage_tests/ban_pydantic_extra_allow.py."""
 
+import importlib.util
+import json
 import os
-import subprocess
 import sys
 
 import pytest
@@ -12,6 +13,11 @@ sys.path.insert(0, _CODE_COVERAGE_DIR)
 import ban_pydantic_extra_allow as checker  # noqa: E402
 
 _REPO_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+
+_RATCHET_PATH = os.path.join(_REPO_ROOT, "scripts", "budget_ratchet_check.py")
+_ratchet_spec = importlib.util.spec_from_file_location("budget_ratchet_check", _RATCHET_PATH)
+ratchet = importlib.util.module_from_spec(_ratchet_spec)
+_ratchet_spec.loader.exec_module(ratchet)
 
 
 @pytest.mark.parametrize(
@@ -187,64 +193,57 @@ def test_reports_nested_class_with_qualified_name():
     assert [violation.identifier() for violation in violations] == ["litellm/types/thing.py::Outer.Inner"]
 
 
-def test_grandfathered_list_matches_repo():
-    """Every grandfathered entry must still exist, and nothing new may be added."""
+def test_budget_matches_repo():
+    """Every grandfathered model must still exist, and nothing new may be added."""
+    budget = checker.read_budget(os.path.join(_REPO_ROOT, checker.BUDGET_PATH))
     found = frozenset(violation.identifier() for violation in checker.find_extra_allow_models(_REPO_ROOT))
-    assert sorted(found - checker.GRANDFATHERED) == []
-    assert sorted(checker.GRANDFATHERED - found) == []
+    assert sorted(found - budget.models) == []
+    assert sorted(budget.models - found) == []
 
 
-def test_parse_grandfathered_reads_the_list_of_another_revision():
-    source = 'OTHER = frozenset({"nope"})\nGRANDFATHERED = frozenset(\n    {\n        "a.py::A",\n        "b.py::B",\n    }\n)\n'
-    assert checker.parse_grandfathered(source) == frozenset({"a.py::A", "b.py::B"})
+def test_budget_limit_matches_the_models_it_lists():
+    """The limit is what the budget ratchet reads, so it can't drift from the list."""
+    budget = checker.read_budget(os.path.join(_REPO_ROOT, checker.BUDGET_PATH))
+    assert budget.limit == len(budget.models)
 
 
-def test_parse_grandfathered_reads_this_files_own_list():
-    with open(os.path.join(_REPO_ROOT, checker.SELF_PATH), encoding="utf-8") as handle:
-        assert checker.parse_grandfathered(handle.read()) == checker.GRANDFATHERED
+def _write_budget(path, limit, models):
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump({checker.BUDGET_RULE: {"limit": limit, "models": list(models)}}, handle)
+    return path
 
 
-def _baseline_commit(repo, entries):
-    """A one-commit repo whose copy of the checker grandfathers exactly ``entries``."""
-    target = os.path.join(repo, checker.SELF_PATH)
-    os.makedirs(os.path.dirname(target), exist_ok=True)
-    with open(target, "w", encoding="utf-8") as handle:
-        handle.write("GRANDFATHERED = frozenset(\n    {\n")
-        handle.writelines(f'        "{entry}",\n' for entry in entries)
-        handle.write("    }\n)\n")
-    for command in (
-        ["git", "init", "-q", "."],
-        ["git", "add", checker.SELF_PATH],
-        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline"],
-    ):
-        subprocess.run(command, cwd=repo, check=True)
-    return subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
-    ).stdout.strip()
+def test_read_budget_reads_the_limit_and_the_models(tmp_path):
+    path = _write_budget(tmp_path / "extra-allow-budget.json", 2, ["a.py::A", "b.py::B"])
+    assert checker.read_budget(str(path)) == checker.Budget(limit=2, models=frozenset({"a.py::A", "b.py::B"}))
 
 
 @pytest.mark.parametrize(
-    "baseline, expected",
+    "limit, expected_exit",
     [
-        pytest.param(checker.GRANDFATHERED, [], id="unchanged_list_passes"),
-        pytest.param(
-            checker.GRANDFATHERED | {"litellm/types/gone.py::Gone"},
-            [],
-            id="removing_an_entry_passes",
-        ),
-        pytest.param(
-            checker.GRANDFATHERED - {"litellm/types/utils.py::ImageResponse"},
-            ["litellm/types/utils.py::ImageResponse"],
-            id="adding_an_entry_is_reported",
-        ),
+        pytest.param(1, 0, id="limit_matching_the_single_model_passes"),
+        pytest.param(2, 1, id="limit_above_the_models_listed_fails"),
     ],
 )
-def test_added_grandfathered_only_reports_growth(tmp_path, monkeypatch, baseline, expected):
-    base_sha = _baseline_commit(str(tmp_path), sorted(baseline))
+def test_main_requires_the_limit_to_match_the_list(tmp_path, monkeypatch, limit, expected_exit):
+    """A limit above the list would buy silent headroom the budget ratchet can't see."""
+    model_dir = tmp_path / checker.SCAN_ROOT / "types"
+    model_dir.mkdir(parents=True)
+    (model_dir / "thing.py").write_text('class Foo(BaseModel):\n    model_config = ConfigDict(extra="allow")\n')
+    _write_budget(tmp_path / checker.BUDGET_PATH, limit, [f"{checker.SCAN_ROOT}/types/thing.py::Foo"])
     monkeypatch.chdir(tmp_path)
-    assert list(checker.added_grandfathered(base_sha)) == expected
+    assert checker.main() == expected_exit
 
 
-def test_added_grandfathered_skips_a_base_without_the_checker(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    assert checker.added_grandfathered("HEAD") == ()
+def test_raising_the_limit_reds_the_budget_ratchet():
+    """Grandfathering one more model means raising the limit, which the shared ratchet catches."""
+    budget = checker.read_budget(os.path.join(_REPO_ROOT, checker.BUDGET_PATH))
+    base = {checker.BUDGET_RULE: {"limit": budget.limit}}
+    head = {checker.BUDGET_RULE: {"limit": budget.limit + 1}}
+    regressions = ratchet.regressions_for(checker.BUDGET_PATH, base, head)
+    assert [regression.rule for regression in regressions] == [checker.BUDGET_RULE]
+    assert ratchet.regressions_for(checker.BUDGET_PATH, base, {checker.BUDGET_RULE: {"limit": budget.limit - 1}}) == []
+
+
+def test_the_budget_ratchet_watches_this_budget():
+    assert checker.BUDGET_PATH in ratchet.DEFAULT_BUDGETS

@@ -2,81 +2,34 @@
 
 ``extra="allow"`` silently accepts undeclared keys, so typos survive validation and
 real fields (pricing on ``ModelInfo``, for example) never get declared anywhere. The
-models listed in ``GRANDFATHERED`` predate this check and stay allowed; anything new
-must declare its fields.
+models listed in ``extra-allow-budget.json`` predate this check and stay allowed;
+anything new must declare its fields.
 
-The list is one way. With ``--base <ref>`` the check also fails when it gained an entry
-relative to that ref, so the only edits to it that pass are removals.
+That list is a budget like the others, so ``scripts/budget_ratchet_check.py`` is what
+reds when it grows, and its ``limit`` must equal the number of models it lists.
 """
 
-import argparse
 import ast
+import json
 import os
-import subprocess
 import sys
+from types import MappingProxyType
 from typing import Final, Iterator, NamedTuple, Sequence
 
 SCAN_ROOT: Final = "litellm"
-SELF_PATH: Final = "tests/code_coverage_tests/ban_pydantic_extra_allow.py"
+BUDGET_PATH: Final = "extra-allow-budget.json"
+BUDGET_RULE: Final = "extra_allow_models"
 
-GRANDFATHERED: Final = frozenset(
-    {
-        "litellm/llms/anthropic/common_utils.py::_ReplayedSearchQuery",
-        "litellm/llms/anthropic/common_utils.py::_ReplayedServerToolUse",
-        "litellm/llms/anthropic/common_utils.py::_ReplayedWebSearchResult",
-        "litellm/llms/anthropic/common_utils.py::_ReplayedWebSearchToolResult",
-        "litellm/llms/base_llm/ocr/transformation.py::OCRPage",
-        "litellm/llms/base_llm/ocr/transformation.py::OCRPageImage",
-        "litellm/llms/base_llm/ocr/transformation.py::OCRResponse",
-        "litellm/llms/base_llm/ocr/transformation.py::OCRUsageInfo",
-        "litellm/llms/base_llm/sandbox/transformation.py::CodeExecutionResult",
-        "litellm/llms/base_llm/sandbox/transformation.py::ContainerHandle",
-        "litellm/llms/base_llm/search/transformation.py::SearchResponse",
-        "litellm/llms/base_llm/search/transformation.py::SearchResult",
-        "litellm/proxy/_types.py::CoordinationRedisParams",
-        "litellm/proxy/_types.py::ModelInfo",
-        "litellm/proxy/_types.py::TeamDefaultSettings",
-        "litellm/proxy/ui_crud_endpoints/proxy_setting_endpoints.py::UISettings",
-        "litellm/router_strategy/auto_router/litellm_encoder.py::CustomDenseEncoder",
-        "litellm/router_strategy/complexity_router/config.py::ComplexityRouterConfig",
-        "litellm/router_strategy/quality_router/config.py::QualityRouterConfig",
-        "litellm/router_strategy/quality_router/config.py::RoutingPreferences",
-        "litellm/types/agents.py::AgentCreateResponse",
-        "litellm/types/agents.py::AgentDeleteResult",
-        "litellm/types/agents.py::AgentListResponse",
-        "litellm/types/agents.py::AgentVersionsResponse",
-        "litellm/types/agents.py::LiteLLMSendMessageResponse",
-        "litellm/types/completion.py::CompletionRequest",
-        "litellm/types/embedding.py::EmbeddingRequest",
-        "litellm/types/fine_tuning.py::OpenAIFineTuningHyperparameters",
-        "litellm/types/guardrails.py::BaseLitellmParams",
-        "litellm/types/llms/anthropic.py::AnthropicResponseContentBlockToolUse",
-        "litellm/types/llms/anthropic.py::AnthropicResponseUsageBlock",
-        "litellm/types/llms/base.py::BaseLiteLLMOpenAIResponseObject",
-        "litellm/types/llms/base.py::HiddenParams",
-        "litellm/types/llms/openai.py::GenericEvent",
-        "litellm/types/llms/openai.py::Hyperparameters",
-        "litellm/types/llms/openai.py::InputTokensDetails",
-        "litellm/types/llms/openai.py::LiteLLMFineTuningJobCreate",
-        "litellm/types/llms/openai.py::OutputTokensDetails",
-        "litellm/types/llms/openai.py::ResponseAPIUsage",
-        "litellm/types/prompts/init_prompts.py::PromptInfo",
-        "litellm/types/prompts/init_prompts.py::PromptLiteLLMParams",
-        "litellm/types/proxy/guardrails/guardrail_hooks/cisco_ai_defense.py::CiscoAIDefenseGuardrailConfigModelOptionalParams",
-        "litellm/types/proxy/guardrails/guardrail_hooks/generic_guardrail_api.py::GuardrailToolParam",
-        "litellm/types/proxy/guardrails/guardrail_hooks/straiker.py::StraikerWebhookResponse",
-        "litellm/types/rag.py::RAGIngestRequest",
-        "litellm/types/rag.py::RAGQueryRequest",
-        "litellm/types/realtime.py::RealtimeSessionConfig",
-        "litellm/types/realtime.py::RealtimeTranscriptionSessionRequest",
-        "litellm/types/realtime.py::RealtimeTranscriptionSessionResponse",
-        "litellm/types/router.py::Deployment",
-        "litellm/types/router.py::GenericLiteLLMParams",
-        "litellm/types/router.py::LiteLLM_Params",
-        "litellm/types/router.py::ModelInfo",
-        "litellm/types/utils.py::ImageResponse",
-    }
-)
+
+class Budget(NamedTuple):
+    limit: int
+    models: frozenset[str]
+
+
+def read_budget(path: str) -> Budget:
+    with open(path, encoding="utf-8") as handle:
+        rule: Final = MappingProxyType(json.load(handle)[BUDGET_RULE])
+    return Budget(limit=int(rule["limit"]), models=frozenset(rule["models"]))
 
 
 class Violation(NamedTuple):
@@ -274,48 +227,13 @@ def find_extra_allow_models(base_dir: str) -> tuple[Violation, ...]:
     )
 
 
-def parse_grandfathered(source: str) -> frozenset[str]:
-    """The entries ``GRANDFATHERED`` lists in ``source``, so another revision of this file
-    can be read without importing it. The entries are string literals, so they are collected
-    from the assignment's subtree rather than evaluating the ``frozenset`` call around them."""
-    return frozenset(
-        node.value
-        for statement in ast.parse(source).body
-        for name, value in _assigned_names(statement)
-        if name == "GRANDFATHERED"
-        for node in ast.walk(value)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str)
-    )
-
-
-def _source_at(ref: str) -> str | None:
-    completed: Final = subprocess.run(
-        ["git", "show", f"{ref}:{SELF_PATH}"], capture_output=True, text=True, check=False
-    )
-    return completed.stdout if completed.returncode == 0 else None
-
-
-def added_grandfathered(base_ref: str) -> tuple[str, ...]:
-    base_source: Final = _source_at(base_ref)
-    if base_source is None:
-        print(f"{SELF_PATH} does not exist at {base_ref}, so there is no list to ratchet against yet.")
-        return ()
-    return tuple(sorted(GRANDFATHERED - parse_grandfathered(base_source)))
-
-
 def main() -> int:
-    parser: Final = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--base",
-        help="git ref to ratchet GRANDFATHERED against, failing when this branch added an entry",
-    )
-    args: Final = parser.parse_args()
-
-    base_dir = os.getcwd()
-    found = find_extra_allow_models(base_dir)
-    violations = tuple(violation for violation in found if violation.identifier() not in GRANDFATHERED)
-    stale = tuple(sorted(GRANDFATHERED - {violation.identifier() for violation in found}))
-    added = added_grandfathered(args.base) if args.base else ()
+    base_dir: Final = os.getcwd()
+    budget: Final = read_budget(os.path.join(base_dir, BUDGET_PATH))
+    found: Final = find_extra_allow_models(base_dir)
+    violations: Final = tuple(violation for violation in found if violation.identifier() not in budget.models)
+    stale: Final = tuple(sorted(budget.models - {violation.identifier() for violation in found}))
+    miscounted: Final = budget.limit != len(budget.models)
 
     for violation in violations:
         print(f'{violation.file}:{violation.line}: {violation.model} sets extra="allow"')
@@ -324,25 +242,24 @@ def main() -> int:
             f'\nFound {len(violations)} new Pydantic model(s) using extra="allow".\n'
             'Declare the fields you accept instead. extra="allow" hides typos and\n'
             "leaves real fields undocumented and untyped. If a model genuinely has to\n"
-            "forward opaque provider payloads, add it to GRANDFATHERED in\n"
-            "tests/code_coverage_tests/ban_pydantic_extra_allow.py with a reason in the PR."
+            f"forward opaque provider payloads, add it to {BUDGET_RULE} in {BUDGET_PATH},\n"
+            "raise the limit to match, and say why in the PR: raising it reds the\n"
+            "non-gating budget-ratchet check so the loosening is seen and accepted."
         )
     if stale:
         print(
-            '\nThese GRANDFATHERED entries no longer use extra="allow" (or moved).\n'
-            "Remove them so the list keeps ratcheting down:"
+            f'\nThese {BUDGET_PATH} models no longer use extra="allow" (or moved).\n'
+            "Remove them and lower the limit so it keeps ratcheting down:"
         )
         for entry in stale:
             print(f"  {entry}")
-    if added:
+    if miscounted:
         print(
-            f"\nThis branch added {len(added)} entry/entries to GRANDFATHERED. The list only\n"
-            "shrinks, so declare the fields these models accept instead of grandfathering them:"
+            f"\n{BUDGET_PATH} lists {len(budget.models)} models under a limit of {budget.limit}.\n"
+            "They must match, since the limit is what the budget ratchet reads."
         )
-        for entry in added:
-            print(f"  {entry}")
 
-    if violations or stale or added:
+    if violations or stale or miscounted:
         return 1
     print('No new extra="allow" Pydantic models found.')
     return 0

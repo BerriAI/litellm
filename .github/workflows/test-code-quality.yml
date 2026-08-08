@@ -119,14 +119,6 @@ jobs:
       - name: ban_pydantic_extra_allow
         run: uv run --no-sync python ./tests/code_coverage_tests/ban_pydantic_extra_allow.py
 
-      - name: ban_pydantic_extra_allow (grandfathered list only shrinks)
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          uv run --no-sync python ./tests/code_coverage_tests/ban_pydantic_extra_allow.py --base "$BASE_SHA"
-
       - name: check_fastuuid_usage
         run: uv run --no-sync python ./tests/code_coverage_tests/check_fastuuid_usage.py
 
