@@ -13,10 +13,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
+import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
@@ -62,19 +61,13 @@ def test_internal_user_viewer_rag_ingest_without_vector_store_id_rejected(
     response = client_internal_user_viewer.post(
         "/v1/rag/ingest",
         files={"file": ("sample.txt", io.BytesIO(b"test content"), "text/plain")},
-        data={
-            "request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
-        },
+        data={"request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'},
     )
 
     assert response.status_code == 403
     detail = response.json()
     assert "detail" in detail
-    error_msg = (
-        detail["detail"]["error"]
-        if isinstance(detail["detail"], dict)
-        else str(detail["detail"])
-    )
+    error_msg = detail["detail"]["error"] if isinstance(detail["detail"], dict) else str(detail["detail"])
     assert "internal_user_viewer" in error_msg
     assert "vector_store_id" in error_msg
 
@@ -101,8 +94,7 @@ def test_internal_user_viewer_rag_ingest_with_vector_store_id_passes_check(
 
     # Should not be 403 (role check passed)
     assert response.status_code != 403, (
-        f"internal_user_viewer with vector_store_id should pass role check. "
-        f"Response: {response.json()}"
+        f"internal_user_viewer with vector_store_id should pass role check. Response: {response.json()}"
     )
 
 
@@ -118,15 +110,12 @@ def test_internal_user_rag_ingest_without_vector_store_id_allowed(client_interna
         response = client_internal_user.post(
             "/v1/rag/ingest",
             files={"file": ("sample.txt", io.BytesIO(b"test content"), "text/plain")},
-            data={
-                "request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
-            },
+            data={"request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'},
         )
 
     # Should not be 403
     assert response.status_code != 403, (
-        f"internal_user should be allowed to create new vector stores. "
-        f"Response: {response.json()}"
+        f"internal_user should be allowed to create new vector stores. Response: {response.json()}"
     )
 
 
@@ -174,13 +163,13 @@ def test_rag_ingest_blocks_clientside_credentials(client_internal_user, blocked_
             },
         },
     )
-    assert (
-        response.status_code == 400
-    ), f"Expected 400 when '{blocked_field}' is set clientside, got {response.status_code}: {response.json()}"
+    assert response.status_code == 400, (
+        f"Expected 400 when '{blocked_field}' is set clientside, got {response.status_code}: {response.json()}"
+    )
     body = response.json()
-    assert blocked_field in str(
-        body
-    ), f"Response should mention '{blocked_field}': {body}"
+    assert blocked_field in str(body), f"Response should mention '{blocked_field}': {body}"
+
+
 class TestRagIngestSSRFBlocked:
     """
     aws_sts_endpoint and related credential-redirect fields must be rejected
@@ -197,9 +186,7 @@ class TestRagIngestSSRFBlocked:
             ("aws_bedrock_runtime_endpoint", "https://attacker.example/bedrock"),
         ],
     )
-    def test_ssrf_field_in_vector_store_config_rejected(
-        self, field, value, client_internal_user
-    ):
+    def test_ssrf_field_in_vector_store_config_rejected(self, field, value, client_internal_user):
         payload = {
             "file_url": "https://example.com/doc.pdf",
             "ingest_options": {
@@ -219,9 +206,7 @@ class TestRagIngestSSRFBlocked:
         )
         body = response.json()
         detail = body.get("detail", {})
-        error_text = (
-            detail.get("error", "") if isinstance(detail, dict) else str(detail)
-        )
+        error_text = detail.get("error", "") if isinstance(detail, dict) else str(detail)
         assert field in error_text, f"Error should name the offending field: {error_text}"
 
     def test_clean_bedrock_ingest_options_not_rejected(self, client_internal_user):
@@ -234,14 +219,10 @@ class TestRagIngestSSRFBlocked:
                 "/v1/rag/ingest",
                 json={
                     "file_url": "https://example.com/doc.pdf",
-                    "ingest_options": {
-                        "vector_store": {"custom_llm_provider": "bedrock"}
-                    },
+                    "ingest_options": {"vector_store": {"custom_llm_provider": "bedrock"}},
                 },
             )
-        assert response.status_code != 400, (
-            f"Clean Bedrock ingest_options should not be rejected: {response.json()}"
-        )
+        assert response.status_code != 400, f"Clean Bedrock ingest_options should not be rejected: {response.json()}"
 
 
 def test_rag_query_returns_response_cost_header(client_internal_user):
@@ -265,12 +246,14 @@ def test_rag_query_returns_response_cost_header(client_internal_user):
     )
     mock_response._hidden_params["response_cost"] = 3.45e-06
 
-    with patch(
-        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
-        new_callable=AsyncMock,
-        return_value=mock_response,
-    ), patch("litellm.vector_store_registry", None), patch(
-        "litellm.proxy.proxy_server.prisma_client", None
+    with (
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ),
+        patch("litellm.vector_store_registry", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -286,6 +269,96 @@ def test_rag_query_returns_response_cost_header(client_internal_user):
 
     assert response.status_code == 200, response.json()
     assert response.headers.get("x-litellm-response-cost") == "3.45e-06"
+
+
+@pytest.mark.asyncio
+async def test_rag_query_resolves_managed_vector_store_registry(client_internal_user):
+    """
+    /v1/rag/query must resolve the LiteLLM-managed vector store registry so the
+    configured provider and litellm_params (api_key, api_base) reach the
+    internal vector store search instead of defaulting to OpenAI.
+
+    Before the fix, retrieval_config["custom_llm_provider"] stayed whatever the
+    client sent and the registry credentials were never forwarded to
+    litellm.aquery, so a registered non-OpenAI vector store was always queried
+    via api.openai.com. The fix also scopes registry params to
+    retrieval_config (the search-only channel): stored fields such as metadata
+    must never surface as top-level kwargs, which flow to the generation call.
+    """
+    from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+        LiteLLM_ManagedVectorStore,
+    )
+    from litellm.types.utils import ModelResponse
+
+    mock_vector_store: LiteLLM_ManagedVectorStore = {
+        "vector_store_id": "vs_registered",
+        "custom_llm_provider": "bedrock",
+        "litellm_credential_name": "my_bedrock_creds",
+        "litellm_params": {
+            "aws_region_name": "us-east-1",
+            # Security probe: a stored field that must never reach the
+            # generation-call kwargs / sanitization boundary.
+            "metadata": {"disable_global_guardrails": True},
+        },
+    }
+
+    mock_registry = MagicMock()
+    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = mock_vector_store
+
+    captured = {}
+
+    async def fake_aquery(**kwargs):
+        captured.update(kwargs)
+        return ModelResponse(
+            id="chatcmpl-test",
+            choices=[
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "The codename is AZURE-FALCON-42.",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            model="gpt-4o-mini",
+            usage={"prompt_tokens": 35, "completion_tokens": 14, "total_tokens": 49},
+        )
+
+    with (
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+            new=AsyncMock(side_effect=fake_aquery),
+        ),
+        patch.object(litellm, "vector_store_registry", mock_registry),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "What is the codename?"}],
+                "retrieval_config": {
+                    "vector_store_id": "vs_registered",
+                    "custom_llm_provider": "openai",
+                },
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    # Registry params land in retrieval_config (the search channel)...
+    assert captured["retrieval_config"]["custom_llm_provider"] == "bedrock"
+    assert captured["retrieval_config"]["aws_region_name"] == "us-east-1"
+    assert captured["retrieval_config"]["metadata"] == {"disable_global_guardrails": True}
+    # ...and never surface as top-level kwargs, which flow to the generation
+    # call. The credential name is popped (the search resolves it by id).
+    assert "aws_region_name" not in captured
+    # `metadata` at the top level is the request's own metadata (agent_id,
+    # endpoint, headers...); the registry's guardrail override must not leak
+    # into it, or the generation call would skip global guardrails.
+    assert "disable_global_guardrails" not in captured.get("metadata", {})
+    assert "litellm_credential_name" not in captured
+    assert "litellm_credential_name" not in captured["retrieval_config"]
 
 
 def test_rag_query_stream_returns_event_stream(client_internal_user):
@@ -306,10 +379,14 @@ def test_rag_query_stream_returns_event_stream(client_internal_user):
             api_key="test-key",
         )
 
-    with patch(
-        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
-        new=AsyncMock(side_effect=fake_aquery),
-    ), patch("litellm.vector_store_registry", None), patch("litellm.proxy.proxy_server.prisma_client", None):
+    with (
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+            new=AsyncMock(side_effect=fake_aquery),
+        ),
+        patch("litellm.vector_store_registry", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
         response = client_internal_user.post(
             "/v1/rag/query",
             json={

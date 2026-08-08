@@ -488,6 +488,7 @@ async def rag_ingest(
 
         # Add litellm data
         request_data: dict[str, Any] = {}
+        # rebind-ok: request_data is rebuilt from the litellm-enriched request.
         request_data = await add_litellm_data_to_request(
             data=request_data,
             request=request,
@@ -657,16 +658,38 @@ async def rag_query(
             user_api_key_dict=user_api_key_dict,
         )
 
+        # Deferred import: keeps vector_store_endpoints out of sys.modules at
+        # proxy boot so lazy router registration and the OpenAPI snapshot stub
+        # injection are not skipped for vector store routes.
+        from litellm.proxy.vector_store_endpoints.endpoints import (
+            _update_request_data_with_litellm_managed_vector_store_registry,
+        )
+
         # Add litellm data
-        request_data: dict[str, Any] = {}
         request_data = await add_litellm_data_to_request(
-            data=request_data,
+            data={},  # mutable-ok: resolver populates this dict in place
             request=request,
             general_settings=general_settings,
             user_api_key_dict=user_api_key_dict,
             version=version,
             proxy_config=proxy_config,
         )
+
+        resolved_registry = await _update_request_data_with_litellm_managed_vector_store_registry(
+            data={},  # mutable-ok: resolver populates this dict in place
+            vector_store_id=retrieval_config["vector_store_id"],
+            user_api_key_dict=user_api_key_dict,
+        )
+        resolved_registry.pop("litellm_credential_name", None)
+        # Registry credentials are scoped to the vector store search: merging
+        # them into ``retrieval_config`` (instead of ``request_data``) keeps
+        # them out of the generation-call kwargs entirely. The search call
+        # site forwards only an allowlisted subset (see
+        # ``_VECTOR_STORE_SEARCH_PARAMS`` in ``litellm/rag/main.py``), so
+        # stored metadata / guardrail fields never reach the LLM call.
+        # mutable-ok: registry-resolved values are merged into the existing
+        # retrieval_config dict rather than copied, keeping them scoped to search.
+        retrieval_config.update(resolved_registry)
 
         verbose_proxy_logger.debug("RAG Query - model: %s, retrieval_config: %s", model, retrieval_config)
 

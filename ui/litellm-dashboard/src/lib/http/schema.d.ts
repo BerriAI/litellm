@@ -22006,12 +22006,18 @@ export interface components {
         };
         /** Body_audio_transcriptions_audio_transcriptions_post */
         Body_audio_transcriptions_audio_transcriptions_post: {
-            /** File */
+            /**
+             * File
+             * Format: binary
+             */
             file: string;
         };
         /** Body_audio_transcriptions_v1_audio_transcriptions_post */
         Body_audio_transcriptions_v1_audio_transcriptions_post: {
-            /** File */
+            /**
+             * File
+             * Format: binary
+             */
             file: string;
         };
         /** Body_convert_prompt_file_to_json_utils_dotprompt_json_converter_post */
@@ -22029,7 +22035,10 @@ export interface components {
              * @default openai
              */
             custom_llm_provider: string;
-            /** File */
+            /**
+             * File
+             * Format: binary
+             */
             file: string;
             /** Litellm Metadata */
             litellm_metadata?: string | null;
@@ -22053,7 +22062,10 @@ export interface components {
              * @default openai
              */
             custom_llm_provider: string;
-            /** File */
+            /**
+             * File
+             * Format: binary
+             */
             file: string;
             /** Litellm Metadata */
             litellm_metadata?: string | null;
@@ -22077,7 +22089,10 @@ export interface components {
              * @default openai
              */
             custom_llm_provider: string;
-            /** File */
+            /**
+             * File
+             * Format: binary
+             */
             file: string;
             /** Litellm Metadata */
             litellm_metadata?: string | null;
@@ -22098,34 +22113,34 @@ export interface components {
         Body_image_edit_api_images_edits_post: {
             /** Image */
             image?: string[] | null;
-            /** Image[] */
-            "image[]"?: string[] | null;
+            /** Image Array */
+            image_array?: string[] | null;
             /** Mask */
             mask?: string[] | null;
-            /** Mask[] */
-            "mask[]"?: string[] | null;
+            /** Mask Array */
+            mask_array?: string[] | null;
         };
         /** Body_image_edit_api_openai_deployments__model__images_edits_post */
         Body_image_edit_api_openai_deployments__model__images_edits_post: {
             /** Image */
             image?: string[] | null;
-            /** Image[] */
-            "image[]"?: string[] | null;
+            /** Image Array */
+            image_array?: string[] | null;
             /** Mask */
             mask?: string[] | null;
-            /** Mask[] */
-            "mask[]"?: string[] | null;
+            /** Mask Array */
+            mask_array?: string[] | null;
         };
         /** Body_image_edit_api_v1_images_edits_post */
         Body_image_edit_api_v1_images_edits_post: {
             /** Image */
             image?: string[] | null;
-            /** Image[] */
-            "image[]"?: string[] | null;
+            /** Image Array */
+            image_array?: string[] | null;
             /** Mask */
             mask?: string[] | null;
-            /** Mask[] */
-            "mask[]"?: string[] | null;
+            /** Mask Array */
+            mask_array?: string[] | null;
         };
         /** Body_test_model_connection_health_test_connection_post */
         Body_test_model_connection_health_test_connection_post: {
@@ -22151,21 +22166,30 @@ export interface components {
         };
         /** Body_upload_logo_upload_logo_post */
         Body_upload_logo_upload_logo_post: {
-            /** File */
+            /**
+             * File
+             * Format: binary
+             */
             file: string;
         };
         /** Body_video_create_character_v1_videos_characters_post */
         Body_video_create_character_v1_videos_characters_post: {
             /** Name */
             name: string;
-            /** Video */
+            /**
+             * Video
+             * Format: binary
+             */
             video: string;
         };
         /** Body_video_create_character_videos_characters_post */
         Body_video_create_character_videos_characters_post: {
             /** Name */
             name: string;
-            /** Video */
+            /**
+             * Video
+             * Format: binary
+             */
             video: string;
         };
         /** Body_video_generation_v1_videos_post */
@@ -22776,6 +22800,7 @@ export interface components {
         /** ChatCompletionAudioObject */
         ChatCompletionAudioObject: {
             input_audio: components["schemas"]["InputAudio"];
+            prompt_cache_breakpoint?: components["schemas"]["PromptCacheBreakpoint"];
             /**
              * Type
              * @constant
@@ -30959,6 +30984,19 @@ export interface components {
             prompt_id: string;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
         };
+        /**
+         * PromptCacheBreakpoint
+         * @description Marks the exact end of a reusable prompt prefix.
+         *
+         *     The breakpoint inherits its TTL from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a token block.
+         */
+        PromptCacheBreakpoint: {
+            /**
+             * Mode
+             * @constant
+             */
+            mode: "explicit";
+        };
         /** PromptInfo */
         PromptInfo: {
             /**
@@ -35035,10 +35073,6 @@ export interface components {
         };
         /** ValidationError */
         ValidationError: {
-            /** Context */
-            ctx?: Record<string, never>;
-            /** Input */
-            input?: unknown;
             /** Location */
             loc: (string | number)[];
             /** Message */
@@ -46958,7 +46992,11 @@ export interface operations {
     };
     websocket_realtime_websocket_endpoint_get_3: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: string;
+                intent?: string;
+                guardrails?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -49735,7 +49773,11 @@ export interface operations {
     };
     websocket_realtime_websocket_endpoint_get: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: string;
+                intent?: string;
+                guardrails?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -49853,7 +49895,9 @@ export interface operations {
     };
     websocket_responses_websocket_endpoint_get: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -57748,7 +57792,11 @@ export interface operations {
     };
     websocket_realtime_websocket_endpoint_get_2: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: string;
+                intent?: string;
+                guardrails?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -57826,7 +57874,9 @@ export interface operations {
     };
     websocket_responses_websocket_endpoint_get_2: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -61241,7 +61291,11 @@ export interface operations {
     };
     websocket_vertex_ai_live_passthrough_endpoint: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: string;
+                vertex_project?: string;
+                vertex_location?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
