@@ -86,7 +86,7 @@ def _is_vector_store_index_lifecycle_request(
             return True
 
     # POST /indexes (create index at service level; no index name in path).
-    normalized: Final = request_path.rstrip("/")
+    normalized: Final = request_path.split("?", 1)[0].rstrip("/")
     if request_method == "POST" and normalized.endswith("/indexes"):
         return True
 
