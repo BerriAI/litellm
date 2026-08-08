@@ -119,7 +119,7 @@ class PassThroughStreamingHandler:
                     verbose_proxy_logger.error("Error scheduling chunk_processor logging: %s", e)
             try:
                 await response.aclose()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001  # closing a possibly-broken transport must not mask stream teardown
                 verbose_proxy_logger.debug("Error closing passthrough upstream response: %s", e)
 
     @staticmethod
