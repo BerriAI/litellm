@@ -1089,13 +1089,21 @@ class ResponseAPILoggingUtils:
                 audio_tokens=getattr(output_tokens_details, "audio_tokens", None),
             )
 
+        # xAI states what it billed for the request in usage.cost_in_usd_ticks.
+        # Rebuilding the usage object here dropped it, so the provider's own figure
+        # never reached the cost calculator on the Responses path.
+        cost_in_usd_ticks: Final[int | None] = getattr(response_api_usage, "cost_in_usd_ticks", None)
+        reported_cost_fields: Final[dict[str, int]] = (
+            {} if cost_in_usd_ticks is None else {"cost_in_usd_ticks": cost_in_usd_ticks}
+        )
+
         chat_usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
             prompt_tokens_details=prompt_tokens_details,
             completion_tokens_details=completion_tokens_details,
-        )
+        ).model_copy(update=reported_cost_fields)
 
         # Preserve cost attribute if it exists on ResponseAPIUsage
         if hasattr(response_api_usage, "cost") and response_api_usage.cost is not None:

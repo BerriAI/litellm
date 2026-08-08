@@ -424,6 +424,85 @@ class TestXAICostCalculator:
         # Expected cost: No web search data = $0.0
         assert web_search_cost == 0.0
 
+    def test_reported_cost_is_preferred_over_token_math(self):
+        """xAI states what it billed in usage.cost_in_usd_ticks; use that figure."""
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=200,
+            total_tokens=300,
+        )
+        # 1 USD = 10^10 ticks, so this request cost $0.0037756.
+        setattr(usage, "cost_in_usd_ticks", 37756000)
+
+        prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+
+        # Reported as completion cost -- xAI does not split the total by direction.
+        assert prompt_cost == 0.0
+        assert math.isclose(completion_cost, 0.0037756, rel_tol=1e-10)
+
+    def test_reported_cost_suppresses_web_search_surcharge(self):
+        """The reported total already covers server-side tool calls."""
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=100,
+                web_search_requests=3,
+            ),
+        )
+        setattr(usage, "cost_in_usd_ticks", 37756000)
+
+        # Without this, the 3 searches would be billed a second time on top of the
+        # total xAI already charged.
+        assert cost_per_web_search_request(usage=usage, model_info={}) == 0.0
+
+    def test_web_search_surcharge_suppressed_through_the_dispatcher(self):
+        """The suppression has to hold on the path cost tracking actually uses."""
+        from litellm.llms import get_cost_for_web_search_request
+
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=100,
+                web_search_requests=3,
+            ),
+        )
+
+        # Legacy behaviour is untouched when xAI reports nothing.
+        assert get_cost_for_web_search_request("xai", usage, {}) > 0.0
+
+        reported = usage.model_copy(update={"cost_in_usd_ticks": 37756000})
+        assert get_cost_for_web_search_request("xai", reported, {}) == 0.0
+
+    def test_no_reported_cost_falls_back_to_token_math(self):
+        """Absent the provider figure, nothing changes for existing callers."""
+        usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
+
+        prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+
+        assert prompt_cost > 0.0
+        assert completion_cost > 0.0
+
+    def test_malformed_reported_cost_falls_back_to_token_math(self):
+        """A junk value must not fail the request -- fall back to calculating."""
+        usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
+        setattr(usage, "cost_in_usd_ticks", "not-a-number")
+
+        prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+
+        assert prompt_cost > 0.0
+        assert completion_cost > 0.0
+
+    def test_zero_reported_cost_is_honoured(self):
+        """A reported zero is a real answer, not a missing value."""
+        usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
+        setattr(usage, "cost_in_usd_ticks", 0)
+
+        assert cost_per_token(model="grok-4-latest", usage=usage) == (0.0, 0.0)
+
     def test_grok_4_20_beta_reasoning_cost_calculation(self):
         """Test cost calculation for grok-4.20-beta-0309-reasoning model."""
         usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)

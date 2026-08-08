@@ -395,6 +395,41 @@ class TestResponseAPILoggingUtils:
         assert result.prompt_tokens_details.cache_creation_tokens == 10059
         assert result.prompt_tokens_details.cached_tokens == 0
 
+    def test_transform_response_api_usage_keeps_cost_in_usd_ticks(self):
+        """Responses API (/v1/responses) must not drop the cost xAI reports.
+
+        xAI returns usage.cost_in_usd_ticks -- what it actually billed for the
+        request, tokens and server-side tool calls together. Rebuilding the usage
+        object here dropped it, so the xAI cost calculator never saw the provider's
+        own figure and fell back to computing one.
+        """
+        usage = {
+            "input_tokens": 199,
+            "output_tokens": 1,
+            "total_tokens": 200,
+            "cost_in_usd_ticks": 37756000,
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        assert getattr(result, "cost_in_usd_ticks", None) == 37756000
+
+    def test_transform_response_api_usage_without_cost_in_usd_ticks(self):
+        """Providers that report no cost are left exactly as they were."""
+        usage = {
+            "input_tokens": 199,
+            "output_tokens": 1,
+            "total_tokens": 200,
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        assert getattr(result, "cost_in_usd_ticks", None) is None
+
     def test_transform_response_api_usage_mixed_details(self):
         """Test transformation handles mixed token details (cached + image + audio)."""
         # Setup - hypothetical usage with mixed token types
