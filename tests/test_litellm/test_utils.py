@@ -4515,6 +4515,16 @@ _FIREWORKS_MODELS = [
         False,
         True,
     ),
+    (
+        "accounts/fireworks/models/deepseek-v4-flash-0731",
+        1.4e-07,
+        2.8e-07,
+        2.8e-08,
+        1048576,
+        384000,
+        False,
+        True,
+    ),
 ]
 
 _FIREWORKS_SHORT_FORMS = [
@@ -4529,6 +4539,7 @@ _FIREWORKS_SHORT_FORMS = [
     "gpt-oss-20b",
     "deepseek-v4-pro",
     "deepseek-v4-flash",
+    "deepseek-v4-flash-0731",
 ]
 
 _FIREWORKS_ROUTER_SHORT_FORMS = [
