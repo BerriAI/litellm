@@ -89,18 +89,14 @@ async def test_mlflow_logging_functionality():
             "jobID": "214590dsff09fds",
             "taskName": "run_page_classification",
         }
-        assert (
-            tags_param == expected_tags
-        ), f"Expected tags {expected_tags}, got {tags_param}"
+        assert tags_param == expected_tags, f"Expected tags {expected_tags}, got {tags_param}"
 
         # Check that prediction parameter was included in inputs
         inputs_param = call_args.kwargs.get("inputs", {})
-        assert (
-            "prediction" in inputs_param
-        ), "Prediction should be included in span inputs"
-        assert (
-            inputs_param["prediction"] == test_prediction
-        ), f"Expected prediction {test_prediction}, got {inputs_param['prediction']}"
+        assert "prediction" in inputs_param, "Prediction should be included in span inputs"
+        assert inputs_param["prediction"] == test_prediction, (
+            f"Expected prediction {test_prediction}, got {inputs_param['prediction']}"
+        )
 
 
 def test_mlflow_token_usage_attribute_structure():
@@ -138,6 +134,105 @@ def test_mlflow_token_usage_attribute_structure():
             "input_tokens": 5,
             "output_tokens": 7,
             "total_tokens": 12,
+        }
+
+
+def test_mlflow_token_usage_includes_anthropic_style_cache_fields():
+    """Cache token counts from the raw response usage are lifted into tokenUsage."""
+
+    mock_mlflow_tracking = MagicMock()
+    mock_mlflow_tracking.MlflowClient = MagicMock()
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "mlflow": MagicMock(),
+            "mlflow.tracking": mock_mlflow_tracking,
+            "mlflow.tracing.utils": MagicMock(),
+        },
+    ):
+        from litellm.integrations.mlflow import MlflowLogger
+
+        mlflow_logger = MlflowLogger()
+
+        attrs = mlflow_logger._extract_attributes(  # type: ignore
+            {
+                "litellm_call_id": "123",
+                "call_type": "completion",
+                "model": "claude-haiku-4-5",
+                "standard_logging_object": {
+                    "prompt_tokens": 10500,
+                    "completion_tokens": 200,
+                    "total_tokens": 10700,
+                    "response": {
+                        "usage": {
+                            "prompt_tokens": 10500,
+                            "completion_tokens": 200,
+                            "total_tokens": 10700,
+                            "cache_read_input_tokens": 10000,
+                            "cache_creation_input_tokens": 300,
+                        }
+                    },
+                },
+            }
+        )
+
+        assert attrs["mlflow.chat.tokenUsage"] == {
+            "input_tokens": 10500,
+            "output_tokens": 200,
+            "total_tokens": 10700,
+            "cache_read_input_tokens": 10000,
+            "cache_creation_input_tokens": 300,
+        }
+
+
+def test_mlflow_token_usage_includes_openai_style_cached_tokens():
+    """OpenAI-style responses nest cache counts under prompt_tokens_details."""
+
+    mock_mlflow_tracking = MagicMock()
+    mock_mlflow_tracking.MlflowClient = MagicMock()
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "mlflow": MagicMock(),
+            "mlflow.tracking": mock_mlflow_tracking,
+            "mlflow.tracing.utils": MagicMock(),
+        },
+    ):
+        from litellm.integrations.mlflow import MlflowLogger
+
+        mlflow_logger = MlflowLogger()
+
+        attrs = mlflow_logger._extract_attributes(  # type: ignore
+            {
+                "litellm_call_id": "123",
+                "call_type": "completion",
+                "model": "gpt-4o",
+                "standard_logging_object": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 10,
+                    "total_tokens": 110,
+                    "response": {
+                        "usage": {
+                            "prompt_tokens": 100,
+                            "completion_tokens": 10,
+                            "total_tokens": 110,
+                            "prompt_tokens_details": {
+                                "cached_tokens": 80,
+                                "audio_tokens": None,
+                            },
+                        }
+                    },
+                },
+            }
+        )
+
+        assert attrs["mlflow.chat.tokenUsage"] == {
+            "input_tokens": 100,
+            "output_tokens": 10,
+            "total_tokens": 110,
+            "cache_read_input_tokens": 80,
         }
 
 
@@ -193,8 +288,5 @@ def test_mlflow_stream_handler_uses_async_complete_response():
         )
 
         mlflow_logger._end_span_or_trace.assert_called_once()
-        assert (
-            mlflow_logger._end_span_or_trace.call_args.kwargs["outputs"]
-            is final_response
-        )
+        assert mlflow_logger._end_span_or_trace.call_args.kwargs["outputs"] is final_response
         assert "abc123" not in mlflow_logger._stream_id_to_span
