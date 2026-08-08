@@ -1141,6 +1141,30 @@ def test_reasoning_effort_string_passthrough():
     assert result["reasoning_effort"] == "high"
 
 
+def test_reasoning_effort_dict_extracts_effort_key():
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"reasoning_effort": {"effort": "high", "summary": "detailed"}},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert result["reasoning_effort"] == "high"
+    assert isinstance(result["reasoning_effort"], str)
+
+
+def test_reasoning_effort_dict_without_effort_key_defaults_to_medium():
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"reasoning_effort": {"summary": "detailed"}},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert result["reasoning_effort"] == "medium"
+    assert isinstance(result["reasoning_effort"], str)
+
+
 def test_reasoning_effort_integer_passthrough():
     config = FireworksAIConfig()
     result = config.map_openai_params(

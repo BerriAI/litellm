@@ -265,6 +265,8 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                     optional_params["reasoning_effort"] = "medium"
                 elif value is False:
                     optional_params["reasoning_effort"] = "none"
+                elif isinstance(value, dict):
+                    optional_params["reasoning_effort"] = value.get("effort", "medium")
                 else:
                     optional_params["reasoning_effort"] = value
             elif param in supported_openai_params:
