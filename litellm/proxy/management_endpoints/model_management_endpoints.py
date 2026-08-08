@@ -56,6 +56,10 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     update_team as _legacy_update_team,
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
+from litellm.proxy.spend_tracking.ptu_feature_flag import (
+    PTU_COST_ATTRIBUTION_ENV_VAR,
+    is_ptu_cost_attribution_enabled,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import ModelTableRepository
@@ -239,8 +243,12 @@ _PTU_MODEL_INFO_FIELDS: Final = ("ptu_count", "cost_per_ptu_per_hour", "ptu_effe
 
 
 def _explicitly_cleared_ptu_fields(model_info: ModelInfo | None) -> frozenset[str]:
-    """The PTU fields a patch sends as an explicit null, which update_db_model drops."""
-    if model_info is None:
+    """The PTU fields a patch sends as an explicit null, which update_db_model drops.
+
+    Empty while the feature is off, so disabling pauses PTU rather than letting a client
+    that round-trips a model_info blob erase a configuration set up during an earlier opt-in.
+    """
+    if model_info is None or not is_ptu_cost_attribution_enabled():
         return frozenset()
     return frozenset(
         field
@@ -260,6 +268,32 @@ def _merged_ptu_model_info(*, db_model: Deployment, patch_data: updateDeployment
     incoming: Final = patch_data.model_info.model_dump(exclude_none=True) if patch_data.model_info else empty
     cleared: Final = _explicitly_cleared_ptu_fields(patch_data.model_info)
     return MappingProxyType({k: v for k, v in {**stored, **incoming}.items() if k not in cleared})
+
+
+def _raise_if_ptu_cost_attribution_disabled(incoming_model_info: Mapping[str, object]) -> None:
+    """Reject PTU model_info fields unless the operator opted into PTU cost attribution.
+
+    Takes the incoming request's model_info rather than the merged deployment, so an
+    unrelated patch of a model that still stores PTU config from an earlier opt-in is
+    left alone. The fields are rejected rather than dropped so a caller never believes
+    a flat cost was configured while the rollup that would price it is not running.
+
+    Only a value is rejected. An explicit null reaches the clear loop, which is gated on
+    the same flag, so a disabled proxy neither writes PTU config nor erases what an
+    earlier opt-in stored. Disabling pauses the feature rather than discarding its setup.
+    """
+    if is_ptu_cost_attribution_enabled():
+        return
+    supplied: Final = tuple(field for field in _PTU_MODEL_INFO_FIELDS if incoming_model_info.get(field) is not None)
+    if not supplied:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"PTU cost attribution is disabled, so {', '.join(supplied)} cannot be set. "
+            f"Set {PTU_COST_ATTRIBUTION_ENV_VAR}=true to enable it."
+        ),
+    )
 
 
 def _validate_ptu_model_info(model_info: Mapping[str, object]) -> None:
@@ -326,6 +360,8 @@ def _coerce_ptu_datetime(value: object) -> datetime.datetime | None:
 
 
 def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> PrismaCompatibleUpdateDBModel:
+    if updated_patch.model_info is not None:
+        _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
     merged_model_name: Final = updated_patch.model_name or db_model.model_name
     merged_litellm_params: Final = db_model.litellm_params.model_dump(exclude_none=True)
     merged_model_info: Final = db_model.model_info.model_dump(exclude_none=True)
@@ -1531,7 +1567,9 @@ async def add_new_model(
 
         model_response: LiteLLM_ProxyModelTable | None = None
         # update DB
-        _validate_ptu_model_info(model_params.model_info.model_dump(exclude_none=True))
+        incoming_model_info: Final = model_params.model_info.model_dump(exclude_none=True)
+        _raise_if_ptu_cost_attribution_disabled(incoming_model_info)
+        _validate_ptu_model_info(incoming_model_info)
 
         if store_model_in_db is True:
             """

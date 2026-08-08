@@ -10,6 +10,7 @@ from typing_extensions import TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PTU_SENTINEL_API_KEY
 from litellm.proxy._types import CommonProxyErrors
+from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.table_repositories import DeletedVerificationTokenRepository
 from litellm.repositories.verification_token_repository import (
@@ -141,6 +142,28 @@ class _GroupingSetsRow(SimpleNamespace):
     failed_requests: int | None
 
 
+def _reported_flat_cost(record: DailySpendRecord | _GroupingSetsRow) -> float:
+    """Flat cost a daily row reports, which is zero unless PTU cost attribution is enabled.
+
+    Both read paths funnel through here: the paginated path reads the ``ptu_flat_cost``
+    column straight off the row, and the aggregated path reads the SUM() alias. Rows an
+    operator accrued during an earlier opt-in stay in the table, so the gate lives on the
+    read rather than on the query that produced the rows.
+
+    The row is checked before the flag because this runs once per metric accumulation, and
+    a record fans out across roughly a dozen breakdowns. The flag reads through the secret
+    manager, uncached, so consulting it for every accumulation put thousands of lookups on
+    a shared endpoint that made none before. Only a row actually carrying flat cost, which
+    is a sentinel row, reaches it now.
+    """
+    raw: Final = getattr(record, "ptu_flat_cost", None) or 0.0
+    if not raw:
+        return 0.0
+    if not is_ptu_cost_attribution_enabled():
+        return 0.0
+    return raw
+
+
 def update_metrics(existing_metrics: SpendMetrics, record: DailySpendRecord) -> SpendMetrics:
     """Update metrics with new record data.
 
@@ -151,7 +174,7 @@ def update_metrics(existing_metrics: SpendMetrics, record: DailySpendRecord) -> 
     prompt_tokens: Final = record.prompt_tokens or 0
     completion_tokens: Final = record.completion_tokens or 0
     existing_metrics.spend += record.spend or 0.0
-    existing_metrics.flat_cost += getattr(record, "ptu_flat_cost", None) or 0.0
+    existing_metrics.flat_cost += _reported_flat_cost(record)
     existing_metrics.prompt_tokens += prompt_tokens
     existing_metrics.completion_tokens += completion_tokens
     existing_metrics.total_tokens += prompt_tokens + completion_tokens
@@ -784,7 +807,7 @@ def _record_to_spend_metrics(record: _GroupingSetsRow) -> SpendMetrics:
     completion_tokens: Final = record.completion_tokens or 0
     return SpendMetrics(
         spend=record.spend or 0.0,
-        flat_cost=getattr(record, "ptu_flat_cost", None) or 0.0,
+        flat_cost=_reported_flat_cost(record),
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,

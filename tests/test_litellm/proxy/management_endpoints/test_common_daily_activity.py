@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
+
 sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy.management_endpoints.common_daily_activity import (
@@ -1142,6 +1144,11 @@ class TestEverySavingsDriverSurvivesTheReadPath:
             )
 
 
+@pytest.fixture
+def ptu_cost_attribution_enabled(monkeypatch):
+    monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
+
+
 def _spend_record(api_key, *, model="gpt-4o-mini-ptu", spend=0.0, ptu_flat_cost=0.0):
     return SimpleNamespace(
         api_key=api_key,
@@ -1167,13 +1174,13 @@ def _spend_record(api_key, *, model="gpt-4o-mini-ptu", spend=0.0, ptu_flat_cost=
     )
 
 
-def test_update_metrics_accumulates_ptu_flat_cost():
+def test_update_metrics_accumulates_ptu_flat_cost(ptu_cost_attribution_enabled):
     metrics = update_metrics(SpendMetrics(), _spend_record("real-key", spend=1.0, ptu_flat_cost=240.0))
     assert metrics.flat_cost == 240.0
     assert metrics.spend == 1.0
 
 
-def test_ptu_sentinel_excluded_from_key_breakdown_but_flat_cost_aggregates():
+def test_ptu_sentinel_excluded_from_key_breakdown_but_flat_cost_aggregates(ptu_cost_attribution_enabled):
     from litellm.constants import PTU_SENTINEL_API_KEY
     from litellm.proxy.management_endpoints.common_daily_activity import update_breakdown_metrics
     from litellm.types.proxy.management_endpoints.common_daily_activity import BreakdownMetrics
@@ -1230,7 +1237,7 @@ def _grouping_row(
     )
 
 
-def test_grouping_sets_dispatcher_excludes_ptu_sentinel_from_key_breakdowns():
+def test_grouping_sets_dispatcher_excludes_ptu_sentinel_from_key_breakdowns(ptu_cost_attribution_enabled):
     """The GROUPING SETS path must mirror the per-row path: the flat-cost sentinel
     aggregates into the date/model/total metrics but never surfaces as an api_key."""
     from litellm.constants import PTU_SENTINEL_API_KEY
@@ -1267,7 +1274,7 @@ def test_grouping_sets_dispatcher_excludes_ptu_sentinel_from_key_breakdowns():
     assert "real-key" in model_bucket.api_key_breakdown
 
 
-def test_grouping_sets_dispatcher_populates_every_breakdown_level():
+def test_grouping_sets_dispatcher_populates_every_breakdown_level(ptu_cost_attribution_enabled):
     """Every GROUPING SETS level lands in its bucket, and the flat-cost sentinel
     is kept out of the model_group and provider api_key sub-breakdowns too."""
     from litellm.constants import PTU_SENTINEL_API_KEY
@@ -1359,7 +1366,7 @@ def test_grouping_sets_dispatcher_keeps_a_real_provider_row_that_shares_the_sent
     assert unknown.metrics.flat_cost == 0.0
 
 
-def test_update_breakdown_metrics_covers_mcp_endpoint_and_entity():
+def test_update_breakdown_metrics_covers_mcp_endpoint_and_entity(ptu_cost_attribution_enabled):
     """A full request record fans out into the mcp, endpoint, provider and entity
     breakdowns, while the flat-cost sentinel stays out of the entity api_key sub-map."""
     from litellm.constants import PTU_SENTINEL_API_KEY
@@ -1432,6 +1439,10 @@ class TestSentinelRowsDisplayTheirModelName:
     """A sentinel row keys on the deployment id so a rename cannot move it. The usage views
     render the breakdown key directly as a label, so the read path has to show the name."""
 
+    @pytest.fixture(autouse=True)
+    def _enabled(self, ptu_cost_attribution_enabled):
+        """Flat cost is gated off by default, and these assert on the amounts."""
+
     @staticmethod
     def _breakdown(records):
         from litellm.proxy.management_endpoints.common_daily_activity import update_breakdown_metrics
@@ -1485,3 +1496,226 @@ class TestSentinelRowsDisplayTheirModelName:
         models = self._breakdown([self._sentinel(model_id="dep-1", model_group=None)]).models
 
         assert models["dep-1"].metrics.flat_cost == pytest.approx(480.0)
+
+
+def _daily_team_row(api_key, *, spend=0.0, ptu_flat_cost=0.0):
+    """A LiteLLM_DailyTeamSpend row as the paginated read path receives it from find_many."""
+    base: Final = _spend_record(api_key, spend=spend, ptu_flat_cost=ptu_flat_cost)
+    return SimpleNamespace(**{**base.__dict__, "date": "2026-07-01", "team_id": "team-1"})
+
+
+class TestPtuCostAttributionDisabled:
+    """With LITELLM_ENABLE_PTU_COST_ATTRIBUTION unset, both read paths report zero flat
+    cost, while the sentinel filtering that keeps ``__ptu_flat_cost__`` out of the
+    breakdowns keeps running.
+
+    Filtering is deliberately not gated: an operator can enable the flag, accrue
+    sentinel rows, then disable it, and those rows stay in LiteLLM_DailyTeamSpend
+    forever. Gating the filter too would surface the sentinel as a bogus api_key and
+    mint a provider bucket for its empty provider.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _flag_off(self, monkeypatch):
+        monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR, raising=False)
+
+    def test_paginated_path_reports_zero_flat_cost(self):
+        metrics = update_metrics(SpendMetrics(), _spend_record("real-key", spend=1.0, ptu_flat_cost=240.0))
+
+        assert metrics.flat_cost == 0.0
+        assert metrics.spend == 1.0
+
+    def test_aggregated_path_reports_zero_flat_cost(self):
+        from litellm.proxy.management_endpoints.common_daily_activity import _GROUP_GRAND_TOTAL
+
+        metrics = _record_to_spend_metrics(_grouping_row(_GROUP_GRAND_TOTAL, spend=5.0, ptu_flat_cost=240.0))
+
+        assert metrics.flat_cost == 0.0
+        assert metrics.spend == 5.0
+
+    def test_aggregated_totals_and_buckets_report_zero_flat_cost(self):
+        from litellm.constants import PTU_SENTINEL_API_KEY
+        from litellm.proxy.management_endpoints.common_daily_activity import (
+            _GROUP_DATE_API_KEY,
+            _GROUP_DATE_MODEL,
+            _GROUP_GRAND_TOTAL,
+            _aggregate_grouping_sets_records_sync,
+        )
+
+        records = [
+            _grouping_row(_GROUP_DATE_API_KEY, api_key=PTU_SENTINEL_API_KEY, ptu_flat_cost=240.0),
+            _grouping_row(_GROUP_DATE_MODEL, model="gpt-4o-mini-ptu", spend=5.0, ptu_flat_cost=240.0),
+            _grouping_row(_GROUP_GRAND_TOTAL, spend=5.0, ptu_flat_cost=240.0),
+        ]
+
+        aggregated = _aggregate_grouping_sets_records_sync(records=records, api_key_metadata={})
+
+        assert aggregated["totals"].flat_cost == 0.0
+        assert aggregated["totals"].spend == 5.0
+        assert aggregated["results"][0].breakdown.models["gpt-4o-mini-ptu"].metrics.flat_cost == 0.0
+
+    def test_sentinel_still_excluded_from_the_api_key_breakdown(self):
+        from litellm.constants import PTU_SENTINEL_API_KEY
+        from litellm.proxy.management_endpoints.common_daily_activity import update_breakdown_metrics
+        from litellm.types.proxy.management_endpoints.common_daily_activity import BreakdownMetrics
+
+        breakdown = BreakdownMetrics()
+        update_breakdown_metrics(breakdown, _spend_record("real-key", spend=5.0), {}, {}, {})
+        update_breakdown_metrics(
+            breakdown, _spend_record(PTU_SENTINEL_API_KEY, ptu_flat_cost=240.0), {}, {}, {}, entity_id_field="team_id"
+        )
+
+        assert PTU_SENTINEL_API_KEY not in breakdown.api_keys
+        assert PTU_SENTINEL_API_KEY not in breakdown.models["gpt-4o-mini-ptu"].api_key_breakdown
+        assert "real-key" in breakdown.models["gpt-4o-mini-ptu"].api_key_breakdown
+
+    def test_sentinel_still_excluded_from_the_provider_breakdown(self):
+        from litellm.constants import PTU_SENTINEL_API_KEY
+        from litellm.proxy.management_endpoints.common_daily_activity import update_breakdown_metrics
+        from litellm.types.proxy.management_endpoints.common_daily_activity import BreakdownMetrics
+
+        breakdown = BreakdownMetrics()
+        update_breakdown_metrics(breakdown, _spend_record(PTU_SENTINEL_API_KEY, ptu_flat_cost=240.0), {}, {}, {})
+
+        assert breakdown.providers == {}
+
+    def test_grouping_sets_sentinel_still_excluded_from_breakdowns(self):
+        from litellm.constants import PTU_SENTINEL_API_KEY
+        from litellm.proxy.management_endpoints.common_daily_activity import (
+            _GROUP_DATE_API_KEY,
+            _GROUP_DATE_MODEL,
+            _GROUP_DATE_MODEL_API_KEY,
+            _GROUP_DATE_PROVIDER,
+            _aggregate_grouping_sets_records_sync,
+        )
+
+        records = [
+            _grouping_row(_GROUP_DATE_API_KEY, api_key=PTU_SENTINEL_API_KEY, ptu_flat_cost=240.0),
+            _grouping_row(_GROUP_DATE_MODEL, model="gpt-4o-mini-ptu", spend=5.0, ptu_flat_cost=240.0),
+            _grouping_row(
+                _GROUP_DATE_MODEL_API_KEY, model="gpt-4o-mini-ptu", api_key=PTU_SENTINEL_API_KEY, ptu_flat_cost=240.0
+            ),
+            _grouping_row(_GROUP_DATE_PROVIDER, custom_llm_provider="", ptu_flat_cost=240.0),
+        ]
+
+        day = _aggregate_grouping_sets_records_sync(records=records, api_key_metadata={})["results"][0]
+
+        assert PTU_SENTINEL_API_KEY not in day.breakdown.api_keys
+        assert PTU_SENTINEL_API_KEY not in day.breakdown.models["gpt-4o-mini-ptu"].api_key_breakdown
+        assert sum(bucket.metrics.flat_cost for bucket in day.breakdown.providers.values()) == 0.0
+
+    @pytest.mark.asyncio
+    async def test_team_daily_activity_endpoint_reports_zero_flat_cost(self):
+        """/team/daily/activity reads rows with find_many rather than the aggregated SQL, so
+        forcing the SQL select to a constant zero would leave this path reporting flat cost."""
+        from litellm.constants import PTU_SENTINEL_API_KEY
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_table = MagicMock()
+        mock_table.count = AsyncMock(return_value=2)
+        mock_table.find_many = AsyncMock(
+            return_value=[
+                _daily_team_row("real-key", spend=5.0),
+                _daily_team_row(PTU_SENTINEL_API_KEY, ptu_flat_cost=240.0),
+            ]
+        )
+        mock_prisma.db.litellm_verificationtoken = MagicMock()
+        mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.litellm_dailyteamspend = mock_table
+
+        result = await get_daily_activity(
+            prisma_client=mock_prisma,
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id="team-1",
+            entity_metadata_field=None,
+            start_date="2026-07-01",
+            end_date="2026-07-01",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=50,
+        )
+
+        assert result.metadata.total_flat_cost == 0.0
+        assert result.metadata.total_spend == 5.0
+        assert PTU_SENTINEL_API_KEY not in result.results[0].breakdown.api_keys
+
+    @pytest.mark.asyncio
+    async def test_team_daily_activity_endpoint_reports_flat_cost_once_enabled(self, monkeypatch):
+        from litellm.constants import PTU_SENTINEL_API_KEY
+
+        monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_table = MagicMock()
+        mock_table.count = AsyncMock(return_value=2)
+        mock_table.find_many = AsyncMock(
+            return_value=[
+                _daily_team_row("real-key", spend=5.0),
+                _daily_team_row(PTU_SENTINEL_API_KEY, ptu_flat_cost=240.0),
+            ]
+        )
+        mock_prisma.db.litellm_verificationtoken = MagicMock()
+        mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.litellm_dailyteamspend = mock_table
+
+        result = await get_daily_activity(
+            prisma_client=mock_prisma,
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id="team-1",
+            entity_metadata_field=None,
+            start_date="2026-07-01",
+            end_date="2026-07-01",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=50,
+        )
+
+        assert result.metadata.total_flat_cost == 240.0
+        assert PTU_SENTINEL_API_KEY not in result.results[0].breakdown.api_keys
+
+
+class TestFlagIsNotReadOnTheHotPath:
+    """update_metrics runs once per accumulation and a record fans out across roughly a
+    dozen breakdowns, so a flag that reads through the secret manager must not be consulted
+    for rows that carry no flat cost at all."""
+
+    @staticmethod
+    def _count_flag_reads(records):
+        import litellm.proxy.management_endpoints.common_daily_activity as cda
+        from litellm.types.proxy.management_endpoints.common_daily_activity import BreakdownMetrics
+
+        reads = []
+        real = cda.is_ptu_cost_attribution_enabled
+
+        def counted():
+            reads.append(1)
+            return real()
+
+        cda.is_ptu_cost_attribution_enabled = counted
+        try:
+            breakdown = BreakdownMetrics()
+            for record in records:
+                cda.update_breakdown_metrics(breakdown, record, {}, {}, {})
+        finally:
+            cda.is_ptu_cost_attribution_enabled = real
+        return len(reads)
+
+    def test_a_request_row_never_reads_the_flag(self):
+        reads = self._count_flag_reads([_spend_record("real-key", spend=5.0, ptu_flat_cost=0.0)])
+        assert reads == 0, f"{reads} secret-manager lookups for a row with no flat cost"
+
+    def test_a_page_of_request_rows_never_reads_the_flag(self):
+        rows = [_spend_record(f"key-{i}", spend=1.0, ptu_flat_cost=0.0) for i in range(50)]
+        assert self._count_flag_reads(rows) == 0
+
+    def test_a_sentinel_row_still_consults_the_flag(self):
+        from litellm.constants import PTU_SENTINEL_API_KEY
+
+        reads = self._count_flag_reads([_spend_record(PTU_SENTINEL_API_KEY, spend=0.0, ptu_flat_cost=240.0)])
+        assert reads > 0
