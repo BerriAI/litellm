@@ -5760,6 +5760,72 @@ async def test_temp_budget_increase_applied_for_cached_key():
     assert cached_after.max_budget == 2.0
 
 
+class TestTeamMemberBudgetCheckForKey:
+    """Tests for _team_member_budget_check_for_key: virtual keys with a
+    team member budget must be blocked once over budget, except project-scoped
+    keys, which are governed by the project budget instead."""
+
+    def _valid_token(self, project_id=None) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(
+            token="hashed-token",
+            user_id="member-user",
+            team_id="member-team",
+            team_member_spend=0.03,
+            project_id=project_id,
+        )
+
+    def _cache_with_membership(self):
+        from litellm.proxy._types import LiteLLM_TeamMembership
+
+        membership = LiteLLM_TeamMembership(
+            user_id="member-user",
+            team_id="member-team",
+            spend=0.03,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.01),
+        )
+        cache = MagicMock()
+        cache.async_get_cache = AsyncMock(return_value=membership)
+        return cache
+
+    @pytest.mark.asyncio
+    async def test_raises_when_member_over_budget(self):
+        from litellm.proxy.auth.user_api_key_auth import (
+            _team_member_budget_check_for_key,
+        )
+
+        with patch(
+            "litellm.proxy.proxy_server.get_current_spend",
+            new_callable=AsyncMock,
+            return_value=0.03,
+        ):
+            with pytest.raises(litellm.BudgetExceededError):
+                await _team_member_budget_check_for_key(
+                    valid_token=self._valid_token(),
+                    prisma_client=MagicMock(),
+                    user_api_key_cache=self._cache_with_membership(),
+                )
+
+    @pytest.mark.asyncio
+    async def test_skips_for_project_scoped_key(self):
+        from litellm.proxy.auth.user_api_key_auth import (
+            _team_member_budget_check_for_key,
+        )
+
+        cache = self._cache_with_membership()
+        with patch(
+            "litellm.proxy.proxy_server.get_current_spend",
+            new_callable=AsyncMock,
+            return_value=0.03,
+        ):
+            await _team_member_budget_check_for_key(
+                valid_token=self._valid_token(project_id="project-1"),
+                prisma_client=MagicMock(),
+                user_api_key_cache=cache,
+            )
+
+        cache.async_get_cache.assert_not_called()
+
+
 async def _proxy_exception_for_key(
     api_key: str,
     general_settings: dict[str, bool],

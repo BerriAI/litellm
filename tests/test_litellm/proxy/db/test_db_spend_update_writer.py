@@ -1638,6 +1638,7 @@ async def test_batch_database_updates_isolation_on_failure():
     db_writer._update_user_db = AsyncMock()
     db_writer._update_team_db = AsyncMock()
     db_writer._update_org_db = AsyncMock()
+    db_writer._update_project_db = AsyncMock()
     db_writer._update_tag_db = AsyncMock()
     db_writer._update_agent_db = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
@@ -1653,6 +1654,7 @@ async def test_batch_database_updates_isolation_on_failure():
         hashed_token="t1",
         team_id="team1",
         org_id="org1",
+        project_id="project1",
         end_user_id="eu1",
         prisma_client=MagicMock(),
         litellm_proxy_budget_name="budget",
@@ -1664,6 +1666,7 @@ async def test_batch_database_updates_isolation_on_failure():
     db_writer._update_key_db.assert_awaited_once()
     db_writer._update_team_db.assert_awaited_once()
     db_writer._update_org_db.assert_awaited_once()
+    db_writer._update_project_db.assert_awaited_once()
     db_writer._update_tag_db.assert_awaited_once()
     db_writer._update_agent_db.assert_awaited_once()
     db_writer.add_spend_log_transaction_to_daily_user_transaction.assert_awaited_once()
@@ -2236,3 +2239,178 @@ async def test_daily_transaction_compression_saved_tokens_zero_when_absent():
     assert transaction["compression_saved_tokens"] == 0
     assert transaction["compression_savings_spend"] == 0
     assert transaction["prompt_caching_savings_spend"] == 0
+
+
+@pytest.mark.asyncio
+async def test_update_project_db_enqueues_project_spend():
+    """
+    Regression for project budgets never being enforced: _update_project_db must
+    enqueue a SpendUpdateQueueItem with entity_type=PROJECT so LiteLLM_ProjectTable.spend
+    gets incremented.
+    """
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    project_id = "project-123"
+    response_cost = 0.1
+
+    writer.spend_update_queue.add_update = AsyncMock()
+
+    await writer._update_project_db(
+        response_cost=response_cost,
+        project_id=project_id,
+        prisma_client=mock_prisma,
+    )
+
+    writer.spend_update_queue.add_update.assert_called_once()
+    call_args = writer.spend_update_queue.add_update.call_args[1]
+    assert call_args["update"]["entity_type"] == Litellm_EntityType.PROJECT
+    assert call_args["update"]["entity_id"] == project_id
+    assert call_args["update"]["response_cost"] == response_cost
+
+
+@pytest.mark.asyncio
+async def test_update_project_db_skips_when_project_id_none():
+    """_update_project_db does not enqueue when project_id is None."""
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    writer.spend_update_queue.add_update = AsyncMock()
+
+    await writer._update_project_db(
+        response_cost=0.05,
+        project_id=None,
+        prisma_client=mock_prisma,
+    )
+
+    writer.spend_update_queue.add_update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_batch_database_updates_tracks_project_spend():
+    """
+    _batch_database_updates must call _update_project_db with the project_id it
+    was given, otherwise project spend silently stops being tracked.
+    """
+    writer = DBSpendUpdateWriter()
+    writer._update_project_db = AsyncMock()
+    writer._update_user_db = AsyncMock()
+    writer._update_key_db = AsyncMock()
+    writer._update_team_db = AsyncMock()
+    writer._update_org_db = AsyncMock()
+    writer._update_tag_db = AsyncMock()
+    writer._update_agent_db = AsyncMock()
+    writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
+    writer.add_spend_log_transaction_to_daily_end_user_transaction = AsyncMock()
+    writer.add_spend_log_transaction_to_daily_agent_transaction = AsyncMock()
+    writer.add_spend_log_transaction_to_daily_team_transaction = AsyncMock()
+    writer.add_spend_log_transaction_to_daily_org_transaction = AsyncMock()
+    writer.add_spend_log_transaction_to_daily_tag_transaction = AsyncMock()
+
+    mock_prisma = MagicMock()
+    await writer._batch_database_updates(
+        response_cost=0.42,
+        user_id="user-1",
+        hashed_token="hashed-token",
+        team_id="team-1",
+        org_id=None,
+        project_id="project-xyz",
+        end_user_id=None,
+        prisma_client=mock_prisma,
+        litellm_proxy_budget_name=None,
+        payload={"request_tags": None},
+    )
+
+    writer._update_project_db.assert_called_once()
+    call_kwargs = writer._update_project_db.call_args[1]
+    assert call_kwargs["project_id"] == "project-xyz"
+    assert call_kwargs["response_cost"] == 0.42
+
+
+@pytest.mark.asyncio
+async def test_commit_spend_updates_to_db_increments_project_spend_and_invalidates_cache():
+    """
+    _commit_spend_updates_to_db must increment LiteLLM_ProjectTable.spend and
+    invalidate the cached project object so the next auth check sees fresh spend.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    mock_batcher = MagicMock()
+
+    mock_transaction = AsyncMock()
+    mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
+    mock_transaction.__aexit__ = AsyncMock(return_value=False)
+    mock_transaction.batch_ = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_batcher),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_transaction)
+
+    mock_cache = MagicMock()
+    mock_cache.async_delete_cache = AsyncMock()
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.call_details.get = MagicMock(return_value=mock_cache)
+
+    project_id = "project-789"
+    response_cost = 0.25
+    db_spend_update_transactions = {
+        "user_list_transactions": {},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {},
+        "org_list_transactions": {},
+        "project_list_transactions": {project_id: response_cost},
+        "tag_list_transactions": {},
+        "agent_list_transactions": {},
+    }
+
+    with patch("litellm.proxy.utils._raise_failed_update_spend_exception"):
+        await db_writer._commit_spend_updates_to_db(
+            prisma_client=mock_prisma_client,
+            n_retry_times=0,
+            proxy_logging_obj=mock_proxy_logging,
+            db_spend_update_transactions=db_spend_update_transactions,
+        )
+
+    mock_batcher.litellm_projecttable.update_many.assert_called_once()
+    call_kwargs = mock_batcher.litellm_projecttable.update_many.call_args[1]
+    assert call_kwargs["where"] == {"project_id": project_id}
+    assert call_kwargs["data"] == {"spend": {"increment": response_cost}}
+    mock_cache.async_delete_cache.assert_any_call(key=f"project_id:{project_id}")
+
+
+@pytest.mark.asyncio
+async def test_commit_spend_updates_to_db_handles_missing_project_transactions_key():
+    """
+    Transactions buffered by an older pod (rolling upgrade) have no
+    project_list_transactions key; commit must not raise.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    mock_prisma_client = MagicMock()
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.call_details.get = MagicMock(return_value=None)
+
+    db_spend_update_transactions = {
+        "user_list_transactions": {},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {},
+        "org_list_transactions": {},
+        "tag_list_transactions": {},
+        "agent_list_transactions": {},
+    }
+
+    await db_writer._commit_spend_updates_to_db(
+        prisma_client=mock_prisma_client,
+        n_retry_times=0,
+        proxy_logging_obj=mock_proxy_logging,
+        db_spend_update_transactions=db_spend_update_transactions,
+    )
+
+    mock_prisma_client.db.tx.assert_not_called()

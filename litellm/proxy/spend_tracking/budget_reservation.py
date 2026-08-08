@@ -48,6 +48,7 @@ _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
     "EndUser": Litellm_EntityType.END_USER.value,
     "Tag": Litellm_EntityType.TAG.value,
     "Organization": Litellm_EntityType.ORGANIZATION.value,
+    "Project": Litellm_EntityType.PROJECT.value,
 }
 
 
@@ -436,6 +437,13 @@ async def _get_budget_counters(
     if org_counter is not None:
         counters.append(org_counter)
 
+    project_counter: Final = await _get_project_budget_counter(
+        valid_token=valid_token,
+        user_api_key_cache=user_api_key_cache,
+    )
+    if project_counter is not None:
+        counters.append(project_counter)
+
     return counters
 
 
@@ -532,6 +540,9 @@ async def _get_team_member_budget_counter(
     if team_object is None or team_object.team_id is None or user_object is None or valid_token.user_id is None:
         return None
 
+    if valid_token.project_id is not None:
+        return None
+
     membership_cache_key: Final = f"team_membership:{valid_token.user_id}:{team_object.team_id}"
     cached_team_membership: Final = await user_api_key_cache.async_get_cache(key=membership_cache_key)
     team_membership: LiteLLM_TeamMembership | None = None
@@ -562,6 +573,33 @@ async def _get_team_member_budget_counter(
         fallback_spend=float(team_member_spend or 0.0),
         entity_type="TeamMember",
         entity_id=f"{valid_token.user_id}:{team_object.team_id}",
+    )
+
+
+async def _get_project_budget_counter(
+    valid_token: UserAPIKeyAuth,
+    user_api_key_cache: DualCache,
+) -> _BudgetCounter | None:
+    if valid_token.project_id is None:
+        return None
+
+    source_cache_key: Final = f"project_id:{valid_token.project_id}"
+    project_object: Final = await user_api_key_cache.async_get_cache(key=source_cache_key)
+    if project_object is None:
+        return None
+
+    budget_table: Final = _get_value(project_object, "litellm_budget_table")
+    max_budget: Final = _to_float(_get_value(budget_table, "max_budget"))
+    if max_budget is None or max_budget <= 0:
+        return None
+
+    return _BudgetCounter(
+        counter_key=f"spend:project:{valid_token.project_id}",
+        source_cache_key=source_cache_key,
+        max_budget=max_budget,
+        fallback_spend=_to_float(_get_value(project_object, "spend")) or 0.0,
+        entity_type="Project",
+        entity_id=valid_token.project_id,
     )
 
 

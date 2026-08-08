@@ -2456,6 +2456,7 @@ async def increment_spend_counters(
     budget_reservation: dict | None = None,
     end_user_id: str | None = None,
     tags: list[str] | None = None,
+    project_id: str | None = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -2570,6 +2571,16 @@ async def increment_spend_counters(
             increment=cost,
         )
 
+    async def _project_scope(scope_project_id: str) -> None:
+        project_counter_key: Final = f"spend:project:{scope_project_id}"
+        if project_counter_key in reserved_counter_keys:
+            return
+        await _init_and_increment_spend_counter(
+            counter_key=project_counter_key,
+            source_cache_key=f"project_id:{scope_project_id}",
+            increment=cost,
+        )
+
     scope_coros: Final = tuple(
         coro
         for coro in (
@@ -2577,6 +2588,7 @@ async def increment_spend_counters(
             _team_scope(team_id) if team_id is not None else None,
             _team_member_scope(user_id, team_id) if user_id is not None and team_id is not None else None,
             _user_scope(user_id) if user_id is not None else None,
+            _project_scope(project_id) if project_id is not None else None,
             _increment_end_user_and_tag_spend_counters(
                 end_user_id=end_user_id,
                 tags=tags,

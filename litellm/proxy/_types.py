@@ -4651,6 +4651,7 @@ class DBSpendUpdateTransactions(TypedDict):
     team_list_transactions: dict[str, float] | None
     team_member_list_transactions: dict[str, float] | None
     org_list_transactions: dict[str, float] | None
+    project_list_transactions: dict[str, float] | None  # mutable-ok: matches sibling buffers
     tag_list_transactions: dict[str, float] | None
     agent_list_transactions: dict[str, float] | None
 

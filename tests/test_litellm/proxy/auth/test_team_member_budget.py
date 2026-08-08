@@ -436,3 +436,76 @@ async def test_team_member_budget_check_personal_key_not_team():
         # Should pass and get_team_membership should not be called
         assert result is True
         mock_get_team_membership.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_team_member_budget_check_skipped_for_project_scoped_key():
+    """
+    Regression for project-scoped keys being blocked by the team member budget:
+    when a key carries a project_id, the project budget governs and the team
+    member budget check must not raise, even if the member is over budget.
+    """
+    request_body = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team-1",
+        team_alias="Test Team",
+        spend=0.0,
+        max_budget=None,
+    )
+
+    user_object = LiteLLM_UserTable(
+        user_id="test-user-1",
+        spend=0.0,
+        max_budget=None,
+    )
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        user_id="test-user-1",
+        team_id="test-team-1",
+        project_id="test-project-1",
+        models=["gpt-3.5-turbo"],
+    )
+
+    team_membership = LiteLLM_TeamMembership(
+        user_id="test-user-1",
+        team_id="test-team-1",
+        spend=0.0000002,  # Exceeds budget
+        litellm_budget_table=LiteLLM_BudgetTable(
+            max_budget=0.0000001,
+        ),
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_prisma_client = MagicMock()
+    mock_user_api_key_cache = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_membership",
+            new_callable=AsyncMock,
+            return_value=team_membership,
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache),
+    ):
+        result = await common_checks(
+            request_body=request_body,
+            team_object=team_object,
+            user_object=user_object,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route="/chat/completions",
+            llm_router=None,
+            proxy_logging_obj=mock_proxy_logging_obj,
+            valid_token=valid_token,
+            request=mock_request,
+        )
+
+        assert result is True
