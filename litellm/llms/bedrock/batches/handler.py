@@ -1,10 +1,13 @@
 from datetime import datetime
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from openai.types.batch import BatchRequestCounts
 from openai.types.batch import Metadata as OpenAIBatchMetadata
 
 from litellm.types.utils import LiteLLMBatch
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 # AWS Bedrock model-invocation-job statuses → OpenAI Batch statuses.
 # Mirrors the mapping used by `BedrockBatchesConfig.transform_create_batch_response`
@@ -81,6 +84,79 @@ class BedrockBatchesHandler:
 
     E.g. Twelve Labs Embedding Async Invoke
     """
+
+    @staticmethod
+    def cancel_batch(
+        batch_id: str,
+        aws_region_name: str | None = None,
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+        aws_access_key_id: str | None = None,
+        aws_secret_access_key: str | None = None,
+        aws_session_token: str | None = None,
+        aws_session_name: str | None = None,
+        aws_profile_name: str | None = None,
+        aws_role_name: str | None = None,
+        aws_web_identity_token: str | None = None,
+        aws_sts_endpoint: str | None = None,
+        aws_external_id: str | None = None,
+        **kwargs: object,  # kwargs-ok: litellm.cancel_batch forwards arbitrary user kwargs verbatim
+    ) -> "LiteLLMBatch":
+        try:
+            import boto3
+            from botocore.exceptions import ClientError
+        except ImportError as exc:
+            raise ImportError("Missing boto3/botocore to call bedrock. Run 'pip install boto3'.") from exc
+
+        region: Final = aws_region_name or _extract_region_from_bedrock_arn(batch_id) or "us-east-1"
+
+        from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
+
+        creds: Final = BedrockBatchesConfig().get_credentials(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            aws_region_name=region,
+            aws_session_name=aws_session_name,
+            aws_profile_name=aws_profile_name,
+            aws_role_name=aws_role_name,
+            aws_web_identity_token=aws_web_identity_token,
+            aws_sts_endpoint=aws_sts_endpoint,
+            aws_external_id=aws_external_id,
+        )
+
+        client: Final = boto3.client(
+            "bedrock",
+            region_name=region,
+            aws_access_key_id=creds.access_key,
+            aws_secret_access_key=creds.secret_key,
+            aws_session_token=creds.token,
+        )
+
+        try:
+            client.stop_model_invocation_job(jobIdentifier=batch_id)
+        except ClientError as e:
+            error_code: Final = e.response.get("Error", {}).get("Code")
+            error_msg: Final = e.response.get("Error", {}).get("Message", "").lower()
+            already_terminal: Final = error_code == "ValidationException" and any(
+                term in error_msg for term in ("stop", "terminal", "completed", "already")
+            )
+            if not already_terminal:
+                raise
+
+        return BedrockBatchesHandler._handle_model_invocation_job_status(
+            batch_id=batch_id,
+            aws_region_name=region,
+            logging_obj=logging_obj,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            aws_session_name=aws_session_name,
+            aws_profile_name=aws_profile_name,
+            aws_role_name=aws_role_name,
+            aws_web_identity_token=aws_web_identity_token,
+            aws_sts_endpoint=aws_sts_endpoint,
+            aws_external_id=aws_external_id,
+        )
 
     @staticmethod
     def _handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj=None, **kwargs) -> "LiteLLMBatch":
