@@ -9,8 +9,7 @@ must declare its fields.
 import ast
 import os
 import sys
-from types import MappingProxyType
-from typing import Final, Iterator, Mapping, NamedTuple, Sequence
+from typing import Final, Iterator, NamedTuple, Sequence
 
 SCAN_ROOT: Final = "litellm"
 
@@ -93,85 +92,96 @@ def _assigned_names(statement: ast.stmt) -> tuple[tuple[str, ast.expr], ...]:
     return tuple((target.id, value) for target in targets if isinstance(target, ast.Name))
 
 
-def _bindings(body: Sequence[ast.stmt]) -> tuple[tuple[int, str, ast.expr], ...]:
-    """Module-level ``NAME = value`` bindings in source order, with the line each one lands on."""
-    return tuple((statement.lineno, name, value) for statement in body for name, value in _assigned_names(statement))
+class Binding(NamedTuple):
+    line: int
+    name: str
+    value: ast.expr
 
 
-def _constants_before(bindings: Sequence[tuple[int, str, ast.expr]], line: int) -> Mapping[str, ast.expr]:
-    """The value each name holds just above ``line``, so a config kept in a constant is still
-    seen and rebinding that name later neither hides nor invents an opt-in.
+class Scope(NamedTuple):
+    """Module-level bindings, read as of ``line``.
+
+    Resolution walks a name to the value it held just above the line reading it, and each hop
+    down a chain of aliases carries that alias's own line, so rebinding a name later can neither
+    hide an earlier opt-in nor implicate a model that never had one.
     """
-    return MappingProxyType({name: value for lineno, name, value in bindings if lineno < line})
+
+    bindings: tuple[Binding, ...]
+    line: int
+
+    def resolve(self, node: ast.expr, seen: frozenset[str] = frozenset()) -> ast.expr:
+        if not isinstance(node, ast.Name) or node.id in seen:
+            return node
+        visible: Final = tuple(
+            binding for binding in self.bindings if binding.name == node.id and binding.line < self.line
+        )
+        if not visible:
+            return node
+        return Scope(self.bindings, visible[-1].line).resolve(visible[-1].value, seen | {node.id})
 
 
-def _resolve(node: ast.expr, constants: Mapping[str, ast.expr], seen: frozenset[str] = frozenset()) -> ast.expr:
-    if isinstance(node, ast.Name) and node.id in constants and node.id not in seen:
-        return _resolve(constants[node.id], constants, seen | {node.id})
-    return node
+def _module_bindings(body: Sequence[ast.stmt]) -> tuple[Binding, ...]:
+    return tuple(
+        Binding(statement.lineno, name, value) for statement in body for name, value in _assigned_names(statement)
+    )
 
 
-def _is_allow_literal(node: ast.expr, constants: Mapping[str, ast.expr]) -> bool:
-    resolved: Final = _resolve(node, constants)
+def _is_allow_literal(node: ast.expr, scope: Scope) -> bool:
+    resolved: Final = scope.resolve(node)
     if isinstance(resolved, ast.Constant):
         return resolved.value == "allow"
-    return _is_allow_attribute(resolved)
+    return isinstance(resolved, ast.Attribute) and resolved.attr == "allow"
 
 
-def _is_allow_attribute(node: ast.expr) -> bool:
-    return isinstance(node, ast.Attribute) and node.attr == "allow"
+def _is_extra_allow_keyword(keyword: ast.keyword, scope: Scope) -> bool:
+    return keyword.arg == "extra" and _is_allow_literal(keyword.value, scope)
 
 
-def _is_extra_allow_keyword(keyword: ast.keyword, constants: Mapping[str, ast.expr]) -> bool:
-    return keyword.arg == "extra" and _is_allow_literal(keyword.value, constants)
-
-
-def _mapping_sets_extra_allow(node: ast.Dict, constants: Mapping[str, ast.expr]) -> bool:
+def _mapping_sets_extra_allow(node: ast.Dict, scope: Scope) -> bool:
     return any(
-        isinstance(key, ast.Constant) and key.value == "extra" and _is_allow_literal(value, constants)
+        isinstance(key, ast.Constant) and key.value == "extra" and _is_allow_literal(value, scope)
         for key, value in zip(node.keys, node.values)
     )
 
 
-def _config_sets_extra_allow(node: ast.expr, constants: Mapping[str, ast.expr]) -> bool:
+def _config_sets_extra_allow(node: ast.expr, scope: Scope) -> bool:
     if isinstance(node, ast.Call):
-        return any(_is_extra_allow_keyword(keyword, constants) for keyword in node.keywords)
+        return any(_is_extra_allow_keyword(keyword, scope) for keyword in node.keywords)
     if isinstance(node, ast.Dict):
-        return _mapping_sets_extra_allow(node, constants)
+        return _mapping_sets_extra_allow(node, scope)
     return False
 
 
-def _is_extra_allow_value(node: ast.expr, constants: Mapping[str, ast.expr]) -> bool:
-    return _config_sets_extra_allow(_resolve(node, constants), constants)
+def _is_extra_allow_value(node: ast.expr, scope: Scope) -> bool:
+    return _config_sets_extra_allow(scope.resolve(node), scope)
 
 
-def _assigns_extra_allow(statement: ast.stmt, target_names: Sequence[str], constants: Mapping[str, ast.expr]) -> bool:
+def _assigns_extra_allow(statement: ast.stmt, target_names: Sequence[str], scope: Scope) -> bool:
     return any(
-        name in set(target_names) and _is_extra_allow_value(value, constants)
-        for name, value in _assigned_names(statement)
+        name in set(target_names) and _is_extra_allow_value(value, scope) for name, value in _assigned_names(statement)
     )
 
 
-def _legacy_config_sets_extra_allow(class_def: ast.ClassDef, constants: Mapping[str, ast.expr]) -> bool:
+def _legacy_config_sets_extra_allow(class_def: ast.ClassDef, scope: Scope) -> bool:
     return any(
         isinstance(statement, ast.ClassDef)
         and statement.name == "Config"
         and any(
             isinstance(inner, ast.Assign)
             and any(isinstance(target, ast.Name) and target.id == "extra" for target in inner.targets)
-            and _is_allow_literal(inner.value, constants)
+            and _is_allow_literal(inner.value, scope)
             for inner in statement.body
         )
         for statement in class_def.body
     )
 
 
-def _class_allows_extra(class_def: ast.ClassDef, constants: Mapping[str, ast.expr]) -> bool:
-    if any(_is_extra_allow_keyword(keyword, constants) for keyword in class_def.keywords):
+def _class_allows_extra(class_def: ast.ClassDef, scope: Scope) -> bool:
+    if any(_is_extra_allow_keyword(keyword, scope) for keyword in class_def.keywords):
         return True
-    if any(_assigns_extra_allow(statement, ["model_config"], constants) for statement in class_def.body):
+    if any(_assigns_extra_allow(statement, ["model_config"], scope) for statement in class_def.body):
         return True
-    return _legacy_config_sets_extra_allow(class_def, constants)
+    return _legacy_config_sets_extra_allow(class_def, scope)
 
 
 def _iter_classes(body: Sequence[ast.stmt], prefix: str = "") -> Iterator[tuple[str, ast.ClassDef]]:
@@ -184,11 +194,11 @@ def _iter_classes(body: Sequence[ast.stmt], prefix: str = "") -> Iterator[tuple[
 
 def find_violations_in_source(source: str, relative_path: str) -> tuple[Violation, ...]:
     tree: Final = ast.parse(source, filename=relative_path)
-    bindings: Final = _bindings(tree.body)
+    bindings: Final = _module_bindings(tree.body)
     return tuple(
         Violation(file=relative_path, line=class_def.lineno, model=qualified)
         for qualified, class_def in _iter_classes(tree.body)
-        if _class_allows_extra(class_def, _constants_before(bindings, class_def.lineno))
+        if _class_allows_extra(class_def, Scope(bindings, class_def.lineno))
     )
 
 
