@@ -54,10 +54,9 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
 
     DEFAULT_NIM_RERANK_API_BASE = "https://ai.api.nvidia.com"
 
-    # Structured document fields forwarded to the ranking API as-is.
-    # VL rerank models (e.g. nvidia/llama-nemotron-rerank-vl-1b-v2) accept
-    # image passages alongside text passages.
-    SUPPORTED_PASSAGE_FIELDS = ("text", "image")
+    # The legacy retrieval rerank route accepts text passages only. The native
+    # ranking subclass expands this tuple for VL models that accept images.
+    SUPPORTED_PASSAGE_FIELDS: tuple[str, ...] = ("text",)
 
     def __init__(self) -> None:
         pass
@@ -212,12 +211,12 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
             if isinstance(doc, str):
                 passages.append({"text": doc})
             elif isinstance(doc, dict):
-                # Preserve structured passages (text, image, or mixed) so
-                # VL rerank models receive image passages intact
+                # Preserve only the structured passage fields supported by the
+                # selected rerank route.
                 supported_fields: NvidiaNimPassageObject = {}  # mutable-ok: assembling a request TypedDict
-                if "text" in doc:
+                if "text" in self.SUPPORTED_PASSAGE_FIELDS and "text" in doc:
                     supported_fields["text"] = doc["text"]
-                if "image" in doc:
+                if "image" in self.SUPPORTED_PASSAGE_FIELDS and "image" in doc:
                     supported_fields["image"] = doc["image"]
                 if supported_fields:
                     passages.append(supported_fields)

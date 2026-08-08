@@ -525,13 +525,16 @@ class TestNvidiaNimRetrievalRerankRequestTransform:
         request_data = self._build_request([TEXT_DOC])
         assert request_data["passages"] == [TEXT_DOC]
 
-    def test_image_object_documents_are_preserved(self):
+    def test_image_object_documents_keep_retrieval_behavior(self):
         request_data = self._build_request([IMAGE_DOC, TEXT_DOC])
-        assert request_data["passages"] == [IMAGE_DOC, TEXT_DOC]
+        assert request_data["passages"] == [
+            {"text": json.dumps(IMAGE_DOC)},
+            TEXT_DOC,
+        ]
 
-    def test_mixed_text_image_documents_are_preserved(self):
+    def test_mixed_text_image_documents_keep_text_only(self):
         request_data = self._build_request([MIXED_DOC])
-        assert request_data["passages"] == [MIXED_DOC]
+        assert request_data["passages"] == [{"text": MIXED_DOC["text"]}]
 
     def test_unsupported_dict_documents_are_stringified(self):
         doc = {"title": "no supported fields here"}
