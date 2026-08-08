@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "LiteLLM_AdaptiveRouterState" ADD COLUMN     "alpha_eff" DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+ADD COLUMN     "beta_eff" DOUBLE PRECISION NOT NULL DEFAULT 1.0;
+

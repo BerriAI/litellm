@@ -5,6 +5,7 @@ import pytest
 from litellm.router_strategy.adaptive_router.bandit import (
     BanditCell,
     apply_delta,
+    apply_efficiency_delta,
     initial_cell,
     normalized_cost,
     pick_best,
@@ -65,6 +66,28 @@ def test_apply_delta_respects_sample_cap():
     same_cell = apply_delta(cell, 5.0, 5.0)
     assert same_cell.alpha == cell.alpha
     assert same_cell.beta == cell.beta
+
+
+def test_apply_efficiency_delta_increments_alpha_eff_and_beta_eff():
+    cell = BanditCell(alpha=5.0, beta=5.0, alpha_eff=1.0, beta_eff=1.0)
+    new_cell = apply_efficiency_delta(cell, 0.8, 0.2)
+    assert new_cell.alpha_eff == 1.8
+    assert new_cell.beta_eff == 1.2
+    # Quality posterior unchanged
+    assert new_cell.alpha == 5.0
+    assert new_cell.beta == 5.0
+
+
+def test_apply_efficiency_delta_respects_sample_cap():
+    cell = BanditCell(alpha=5.0, beta=5.0, alpha_eff=SAMPLE_CAP - 1.0, beta_eff=1.0)
+    same_cell = apply_efficiency_delta(cell, 5.0, 5.0)
+    assert same_cell.alpha_eff == cell.alpha_eff
+    assert same_cell.beta_eff == cell.beta_eff
+
+
+def test_efficiency_mean():
+    cell = BanditCell(alpha=5.0, beta=5.0, alpha_eff=6.0, beta_eff=4.0)
+    assert abs(cell.efficiency_mean - 0.6) < 0.001
 
 
 def test_thompson_sample_in_range():

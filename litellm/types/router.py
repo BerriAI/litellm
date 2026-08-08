@@ -888,13 +888,20 @@ class RequestType(str, enum.Enum):
 class AdaptiveRouterWeights(BaseModel):
     quality: float = Field(default=0.7, ge=0.0, le=1.0)
     cost: float = Field(default=0.3, ge=0.0, le=1.0)
+    # Weight on the latency/throughput posterior (see adaptive_router/efficiency.py). Defaults to
+    # 0.0 so existing quality/cost-tuned deployments see no behavior change until an operator
+    # opts in explicitly -- see PHASE1_PLAN.md Decision 1.
+    efficiency: float = Field(default=0.0, ge=0.0, le=1.0)
 
-    @field_validator("cost")
+    @field_validator("efficiency")
     @classmethod
     def _weights_sum_to_one(cls, v, info):
         q: Final = info.data.get("quality", 0.7)
-        if abs(q + v - 1.0) > 0.001:
-            raise ValueError(f"weights must sum to 1.0, got quality={q} + cost={v} = {q + v}")
+        c: Final = info.data.get("cost", 0.3)
+        if abs(q + c + v - 1.0) > 0.001:
+            raise ValueError(
+                f"weights must sum to 1.0, got quality={q} + cost={c} + efficiency={v} = {q + c + v}"
+            )
         return v
 
 

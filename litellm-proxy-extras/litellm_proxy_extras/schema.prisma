@@ -1377,6 +1377,12 @@ model LiteLLM_AdaptiveRouterState {
   model_name      String
   alpha           Float
   beta            Float
+  // Efficiency posterior (latency/throughput reward) -- independent Beta on the same
+  // cell, fed by AdaptiveRouter.record_efficiency. Defaults to the uninformative
+  // Beta(1, 1) prior used in-memory (see bandit.py) so a row created before this
+  // column existed reads back with no efficiency signal yet, not a false one.
+  alpha_eff       Float    @default(1.0)
+  beta_eff        Float    @default(1.0)
   total_samples   Int      @default(0)
   last_updated_at DateTime @default(now()) @updatedAt
 
