@@ -757,11 +757,13 @@ def test_generic_cost_per_token_gpt56_terra_cache_costs_by_tier_and_context(
     [
         ("azure/gpt-5.6", 5e-6, 3e-5, 5e-7),
         ("azure/gpt-5.6-sol", 5e-6, 3e-5, 5e-7),
-        ("azure/gpt-5.6-terra", 2e-6, 1.2e-5, 2e-7),
-        ("azure/gpt-5.6-luna", 2e-7, 1.2e-6, 2e-8),
+        ("azure/gpt-5.6-terra", 2.5e-6, 1.5e-5, 2.5e-7),
+        ("azure/gpt-5.6-luna", 1e-6, 6e-6, 1e-7),
         ("azure/us/gpt-5.6", 5.5e-6, 3.3e-5, 5.5e-7),
-        ("azure/eu/gpt-5.6-terra", 2.2e-6, 1.32e-5, 2.2e-7),
-        ("azure/eu/gpt-5.6-luna", 2.2e-7, 1.32e-6, 2.2e-8),
+        ("azure/us/gpt-5.6-terra", 2.75e-6, 1.65e-5, 2.75e-7),
+        ("azure/us/gpt-5.6-luna", 1.1e-6, 6.6e-6, 1.1e-7),
+        ("azure/eu/gpt-5.6-terra", 2.75e-6, 1.65e-5, 2.75e-7),
+        ("azure/eu/gpt-5.6-luna", 1.1e-6, 6.6e-6, 1.1e-7),
     ],
 )
 def test_generic_cost_per_token_azure_gpt56(
@@ -793,6 +795,51 @@ def test_generic_cost_per_token_azure_gpt56(
     )
     assert round(prompt_cost, 10) == round(input_cost * prompt_tokens, 10)
     assert round(completion_cost, 10) == round(output_cost * completion_tokens, 10)
+
+
+@pytest.mark.parametrize(
+    "model,service_tier,prompt_tokens,input_rate,output_rate,cache_read_rate",
+    [
+        ("azure/gpt-5.6-luna", None, 300000, 2e-6, 9e-6, 2e-7),
+        ("azure/gpt-5.6-luna", "priority", 1000, 2e-6, 1.2e-5, 2e-7),
+        ("azure/gpt-5.6-luna", "priority", 300000, 4e-6, 1.8e-5, 4e-7),
+        ("azure/gpt-5.6-terra", None, 300000, 5e-6, 2.25e-5, 5e-7),
+        ("azure/gpt-5.6-terra", "priority", 1000, 5e-6, 3e-5, 5e-7),
+        ("azure/gpt-5.6-terra", "priority", 300000, 1e-5, 4.5e-5, 1e-6),
+        ("azure/us/gpt-5.6-luna", None, 300000, 2.2e-6, 9.9e-6, 2.2e-7),
+        ("azure/us/gpt-5.6-luna", "priority", 1000, 2.75e-6, 1.65e-5, 2.75e-7),
+        ("azure/eu/gpt-5.6-terra", None, 300000, 5.5e-6, 2.475e-5, 5.5e-7),
+    ],
+)
+def test_generic_cost_per_token_azure_gpt56_priority_and_long_context_rates(
+    model, service_tier, prompt_tokens, input_rate, output_rate, cache_read_rate
+):
+    """The base-rate test above leaves the ``_priority`` and ``_above_272k_tokens``
+    fields unexercised, so a typo in one, or a key the calculator never reads, would
+    silently fall back to base rates and misreport spend for those tiers.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    cached_tokens = prompt_tokens // 5
+    text_tokens = prompt_tokens - cached_tokens
+    completion_tokens = 500
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="azure",
+        service_tier=service_tier,
+    )
+
+    assert prompt_cost == pytest.approx(text_tokens * input_rate + cached_tokens * cache_read_rate)
+    assert completion_cost == pytest.approx(completion_tokens * output_rate)
 
 
 @pytest.mark.parametrize(
