@@ -6,8 +6,16 @@ request time. This module only checks that a write sets a well-formed ``access``
 """
 
 from collections.abc import Mapping
+from typing import Final, NoReturn
 
 from fastapi import HTTPException, status
+
+_ALLOWED_ACCESS_FIELDS: Final = frozenset({"global", "teams", "orgs"})
+
+
+def _reject(message: str) -> NoReturn:
+    detail: Final = {"error": message}  # mutable-ok: FastAPI serialises the detail
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
 def validate_credential_access(credential_info: Mapping[str, object] | None) -> None:
@@ -19,27 +27,15 @@ def validate_credential_access(credential_info: Mapping[str, object] | None) -> 
     """
     if not isinstance(credential_info, dict) or "access" not in credential_info:
         return
-    access = credential_info["access"]
+    access: Final = credential_info["access"]
     if not isinstance(access, dict):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": "credential_info.access must be an object"},
-        )
+        _reject("credential_info.access must be an object")
     if "global" in access and not isinstance(access["global"], bool):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": "access.global must be a boolean"},
-        )
+        _reject("access.global must be a boolean")
     for field in ("teams", "orgs"):
         bucket = access.get(field)
         if bucket is not None and not (isinstance(bucket, list) and all(isinstance(item, str) for item in bucket)):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": f"access.{field} must be a list of strings"},
-            )
-    unknown = set(access) - {"global", "teams", "orgs"}
+            _reject(f"access.{field} must be a list of strings")
+    unknown: Final = frozenset(access) - _ALLOWED_ACCESS_FIELDS
     if unknown:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": f"access contains unknown field(s): {sorted(unknown)}"},
-        )
+        _reject(f"access contains unknown field(s): {sorted(unknown)}")

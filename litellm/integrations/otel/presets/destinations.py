@@ -12,6 +12,8 @@ credential values only.
 
 import os
 from collections.abc import Callable, Mapping
+from types import MappingProxyType
+from typing import Final
 
 from litellm.integrations.langfuse.langfuse_otel import (
     LANGFUSE_CLOUD_US_ENDPOINT,
@@ -22,48 +24,52 @@ from litellm.integrations.weave.weave_otel import _get_weave_authorization_heade
 
 
 def _parse_header_string(raw: str) -> Mapping[str, str]:
-    pairs = (item.split("=", 1) for item in raw.split(",") if "=" in item)
-    return {key.strip(): value.strip() for key, value in pairs}
+    pairs: Final = (item.split("=", 1) for item in raw.split(",") if "=" in item)
+    return MappingProxyType({key.strip(): value.strip() for key, value in pairs})
 
 
 def _langfuse_endpoint(host: str) -> str:
-    normalized = host if host.startswith("http") else f"https://{host}"
+    normalized: Final = host if host.startswith("http") else f"https://{host}"
     return f"{normalized.rstrip('/')}/api/public/otel"
 
 
 def _langfuse_destination(values: Mapping[str, str]) -> OtelDestination | None:
-    public_key = values.get("langfuse_public_key")
-    secret_key = values.get("langfuse_secret_key")
+    public_key: Final = values.get("langfuse_public_key")
+    secret_key: Final = values.get("langfuse_secret_key")
     if not public_key or not secret_key:
         return None
-    host = values.get("langfuse_host")
-    endpoint = _langfuse_endpoint(host) if host else LANGFUSE_CLOUD_US_ENDPOINT
-    auth = LangfuseOtelLogger._get_langfuse_authorization_header(public_key=public_key, secret_key=secret_key)
-    return OtelDestination(endpoint=endpoint, headers={"Authorization": auth})
+    host: Final = values.get("langfuse_host")
+    endpoint: Final = _langfuse_endpoint(host) if host else LANGFUSE_CLOUD_US_ENDPOINT
+    auth: Final = LangfuseOtelLogger._get_langfuse_authorization_header(public_key=public_key, secret_key=secret_key)
+    return OtelDestination(endpoint=endpoint, headers=MappingProxyType({"Authorization": auth}))
 
 
 def _arize_destination(values: Mapping[str, str]) -> OtelDestination | None:
-    space = values.get("arize_space_id") or values.get("arize_space_key")
-    api_key = values.get("arize_api_key")
+    space: Final = values.get("arize_space_id") or values.get("arize_space_key")
+    api_key: Final = values.get("arize_api_key")
     if not space or not api_key:
         return None
     # Mirrors the global config's ARIZE_ENDPOINT / ARIZE_HTTP_ENDPOINT split: Arize's
     # own endpoint is gRPC, but a destination may point at an HTTP collector, and the
     # URL scheme cannot express that (the gRPC endpoint is also https://).
-    http_endpoint = values.get("arize_http_endpoint")
-    endpoint = values.get("arize_endpoint") or http_endpoint or "https://otlp.arize.com/v1"
-    project = values.get("arize_project_name") or values.get("project_name") or os.environ.get("ARIZE_PROJECT_NAME")
-    resource_attributes = {"model_id": project, "arize.project.name": project} if project else {}
+    http_endpoint: Final = values.get("arize_http_endpoint")
+    endpoint: Final = values.get("arize_endpoint") or http_endpoint or "https://otlp.arize.com/v1"
+    project: Final = (
+        values.get("arize_project_name") or values.get("project_name") or os.environ.get("ARIZE_PROJECT_NAME")
+    )
+    resource_attributes: Final = (
+        MappingProxyType({"model_id": project, "arize.project.name": project}) if project else _EMPTY
+    )
     return OtelDestination(
         endpoint=endpoint,
-        headers={"space_id": space, "api_key": api_key},
+        headers=MappingProxyType({"space_id": space, "api_key": api_key}),
         resource_attributes=resource_attributes,
         protocol="otlp_http" if http_endpoint and not values.get("arize_endpoint") else None,
     )
 
 
 def _weave_destination(values: Mapping[str, str]) -> OtelDestination | None:
-    api_key = values.get("wandb_api_key")
+    api_key: Final = values.get("wandb_api_key")
     if not api_key:
         return None
     from litellm.integrations.weave.weave_otel import (
@@ -71,12 +77,15 @@ def _weave_destination(values: Mapping[str, str]) -> OtelDestination | None:
         WEAVE_OTEL_ENDPOINT,
     )
 
-    base = (values.get("weave_endpoint") or WEAVE_BASE_URL).rstrip("/")
-    endpoint = base if base.endswith("/v1/traces") else base.removesuffix("/otel") + WEAVE_OTEL_ENDPOINT
-    headers = {"Authorization": _get_weave_authorization_header(api_key=api_key)}
-    project_id = values.get("weave_project_id")
-    if project_id:
-        headers["project_id"] = project_id
+    base: Final = (values.get("weave_endpoint") or WEAVE_BASE_URL).rstrip("/")
+    endpoint: Final = base if base.endswith("/v1/traces") else base.removesuffix("/otel") + WEAVE_OTEL_ENDPOINT
+    project_id: Final = values.get("weave_project_id")
+    headers: Final = MappingProxyType(
+        {  # mutable-ok: the OTLP exporter is handed a concrete header map
+            "Authorization": _get_weave_authorization_header(api_key=api_key),
+            **({"project_id": project_id} if project_id else {}),  # mutable-ok: optional key, spread inline
+        }
+    )
     return OtelDestination(endpoint=endpoint, headers=headers)
 
 
@@ -91,7 +100,7 @@ def _generic_destination(values: Mapping[str, str]) -> OtelDestination | None:
     to the plain HTTP URL the admin typed, so the destination silently delivered nothing
     while still being disclosed as active.
     """
-    endpoint = values.get("otel_endpoint")
+    endpoint: Final = values.get("otel_endpoint")
     if not endpoint:
         return None
     return OtelDestination(
@@ -101,13 +110,17 @@ def _generic_destination(values: Mapping[str, str]) -> OtelDestination | None:
     )
 
 
-_ADAPTERS: Mapping[str, Callable[[Mapping[str, str]], OtelDestination | None]] = {
-    "langfuse_otel": _langfuse_destination,
-    "arize": _arize_destination,
-    "weave_otel": _weave_destination,
-}
+_EMPTY: Final[Mapping[str, str]] = MappingProxyType({})
 
-OTEL_V2_DESTINATION_CALLBACKS = frozenset(_ADAPTERS)
+_ADAPTERS: Final[Mapping[str, Callable[[Mapping[str, str]], OtelDestination | None]]] = MappingProxyType(
+    {
+        "langfuse_otel": _langfuse_destination,
+        "arize": _arize_destination,
+        "weave_otel": _weave_destination,
+    }
+)
+
+OTEL_V2_DESTINATION_CALLBACKS: Final = frozenset(_ADAPTERS)
 
 
 def build_destination(callback_name: str, values: Mapping[str, str]) -> OtelDestination | None:
@@ -118,10 +131,12 @@ def build_destination(callback_name: str, values: Mapping[str, str]) -> OtelDest
     host (an easy slip in the create form) yields a malformed OTLP URL the
     exporter rejects with a 404, so whitespace is never significant here.
     """
-    trimmed = {key: value.strip() if isinstance(value, str) else value for key, value in values.items()}
-    adapter = _ADAPTERS.get(callback_name)
+    trimmed: Final = MappingProxyType(
+        {key: value.strip() for key, value in values.items()}
+    )
+    adapter: Final = _ADAPTERS.get(callback_name)
     if adapter is not None:
-        destination = adapter(trimmed)
+        destination: Final = adapter(trimmed)
         if destination is not None:
             return destination
     return _generic_destination(trimmed)

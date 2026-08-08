@@ -10,7 +10,9 @@ scope is the given set of team ids and org ids. The resolver passes a
 one-element scope built with ``identity_scope``.
 """
 
-from typing import TYPE_CHECKING
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -20,6 +22,9 @@ from litellm.models.credentials import CredentialAccess, CredentialInfo, Credent
 
 if TYPE_CHECKING:
     from litellm.integrations.otel.model.destination import OtelDestination
+
+
+_EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 class _LoggingDestinationTag(BaseModel):
@@ -127,14 +132,16 @@ def destination_for_credential(credential: CredentialItem) -> 'tuple[str, "OtelD
     from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
     from litellm.integrations.otel.presets.destinations import build_destination
 
-    backend = (credential.credential_info or {}).get("description")
+    backend: Final = (credential.credential_info or _EMPTY).get("description")
     if not backend:
         return None
     # Drop unset (``None``) values rather than stringifying them: ``str(None)`` is the
     # literal ``"None"``, which would land in the exporter endpoint/headers and break
     # the export (e.g. an empty ``otel_endpoint`` becoming the URL ``"None"``).
-    values = {str(key): str(value) for key, value in (credential.credential_values or {}).items() if value is not None}
-    destination = build_destination(backend, values)
+    values: Final = MappingProxyType(
+        {str(key): str(value) for key, value in (credential.credential_values or _EMPTY).items() if value is not None}
+    )
+    destination: Final = build_destination(backend, values)
     if destination is None:
         return None
     return (backend if backend in PRESET_BY_CALLBACK else "generic", destination)

@@ -2,6 +2,8 @@
 CRUD endpoints for storing reusable credentials.
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
@@ -25,6 +27,8 @@ from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.utils import CreateCredentialItem, CredentialItem
 
 router: Final = APIRouter()
+
+_EMPTY_VERDICT: Final[Mapping[str, bool]] = MappingProxyType({})
 
 
 class CredentialHelperUtils:
@@ -121,6 +125,14 @@ async def create_credential(
     dependencies=[Depends(user_api_key_auth)],
     tags=["credential management"],
 )
+def _destination_verdict(credential: CredentialItem) -> Mapping[str, bool]:
+    """Whether this logging credential actually builds, for the listing. Empty for a
+    provider credential, which has no destination to report on."""
+    if not is_logging_credential(credential.credential_info):
+        return _EMPTY_VERDICT
+    return {"resolves_to_destination": destination_for_credential(credential) is not None}  # mutable-ok: JSON body
+
+
 async def get_credentials(
     request: Request,
     fastapi_response: Response,
@@ -135,11 +147,7 @@ async def get_credentials(
                 "credential_name": credential.credential_name,
                 "credential_values": _get_masked_values(credential.credential_values),
                 "credential_info": credential.credential_info,
-                **(
-                    {"resolves_to_destination": destination_for_credential(credential) is not None}
-                    if is_logging_credential(credential.credential_info)
-                    else {}
-                ),
+                **_destination_verdict(credential),
             }
             for credential in litellm.credential_list
         ]
