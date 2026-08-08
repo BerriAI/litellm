@@ -49,8 +49,8 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_credentials_for_model,
     handle_model_based_routing,
     prepare_data_with_credentials,
-    validate_managed_file_id_requirement,
     validate_managed_files_requirement,
+    validate_managed_id_requirement,
 )
 from litellm.proxy.utils import ProxyLogging, is_known_model
 from litellm.repositories.table_repositories import ManagedFileRepository
@@ -613,7 +613,7 @@ async def get_file_content(
 
     data: dict = {"file_id": file_id}
     try:
-        validate_managed_file_id_requirement(file_id=file_id)
+        validate_managed_id_requirement(resource_id=file_id, resource_kind="file")
 
         # Include original request and headers in the data
         base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -911,7 +911,7 @@ async def get_file(
 
     data: dict = {"file_id": file_id}
     try:
-        validate_managed_file_id_requirement(file_id=file_id)
+        validate_managed_id_requirement(resource_id=file_id, resource_kind="file")
 
         custom_llm_provider: Final = (
             provider
@@ -1103,7 +1103,7 @@ async def delete_file(
 
     data: dict = {"file_id": file_id}
     try:
-        validate_managed_file_id_requirement(file_id=file_id)
+        validate_managed_id_requirement(resource_id=file_id, resource_kind="file")
 
         custom_llm_provider: Final = (
             provider

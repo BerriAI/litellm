@@ -3109,22 +3109,22 @@ def _unified_managed_file_id() -> str:
 
 def test_require_managed_files_allows_unified_managed_file_id(monkeypatch):
     from litellm.proxy.openai_files_endpoints.common_utils import (
-        validate_managed_file_id_requirement,
+        validate_managed_id_requirement,
     )
 
     monkeypatch.setattr("litellm.require_managed_files", True)
 
-    validate_managed_file_id_requirement(file_id=_unified_managed_file_id())
+    validate_managed_id_requirement(resource_id=_unified_managed_file_id(), resource_kind="file")
 
 
 def test_managed_file_id_requirement_is_opt_in(monkeypatch):
     from litellm.proxy.openai_files_endpoints.common_utils import (
-        validate_managed_file_id_requirement,
+        validate_managed_id_requirement,
     )
 
     monkeypatch.setattr("litellm.require_managed_files", False)
 
-    validate_managed_file_id_requirement(file_id="file-victim-abc123")
+    validate_managed_id_requirement(resource_id="file-victim-abc123", resource_kind="file")
 
 
 def test_raw_provider_file_id_retrieve_allowed_when_managed_files_not_required(

@@ -65,6 +65,11 @@ def _update_request_data_with_managed_file_id(
         is_base64_encoded_unified_id,
         parse_unified_id,
     )
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        validate_managed_id_requirement,
+    )
+
+    validate_managed_id_requirement(resource_id=file_id, resource_kind="file")
 
     # First, check if this is a unified managed file ID (base64 encoded)
     decoded_id: Final = is_base64_encoded_unified_id(file_id)

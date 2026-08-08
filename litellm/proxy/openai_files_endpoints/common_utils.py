@@ -881,17 +881,20 @@ def validate_managed_files_requirement(
         )
 
 
-def validate_managed_file_id_requirement(file_id: str) -> None:
+def validate_managed_id_requirement(
+    resource_id: str | None,
+    resource_kind: Literal["file", "batch", "fine-tuning job"],
+) -> None:
     """
-    Enforce proxy-level managed files on the file read/delete routes when
-    ``litellm.require_managed_files`` is enabled.
+    Enforce proxy-level managed resources on every route that accepts a provider-issued id
+    when ``litellm.require_managed_files`` is enabled.
 
-    Ownership is only recorded for LiteLLM managed files, so a raw provider file id sent to
-    retrieve/content/delete is forwarded to the provider under shared credentials without any
-    tenant check; knowing another tenant's provider file id would be enough to read or delete it.
+    Ownership is only recorded for LiteLLM managed ids, so a raw provider id is forwarded to the
+    provider under shared credentials without any tenant check; knowing another tenant's provider
+    id would be enough to read, reuse, or destroy the object behind it.
 
     Raises:
-        HTTPException: 400 if ``file_id`` is not a LiteLLM managed file id.
+        HTTPException: 400 if ``resource_id`` is set and is not a LiteLLM managed id.
     """
     from fastapi import HTTPException
 
@@ -900,14 +903,18 @@ def validate_managed_file_id_requirement(file_id: str) -> None:
     if litellm.require_managed_files is not True:
         return
 
-    if _is_base64_encoded_unified_file_id(file_id):
+    if not resource_id:
+        return
+
+    if _is_base64_encoded_unified_file_id(resource_id):
         return
 
     raise HTTPException(
         status_code=400,
         detail=(
-            "Raw provider file ids cannot be used when require_managed_files is enabled in "
-            "litellm_settings. Use the LiteLLM managed file id returned when the file was created."
+            f"Raw provider {resource_kind} ids cannot be used when require_managed_files is enabled in "
+            f"litellm_settings. Use the LiteLLM managed {resource_kind} id returned when the "
+            f"{resource_kind} was created."
         ),
     )
 
