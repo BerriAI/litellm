@@ -158,7 +158,12 @@ DEFAULT_SHADOW_EVAL_JUDGE_MODEL: Final[str] = "anthropic/claude-sonnet-5"
 class StartShadowEvalRequest(BaseModel):
     """Start shadowing a deployment's traffic through an auto-router for comparison."""
 
-    api_key_id: str = Field(description="The hashed virtual key whose traffic will be shadowed")
+    api_key_id: str = Field(
+        description=(
+            "The hashed virtual key whose traffic will be shadowed. Shadow evaluation runs ONLY on this "
+            "key's traffic; requests made with any other key are not sampled."
+        )
+    )
     router_name: str = Field(description="The auto-router config to shadow requests through")
     shadow_percentage: float = Field(
         ge=0.1,
@@ -213,6 +218,8 @@ class GetShadowEvalJobResponse(BaseModel):
     job_id: str
     status: ShadowEvalStatus
     router_name: str
+    api_key_id: str = Field(description="The hashed virtual key whose traffic this job evaluates, and only that key's")
+    team_id: str | None = Field(default=None, description="Team the shadowed key belongs to, when it has one")
     shadow_percentage: float
     request_count: int = Field(description="Total requests observed on the shadowed key since the job started")
     completed_count: int = Field(description="Verdicts written so far")

@@ -598,6 +598,8 @@ class _ShadowEvalJobRow(BaseModel):
     id: str
     status: ShadowEvalStatus
     router_name: str
+    api_key_id: str
+    team_id: str | None = None
     shadow_percentage: float
     request_count: int
     completed_count: int
@@ -617,6 +619,8 @@ def _job_to_response(record: object, results: ShadowEvalResult | None) -> GetSha
         job_id=row.id,
         status=row.status,
         router_name=row.router_name,
+        api_key_id=row.api_key_id,
+        team_id=row.team_id,
         shadow_percentage=row.shadow_percentage,
         request_count=row.request_count,
         completed_count=row.completed_count,

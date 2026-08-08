@@ -466,6 +466,49 @@ class TestAutoRouterBenchmarks:
         assert response.groups[0].tier_turns == expected
 
 
+class TestShadowEvalJobResponseNamesWhatIsBeingEvaluated:
+    """A shadow eval only samples one key's traffic. An admin running several jobs cannot
+    tell which key a win rate belongs to unless the job response says so."""
+
+    @staticmethod
+    def _record(**overrides: object):
+        from datetime import datetime, timezone
+
+        fields = {
+            "id": "job-1",
+            "status": "running",
+            "router_name": "claude-auto",
+            "api_key_id": "hashed-key-abc",
+            "team_id": "team-7",
+            "shadow_percentage": 10.0,
+            "request_count": 100,
+            "completed_count": 9,
+            "failed_count": 1,
+            "cost_estimate": 3.0,
+            "cost_actual": 0.42,
+            "created_at": datetime(2026, 8, 1, tzinfo=timezone.utc),
+            "completed_at": None,
+            **overrides,
+        }
+        return type("Row", (), fields)()
+
+    def test_response_reports_the_shadowed_key_and_its_team(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import _job_to_response
+
+        response = _job_to_response(self._record(), None)
+
+        assert response.api_key_id == "hashed-key-abc"
+        assert response.team_id == "team-7"
+
+    def test_a_keyless_team_still_produces_a_response(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import _job_to_response
+
+        response = _job_to_response(self._record(team_id=None), None)
+
+        assert response.api_key_id == "hashed-key-abc"
+        assert response.team_id is None
+
+
 class TestJudgeCostEstimate:
     """The upfront estimate must price the judge's real output budget, not a stale hardcoded one."""
 

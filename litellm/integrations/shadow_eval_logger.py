@@ -16,7 +16,11 @@ Flow per sampled request (all in a detached background task, zero added latency)
 3. Write a ``LiteLLM_ShadowEvalVerdict`` row and bump the job's counters.
 
 Shadow and judge calls carry ``shadow_eval_internal`` metadata so this logger
-ignores its own traffic and cannot recurse.
+ignores its own traffic and cannot recurse. They also carry the shadowed key's
+identity metadata, so the provider spend they incur is attributed to that key
+(and its team/org/user) and counts against every budget that key is subject to,
+including the global proxy budget. A job additionally stops itself once its judge
+spend reaches a multiple of the estimate quoted when it started.
 """
 
 import asyncio
@@ -26,6 +30,7 @@ import random
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
 
@@ -34,6 +39,8 @@ from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.internal_call_metadata import sanitized_forwardable_call_metadata
+from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -64,6 +71,14 @@ _MAX_JUDGE_CHARS: Final = 16_000
 JUDGE_MAX_OUTPUT_TOKENS: Final = 500
 
 _SEEN_FLUSH_INTERVAL_SECONDS: Final = 10.0
+
+# A job stops sampling once its judge spend reaches this multiple of the estimate shown
+# at start. The headroom absorbs an estimate that undershot the real traffic mix without
+# letting the job run away; the floor keeps a cent-sized estimate from stopping a job on
+# its first verdict. cost_actual is read from the job cache, so overshoot is bounded by
+# _JOB_CACHE_TTL_SECONDS worth of judge calls.
+_SPEND_CAP_MULTIPLIER: Final = 1.5
+_SPEND_CAP_FLOOR_USD: Final = 1.0
 
 _EMPTY_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 
@@ -156,6 +171,21 @@ class ActiveShadowEvalJob:
     shadow_percentage: float
     judge_model: str
     status: str
+    cost_estimate: float | None = None
+    cost_actual: float = 0.0
+
+
+def _job_is_over_spend_cap(job: ActiveShadowEvalJob) -> bool:
+    """Whether the job has spent past what its start-time estimate justifies.
+
+    Budgets bound what the *key* may spend; this bounds what a single eval may spend
+    even under a generous budget, so a bad estimate or a traffic spike cannot quietly
+    turn a "$3 eval" into a much larger bill. A job with no estimate (older rows,
+    unpriced judge model) has nothing to be a multiple of, so it is uncapped.
+    """
+    if job.cost_estimate is None or job.cost_estimate <= 0.0:
+        return False
+    return job.cost_actual >= max(job.cost_estimate * _SPEND_CAP_MULTIPLIER, _SPEND_CAP_FLOOR_USD)
 
 
 _JobCache: TypeAlias = "dict[str, tuple[float, ActiveShadowEvalJob | None]]"  # mutable-ok: TTL cache
@@ -208,6 +238,9 @@ class ShadowEvalLogger(CustomLogger):
             job: Final = await self._get_active_job(api_key_hash)
             if job is None:
                 return
+            if _job_is_over_spend_cap(job):
+                await self._stop_job_over_spend_cap(job)
+                return
             request_id: Final = payload.get("id") or ""
             if not request_id:
                 return
@@ -238,6 +271,7 @@ class ShadowEvalLogger(CustomLogger):
                     model_parameters=MappingProxyType(
                         dict(payload.get("model_parameters") or {})  # mutable-ok: frozen snapshot
                     ),
+                    parent_metadata=MappingProxyType(dict(request_metadata)),  # mutable-ok: frozen snapshot
                 )
             )
             task.add_done_callback(lambda _: setattr(self, "_inflight_shadow_tasks", self._inflight_shadow_tasks - 1))
@@ -269,6 +303,8 @@ class ShadowEvalLogger(CustomLogger):
                     shadow_percentage=float(record.shadow_percentage),
                     judge_model=str(record.judge_model),
                     status=str(record.status),
+                    cost_estimate=float(record.cost_estimate) if record.cost_estimate is not None else None,
+                    cost_actual=float(record.cost_actual or 0.0),
                 )
                 if record is not None
                 else None
@@ -278,6 +314,38 @@ class ShadowEvalLogger(CustomLogger):
             return cached[1] if cached is not None else None
         self._job_cache[api_key_hash] = (now, job)
         return job
+
+    async def _stop_job_over_spend_cap(self, job: ActiveShadowEvalJob) -> None:
+        """Flip a runaway job to completed, keeping the verdicts it already produced.
+
+        Guarded on the job still being pending/running so two pods breaching the cap on
+        the same job cannot resurrect one an admin stopped in between.
+        """
+        prisma: Final = self._prisma_provider()
+        if prisma is None:
+            return
+        self._job_cache = {  # mutable-ok: TTL cache
+            k: v for k, v in self._job_cache.items() if v[1] is None or v[1].id != job.id
+        }
+        verbose_logger.info(
+            "shadow_eval: stopping job %s, spend $%.4f reached the cap for its $%.4f estimate",
+            job.id,
+            job.cost_actual,
+            job.cost_estimate or 0.0,
+        )
+        try:
+            await prisma.db.litellm_shadowevaljob.update_many(
+                where={  # mutable-ok: Prisma filter
+                    "id": job.id,
+                    "status": {"in": ["pending", "running"]},  # mutable-ok: Prisma filter
+                },
+                data={  # mutable-ok: Prisma payload
+                    "status": "completed",
+                    "completed_at": datetime.now(timezone.utc),
+                },
+            )
+        except Exception as e:  # noqa: BLE001  # logging hooks must never fail the request
+            verbose_logger.debug("shadow_eval: failed to stop over-cap job %s: %s", job.id, e)
 
     async def _flush_seen_counts(self) -> None:
         prisma: Final = self._prisma_provider()
@@ -304,6 +372,7 @@ class ShadowEvalLogger(CustomLogger):
         response_obj: object,
         real_model: str,
         model_parameters: Mapping[str, object],
+        parent_metadata: Mapping[str, object],
     ) -> None:
         """Detached background task: shadow call -> blind judge -> verdict row."""
         prisma: Final = self._prisma_provider()
@@ -312,7 +381,7 @@ class ShadowEvalLogger(CustomLogger):
             if not real_text or not messages:
                 return
 
-            shadow: Final = await self._call_router_shadow(job.router_name, messages, model_parameters)
+            shadow: Final = await self._call_router_shadow(job.router_name, messages, model_parameters, parent_metadata)
             if shadow is None:
                 await self._bump_failed(job.id)
                 return
@@ -323,6 +392,7 @@ class ShadowEvalLogger(CustomLogger):
                 messages=messages,
                 real_text=real_text,
                 shadow_text=shadow_text,
+                parent_metadata=parent_metadata,
             )
             if verdict is None:
                 await self._bump_failed(job.id)
@@ -373,16 +443,23 @@ class ShadowEvalLogger(CustomLogger):
             verbose_logger.debug("shadow_eval: failed_count increment failed: %s", e)
 
     async def _call_router_shadow(
-        self, router_name: str, messages: Sequence[Mapping[str, object]], model_parameters: Mapping[str, object]
+        self,
+        router_name: str,
+        messages: Sequence[Mapping[str, object]],
+        model_parameters: Mapping[str, object],
+        parent_metadata: Mapping[str, object],
     ) -> tuple[str, str, str | None, int | None] | None:
         """Send the prompt through the auto-router; return (text, model, tier, completion_tokens)."""
         router: Final = self._router_provider()
         if router is None:
             verbose_logger.debug("shadow_eval: no router available")
             return None
-        # The router's pre-routing hook writes its routing decision into this
-        # metadata dict; read it back after the call for tier attribution.
-        shadow_metadata: Final[dict[str, object]] = {  # mutable-ok: router writes back
+        # Carries the shadowed key's identity so this call's real provider spend is
+        # attributed to, and budget-checked against, the key whose traffic it copies.
+        # The router's pre-routing hook also writes its routing decision into this dict;
+        # read it back after the call for tier attribution.
+        attribution: Final = sanitized_forwardable_call_metadata(parent_metadata, SHADOW_EVAL_ROUTER_CALL_ORIGIN)
+        shadow_metadata: Final[dict[str, object]] = attribution | {  # mutable-ok: router writes back
             SHADOW_EVAL_INTERNAL_MARKER: True
         }
         shadow_params: Final = {  # mutable-ok: splatted as kwargs
@@ -417,6 +494,7 @@ class ShadowEvalLogger(CustomLogger):
         messages: Sequence[Mapping[str, object]],
         real_text: str,
         shadow_text: str,
+        parent_metadata: Mapping[str, object],
     ) -> tuple[str, float, str, float] | None:
         """Blind pairwise judge. Returns (preference, confidence, reasoning, cost)."""
         real_is_a: Final = random.random() < 0.5
@@ -434,6 +512,9 @@ class ShadowEvalLogger(CustomLogger):
             f"Response B:\n{response_b[:_MAX_JUDGE_CHARS]}\n\n"
             "Which response is better?"
         )
+        judge_metadata: Final = sanitized_forwardable_call_metadata(parent_metadata, SHADOW_EVAL_JUDGE_CALL_ORIGIN) | {
+            SHADOW_EVAL_INTERNAL_MARKER: True
+        }
         try:
             response: Final = await litellm.acompletion(
                 model=judge_model,
@@ -443,7 +524,7 @@ class ShadowEvalLogger(CustomLogger):
                 ],
                 temperature=0,
                 max_tokens=JUDGE_MAX_OUTPUT_TOKENS,
-                metadata={SHADOW_EVAL_INTERNAL_MARKER: True},  # mutable-ok: SDK metadata
+                metadata=judge_metadata,
             )
         except Exception as e:  # noqa: BLE001  # judge outages are a counted failure, not a crash
             verbose_logger.debug("shadow_eval: judge call failed: %s", e)

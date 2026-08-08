@@ -25329,6 +25329,11 @@ export interface components {
          * @description Status and, once available, results of a shadow-eval job.
          */
         GetShadowEvalJobResponse: {
+            /**
+             * Api Key Id
+             * @description The hashed virtual key whose traffic this job evaluates, and only that key's
+             */
+            api_key_id: string;
             /** Completed At */
             completed_at?: string | null;
             /**
@@ -25369,6 +25374,11 @@ export interface components {
              * @enum {string}
              */
             status: "pending" | "running" | "completed" | "failed";
+            /**
+             * Team Id
+             * @description Team the shadowed key belongs to, when it has one
+             */
+            team_id?: string | null;
         };
         /**
          * GetTeamMemberPermissionsResponse
@@ -32768,7 +32778,7 @@ export interface components {
         StartShadowEvalRequest: {
             /**
              * Api Key Id
-             * @description The hashed virtual key whose traffic will be shadowed
+             * @description The hashed virtual key whose traffic will be shadowed. Shadow evaluation runs ONLY on this key's traffic; requests made with any other key are not sampled.
              */
             api_key_id: string;
             /**

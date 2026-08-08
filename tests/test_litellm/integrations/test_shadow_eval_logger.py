@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.shadow_eval_logger import (
     JUDGE_MAX_OUTPUT_TOKENS,
     SHADOW_EVAL_INTERNAL_MARKER,
@@ -15,6 +16,7 @@ from litellm.integrations.shadow_eval_logger import (
     _sample_hits,
     _unmask_preference,
 )
+from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
 
 
 class TestSampling:
@@ -97,7 +99,7 @@ class TestJudgeOutputBudget:
 
         logger = ShadowEvalLogger(router_provider=lambda: MagicMock(), prisma_provider=lambda: MagicMock())
         verdict = await logger._call_judge(
-            "gpt-4o-mini", [{"role": "user", "content": "hi"}], "real text", "shadow text"
+            "gpt-4o-mini", [{"role": "user", "content": "hi"}], "real text", "shadow text", {}
         )
 
         assert verdict is not None
@@ -188,6 +190,7 @@ class TestCallRouterShadowForwardsParameters:
             "claude-auto",
             [{"role": "user", "content": "hi"}],
             {"temperature": 0.2, "tools": [{"type": "function"}], "max_tokens": 500},
+            {},
         )
 
         _, kwargs = router.acompletion.call_args
@@ -204,13 +207,16 @@ class TestCallRouterShadowForwardsParameters:
             "claude-auto",
             [{"role": "user", "content": "hi"}],
             {"stream": True, "metadata": {"user_api_key_hash": "leaked"}, "temperature": 0.5},
+            {},
         )
 
         _, kwargs = router.acompletion.call_args
         assert "stream" not in kwargs
         assert kwargs["temperature"] == 0.5
-        # metadata must stay the logger's own internal marker, not the caller's
-        assert kwargs["metadata"] == {SHADOW_EVAL_INTERNAL_MARKER: True}
+        # model_parameters carries a stale copy of the parent's metadata; the shadow call
+        # builds its own from the parent metadata argument instead.
+        assert "leaked" not in str(kwargs["metadata"])
+        assert kwargs["metadata"][SHADOW_EVAL_INTERNAL_MARKER] is True
 
 
 @pytest.mark.asyncio
@@ -290,6 +296,7 @@ class TestStoppedJobCannotBeReactivated:
             response_obj={"choices": [{"message": {"content": "real text"}}]},
             real_model="gpt-4o",
             model_parameters={},
+            parent_metadata={},
         )
 
         prisma.db.litellm_shadowevaljob.update_many.assert_awaited_once()
@@ -326,10 +333,272 @@ class TestVerdictWriteAccumulatesCost:
             response_obj={"choices": [{"message": {"content": "real text"}}]},
             real_model="gpt-4o",
             model_parameters={},
+            parent_metadata={},
         )
 
         _, call_kwargs = prisma.db.litellm_shadowevaljob.update_many.call_args
         assert call_kwargs["data"]["cost_actual"] == {"increment": 0.05}
+
+
+_PARENT_METADATA = {
+    "user_api_key": "hashed-key",
+    "user_api_key_alias": "team-prod-key",
+    "user_api_key_team_id": "team-1",
+    "user_api_key_org_id": "org-1",
+    "user_api_key_user_id": "user-1",
+    "user_api_key_end_user_id": "end-user-1",
+    "user_api_key_budget_reservation": {"reserved_cost": 2.5, "finalized": False},
+    "user_api_key_auth": {"models": ["gpt-4o"], "budget_reservation": {"reserved_cost": 2.5}},
+    "routing_decision": {"tier": "SIMPLE"},
+    "standard_logging_object": {"id": "parent-req"},
+}
+
+_IDENTITY_KEYS = (
+    "user_api_key",
+    "user_api_key_alias",
+    "user_api_key_team_id",
+    "user_api_key_org_id",
+    "user_api_key_user_id",
+    "user_api_key_end_user_id",
+)
+
+
+def _assert_attributed(metadata, expected_origin):
+    """Every assertion the proxy's cost callback depends on to bill an internal sub-call."""
+    for key in _IDENTITY_KEYS:
+        assert metadata[key] == _PARENT_METADATA[key], f"{key} must reach the sub-call for spend attribution"
+    assert metadata[INTERNAL_CALL_ORIGIN_METADATA_KEY] == expected_origin
+    # The parent completion owns this reservation. A sub-call carrying it would let the
+    # sub-call's cost callback finalize it, so the parent's own callback skips
+    # incrementing the key/team counters and the parent's spend is lost.
+    assert "user_api_key_budget_reservation" not in metadata
+    assert "budget_reservation" not in metadata["user_api_key_auth"]
+    assert metadata["user_api_key_auth"]["models"] == ["gpt-4o"]
+    # Per-request state of a request that already finished says nothing true about this one.
+    assert "routing_decision" not in metadata
+    assert "standard_logging_object" not in metadata
+
+
+@pytest.mark.asyncio
+class TestSubCallsAreAttributedToTheShadowedKey:
+    """Shadow and judge calls bill real provider spend nobody typed a prompt for.
+
+    Without the caller's identity on their metadata, _PROXY_track_cost_callback drops
+    the spend log and no budget counter moves, so an admin-enabled eval spends against
+    a customer's key invisibly and past every configured limit.
+    """
+
+    async def test_judge_call_carries_the_key_identity_without_its_reservation(self, monkeypatch: pytest.MonkeyPatch):
+        import litellm as litellm_module
+
+        acompletion = AsyncMock(
+            return_value={
+                "choices": [{"message": {"content": '{"preference": "A", "confidence": 0.8, "reasoning": "clearer"}'}}]
+            }
+        )
+        monkeypatch.setattr(litellm_module, "acompletion", acompletion)
+        logger = ShadowEvalLogger(router_provider=lambda: MagicMock(), prisma_provider=lambda: MagicMock())
+
+        verdict = await logger._call_judge(
+            "gpt-4o-mini", [{"role": "user", "content": "hi"}], "real text", "shadow text", _PARENT_METADATA
+        )
+
+        assert verdict is not None
+        metadata = acompletion.call_args.kwargs["metadata"]
+        _assert_attributed(metadata, SHADOW_EVAL_JUDGE_CALL_ORIGIN)
+        assert metadata[SHADOW_EVAL_INTERNAL_MARKER] is True
+
+    async def test_shadow_router_call_carries_the_key_identity_and_the_recursion_guard(self):
+        router = MagicMock()
+        router.acompletion = AsyncMock(return_value={"choices": [{"message": {"content": "shadow reply"}}]})
+        logger = ShadowEvalLogger(router_provider=lambda: router, prisma_provider=lambda: MagicMock())
+
+        result = await logger._call_router_shadow(
+            "claude-auto", [{"role": "user", "content": "hi"}], {}, _PARENT_METADATA
+        )
+
+        assert result is not None
+        metadata = router.acompletion.call_args.kwargs["metadata"]
+        _assert_attributed(metadata, SHADOW_EVAL_ROUTER_CALL_ORIGIN)
+        # Without the marker the shadow call's own success event would shadow itself.
+        assert metadata[SHADOW_EVAL_INTERNAL_MARKER] is True
+
+    async def test_shadow_metadata_stays_writable_for_the_routing_decision_read_back(self):
+        """Tier attribution reads routing_decision back out of the dict the router was given."""
+        router = MagicMock()
+
+        async def acompletion(**kwargs):
+            kwargs["metadata"]["routing_decision"] = {"tier_label": "COMPLEX", "routed_model": "o1"}
+            return {"choices": [{"message": {"content": "shadow reply"}}]}
+
+        router.acompletion = acompletion
+        logger = ShadowEvalLogger(router_provider=lambda: router, prisma_provider=lambda: MagicMock())
+
+        result = await logger._call_router_shadow(
+            "claude-auto", [{"role": "user", "content": "hi"}], {}, _PARENT_METADATA
+        )
+
+        assert result is not None
+        assert result[2] == "COMPLEX"
+
+    async def test_parent_metadata_reaches_both_legs_from_the_success_hook(self):
+        """The hook is the only place the parent's metadata exists; a break here is invisible
+        to unit tests of the two legs in isolation."""
+        prisma = MagicMock()
+        prisma.db.litellm_shadowevalverdict.create = AsyncMock()
+        prisma.db.litellm_shadowevaljob.update_many = AsyncMock()
+        job = ActiveShadowEvalJob(id="j1", router_name="r", shadow_percentage=100.0, judge_model="m", status="running")
+        logger, _, _ = _logger_with_mocks(job)
+        logger._prisma_provider = lambda: prisma
+        logger._call_router_shadow = AsyncMock(return_value=("shadow text", "shadow-model", "SIMPLE", 10))
+        logger._call_judge = AsyncMock(return_value=("real", 0.9, "clearer", 0.01))
+
+        await logger.async_log_success_event(
+            {
+                "standard_logging_object": {
+                    "id": "req-1",
+                    "model": "gpt-4o",
+                    "call_type": "acompletion",
+                    "metadata": {"user_api_key_hash": "key-hash"},
+                },
+                "litellm_params": {"metadata": dict(_PARENT_METADATA)},
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            {"choices": [{"message": {"content": "real text"}}]},
+            None,
+            None,
+        )
+        await asyncio.sleep(0.05)
+
+        assert logger._call_router_shadow.await_args.args[3]["user_api_key"] == "hashed-key"
+        assert logger._call_judge.await_args.kwargs["parent_metadata"]["user_api_key"] == "hashed-key"
+
+
+@pytest.mark.asyncio
+class TestPerJobSpendCap:
+    """Budgets bound the key; the cap bounds a single eval, so a bad estimate or a
+    traffic spike cannot turn a quoted eval into a much larger bill."""
+
+    @staticmethod
+    def _success_kwargs():
+        return {
+            "standard_logging_object": {
+                "id": "req-1",
+                "model": "gpt-4o",
+                "call_type": "acompletion",
+                "metadata": {"user_api_key_hash": "key-hash"},
+            },
+            "litellm_params": {"metadata": {}},
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+    async def test_job_over_the_cap_stops_sampling_and_completes_the_job(self):
+        job = ActiveShadowEvalJob(
+            id="j1",
+            router_name="r",
+            shadow_percentage=100.0,
+            judge_model="m",
+            status="running",
+            cost_estimate=10.0,
+            cost_actual=15.0,
+        )
+        logger, prisma, router = _logger_with_mocks(job)
+        prisma.db.litellm_shadowevaljob.update_many = AsyncMock()
+        logger._run_shadow_eval = AsyncMock()
+
+        await logger.async_log_success_event(self._success_kwargs(), MagicMock(), None, None)
+        await asyncio.sleep(0)
+
+        logger._run_shadow_eval.assert_not_awaited()
+        router.acompletion.assert_not_called()
+        prisma.db.litellm_shadowevaljob.update_many.assert_awaited_once()
+        call_kwargs = prisma.db.litellm_shadowevaljob.update_many.call_args.kwargs
+        assert call_kwargs["where"]["id"] == "j1"
+        # Guarded so a pod breaching the cap cannot resurrect a job an admin already stopped.
+        assert set(call_kwargs["where"]["status"]["in"]) == {"pending", "running"}
+        assert call_kwargs["data"]["status"] == "completed"
+        assert call_kwargs["data"]["completed_at"] is not None
+
+    async def test_job_just_under_the_cap_keeps_evaluating(self):
+        job = ActiveShadowEvalJob(
+            id="j1",
+            router_name="r",
+            shadow_percentage=100.0,
+            judge_model="m",
+            status="running",
+            cost_estimate=10.0,
+            cost_actual=14.99,
+        )
+        logger, prisma, _ = _logger_with_mocks(job)
+        prisma.db.litellm_shadowevaljob.update_many = AsyncMock()
+        logger._run_shadow_eval = AsyncMock()
+
+        await logger.async_log_success_event(self._success_kwargs(), MagicMock(), None, None)
+        await asyncio.sleep(0.01)
+
+        logger._run_shadow_eval.assert_awaited_once()
+        prisma.db.litellm_shadowevaljob.update_many.assert_not_awaited()
+
+    async def test_job_without_an_estimate_is_uncapped(self):
+        """A missing estimate is no multiple to compare against; treating it as 0 would
+        stop every such job on its first request instead."""
+        job = ActiveShadowEvalJob(
+            id="j1",
+            router_name="r",
+            shadow_percentage=100.0,
+            judge_model="m",
+            status="running",
+            cost_estimate=None,
+            cost_actual=500.0,
+        )
+        logger, prisma, _ = _logger_with_mocks(job)
+        prisma.db.litellm_shadowevaljob.update_many = AsyncMock()
+        logger._run_shadow_eval = AsyncMock()
+
+        await logger.async_log_success_event(self._success_kwargs(), MagicMock(), None, None)
+        await asyncio.sleep(0.01)
+
+        logger._run_shadow_eval.assert_awaited_once()
+        prisma.db.litellm_shadowevaljob.update_many.assert_not_awaited()
+
+    async def test_a_cent_sized_estimate_is_not_stopped_by_its_first_verdict(self):
+        """1.5x a $0.01 estimate is $0.015; without the floor a single judge call ends the job."""
+        job = ActiveShadowEvalJob(
+            id="j1",
+            router_name="r",
+            shadow_percentage=100.0,
+            judge_model="m",
+            status="running",
+            cost_estimate=0.01,
+            cost_actual=0.08,
+        )
+        logger, prisma, _ = _logger_with_mocks(job)
+        prisma.db.litellm_shadowevaljob.update_many = AsyncMock()
+        logger._run_shadow_eval = AsyncMock()
+
+        await logger.async_log_success_event(self._success_kwargs(), MagicMock(), None, None)
+        await asyncio.sleep(0.01)
+
+        logger._run_shadow_eval.assert_awaited_once()
+
+    async def test_stopping_evicts_the_cached_job_so_later_requests_do_not_rewrite_it(self):
+        job = ActiveShadowEvalJob(
+            id="j1",
+            router_name="r",
+            shadow_percentage=100.0,
+            judge_model="m",
+            status="running",
+            cost_estimate=10.0,
+            cost_actual=15.0,
+        )
+        logger, prisma, _ = _logger_with_mocks(job)
+        prisma.db.litellm_shadowevaljob.update_many = AsyncMock()
+        prisma.db.litellm_shadowevaljob.find_first = AsyncMock(return_value=None)
+
+        await logger.async_log_success_event(self._success_kwargs(), MagicMock(), None, None)
+        await logger.async_log_success_event(self._success_kwargs(), MagicMock(), None, None)
+
+        assert prisma.db.litellm_shadowevaljob.update_many.await_count == 1
 
 
 class TestExtractResponseText:
