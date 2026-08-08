@@ -1,8 +1,10 @@
 "use client";
 
 import React, { useState } from "react";
+import { ArrowDown } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -291,7 +293,17 @@ const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ acces
     <div className="w-full space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-foreground">Auto-router usage</h2>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-xl font-semibold text-foreground">Auto-router usage</h2>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => document.getElementById("shadow-eval-section")?.scrollIntoView({ behavior: "smooth" })}
+            >
+              <ArrowDown className="size-3.5" />
+              Shadow eval
+            </Button>
+          </div>
           <p className="mt-1 text-sm text-muted-foreground">{WINDOW_LABELS[range]}</p>
         </div>
         <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-center">

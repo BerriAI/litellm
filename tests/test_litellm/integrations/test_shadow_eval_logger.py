@@ -3,7 +3,7 @@
 import asyncio
 import json
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -13,6 +13,7 @@ from litellm.integrations.shadow_eval_logger import (
     SHADOW_EVAL_INTERNAL_MARKER,
     ActiveShadowEvalJob,
     ShadowEvalLogger,
+    _key_or_team_is_over_budget,
     _parse_pairwise_verdict,
     _sample_hits,
     _unmask_preference,
@@ -473,6 +474,112 @@ class TestSubCallsAreAttributedToTheShadowedKey:
 
         assert logger._call_router_shadow.await_args.args[3]["user_api_key"] == "hashed-key"
         assert logger._call_judge.await_args.kwargs["parent_metadata"]["user_api_key"] == "hashed-key"
+
+
+@pytest.mark.asyncio
+class TestKeyOrTeamIsOverBudget:
+    """Shadow/judge calls run outside the normal auth path and never reserve budget
+    for themselves, so an already-exhausted key or team must not be pushed further
+    over by a background eval it never asked to run."""
+
+    @staticmethod
+    def _metadata(**overrides):
+        return {
+            "user_api_key_hash": "key-hash",
+            "user_api_key_max_budget": 10.0,
+            "user_api_key_spend": 4.0,
+            **overrides,
+        }
+
+    async def test_under_key_budget_is_not_over_budget(self):
+        with patch("litellm.proxy.proxy_server.get_current_spend", AsyncMock(return_value=4.0)):
+            assert not await _key_or_team_is_over_budget(self._metadata())
+
+    async def test_at_key_budget_is_over_budget(self):
+        with patch("litellm.proxy.proxy_server.get_current_spend", AsyncMock(return_value=10.0)):
+            assert await _key_or_team_is_over_budget(self._metadata())
+
+    async def test_reads_the_cross_pod_counter_not_the_stale_metadata_spend(self):
+        get_current_spend = AsyncMock(return_value=11.0)
+        with patch("litellm.proxy.proxy_server.get_current_spend", get_current_spend):
+            assert await _key_or_team_is_over_budget(self._metadata(user_api_key_spend=0.0))
+        get_current_spend.assert_awaited_once_with(
+            counter_key="spend:key:key-hash", fallback_spend=0.0, max_budget=10.0
+        )
+
+    async def test_team_over_budget_is_caught_even_when_key_has_room(self):
+        metadata = self._metadata(
+            user_api_key_team_id="team-1",
+            user_api_key_team_max_budget=5.0,
+            user_api_key_team_spend=5.0,
+        )
+
+        async def fake_spend(counter_key, fallback_spend, max_budget):
+            return max_budget if counter_key == "spend:team:team-1" else 1.0
+
+        with patch("litellm.proxy.proxy_server.get_current_spend", AsyncMock(side_effect=fake_spend)):
+            assert await _key_or_team_is_over_budget(metadata)
+
+    async def test_no_budget_configured_is_never_over_budget(self):
+        assert not await _key_or_team_is_over_budget({"user_api_key_hash": "key-hash"})
+
+    async def test_missing_proxy_server_fails_open_rather_than_blocking_logging(self):
+        with patch.dict("sys.modules", {"litellm.proxy.proxy_server": None}):
+            assert not await _key_or_team_is_over_budget(self._metadata())
+
+
+@pytest.mark.asyncio
+class TestSuccessHookSkipsWhenOverBudget:
+    async def test_over_budget_key_is_skipped_before_scheduling_the_shadow_task(self):
+        job = ActiveShadowEvalJob(id="j1", router_name="r", shadow_percentage=100.0, judge_model="m", status="running")
+        logger, _, router = _logger_with_mocks(job)
+        logger._run_shadow_eval = AsyncMock()
+        kwargs = {
+            "standard_logging_object": {
+                "id": "req-1",
+                "model": "gpt-4o",
+                "call_type": "acompletion",
+                "metadata": {
+                    "user_api_key_hash": "key-hash",
+                    "user_api_key_max_budget": 10.0,
+                    "user_api_key_spend": 10.0,
+                },
+            },
+            "litellm_params": {"metadata": {}},
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+        with patch("litellm.proxy.proxy_server.get_current_spend", AsyncMock(return_value=10.0)):
+            await logger.async_log_success_event(kwargs, MagicMock(), None, None)
+        await asyncio.sleep(0)
+
+        logger._run_shadow_eval.assert_not_awaited()
+        router.acompletion.assert_not_called()
+
+    async def test_under_budget_key_still_schedules_the_shadow_task(self):
+        job = ActiveShadowEvalJob(id="j1", router_name="r", shadow_percentage=100.0, judge_model="m", status="running")
+        logger, _, router = _logger_with_mocks(job)
+        logger._run_shadow_eval = AsyncMock()
+        kwargs = {
+            "standard_logging_object": {
+                "id": "req-1",
+                "model": "gpt-4o",
+                "call_type": "acompletion",
+                "metadata": {
+                    "user_api_key_hash": "key-hash",
+                    "user_api_key_max_budget": 10.0,
+                    "user_api_key_spend": 4.0,
+                },
+            },
+            "litellm_params": {"metadata": {}},
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+        with patch("litellm.proxy.proxy_server.get_current_spend", AsyncMock(return_value=4.0)):
+            await logger.async_log_success_event(kwargs, MagicMock(), None, None)
+        await asyncio.sleep(0)
+
+        logger._run_shadow_eval.assert_awaited_once()
 
 
 @pytest.mark.asyncio

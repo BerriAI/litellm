@@ -19,9 +19,11 @@ Shadow and judge calls carry ``shadow_eval_internal`` metadata so this logger
 ignores its own traffic and cannot recurse. They also carry the shadowed key's
 identity metadata, so the provider spend they incur is attributed to that key
 (and its team/org/user) and counts against every budget that key is subject to,
-including the global proxy budget. A job additionally stops itself once its
-sampling window (``ends_at``) closes or its judge spend reaches a multiple of
-the estimate quoted when it started.
+including the global proxy budget. A shadow/judge pair is skipped outright if
+the shadowed key or its team is already at or over budget, read from the same
+cross-pod spend counters the normal auth path reserves against. A job
+additionally stops itself once its sampling window (``ends_at``) closes or its
+judge spend reaches a multiple of the estimate quoted when it started.
 """
 
 import asyncio
@@ -194,6 +196,48 @@ def _job_is_past_its_end(job: ActiveShadowEvalJob) -> bool:
     return job.ends_at is not None and datetime.now(timezone.utc) >= job.ends_at
 
 
+async def _key_or_team_is_over_budget(metadata: Mapping[str, object]) -> bool:
+    """Whether the shadowed key or its team has no budget left for the shadow/judge calls.
+
+    These calls run outside the normal auth path (no /key/generate-issued request
+    reaches user_api_key_auth for them), so they never go through
+    reserve_budget_for_request. Reading the same cross-pod counters that path
+    reserves against, at read time, stops a key or team that is already out of
+    budget from having a shadow eval push it further over: not a hard reservation
+    (a burst of concurrent requests could still all pass this read), but it closes
+    the gap for the common case a background quality-measurement task should
+    never make worse.
+    """
+    try:
+        from litellm.proxy.proxy_server import get_current_spend
+    except ImportError:
+        return False
+
+    api_key_hash: Final = metadata.get("user_api_key_hash")
+    max_budget: Final = metadata.get("user_api_key_max_budget")
+    if isinstance(api_key_hash, str) and isinstance(max_budget, (int, float)) and max_budget > 0:
+        spend: Final = await get_current_spend(
+            counter_key=f"spend:key:{api_key_hash}",
+            fallback_spend=float(metadata.get("user_api_key_spend") or 0.0),
+            max_budget=float(max_budget),
+        )
+        if spend >= max_budget:
+            return True
+
+    team_id: Final = metadata.get("user_api_key_team_id")
+    team_max_budget: Final = metadata.get("user_api_key_team_max_budget")
+    if isinstance(team_id, str) and isinstance(team_max_budget, (int, float)) and team_max_budget > 0:
+        team_spend: Final = await get_current_spend(
+            counter_key=f"spend:team:{team_id}",
+            fallback_spend=float(metadata.get("user_api_key_team_spend") or 0.0),
+            max_budget=float(team_max_budget),
+        )
+        if team_spend >= team_max_budget:
+            return True
+
+    return False
+
+
 def _job_is_over_spend_cap(job: ActiveShadowEvalJob) -> bool:
     """Whether the job has spent past what its start-time estimate justifies.
 
@@ -282,6 +326,8 @@ class ShadowEvalLogger(CustomLogger):
                 return  # only chat-shaped traffic is comparable
             if self._inflight_shadow_tasks >= _MAX_CONCURRENT_SHADOW_TASKS:
                 return
+            if await _key_or_team_is_over_budget(metadata):
+                return  # the shadowed key/team has no budget left for the extra calls
             raw_messages: Final = kwargs.get("messages")
             self._inflight_shadow_tasks += 1
             task: Final = asyncio.create_task(

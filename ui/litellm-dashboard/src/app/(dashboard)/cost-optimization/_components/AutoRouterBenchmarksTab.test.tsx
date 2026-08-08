@@ -266,4 +266,18 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByRole("tab", { name: "30d" })).toBeInTheDocument();
     expect(screen.getByText("All auto-routers")).toBeInTheDocument();
   });
+
+  it("scrolls to the shadow eval section when its jump button is clicked", () => {
+    mockHook({ data: response([group()]) });
+    renderTab();
+    const target = document.createElement("div");
+    target.id = "shadow-eval-section";
+    target.scrollIntoView = vi.fn();
+    document.body.appendChild(target);
+
+    fireEvent.click(screen.getByRole("button", { name: /shadow eval/i }));
+
+    expect(target.scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth" });
+    target.remove();
+  });
 });

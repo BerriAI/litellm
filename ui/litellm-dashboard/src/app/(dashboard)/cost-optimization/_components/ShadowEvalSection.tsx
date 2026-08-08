@@ -412,7 +412,7 @@ const ShadowEvalSection: React.FC<ShadowEvalSectionProps> = ({ accessToken }) =>
   if (error instanceof ApiError && error.status === 403) return null; // admin-only section
 
   return (
-    <div className="space-y-4">
+    <div id="shadow-eval-section" className="space-y-4 scroll-mt-6">
       <div className="flex flex-wrap items-baseline gap-2">
         <h3 className="text-lg font-semibold text-foreground">Shadow eval</h3>
         <p className="text-xs text-muted-foreground">
