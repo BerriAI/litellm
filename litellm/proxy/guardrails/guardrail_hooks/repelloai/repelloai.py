@@ -202,8 +202,6 @@ class RepelloAIGuardrail(CustomGuardrail):
                 headers={"X-API-Key": self.repelloai_api_key},
                 json=request,
             )
-            if raw_response is None:
-                raise ValueError("RepelloAI Argus returned no response")
             response: Final[HttpxResponse] = raw_response
             self._raise_for_config_error(response)
             response.raise_for_status()
