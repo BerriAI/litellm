@@ -29,6 +29,7 @@ import {
   type BucketRow,
 } from "./autoRouterBenchmarks";
 import { usd } from "./costOptimizationUtils";
+import ShadowEvalSection from "./ShadowEvalSection";
 import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
 
 const Message: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -270,6 +271,8 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
         </div>
         <CachingCard cache={stats.cache} />
       </div>
+
+      <ShadowEvalSection accessToken={accessToken} />
     </>
   );
 };
