@@ -103,6 +103,7 @@ class CustomGuardrail(CustomLogger):
     use_native_during_call_hook: ClassVar[bool] = False
 
     records_own_guardrail_information: ClassVar[bool] = False
+    supported_streaming_call_types: ClassVar[frozenset[CallTypes]] = frozenset()
 
     def __init__(
         self,
@@ -624,6 +625,9 @@ class CustomGuardrail(CustomLogger):
 
     def uses_apply_guardrail_interface(self) -> bool:
         return type(self).apply_guardrail is not CustomGuardrail.apply_guardrail
+
+    def supports_streaming_call_type(self, call_type: CallTypes) -> bool:
+        return call_type in self.supported_streaming_call_types
 
     def _deployment_pre_call_target(self) -> "CustomLogger":
         if not self.uses_apply_guardrail_interface():

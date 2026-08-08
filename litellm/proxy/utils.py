@@ -1768,6 +1768,18 @@ class ProxyLogging:
         return call_types[0] in NON_OPENAI_STREAM_GUARDRAIL_TRANSLATION_CALL_TYPES
 
     @staticmethod
+    def _guardrail_supports_streaming_route(
+        guardrail: CustomGuardrail,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> bool:
+        from litellm.litellm_core_utils.api_route_to_call_types import (
+            get_call_types_for_route,
+        )
+
+        call_types: Final = get_call_types_for_route(user_api_key_dict.request_route)
+        return any(guardrail.supports_streaming_call_type(call_type) for call_type in call_types)
+
+    @staticmethod
     def has_post_call_response_headers_callbacks() -> bool:
         return ProxyLogging._callback_capabilities().has_post_call_response_headers
 
@@ -2745,6 +2757,10 @@ class ProxyLogging:
                     and isinstance(resolved_callback, CustomGuardrail)
                     and resolved_callback.uses_apply_guardrail_interface()
                     and not resolved_callback.mask_response_content
+                    and not ProxyLogging._guardrail_supports_streaming_route(
+                        resolved_callback,
+                        user_api_key_dict,
+                    )
                 )
                 else kind
             )
