@@ -38794,6 +38794,29 @@
         "supports_vision": true,
         "supports_web_search": true
     },
+    "vertex_ai/xai/grok-4.3": {
+        "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 4e-07,
+        "input_cost_per_token": 1.25e-06,
+        "input_cost_per_token_above_200k_tokens": 2.5e-06,
+        "litellm_provider": "vertex_ai",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 200000,
+        "max_tokens": 200000,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06,
+        "output_cost_per_token_above_200k_tokens": 5e-06,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing#grok-models",
+        "supported_regions": [
+            "global"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "vertex_ai/qwen/qwen3-235b-a22b-instruct-2507-maas": {
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "vertex_ai-qwen_models",
