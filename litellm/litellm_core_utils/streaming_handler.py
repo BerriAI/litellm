@@ -1450,8 +1450,9 @@ class CustomStreamWrapper:
 
                 self.tool_call = True
 
-            if hasattr(chunk, "usage") and chunk.usage is not None:
-                model_response.usage = chunk.usage
+            raw_usage: Final = getattr(chunk, "usage", None)
+            if isinstance(raw_usage, (Usage, BaseModel, dict)):
+                model_response.usage = _normalize_usage(raw_usage)
 
             ## RETURN ARG
             result: Final = self.return_processed_chunk_logic(
@@ -2243,6 +2244,14 @@ def _coerce_token_details(
     return details_type(**(raw if isinstance(raw, dict) else raw.model_dump()))
 
 
+def _normalize_usage(usage: Usage | BaseModel | dict[str, object]) -> Usage:
+    if isinstance(usage, Usage):
+        return usage
+    if isinstance(usage, BaseModel):
+        return Usage(**usage.model_dump())
+    return Usage(**usage)
+
+
 def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
     """Assume most recent usage chunk has total usage uptil then."""
     from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
@@ -2259,7 +2268,10 @@ def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
 
     for chunk in chunks:
         if "usage" in chunk and chunk["usage"] is not None:
-            usage = chunk["usage"]
+            raw_usage = chunk["usage"]
+            if not isinstance(raw_usage, (Usage, BaseModel, dict)):
+                continue
+            usage = _normalize_usage(raw_usage)
             latest_usage_chunk = usage
             if "prompt_tokens" in usage:
                 prompt_tokens = usage.get("prompt_tokens", 0) or 0
@@ -2286,11 +2298,7 @@ def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
     )
 
     if latest_usage_chunk is not None:
-        latest_cost: Final = (
-            latest_usage_chunk.get("cost")
-            if isinstance(latest_usage_chunk, dict)
-            else getattr(latest_usage_chunk, "cost", None)
-        )
+        latest_cost: Final = getattr(latest_usage_chunk, "cost", None)
         if latest_cost is not None:
             returned_usage_chunk.cost = latest_cost
 
