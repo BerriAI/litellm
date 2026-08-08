@@ -30,7 +30,7 @@ def test_no_allowance_without_a_license_or_config():
 
 def test_license_max_sgr_is_the_allowance():
     config = resolve_sgr_limit(general_settings={}, license_data={"max_sgr": 1_000_000})
-    assert config == SGRLimitConfig(limit=1_000_000, soft_limit=800_000, window=SGRLimitWindow.MONTH)
+    assert config == SGRLimitConfig(limit=1_000_000, soft_limit=800_000, window=SGRLimitWindow.YEAR)
 
 
 def test_config_overrides_the_license_so_a_customer_can_alert_earlier():
@@ -48,8 +48,29 @@ def test_soft_limit_percent_moves_the_soft_threshold():
     assert config.soft_limit == 500
 
 
-def test_window_can_be_the_calendar_year():
-    config = resolve_sgr_limit(general_settings={"sgr_limit": 10, "sgr_limit_window": "year"}, license_data=None)
+def test_window_can_be_narrowed_to_the_calendar_month():
+    config = resolve_sgr_limit(general_settings={"sgr_limit": 10, "sgr_limit_window": "month"}, license_data=None)
+    assert config is not None
+    assert config.window is SGRLimitWindow.MONTH
+
+
+def test_the_license_can_carry_the_window():
+    config = resolve_sgr_limit(general_settings={}, license_data={"max_sgr": 100, "sgr_window": "month"})
+    assert config is not None
+    assert config.window is SGRLimitWindow.MONTH
+
+
+def test_config_window_wins_over_the_license_window():
+    config = resolve_sgr_limit(
+        general_settings={"sgr_limit_window": "year"},
+        license_data={"max_sgr": 100, "sgr_window": "month"},
+    )
+    assert config is not None
+    assert config.window is SGRLimitWindow.YEAR
+
+
+def test_a_nonsensical_license_window_falls_back_to_the_calendar_year():
+    config = resolve_sgr_limit(general_settings={}, license_data={"max_sgr": 100, "sgr_window": "fortnight"})
     assert config is not None
     assert config.window is SGRLimitWindow.YEAR
 
@@ -83,7 +104,7 @@ def test_settings_left_unset_fall_back_to_the_license():
         general_settings={"sgr_limit": None, "sgr_soft_limit_percent": None, "sgr_limit_window": None},
         license_data={"max_sgr": 100},
     )
-    assert config == SGRLimitConfig(limit=100, soft_limit=80, window=SGRLimitWindow.MONTH)
+    assert config == SGRLimitConfig(limit=100, soft_limit=80, window=SGRLimitWindow.YEAR)
 
 
 def test_a_tiny_allowance_still_has_a_soft_threshold_of_at_least_one():

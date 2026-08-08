@@ -2,10 +2,11 @@
 Soft and hard limits on SGR (successful gateway requests).
 
 An allowance can come from two places. An enterprise license may carry
-``max_sgr``, which makes the contracted volume visible to the deployment
-without LiteLLM having to receive any telemetry back. ``general_settings`` can
-also set it directly, which is what lets a customer self-serve a threshold
-lower than their contract, and which wins when both are present.
+``max_sgr`` and an optional ``sgr_window``, which makes the contracted volume
+visible to the deployment without LiteLLM having to receive any telemetry back.
+``general_settings`` can also set it directly, which is what lets a customer
+self-serve a threshold lower than their contract, and which wins when both are
+present. Absent both, the window is a calendar year.
 
 Crossing a threshold alerts, it does not reject: this reads the same
 ``LiteLLM_DailyGatewayRequests`` rollup the admin UI reads, on a scheduler, so
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 DEFAULT_SGR_SOFT_LIMIT_PERCENT: Final = 0.8
+DEFAULT_SGR_LIMIT_WINDOW: Final = SGRLimitWindow.YEAR
 
 
 class SGRLimitSettings(BaseModel):
@@ -48,9 +50,9 @@ class SGRLimitSettings(BaseModel):
         le=1,
         description="Fraction of the hard limit at which the soft alert fires",
     )
-    sgr_limit_window: SGRLimitWindow = Field(
-        default=SGRLimitWindow.MONTH,
-        description="Period the limit is counted over, calendar aligned in UTC",
+    sgr_limit_window: SGRLimitWindow | None = Field(
+        default=None,
+        description="Period the limit is counted over, calendar aligned in UTC. Overrides a license's sgr_window",
     )
 
 
@@ -62,6 +64,13 @@ def _license_sgr_limit(license_data: "EnterpriseLicenseData | None") -> int | No
         return None
     max_sgr: Final = license_data.get("max_sgr")
     return max_sgr if isinstance(max_sgr, int) and max_sgr > 0 else None
+
+
+def _license_sgr_window(license_data: "EnterpriseLicenseData | None") -> SGRLimitWindow | None:
+    if license_data is None:
+        return None
+    window: Final = license_data.get("sgr_window")
+    return SGRLimitWindow(window) if window in tuple(member.value for member in SGRLimitWindow) else None
 
 
 def resolve_sgr_limit(
@@ -93,7 +102,7 @@ def resolve_sgr_limit(
     return SGRLimitConfig(
         limit=limit,
         soft_limit=max(1, int(limit * settings.sgr_soft_limit_percent)),
-        window=settings.sgr_limit_window,
+        window=settings.sgr_limit_window or _license_sgr_window(license_data) or DEFAULT_SGR_LIMIT_WINDOW,
     )
 
 

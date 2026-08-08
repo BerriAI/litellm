@@ -2407,7 +2407,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     sgr_limit_window: Literal["month", "year"] | None = Field(
         None,
-        description="Period `sgr_limit` is counted over, calendar aligned in UTC. Defaults to `month`",
+        description=(
+            "Period `sgr_limit` is counted over, calendar aligned in UTC. Takes precedence over an enterprise "
+            "license's `sgr_window`, and defaults to `year`"
+        ),
     )
     ui_access_mode: Literal["admin_only", "all"] | None = Field("all", description="Control access to the Proxy UI")
     allowed_routes: list | None = Field(None, description="Proxy API Endpoints you want users to be able to access")
@@ -4711,6 +4714,7 @@ class EnterpriseLicenseData(TypedDict, total=False):
     max_users: int
     max_teams: int
     max_sgr: int
+    sgr_window: Literal["month", "year"]
 
 
 class ResponseLiteLLM_ManagedVectorStore(TypedDict, total=False):

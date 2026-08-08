@@ -23635,7 +23635,7 @@ export interface components {
             sgr_limit?: number | null;
             /**
              * Sgr Limit Window
-             * @description Period `sgr_limit` is counted over, calendar aligned in UTC. Defaults to `month`
+             * @description Period `sgr_limit` is counted over, calendar aligned in UTC. Takes precedence over an enterprise license's `sgr_window`, and defaults to `year`
              */
             sgr_limit_window?: ("month" | "year") | null;
             /**
