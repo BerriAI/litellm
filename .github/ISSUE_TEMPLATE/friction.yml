@@ -1,0 +1,34 @@
+name: Friction
+description: Something about this project cost you time.
+labels: [friction]
+body:
+  - type: textarea
+    attributes:
+      label: Expected Behavior
+      description: Describe what should happen.
+    validations:
+      required: false
+  - type: textarea
+    attributes:
+      label: Current Behavior
+      description: Describe what happens instead.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Possible Solution
+      description: Optional. Suggest a fix or a reason for the friction.
+    validations:
+      required: false
+  - type: textarea
+    attributes:
+      label: Minimal Reproducible Example
+      description: Add a minimal reproducible example under `artifacts/`, or an unambiguous set of steps to reproduce this. Include code where relevant.
+    validations:
+      required: false
+  - type: textarea
+    attributes:
+      label: Context
+      description: Describe how this affected you, and what you were trying to accomplish.
+    validations:
+      required: false
