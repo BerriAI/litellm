@@ -29,6 +29,7 @@ BARRIER_HELPER = """barrier_sync() {
 
 MAKE_STUB = """#!/bin/sh
 . "$STUB_BIN/barrier.sh"
+[ -n "${STUB_MAKE_LOG:-}" ] && echo "$*" >> "$STUB_MAKE_LOG"
 case "$*" in
     lint)
         [ "${STUB_FAIL:-}" = "make-lint" ] && exit 1
@@ -85,7 +86,7 @@ def _write_executable(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
-def _sandbox(tmp_path: Path) -> tuple[Path, Path]:
+def _sandbox(tmp_path: Path, stage: tuple[str, ...] = (".",)) -> tuple[Path, Path]:
     repo = tmp_path / "repo"
     (repo / "litellm" / "proxy").mkdir(parents=True)
     (repo / "litellm" / "foo.py").write_text("x = 1\n")
@@ -95,7 +96,7 @@ def _sandbox(tmp_path: Path) -> tuple[Path, Path]:
     (dashboard / "node_modules").mkdir()
     (dashboard / "src" / "app.ts").write_text("export {}\n")
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "add", *stage], cwd=repo, check=True)
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -146,6 +147,29 @@ def test_all_blocks_passing_exits_zero(tmp_path: Path) -> None:
     repo, bin_dir = _sandbox(tmp_path)
     proc = _run(repo, bin_dir, {})
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def _make_invocations(tmp_path: Path, repo: Path, bin_dir: Path) -> list[str]:
+    log = tmp_path / "make.log"
+    proc = _run(repo, bin_dir, {"STUB_MAKE_LOG": str(log)})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return log.read_text().split()
+
+
+def test_a_python_only_commit_never_provisions_the_dashboard_toolchain(tmp_path: Path) -> None:
+    # npm install costs seconds this commit has no use for, and on a machine whose
+    # node predates the dashboard's engines floor it fails outright, which used to
+    # block `make pre-commit` for changes that never touch the dashboard.
+    repo, bin_dir = _sandbox(tmp_path, stage=("litellm/foo.py",))
+    invocations = _make_invocations(tmp_path, repo, bin_dir)
+    assert "lint" in invocations
+    assert "bootstrap-dashboard" not in invocations
+
+
+@pytest.mark.parametrize("staged", ["ui/litellm-dashboard/src/app.ts", "litellm/proxy/spec.py"])
+def test_a_commit_that_reaches_the_dashboard_provisions_it(tmp_path: Path, staged: str) -> None:
+    repo, bin_dir = _sandbox(tmp_path, stage=(staged,))
+    assert "bootstrap-dashboard" in _make_invocations(tmp_path, repo, bin_dir)
 
 
 def test_full_output_is_saved_to_a_log_file_in_the_git_dir(tmp_path: Path) -> None:

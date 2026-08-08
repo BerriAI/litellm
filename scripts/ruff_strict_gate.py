@@ -10,6 +10,7 @@ branch point (the merge-base).
 """
 
 import argparse
+import functools
 import json
 import re
 import shutil
@@ -77,18 +78,27 @@ def _ruff_json(cwd: Path, config: Path) -> list:
     return json.loads(raw or "[]")
 
 
+# Memoized because `resolve()` is a filesystem round trip and ruff reports many
+# more violations than there are files: the cache makes it one realpath walk per
+# file rather than one per violation.
+@functools.lru_cache(maxsize=None)
+def _relative_to_repo(filename: str) -> str:
+    name = Path(filename)
+    return (
+        (name if name.is_absolute() else REPO_ROOT / name)
+        .resolve()
+        .relative_to(REPO_ROOT)
+        .as_posix()
+    )
+
+
 def head_violations() -> list:
-    out = []
-    for item in _ruff_json(REPO_ROOT, STRICT_CONFIG):
-        name = Path(item["filename"])
-        rel = (
-            (name if name.is_absolute() else REPO_ROOT / name)
-            .resolve()
-            .relative_to(REPO_ROOT)
-            .as_posix()
+    return [
+        Violation(
+            _relative_to_repo(item["filename"]), item["location"]["row"], item["code"]
         )
-        out.append(Violation(rel, item["location"]["row"], item["code"]))
-    return out
+        for item in _ruff_json(REPO_ROOT, STRICT_CONFIG)
+    ]
 
 
 def count_by_rule(violations: list) -> dict:
