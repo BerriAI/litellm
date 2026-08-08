@@ -1,6 +1,6 @@
 {
   "ANN001": {
-    "limit": 3121
+    "limit": 3114
   },
   "ANN002": {
     "limit": 71
@@ -9,7 +9,7 @@
     "limit": 834
   },
   "ANN201": {
-    "limit": 2032
+    "limit": 2031
   },
   "ANN202": {
     "limit": 865
@@ -24,7 +24,7 @@
     "limit": 133
   },
   "ANN401": {
-    "limit": 1630
+    "limit": 1555
   },
   "ASYNC230": {
     "limit": 11
@@ -81,7 +81,7 @@
     "limit": 1
   },
   "C901": {
-    "limit": 315
+    "limit": 314
   },
   "D419": {
     "limit": 6
@@ -306,7 +306,7 @@
     "limit": 0
   },
   "TID251": {
-    "limit": 1240
+    "limit": 1238
   },
   "TRY002": {
     "limit": 528
