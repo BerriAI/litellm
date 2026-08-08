@@ -632,6 +632,98 @@ class TestBedrockMantleCodexAdditionalTools:
         assert "additional_tools" in str(mock_debug.call_args)
 
 
+class TestBedrockMantleCodexFunctionsNamespace:
+    """Codex CLI 0.147.0 canonicalizes its default function/custom tools under an
+    explicit "functions" namespace (openai/codex#37022). Mantle already serves
+    top-level function tools under that namespace, so it 400s the request with
+    "Invalid Value: 'tools.namespace'. User-defined namespace 'functions'
+    collides with an existing tool namespace." (issue #36182), and the config has
+    to unwrap it back to top-level tools."""
+
+    _USER_MESSAGE = {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "Say hi in one word."}],
+    }
+
+    def _functions_namespace(self):
+        return {
+            "type": "namespace",
+            "name": "functions",
+            "tools": [_codex_exec_tool(), _codex_wait_tool()],
+        }
+
+    def _transform(self, input, params=None):
+        cfg = BedrockMantleResponsesAPIConfig()
+        return cfg.transform_responses_api_request(
+            model="openai.gpt-5.6-luna",
+            input=input,
+            response_api_optional_request_params=params if params is not None else {},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    def test_top_level_functions_namespace_is_unwrapped(self):
+        params = BedrockMantleResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"tools": [self._functions_namespace()]},
+            model="openai.gpt-5.6-luna",
+            drop_params=False,
+        )
+        assert params["tools"] == [_codex_exec_tool(), _codex_wait_tool()]
+
+    def test_other_namespaces_are_preserved(self):
+        collaboration = {"type": "namespace", "name": "collaboration", "tools": [{"type": "function", "name": "spawn"}]}
+        params = BedrockMantleResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"tools": [self._functions_namespace(), collaboration]},
+            model="openai.gpt-5.6-luna",
+            drop_params=False,
+        )
+        assert params["tools"] == [_codex_exec_tool(), _codex_wait_tool(), collaboration]
+
+    def test_unsupported_tool_types_inside_namespace_are_dropped(self):
+        params = BedrockMantleResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": "functions",
+                        "tools": [{"type": "web_search"}, _codex_wait_tool()],
+                    }
+                ]
+            },
+            model="openai.gpt-5.6-luna",
+            drop_params=False,
+        )
+        assert params["tools"] == [_codex_wait_tool()]
+
+    def test_empty_functions_namespace_removes_tools(self):
+        params = BedrockMantleResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"tools": [{"type": "namespace", "name": "functions", "tools": []}]},
+            model="openai.gpt-5.6-luna",
+            drop_params=False,
+        )
+        assert "tools" not in params
+
+    def test_functions_namespace_hoisted_out_of_additional_tools_is_unwrapped(self):
+        body = self._transform(
+            input=[
+                {"type": "additional_tools", "role": "developer", "tools": [self._functions_namespace()]},
+                self._USER_MESSAGE,
+            ]
+        )
+        assert body["input"] == [self._USER_MESSAGE]
+        assert body["tools"] == [_codex_exec_tool(), _codex_wait_tool()]
+
+    def test_request_without_functions_namespace_is_untouched(self):
+        tools = [_codex_wait_tool(), {"type": "namespace", "name": "collaboration", "tools": []}]
+        params = BedrockMantleResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"tools": list(tools)},
+            model="openai.gpt-5.6-luna",
+            drop_params=False,
+        )
+        assert params["tools"] == tools
+
+
 class TestBedrockMantleResponsesRegistry:
     def test_registry_returns_config_for_gpt_5_5(self, local_cost_map):
         # gpt-5.x advertises /v1/responses in supported_endpoints (capability)
