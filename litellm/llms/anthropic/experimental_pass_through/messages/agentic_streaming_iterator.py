@@ -21,8 +21,8 @@ from collections.abc import AsyncIterator
 from typing import Any, Final, cast
 
 from litellm._logging import verbose_logger
+from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
 
-PING_SSE_BYTES: Final = b'event: ping\ndata: {"type": "ping"}\n\n'
 HOLD_BACK_PING_INTERVAL_SECONDS: Final = 15.0
 SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES: Final = (
     b"event: error\n"
@@ -249,17 +249,17 @@ class AgenticAnthropicStreamingIterator:
     async def _anext_held_back(self) -> bytes:
         if self._drain_task is None:
             self._drain_task = asyncio.create_task(self._drain_upstream())
-            return PING_SSE_BYTES
+            return STREAM_SSE_KEEPALIVE_PING_BYTES
 
         if not self._stream_exhausted:
             if not await self._completed_within_ping_interval(self._drain_task):
-                return PING_SSE_BYTES
+                return STREAM_SSE_KEEPALIVE_PING_BYTES
             self._stream_exhausted = True
 
         if self._hook_task is None:
             self._hook_task = asyncio.create_task(self._process_agentic_hooks())
         if not await self._completed_within_ping_interval(self._hook_task):
-            return PING_SSE_BYTES
+            return STREAM_SSE_KEEPALIVE_PING_BYTES
 
         if self._follow_up_iterator is not None:
             return await self._next_follow_up_chunk(self._follow_up_iterator)
@@ -286,7 +286,7 @@ class AgenticAnthropicStreamingIterator:
         if self._follow_up_chunk_task is None:
             self._follow_up_chunk_task = asyncio.create_task(_anext_or_none(follow_up_iterator))
         if not await self._completed_within_ping_interval(self._follow_up_chunk_task):
-            return PING_SSE_BYTES
+            return STREAM_SSE_KEEPALIVE_PING_BYTES
         chunk: Final = self._follow_up_chunk_task.result()
         self._follow_up_chunk_task = None
         if chunk is None:
