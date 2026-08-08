@@ -8,13 +8,8 @@ import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolset
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useQueryClient } from "@tanstack/react-query";
 import { DataTable } from "@/components/shared/DataTable";
-import {
-  createMCPToolset,
-  updateMCPToolset,
-  deleteMCPToolset,
-  listMCPTools,
-  getProxyBaseUrl,
-} from "@/components/networking";
+import { createMCPToolset, updateMCPToolset, deleteMCPToolset, listMCPTools } from "@/components/networking";
+import useDocBaseUrl from "@/app/(dashboard)/hooks/proxySettings/useDocBaseUrl";
 import { MCPToolset, MCPToolsetTool } from "@/components/mcp_tools/types";
 import { displayToolName, getMCPToolsetTableColumns } from "./MCPToolsetTableColumns";
 
@@ -302,12 +297,12 @@ function ToolsetsEmptyState() {
 
 function ToolsetUsageGuide() {
   const [copied, setCopied] = useState(false);
-  const proxyBaseUrl = getProxyBaseUrl();
+  const docBaseUrl = useDocBaseUrl();
 
   const snippet = `{
   "mcpServers": {
     "my-toolset": {
-      "url": "${proxyBaseUrl}/toolset/<toolset-name>/mcp",
+      "url": "${docBaseUrl}/toolset/<toolset-name>/mcp",
       "headers": { "x-litellm-api-key": "Bearer <your-api-key>" }
     }
   }
@@ -358,6 +353,7 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
   const [deleting, setDeleting] = useState(false);
 
   const isAdmin = userRole === "Admin" || userRole === "proxy_admin";
+  const docBaseUrl = useDocBaseUrl();
 
   const handleCreate = async (name: string, description: string | undefined, tools: MCPToolsetTool[]) => {
     if (!accessToken) return;
@@ -396,11 +392,12 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
     const deps = {
       isAdmin,
       serverPrefixById,
+      docBaseUrl,
       onEditClick: setEditToolset,
       onDeleteClick: setDeleteId,
     };
     return getMCPToolsetTableColumns(deps);
-  }, [isAdmin, serverPrefixById]);
+  }, [isAdmin, serverPrefixById, docBaseUrl]);
 
   return (
     <div className="mt-4">

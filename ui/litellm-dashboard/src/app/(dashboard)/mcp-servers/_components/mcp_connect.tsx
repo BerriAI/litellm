@@ -4,7 +4,7 @@ import React, { useState } from "react";
 import { Card, Typography, Space, Alert, Button, Switch, Form } from "antd";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, Title as TremorTitle, Text as TremorText } from "@tremor/react";
 import { CopyIcon, Code, Terminal, Globe, CheckIcon, ExternalLinkIcon, KeyIcon, ServerIcon, Zap } from "lucide-react";
-import { getProxyBaseUrl } from "@/components/networking";
+import useDocBaseUrl from "@/app/(dashboard)/hooks/proxySettings/useDocBaseUrl";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 
 const { Title, Text } = Typography;
@@ -114,7 +114,7 @@ interface MCPConnectProps {
 }
 
 const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] }) => {
-  const proxyBaseUrl = getProxyBaseUrl();
+  const docBaseUrl = useDocBaseUrl();
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [currentServer] = useState("Zapier_MCP"); // This should match the current server being viewed
 
@@ -213,7 +213,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           title="MCP Server Information"
           description="Connection details for your LiteLLM MCP server"
         >
-          <CodeBlock title="Server URL" code={`${proxyBaseUrl}/mcp`} copyKey="litellm-server-url" />
+          <CodeBlock title="Server URL" code={`${docBaseUrl}/mcp`} copyKey="litellm-server-url" />
         </FeatureCard>
 
         <FeatureCard
@@ -224,7 +224,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           accessGroups={["dev-group"]}
         >
           <CodeBlock
-            code={`curl --location '${proxyBaseUrl}/v1/responses' \\
+            code={`curl --location '${docBaseUrl}/v1/responses' \\
 --header 'Content-Type: application/json' \\
 --header "Authorization: Bearer $LITELLM_VIRTUAL_KEY" \\
 --data '{
@@ -296,7 +296,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           title="MCP Server Information"
           description="Connection details for your LiteLLM MCP server"
         >
-          <CodeBlock title="Server URL" code={`${proxyBaseUrl}/mcp`} copyKey="openai-server-url" />
+          <CodeBlock title="Server URL" code={`${docBaseUrl}/mcp`} copyKey="openai-server-url" />
         </FeatureCard>
 
         <FeatureCard
@@ -316,7 +316,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "${proxyBaseUrl}/mcp",
+            "server_url": "${docBaseUrl}/mcp",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
@@ -383,7 +383,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
                 code={`{
   "mcpServers": {
     "Zapier_MCP": {
-      "url": "${proxyBaseUrl}/mcp",
+      "url": "${docBaseUrl}/mcp",
       "headers": {
         "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
         "x-mcp-servers": "Zapier_MCP,dev-group"
@@ -427,7 +427,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
               appropriate transport method.
             </Text>
           </div>
-          <CodeBlock title="Server URL" code={`${proxyBaseUrl}/mcp`} copyKey="http-server-url" />
+          <CodeBlock title="Server URL" code={`${docBaseUrl}/mcp`} copyKey="http-server-url" />
           <CodeBlock
             title="Headers Configuration"
             code={JSON.stringify(
