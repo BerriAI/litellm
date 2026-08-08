@@ -508,13 +508,39 @@ class ComplexityRouterConfig(BaseModel):
             "session's first turn and reuse it for every later turn, skipping re-classification. "
             "Off by default so every turn is classified on its own merits and routed to the cheapest "
             "adequate tier. Set True to keep a multi-turn session on one model, which preserves "
-            "provider prompt caches and avoids cross-model conversation-history errors."
+            "provider prompt caches and avoids cross-model conversation-history errors. Always "
+            "implies the deployment pin regardless of deployment_affinity: the session sticks to "
+            "one deployment of the pinned model, since freezing the model while re-shuffling its "
+            "deployments would still go cache-cold."
+        ),
+    )
+    deployment_affinity: bool = Field(
+        default=True,
+        description=(
+            "When True and a session_id is resolvable on the request, pin the deployment chosen "
+            "inside each routed model group and reuse it whenever the session returns to that "
+            "group, without pinning which group the session routes to. Independent of "
+            "session_affinity, which pins the model group instead (and always carries this "
+            "deployment pin with it): with session_affinity off, "
+            "every turn is still classified on its own merits while a session that escalates to a "
+            "stronger tier and comes back still lands on the deployment it used before, which is "
+            "what keeps a provider prompt cache warm. Pins are held per model group, so switching "
+            "tiers does not disturb the pin left behind in the previous group. On by default "
+            "because re-shuffling a conversation across deployments of the same model discards "
+            "that cache for no benefit; set False to keep every turn load-balanced across the "
+            "group, which is what a deployment set with tight per-deployment rate limits wants. "
+            "Inert when no session_id is resolvable, since there is nothing to key a pin on, and "
+            "suppressed when plugins are configured, for the same reason session_affinity is."
         ),
     )
     session_affinity_ttl_seconds: int = Field(
         default=3600,
         gt=0,
-        description="TTL for the session affinity pin; refreshed on every cache hit",
+        description=(
+            "TTL for the session affinity pin; refreshed on every cache hit. Bounds both the "
+            "session_affinity model pin and the deployment_affinity deployment pin, so it measures "
+            "idle time for the session's routing decisions rather than total session length"
+        ),
     )
 
     plugins: list[RoutingPlugin] | None = Field(
