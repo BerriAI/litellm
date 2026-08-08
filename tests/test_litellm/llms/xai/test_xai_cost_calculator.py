@@ -425,23 +425,29 @@ class TestXAICostCalculator:
         assert web_search_cost == 0.0
 
     def test_reported_cost_is_preferred_over_token_math(self):
-        """xAI states what it billed in usage.cost_in_usd_ticks; use that figure."""
+        """xAI states what it billed in usage.cost_in_usd_ticks; use that figure.
+
+        1 USD is 10^10 ticks, so 37756000 ticks is $0.0037756. It lands entirely on
+        completion cost because xAI does not split the total by direction.
+        """
         usage = Usage(
             prompt_tokens=100,
             completion_tokens=200,
             total_tokens=300,
         )
-        # 1 USD = 10^10 ticks, so this request cost $0.0037756.
         setattr(usage, "cost_in_usd_ticks", 37756000)
 
         prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
 
-        # Reported as completion cost -- xAI does not split the total by direction.
         assert prompt_cost == 0.0
         assert math.isclose(completion_cost, 0.0037756, rel_tol=1e-10)
 
     def test_reported_cost_suppresses_web_search_surcharge(self):
-        """The reported total already covers server-side tool calls."""
+        """The reported total already covers server-side tool calls.
+
+        Without the suppression these 3 searches would be billed a second time on
+        top of the total xAI already charged.
+        """
         usage = Usage(
             prompt_tokens=100,
             completion_tokens=50,
@@ -453,12 +459,13 @@ class TestXAICostCalculator:
         )
         setattr(usage, "cost_in_usd_ticks", 37756000)
 
-        # Without this, the 3 searches would be billed a second time on top of the
-        # total xAI already charged.
         assert cost_per_web_search_request(usage=usage, model_info={}) == 0.0
 
     def test_web_search_surcharge_suppressed_through_the_dispatcher(self):
-        """The suppression has to hold on the path cost tracking actually uses."""
+        """The suppression has to hold on the path cost tracking actually uses.
+
+        Legacy behaviour stays intact when xAI reports no cost.
+        """
         from litellm.llms import get_cost_for_web_search_request
 
         usage = Usage(
@@ -471,7 +478,6 @@ class TestXAICostCalculator:
             ),
         )
 
-        # Legacy behaviour is untouched when xAI reports nothing.
         assert get_cost_for_web_search_request("xai", usage, {}) > 0.0
 
         reported = usage.model_copy(update={"cost_in_usd_ticks": 37756000})

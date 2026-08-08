@@ -395,13 +395,13 @@ class TestResponseAPILoggingUtils:
         assert result.prompt_tokens_details.cache_creation_tokens == 10059
         assert result.prompt_tokens_details.cached_tokens == 0
 
-    def test_transform_response_api_usage_keeps_cost_in_usd_ticks(self):
-        """Responses API (/v1/responses) must not drop the cost xAI reports.
+    def test_transform_response_api_usage_keeps_unmodelled_provider_fields(self):
+        """Fields Usage does not model must survive the Responses usage transform.
 
-        xAI returns usage.cost_in_usd_ticks -- what it actually billed for the
-        request, tokens and server-side tool calls together. Rebuilding the usage
-        object here dropped it, so the xAI cost calculator never saw the provider's
-        own figure and fell back to computing one.
+        Rebuilding Usage field by field discarded anything outside its own shape, so
+        a per-provider cost calculator never saw what the provider reported. xAI's
+        cost_in_usd_ticks, the amount it billed for tokens and server-side tool calls
+        together, is the case that motivated this.
         """
         usage = {
             "input_tokens": 199,
@@ -416,8 +416,8 @@ class TestResponseAPILoggingUtils:
 
         assert getattr(result, "cost_in_usd_ticks", None) == 37756000
 
-    def test_transform_response_api_usage_without_cost_in_usd_ticks(self):
-        """Providers that report no cost are left exactly as they were."""
+    def test_transform_response_api_usage_without_extra_provider_fields(self):
+        """Providers that report nothing extra are left exactly as they were."""
         usage = {
             "input_tokens": 199,
             "output_tokens": 1,
@@ -429,6 +429,23 @@ class TestResponseAPILoggingUtils:
         )
 
         assert getattr(result, "cost_in_usd_ticks", None) is None
+
+    def test_transform_response_api_usage_extra_fields_do_not_clobber_usage(self):
+        """A provider field colliding with a Usage field must not overwrite it."""
+        usage = {
+            "input_tokens": 199,
+            "output_tokens": 1,
+            "total_tokens": 200,
+            "prompt_tokens": 999999,
+            "completion_tokens_details": "junk",
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        assert result.prompt_tokens == 199
+        assert result.completion_tokens_details is None
 
     def test_transform_response_api_usage_mixed_details(self):
         """Test transformation handles mixed token details (cached + image + audio)."""

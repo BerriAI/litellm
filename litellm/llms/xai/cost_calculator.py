@@ -13,8 +13,6 @@ from litellm.types.utils import Usage
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo
 
-# xAI states what it billed in "USD ticks", where 1 USD = 10^10 ticks.
-# https://docs.x.ai/developers/cost-tracking
 USD_TICKS_PER_DOLLAR: Final = 10_000_000_000
 
 
@@ -22,27 +20,31 @@ def _cost_reported_by_xai(usage: "Usage") -> float | None:
     """
     Return what xAI billed for the request in USD, or None if it reported nothing.
 
-    ``usage.cost_in_usd_ticks`` is the total for the whole request -- tokens *and*
-    every server-side tool invocation -- so whoever consumes it must not add
-    anything on top.
+    xAI states the amount it charged in ``usage.cost_in_usd_ticks``, where 1 USD is
+    ``USD_TICKS_PER_DOLLAR`` ticks: https://docs.x.ai/developers/cost-tracking
+
+    That figure is the total for the whole request, tokens and every server-side
+    tool invocation together, so whoever consumes it must not add anything on top.
+    It is documented as an integer but arrives on an untyped extra field, so a
+    value that will not convert yields None and the caller prices the request from
+    tokens instead.
     """
-    # Documented as an integer, but this rides in on an untyped extra field, so the
-    # conversion below stays defensive about what actually arrives.
     ticks: Final[int | None] = getattr(usage, "cost_in_usd_ticks", None)
     if ticks is None:
         return None
     try:
         return int(ticks) / USD_TICKS_PER_DOLLAR
     except (TypeError, ValueError):
-        # A malformed value is not worth failing a request over; fall back to
-        # calculating the cost locally.
         return None
 
 
 def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     """
-    Calculates the cost per token for a given XAI model, prompt tokens, and completion tokens.
-    Uses the generic cost calculator for all pricing logic, with XAI-specific reasoning token handling.
+    Prefers the amount xAI reported for the request, matching how the perplexity
+    calculator treats a provider-stated cost. That total is returned as completion
+    cost because xAI does not break it down by direction. Without one, falls back to
+    the generic cost calculator for all pricing logic, with XAI-specific reasoning
+    token handling.
 
     Input:
         - model: str, the model name without provider prefix
@@ -51,16 +53,10 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    ## USE THE COST XAI REPORTED, IF AVAILABLE
-    ## Same shape as the perplexity calculator: when the provider states what it
-    ## charged, that number is authoritative and the local token math is skipped.
-    ## It is returned as completion cost because xAI does not break the total down
-    ## by direction.
     reported_cost: Final = _cost_reported_by_xai(usage)
     if reported_cost is not None:
         return 0.0, reported_cost
 
-    ## FALLBACK: calculate the cost from tokens
     # XAI-specific completion cost: completion is billed as visible + reasoning
     # tokens. Detect when the transformation layer already folded them so we
     # don't double-count; fall back to raw xAI shape for callers that bypass
@@ -101,8 +97,6 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
     prompt_tokens_details.web_search_requests by the transformation layer to be
     compatible with the existing detection system.
     """
-    # Charging a per-search fee on top of a total xAI already gave us would bill
-    # the search calls twice.
     if _cost_reported_by_xai(usage) is not None:
         return 0.0
 

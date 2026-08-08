@@ -1,6 +1,7 @@
 import base64
 import re
 from collections.abc import Iterable, Mapping
+from types import MappingProxyType
 from typing import Any, Final, Optional, Union, cast, get_type_hints, overload
 
 from pydantic import BaseModel
@@ -1040,6 +1041,12 @@ class ResponseAPILoggingUtils:
 
         Both have the same spec with input_tokens, output_tokens, and
         input_tokens_details (text_tokens, image_tokens).
+
+        Usage is rebuilt field by field here, which used to discard anything the
+        provider reported outside that shape, so per-provider cost calculators never
+        saw it. Fields the provider sent that Usage does not model are carried over
+        as-is; ones whose names collide with Usage's own are left out so the values
+        computed above win.
         """
         if usage_input is None:
             return Usage(
@@ -1089,12 +1096,9 @@ class ResponseAPILoggingUtils:
                 audio_tokens=getattr(output_tokens_details, "audio_tokens", None),
             )
 
-        # xAI states what it billed for the request in usage.cost_in_usd_ticks.
-        # Rebuilding the usage object here dropped it, so the provider's own figure
-        # never reached the cost calculator on the Responses path.
-        cost_in_usd_ticks: Final[int | None] = getattr(response_api_usage, "cost_in_usd_ticks", None)
-        reported_cost_fields: Final[dict[str, int]] = (
-            {} if cost_in_usd_ticks is None else {"cost_in_usd_ticks": cost_in_usd_ticks}
+        provider_reported: Final[Mapping[str, object]] = response_api_usage.model_extra or {}
+        provider_reported_fields: Final = MappingProxyType(
+            {name: value for name, value in provider_reported.items() if name not in Usage.model_fields}
         )
 
         chat_usage: Final = Usage(
@@ -1103,7 +1107,7 @@ class ResponseAPILoggingUtils:
             total_tokens=prompt_tokens + completion_tokens,
             prompt_tokens_details=prompt_tokens_details,
             completion_tokens_details=completion_tokens_details,
-        ).model_copy(update=reported_cost_fields)
+        ).model_copy(update=provider_reported_fields)
 
         # Preserve cost attribute if it exists on ResponseAPIUsage
         if hasattr(response_api_usage, "cost") and response_api_usage.cost is not None:
