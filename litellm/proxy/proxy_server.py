@@ -341,6 +341,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_settings,
     get_budget_reset_time,
 )
+from litellm.proxy.common_utils.ui_static_files import UiStaticFiles
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     get_management_object_ttl,
@@ -1861,7 +1862,7 @@ try:
     )
     # print(f"mounted _next at {server_root_path}/ui/_next")
 
-    app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
+    app.mount("/ui", UiStaticFiles(directory=ui_path, html=True), name="ui")
 
     def _restructure_ui_html_files(ui_root: str) -> None:
         """Ensure each exported HTML route is available as <route>/index.html."""
