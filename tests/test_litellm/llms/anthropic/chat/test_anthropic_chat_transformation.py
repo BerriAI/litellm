@@ -916,6 +916,35 @@ def test_anthropic_chat_transform_request_includes_context_management():
     assert result["context_management"] == _sample_context_management_payload()
 
 
+def test_anthropic_chat_transform_request_orders_messages_last():
+    config = AnthropicConfig()
+    result = config.transform_request(
+        model="claude-sonnet-4-20250514",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Hello"},
+        ],
+        optional_params={
+            "tools": [
+                {
+                    "name": "get_weather",
+                    "input_schema": {"type": "object", "properties": {}},
+                }
+            ],
+            "max_tokens": 256,
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    keys = list(result.keys())
+    assert "system" in keys
+    assert "tools" in keys
+    assert keys.index("messages") > keys.index("system")
+    assert keys.index("messages") > keys.index("tools")
+    assert keys[-1] == "messages"
+
+
 def test_anthropic_structured_output_beta_header():
     from litellm.types.utils import CallTypes
     from litellm.utils import return_raw_request
