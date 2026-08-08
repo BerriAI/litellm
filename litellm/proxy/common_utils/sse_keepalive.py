@@ -6,7 +6,9 @@ from typing import Final
 
 import anyio
 
-ANTHROPIC_PING_SSE_CHUNK: Final = 'event: ping\ndata: {"type": "ping"}\n\n'
+from litellm.constants import STREAM_SSE_KEEPALIVE_PING_CHUNK
+
+ANTHROPIC_PING_SSE_CHUNK: Final = STREAM_SSE_KEEPALIVE_PING_CHUNK
 
 
 def _coerce_interval(ping_interval_seconds: float | str | None) -> float | None:

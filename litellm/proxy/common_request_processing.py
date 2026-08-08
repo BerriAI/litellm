@@ -27,6 +27,7 @@ from litellm.constants import (
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_DATA_PREFIX,
+    STREAM_SSE_KEEPALIVE_PING_BYTES,
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -2953,8 +2954,9 @@ class ProxyBaseLLMRequestProcessing:
                 # so a GeneratorExit on client disconnect is raised there and any
                 # statement after the yield never runs. The slow-path hook is
                 # awaited above, so a cancellation during it still leaves this
-                # False and refunds.
-                delivered_chunk = True
+                # False and refunds. A keepalive ping carries no provider output,
+                # so it must not suppress that refund.
+                delivered_chunk = delivered_chunk or chunk != STREAM_SSE_KEEPALIVE_PING_BYTES
                 yield serialize_chunk(chunk)
             stream_completed = True
         except (asyncio.CancelledError, GeneratorExit):

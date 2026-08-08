@@ -13,8 +13,8 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
+from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
 from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
-    PING_SSE_BYTES,
     SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES,
     AgenticAnthropicStreamingIterator,
     _handle_content_block_delta,
@@ -858,10 +858,10 @@ class TestAgenticStreamingIteratorHoldBack:
         async for chunk in iterator:
             collected.append(chunk)
 
-        non_ping = [c for c in collected if c != PING_SSE_BYTES]
+        non_ping = [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES]
         assert non_ping == phase2_chunks
         assert b"litellm_content_retrieve" not in b"".join(collected)
-        assert collected[0] == PING_SSE_BYTES
+        assert collected[0] == STREAM_SSE_KEEPALIVE_PING_BYTES
 
     @pytest.mark.asyncio
     async def test_should_replay_buffer_verbatim_when_no_hook_fires(self):
@@ -877,7 +877,7 @@ class TestAgenticStreamingIteratorHoldBack:
         async for chunk in iterator:
             collected.append(chunk)
 
-        assert [c for c in collected if c != PING_SSE_BYTES] == chunks
+        assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == chunks
         mock_handler._call_agentic_completion_hooks.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -898,8 +898,8 @@ class TestAgenticStreamingIteratorHoldBack:
         async for chunk in iterator:
             collected.append(chunk)
 
-        assert collected.count(PING_SSE_BYTES) >= 2
-        assert [c for c in collected if c != PING_SSE_BYTES] == chunks
+        assert collected.count(STREAM_SSE_KEEPALIVE_PING_BYTES) >= 2
+        assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == chunks
 
     @pytest.mark.asyncio
     async def test_should_propagate_upstream_error_instead_of_partial_message(self):
@@ -919,7 +919,7 @@ class TestAgenticStreamingIteratorHoldBack:
             async for chunk in iterator:
                 collected.append(chunk)
 
-        assert all(c == PING_SSE_BYTES for c in collected)
+        assert all(c == STREAM_SSE_KEEPALIVE_PING_BYTES for c in collected)
         mock_handler._call_agentic_completion_hooks.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -945,8 +945,8 @@ class TestAgenticStreamingIteratorHoldBack:
         async for chunk in iterator:
             collected.append(chunk)
 
-        assert collected.count(PING_SSE_BYTES) >= 4
-        assert [c for c in collected if c != PING_SSE_BYTES] == phase2_chunks
+        assert collected.count(STREAM_SSE_KEEPALIVE_PING_BYTES) >= 4
+        assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == phase2_chunks
 
     @pytest.mark.asyncio
     async def test_should_error_instead_of_replaying_server_fulfilled_tool_use_when_hook_crashes(self):
@@ -962,7 +962,7 @@ class TestAgenticStreamingIteratorHoldBack:
         async for chunk in iterator:
             collected.append(chunk)
 
-        assert [c for c in collected if c != PING_SSE_BYTES] == [SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES]
+        assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == [SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES]
         assert b"litellm_content_retrieve" not in b"".join(collected)
 
     @pytest.mark.asyncio
@@ -979,7 +979,7 @@ class TestAgenticStreamingIteratorHoldBack:
         async for chunk in iterator:
             collected.append(chunk)
 
-        assert [c for c in collected if c != PING_SSE_BYTES] == [SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES]
+        assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == [SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES]
 
     @pytest.mark.asyncio
     async def test_should_replay_client_owned_tool_use_verbatim(self):
@@ -999,7 +999,7 @@ class TestAgenticStreamingIteratorHoldBack:
         async for chunk in iterator:
             collected.append(chunk)
 
-        assert [c for c in collected if c != PING_SSE_BYTES] == chunks
+        assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == chunks
 
     @pytest.mark.asyncio
     async def test_should_emit_pings_while_the_follow_up_stream_is_slow(self):
@@ -1023,8 +1023,8 @@ class TestAgenticStreamingIteratorHoldBack:
             collected.append(chunk)
 
         first_follow_up_index = collected.index(phase2_chunks[0])
-        assert collected[first_follow_up_index + 1] == PING_SSE_BYTES
-        assert [c for c in collected if c != PING_SSE_BYTES] == phase2_chunks
+        assert collected[first_follow_up_index + 1] == STREAM_SSE_KEEPALIVE_PING_BYTES
+        assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == phase2_chunks
 
     @pytest.mark.asyncio
     async def test_should_propagate_follow_up_stream_error(self):
@@ -1074,7 +1074,7 @@ class TestAgenticStreamingIteratorHoldBack:
         )
 
         first = await iterator.__anext__()
-        assert first == PING_SSE_BYTES
+        assert first == STREAM_SSE_KEEPALIVE_PING_BYTES
         assert iterator._drain_task is not None
 
         await iterator.aclose()

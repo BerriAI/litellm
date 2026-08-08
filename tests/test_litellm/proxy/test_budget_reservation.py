@@ -7,6 +7,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
@@ -2451,6 +2452,33 @@ async def test_streaming_cancel_after_chunk_keeps_reservation(
     ) == pytest.approx(2.0)
     assert reservation.get("finalized") is not True
     streaming_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_streaming_cancel_after_only_keepalive_pings_reconciles_to_input_cost(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token, reservation = await _reserve_for_stream(
+        counter_cache, key_cache, proxy_logging_obj, "key-cancel-after-ping"
+    )
+
+    async def cancel_after_ping(user_api_key_dict, response, request_data):
+        yield STREAM_SSE_KEEPALIVE_PING_BYTES
+        raise asyncio.CancelledError()
+
+    generator, streaming_logging_obj = _drive_streaming_cancel(valid_token, cancel_after_ping)
+    received = []
+    with pytest.raises(asyncio.CancelledError):
+        async for chunk in generator:
+            received.append(chunk)
+
+    assert received == [STREAM_SSE_KEEPALIVE_PING_BYTES]
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-cancel-after-ping"
+    ) == pytest.approx(0.5)
+    assert reservation["finalized"] is True
 
 
 @pytest.mark.asyncio
