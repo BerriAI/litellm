@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_checks import delete_cached_project_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import _set_object_metadata_field
 from litellm.proxy.management_helpers.utils import (
@@ -514,6 +515,7 @@ async def update_project(
         litellm_proxy_admin_name,
         premium_user,
         prisma_client,
+        user_api_key_cache,
     )
 
     try:
@@ -672,6 +674,11 @@ async def update_project(
             include={"litellm_budget_table": True, "object_permission": True},
         )
 
+        await delete_cached_project_object(
+            project_id=data.project_id,
+            user_api_key_cache=user_api_key_cache,
+        )
+
         return updated_project
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -710,7 +717,7 @@ async def delete_project(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import premium_user, prisma_client
+    from litellm.proxy.proxy_server import premium_user, prisma_client, user_api_key_cache
 
     try:
         if not premium_user:
@@ -772,6 +779,11 @@ async def delete_project(
             deleted_project: (
                 prisma_models.LiteLLM_ProjectTable | None
             ) = await prisma_client.db.litellm_projecttable.delete(where={"project_id": project_id})
+
+            await delete_cached_project_object(
+                project_id=project_id,
+                user_api_key_cache=user_api_key_cache,
+            )
 
             deleted_projects.append(deleted_project)
 

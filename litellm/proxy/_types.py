@@ -2488,6 +2488,16 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "is active as a reminder that hard enforcement is relaxed."
         ),
     )
+    apply_user_budget_to_team_keys: bool | None = Field(
+        None,
+        description=(
+            "If True, a user's personal max_budget is enforced on every request they "
+            "make, including requests made with a team-scoped key. Defaults to False, "
+            "where a team-scoped key is governed only by the team and team-member "
+            "budgets and the key owner's personal max_budget does not apply "
+            "(see GitHub issue #12905)."
+        ),
+    )
     user_url_validation: bool | None = Field(
         None,
         description=(
@@ -3884,12 +3894,19 @@ class OrganizationMemberUpdateResponse(MemberUpdateResponse):
 ##########################################
 
 
+class TeamAccessGroupModelGrant(LiteLLMPydanticObjectBase):
+    access_group_id: str
+    access_group_name: str
+    models: tuple[str, ...]
+
+
 class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     team_member_budget_table: LiteLLM_BudgetTableFull | None = None
     # Resources inherited from access groups (separate from direct assignments)
     access_group_models: list[str] | None = None
     access_group_mcp_server_ids: list[str] | None = None
     access_group_agent_ids: list[str] | None = None
+    access_group_details: tuple[TeamAccessGroupModelGrant, ...] | None = None
 
 
 class TeamInfoResponseObject(TypedDict):
