@@ -214,10 +214,26 @@ class ShadowEvalTierResult(BaseModel):
     avg_judge_confidence: float
 
 
+class ShadowEvalModelResult(BaseModel):
+    """Judge outcomes against one of the models the shadowed key currently uses.
+
+    A key's real traffic can be a mix of models; per-tier win rates blend those
+    incumbents together, so this slice answers which of them the router actually beat.
+    """
+
+    current_model: str
+    turn_count: int
+    real_win_rate_pct: float
+    shadow_win_rate_pct: float
+    tie_rate_pct: float
+    avg_judge_confidence: float
+
+
 class ShadowEvalResult(BaseModel):
     """Stratified results of a completed (or in-progress) shadow-eval job."""
 
     groups: tuple[ShadowEvalTierResult, ...]
+    by_current_model: tuple[ShadowEvalModelResult, ...] = ()
     overall_shadow_win_rate_pct: float
     overall_tie_rate_pct: float
 

@@ -23,6 +23,7 @@ import {
   useStartShadowEval,
   useStopShadowEval,
   type ShadowEvalJob,
+  type ShadowEvalModelResult,
   type ShadowEvalTierResult,
 } from "./useShadowEval";
 
@@ -89,6 +90,43 @@ const TierResultsTable: React.FC<{ groups: readonly ShadowEvalTierResult[] }> = 
   </Table>
 );
 
+const ModelResultsTable: React.FC<{ models: readonly ShadowEvalModelResult[] }> = ({ models }) => (
+  <div className="border-t">
+    <p className="px-6 pt-4 text-[11px] uppercase tracking-wide text-muted-foreground">By current model</p>
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Current model</TableHead>
+          <TableHead className="text-right">Judged turns</TableHead>
+          <TableHead className="text-right">Router pick wins</TableHead>
+          <TableHead className="text-right">Current model wins</TableHead>
+          <TableHead className="text-right">Ties</TableHead>
+          <TableHead className="text-right">Judge confidence</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {models.map((m) => (
+          <TableRow key={m.current_model}>
+            <TableCell className="font-mono text-xs text-foreground">
+              {m.current_model}
+              {m.turn_count < MIN_TURNS_FOR_CONFIDENCE ? (
+                <span className="ml-2 font-sans text-xs text-muted-foreground">(low sample)</span>
+              ) : null}
+            </TableCell>
+            <TableCell className="text-right tabular-nums">{m.turn_count.toLocaleString()}</TableCell>
+            <TableCell className="text-right font-medium tabular-nums text-foreground">
+              {pct(m.shadow_win_rate_pct)}
+            </TableCell>
+            <TableCell className="text-right tabular-nums">{pct(m.real_win_rate_pct)}</TableCell>
+            <TableCell className="text-right tabular-nums">{pct(m.tie_rate_pct)}</TableCell>
+            <TableCell className="text-right tabular-nums">{m.avg_judge_confidence.toFixed(2)}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  </div>
+);
+
 const JobResults: React.FC<{
   job: ShadowEvalJob;
   onStop: () => void;
@@ -97,6 +135,7 @@ const JobResults: React.FC<{
   const active = job.status === "pending" || job.status === "running";
   const results = job.results;
   const okOrBetter = results ? results.overall_shadow_win_rate_pct + results.overall_tie_rate_pct : null;
+  const mixedTraffic = (results?.by_current_model?.length ?? 0) > 1;
   return (
     <Card className="overflow-hidden py-0">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b px-6 py-4">
@@ -136,6 +175,7 @@ const JobResults: React.FC<{
             </div>
           </div>
           <TierResultsTable groups={results.groups} />
+          {mixedTraffic ? <ModelResultsTable models={results.by_current_model ?? []} /> : null}
         </>
       ) : (
         <p className="px-6 py-8 text-center text-sm text-muted-foreground">

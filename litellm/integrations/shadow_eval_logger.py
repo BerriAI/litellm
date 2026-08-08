@@ -238,6 +238,19 @@ async def _key_or_team_is_over_budget(metadata: Mapping[str, object]) -> bool:
     return False
 
 
+def _request_was_routed_by(request_metadata: Mapping[str, object], router_name: str) -> bool:
+    """Whether this request was already served by the router being shadowed.
+
+    Duplicating such a request compares the router to itself: guaranteed ties, judge
+    spend for zero information. Requests routed by a *different* auto-router still
+    sample, which is a meaningful router-vs-router comparison.
+    """
+    decision: Final = request_metadata.get("routing_decision")
+    if not isinstance(decision, Mapping):
+        return False
+    return decision.get("router_model_name") == router_name
+
+
 def _job_is_over_spend_cap(job: ActiveShadowEvalJob) -> bool:
     """Whether the job has spent past what its start-time estimate justifies.
 
@@ -326,6 +339,8 @@ class ShadowEvalLogger(CustomLogger):
                 return
             if payload.get("call_type") not in (None, "completion", "acompletion", "chat_completion"):
                 return  # only chat-shaped traffic is comparable
+            if _request_was_routed_by(request_metadata, job.router_name):
+                return
             if self._inflight_shadow_tasks >= _MAX_CONCURRENT_SHADOW_TASKS:
                 return
             if await _key_or_team_is_over_budget(metadata):

@@ -82,6 +82,24 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
         avg_judge_confidence: 0.74,
       },
     ],
+    by_current_model: [
+      {
+        current_model: "gpt-4o",
+        turn_count: 30,
+        real_win_rate_pct: 30.0,
+        shadow_win_rate_pct: 45.0,
+        tie_rate_pct: 25.0,
+        avg_judge_confidence: 0.8,
+      },
+      {
+        current_model: "my-finetune",
+        turn_count: 12,
+        real_win_rate_pct: 25.0,
+        shadow_win_rate_pct: 58.3,
+        tie_rate_pct: 16.7,
+        avg_judge_confidence: 0.75,
+      },
+    ],
     overall_shadow_win_rate_pct: 48.0,
     overall_tie_rate_pct: 22.0,
   },
@@ -147,8 +165,27 @@ describe("ShadowEvalSection", () => {
     const j = job();
     mockHooks({ jobs: [j], detail: j });
     render(<ShadowEvalSection accessToken="token" />);
-    // REASONING tier has 12 turns < 30
-    expect(screen.getByText("(low sample)")).toBeInTheDocument();
+    // REASONING tier (12 turns) and my-finetune (12 turns) are both under 30
+    expect(screen.getAllByText("(low sample)")).toHaveLength(2);
+  });
+
+  it("breaks results down by current model when the key's traffic is a mix", () => {
+    const j = job();
+    mockHooks({ jobs: [j], detail: j });
+    render(<ShadowEvalSection accessToken="token" />);
+    expect(screen.getByText("By current model")).toBeInTheDocument();
+    expect(screen.getByText("gpt-4o")).toBeInTheDocument();
+    expect(screen.getByText("my-finetune")).toBeInTheDocument();
+    expect(screen.getByText("58.3%")).toBeInTheDocument();
+  });
+
+  it("omits the by-model table when all traffic came from a single model", () => {
+    const j = job();
+    const results = j.results!;
+    const single = job({ results: { ...results, by_current_model: [results.by_current_model![0]] } });
+    mockHooks({ jobs: [single], detail: single });
+    render(<ShadowEvalSection accessToken="token" />);
+    expect(screen.queryByText("By current model")).not.toBeInTheDocument();
   });
 
   it("shows a stop button for running jobs but not completed ones", () => {

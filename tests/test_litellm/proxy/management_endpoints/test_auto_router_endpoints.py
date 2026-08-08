@@ -654,3 +654,78 @@ class TestShadowEvalJobsAreTimeBound:
         }
         response = _job_to_response(type("Row", (), fields)(), None)
         assert response.ends_at == "2026-08-08T00:00:00+00:00"
+
+
+class TestShadowEvalResultsStratifyByTierAndByCurrentModel:
+    """A key's real traffic can mix models. Per-tier rates blend the incumbents, so
+    the results also slice by real_model — which of today's models did the router beat."""
+
+    @staticmethod
+    def _row(tier: str | None, real_model: str, real_wins: int, shadow_wins: int, ties: int, conf: float):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import _VerdictAggRow
+
+        return _VerdictAggRow(
+            tier_classification=tier,
+            real_model=real_model,
+            turn_count=real_wins + shadow_wins + ties,
+            real_wins=real_wins,
+            shadow_wins=shadow_wins,
+            ties=ties,
+            avg_confidence=conf,
+        )
+
+    def test_same_rollup_produces_both_stratifications(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import _shadow_eval_results
+
+        rows = [
+            self._row("SIMPLE", "gpt-4o", 1, 8, 1, 0.9),
+            self._row("SIMPLE", "my-finetune", 6, 2, 2, 0.7),
+            self._row("REASONING", "gpt-4o", 3, 5, 2, 0.8),
+        ]
+        result = _shadow_eval_results(rows)
+
+        assert result is not None
+        simple = next(g for g in result.groups if g.tier == "SIMPLE")
+        assert simple.turn_count == 20
+        assert simple.shadow_win_rate_pct == 50.0
+
+        gpt4o = next(m for m in result.by_current_model if m.current_model == "gpt-4o")
+        finetune = next(m for m in result.by_current_model if m.current_model == "my-finetune")
+        assert gpt4o.turn_count == 20
+        assert gpt4o.shadow_win_rate_pct == 65.0
+        assert finetune.turn_count == 10
+        assert finetune.shadow_win_rate_pct == 20.0
+
+    def test_tier_confidence_is_turn_weighted_not_a_plain_average(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import _shadow_eval_results
+
+        rows = [
+            self._row("SIMPLE", "gpt-4o", 0, 9, 0, 1.0),
+            self._row("SIMPLE", "my-finetune", 1, 0, 0, 0.0),
+        ]
+        result = _shadow_eval_results(rows)
+
+        assert result is not None
+        assert result.groups[0].avg_judge_confidence == 0.9
+
+    def test_single_incumbent_still_reports_one_model_slice(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import _shadow_eval_results
+
+        result = _shadow_eval_results([self._row("SIMPLE", "gpt-4o", 2, 6, 2, 0.8)])
+
+        assert result is not None
+        assert len(result.by_current_model) == 1
+        assert result.by_current_model[0].current_model == "gpt-4o"
+
+    def test_overall_rates_are_unchanged_by_the_extra_grouping_column(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import _shadow_eval_results
+
+        rows = [
+            self._row("SIMPLE", "gpt-4o", 1, 8, 1, 0.9),
+            self._row("SIMPLE", "my-finetune", 6, 2, 2, 0.7),
+        ]
+        result = _shadow_eval_results(rows)
+
+        assert result is not None
+        assert result.overall_shadow_win_rate_pct == 50.0
+        assert result.overall_tie_rate_pct == 15.0
