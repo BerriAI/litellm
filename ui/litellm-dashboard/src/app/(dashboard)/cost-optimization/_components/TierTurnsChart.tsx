@@ -11,7 +11,7 @@ import {
   type ComplexityTiers,
 } from "@/components/add_model/ComplexityRouterConfig";
 import { normalizeTierModels } from "@/components/add_model/complexity_router_tiers";
-import { chartColorValue, DonutChart, SEQUENTIAL_COLOR_RAMP } from "@/components/shared/charts";
+import { chartColorValue, DonutChart, type ChartColor } from "@/components/shared/charts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 import { viewGroup, type BenchmarkView } from "./autoRouterBenchmarks";
@@ -84,6 +84,8 @@ interface TierTurnsChartProps {
   autoRouters: readonly AutoRouterDeployment[];
 }
 
+const TIER_DONUT_COLORS: readonly ChartColor[] = ["#c7d2fe", "#1e293b", "#d4b483", "#87a878"];
+
 const TierTurnsChart: React.FC<TierTurnsChartProps> = ({ view, autoRouters }) => {
   const group = viewGroup(view);
   const entries = Object.entries(group?.tier_turns ?? {}).filter(([, turns]) => turns > 0);
@@ -96,7 +98,7 @@ const TierTurnsChart: React.FC<TierTurnsChartProps> = ({ view, autoRouters }) =>
     turns,
     models: tierModelsFor(tier, group.router_name, group.router_type, autoRouters),
   }));
-  const colors = SEQUENTIAL_COLOR_RAMP.slice(0, slices.length);
+  const colors = slices.map((_, idx) => TIER_DONUT_COLORS[idx % TIER_DONUT_COLORS.length]);
 
   return (
     <Card>
@@ -119,7 +121,7 @@ const TierTurnsChart: React.FC<TierTurnsChartProps> = ({ view, autoRouters }) =>
             showLabel
             label={`${total.toLocaleString()} total turns`}
           />
-          <ul className="flex flex-col gap-3">
+          <ul className="flex flex-col gap-6">
             {slices.map((slice, idx) => (
               <li key={slice.tier} className="flex items-start gap-2">
                 <span

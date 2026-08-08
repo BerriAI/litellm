@@ -82,9 +82,7 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
         <div className="flex flex-col items-center justify-center gap-2 border-t p-6 md:border-t-0 md:border-l">
           <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Avg saved per session</p>
           <p className="text-5xl font-semibold tracking-tight text-foreground">{usd(stats.saved_per_session)}</p>
-          <p className="text-sm text-muted-foreground">
-            across {stats.sessions.toLocaleString()} sessions and {stats.turns.toLocaleString()} turns
-          </p>
+          <p className="text-sm text-muted-foreground">across {stats.sessions.toLocaleString()} sessions</p>
         </div>
       </div>
     </Card>
