@@ -37,6 +37,7 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeam: vi.fn(),
+  useTeams: vi.fn().mockReturnValue({ data: [] }),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
@@ -896,6 +897,36 @@ describe("TeamInfoView", () => {
           }),
         );
       });
+    });
+
+    it("omits organization_id from an unrelated save so the org is not re-joined", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({ organization_id: "org-123", models: ["gpt-4"] }),
+      );
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+      });
+
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+      await waitFor(() => {
+        expect(screen.getByLabelText("Team Name")).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+      const [, payload] = vi.mocked(networking.teamUpdateCall).mock.calls[0];
+      expect(payload).not.toHaveProperty("organization_id");
     });
   });
 

@@ -4,6 +4,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { MoreHorizontal, Pencil, Play, Trash2 } from "lucide-react";
 
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells";
+import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -30,6 +31,8 @@ export type AvailableCallbacks = Record<string, AvailableCallbackMeta>;
 
 export const callbackRowMode = (record: CallbackRow): string => record.type || record.mode || "success";
 
+export const isDestination = (record: AlertingObject): boolean => record.credentialName != null;
+
 const CALLBACK_MODE_LABELS: Record<string, string> = {
   success: "Success",
   failure: "Failure",
@@ -42,14 +45,64 @@ function callbackModeTone(mode: string): StatusTone {
   return "info";
 }
 
+function ScopeCell({ callback }: { callback: AlertingObject }) {
+  const scope = callback.resolvedScope;
+  const hasResolvedScope = scope?.global === true || [...(scope?.teams ?? []), ...(scope?.orgs ?? [])].length > 0;
+  // A grant only routes traces if the credential also builds an exporter. Showing the
+  // grant alone advertised destinations the resolver excludes, so a misconfigured one
+  // read as live.
+  if (callback.resolvesToDestination === false) {
+    return (
+      <Badge
+        variant="outline"
+        title="This destination cannot be built from its stored values, so it receives no traces"
+      >
+        Not active
+      </Badge>
+    );
+  }
+  if (!scope || !hasResolvedScope) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  if (scope.global) {
+    return <Badge variant="secondary">Global access</Badge>;
+  }
+  const items = [
+    ...scope.teams.map((label) => ({ kind: "team" as const, label })),
+    ...scope.orgs.map((label) => ({ kind: "org" as const, label })),
+  ];
+  const shown = items.slice(0, 4);
+  const remainder = items.length - shown.length;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {shown.map((item) => (
+        <Badge key={`${item.kind}-${item.label}`} variant="outline">
+          {item.kind}: {item.label}
+        </Badge>
+      ))}
+      {remainder > 0 && <Badge variant="secondary">+{remainder} more</Badge>}
+    </div>
+  );
+}
+
 interface CallbackRowActionsProps {
   callback: CallbackRow;
+  // A read-only admin keeps Test, which the backend authorizes for that role on
+  // /health/services, and loses everything that mutates.
+  readOnly?: boolean;
   onTest: (callback: AlertingObject) => void | Promise<void>;
   onEdit: (callback: AlertingObject) => void;
   onDelete: (callback: AlertingObject) => void;
+  onEditAccess: (callback: AlertingObject) => void;
 }
 
-function CallbackRowActions({ callback, onTest, onEdit, onDelete }: CallbackRowActionsProps) {
+function CallbackRowActions({ callback, onTest, onEdit, onDelete, onEditAccess, readOnly }: CallbackRowActionsProps) {
+  const destination = isDestination(callback);
+  // Destinations get no Test, so a read-only admin has no action left on one. Rendering
+  // the trigger anyway opened an empty menu that looked broken rather than restricted.
+  if (destination && readOnly) {
+    return null;
+  }
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -60,19 +113,40 @@ function CallbackRowActions({ callback, onTest, onEdit, onDelete }: CallbackRowA
         <MoreHorizontal className="size-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
-        <DropdownMenuItem data-testid="callback-action-test" onClick={() => void onTest(callback)}>
-          <Play />
-          Test
-        </DropdownMenuItem>
-        <DropdownMenuItem data-testid="callback-action-edit" onClick={() => onEdit(callback)}>
-          <Pencil />
-          Edit
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem variant="destructive" data-testid="callback-action-delete" onClick={() => onDelete(callback)}>
-          <Trash2 />
-          Delete
-        </DropdownMenuItem>
+        {destination ? (
+          !readOnly && (
+            <DropdownMenuItem data-testid="destination-action-edit-access" onClick={() => onEditAccess(callback)}>
+              <Pencil />
+              Edit scope
+            </DropdownMenuItem>
+          )
+        ) : (
+          <>
+            <DropdownMenuItem data-testid="callback-action-test" onClick={() => void onTest(callback)}>
+              <Play />
+              Test
+            </DropdownMenuItem>
+            {!readOnly && (
+              <DropdownMenuItem data-testid="callback-action-edit" onClick={() => onEdit(callback)}>
+                <Pencil />
+                Edit
+              </DropdownMenuItem>
+            )}
+          </>
+        )}
+        {!readOnly && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              variant="destructive"
+              data-testid={destination ? "destination-action-delete" : "callback-action-delete"}
+              onClick={() => onDelete(callback)}
+            >
+              <Trash2 />
+              Delete
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -83,6 +157,8 @@ interface LoggingCallbacksTableColumnsDeps {
   onTest: (callback: AlertingObject) => void | Promise<void>;
   onEdit: (callback: AlertingObject) => void;
   onDelete: (callback: AlertingObject) => void;
+  onEditAccess: (callback: AlertingObject) => void;
+  readOnly?: boolean;
 }
 
 export const getLoggingCallbacksTableColumns = ({
@@ -90,6 +166,8 @@ export const getLoggingCallbacksTableColumns = ({
   onTest,
   onEdit,
   onDelete,
+  onEditAccess,
+  readOnly,
 }: LoggingCallbacksTableColumnsDeps): ColumnDef<CallbackRow>[] => [
   {
     id: "name",
@@ -99,11 +177,19 @@ export const getLoggingCallbacksTableColumns = ({
     enableSorting: false,
     cell: ({ row }) => {
       const id = row.original.name;
-      const displayName = availableCallbacks[id]?.ui_callback_name || id;
+      // A destination keeps the name the admin gave it. Looking it up in the callback
+      // registry renamed a destination called "datadog" to "Datadog", making it
+      // indistinguishable in this column from the real Datadog callback row.
+      const displayName = isDestination(row.original) ? id : availableCallbacks[id]?.ui_callback_name || id;
       return (
-        <span className="block max-w-72 truncate text-sm font-medium" title={displayName}>
-          {displayName}
-        </span>
+        <div>
+          <span className="block max-w-72 truncate text-sm font-medium" title={displayName}>
+            {displayName}
+          </span>
+          {row.original.destinationLabel && (
+            <span className="block text-xs text-muted-foreground">{row.original.destinationLabel}</span>
+          )}
+        </div>
       );
     },
   },
@@ -114,9 +200,25 @@ export const getLoggingCallbacksTableColumns = ({
     size: 240,
     enableSorting: false,
     cell: ({ row }) => {
+      if (isDestination(row.original)) {
+        return <span className="text-muted-foreground">—</span>;
+      }
       const mode = callbackRowMode(row.original);
       return <StatusBadge tone={callbackModeTone(mode)} label={CALLBACK_MODE_LABELS[mode] || mode} />;
     },
+  },
+  {
+    id: "access",
+    meta: { title: "Scope", skeleton: "badge" },
+    header: "Scope",
+    size: 280,
+    enableSorting: false,
+    cell: ({ row }) =>
+      isDestination(row.original) ? (
+        <ScopeCell callback={row.original} />
+      ) : (
+        <span className="text-muted-foreground">—</span>
+      ),
   },
   {
     id: "actions",
@@ -127,7 +229,14 @@ export const getLoggingCallbacksTableColumns = ({
     enableHiding: false,
     cell: ({ row }) => (
       <div className="flex justify-end">
-        <CallbackRowActions callback={row.original} onTest={onTest} onEdit={onEdit} onDelete={onDelete} />
+        <CallbackRowActions
+          callback={row.original}
+          onTest={onTest}
+          onEdit={onEdit}
+          onDelete={onDelete}
+          onEditAccess={onEditAccess}
+          readOnly={readOnly}
+        />
       </div>
     ),
   },
