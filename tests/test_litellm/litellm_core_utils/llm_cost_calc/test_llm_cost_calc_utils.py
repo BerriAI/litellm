@@ -2737,3 +2737,112 @@ def test_tier_request_without_tier_pricing_keeps_the_standard_reasoning_rate():
     )
 
     assert completion_cost == pytest.approx(400 * 4e-06 + 600 * 6e-06, rel=1e-9)
+
+
+@pytest.mark.parametrize(
+    "model,write_cost,write_cost_priority,write_cost_above_272k,write_cost_above_272k_priority",
+    [
+        ("azure/gpt-5.6", 6.25e-06, 1.25e-05, 1.25e-05, 2.5e-05),
+        ("azure/gpt-5.6-sol", 6.25e-06, 1.25e-05, 1.25e-05, 2.5e-05),
+        ("azure/gpt-5.6-terra", 2.5e-06, 5e-06, 5e-06, 1e-05),
+        ("azure/gpt-5.6-luna", 2.5e-07, 5e-07, 5e-07, 1e-06),
+        ("azure/us/gpt-5.6", 6.875e-06, 1.71875e-05, 1.375e-05, None),
+        ("azure/us/gpt-5.6-sol", 6.875e-06, 1.71875e-05, 1.375e-05, None),
+        ("azure/us/gpt-5.6-terra", 2.75e-06, 6.875e-06, 5.5e-06, None),
+        ("azure/us/gpt-5.6-luna", 2.75e-07, 6.875e-07, 5.5e-07, None),
+        ("azure/eu/gpt-5.6", 6.875e-06, 1.71875e-05, 1.375e-05, None),
+        ("azure/eu/gpt-5.6-sol", 6.875e-06, 1.71875e-05, 1.375e-05, None),
+        ("azure/eu/gpt-5.6-terra", 2.75e-06, 6.875e-06, 5.5e-06, None),
+        ("azure/eu/gpt-5.6-luna", 2.75e-07, 6.875e-07, 5.5e-07, None),
+    ],
+)
+def test_generic_cost_per_token_azure_gpt_5_6_cache_write_tokens(
+    model: str,
+    write_cost: float,
+    write_cost_priority: float,
+    write_cost_above_272k: float,
+    write_cost_above_272k_priority,
+):
+    """
+    Azure Foundry bills prompt-cache write tokens for the GPT-5.6 series at
+    1.25x the matching input rate (standard, priority, and long-context tiers).
+    Cache-write tokens on azure/gpt-5.6* deployments must be billed at those
+    rates rather than falling back to the plain input rate.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    info = litellm.get_model_info(model=model, custom_llm_provider="azure")
+    short_usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=10,
+        total_tokens=1010,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=0, cache_write_tokens=800),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(model=model, usage=short_usage, custom_llm_provider="azure")
+    assert prompt_cost == pytest.approx(200 * info["input_cost_per_token"] + 800 * write_cost)
+
+    priority_cost, _ = generic_cost_per_token(
+        model=model, usage=short_usage, custom_llm_provider="azure", service_tier="priority"
+    )
+    assert priority_cost == pytest.approx(200 * info["input_cost_per_token_priority"] + 800 * write_cost_priority)
+
+    long_usage = Usage(
+        prompt_tokens=300000,
+        completion_tokens=10,
+        total_tokens=300010,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=0, cache_write_tokens=800),
+    )
+    long_cost, _ = generic_cost_per_token(model=model, usage=long_usage, custom_llm_provider="azure")
+    assert long_cost == pytest.approx(
+        (300000 - 800) * info["input_cost_per_token_above_272k_tokens"] + 800 * write_cost_above_272k
+    )
+
+    long_priority_cost, _ = generic_cost_per_token(
+        model=model, usage=long_usage, custom_llm_provider="azure", service_tier="priority"
+    )
+    if write_cost_above_272k_priority is None:
+        assert long_priority_cost == pytest.approx(
+            (300000 - 800) * info["input_cost_per_token_above_272k_tokens"] + 800 * write_cost_above_272k
+        )
+        return
+    assert long_priority_cost == pytest.approx(
+        (300000 - 800) * info["input_cost_per_token_above_272k_tokens_priority"]
+        + 800 * write_cost_above_272k_priority
+    )
+
+
+def test_generic_cost_per_token_openai_gpt_5_6_cache_write_service_tiers():
+    """
+    OpenAI gpt-5.6 publishes flex and priority rates for prompt-cache writes
+    (cache_creation_input_token_cost_flex / _priority). Cache-write tokens on
+    flex/priority requests must be billed at those tier rates rather than the
+    standard cache-write rate.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "gpt-5.6"
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=10,
+        total_tokens=1010,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=0, cache_write_tokens=800),
+    )
+    info = litellm.get_model_info(model=model, custom_llm_provider="openai")
+
+    flex_cost, _ = generic_cost_per_token(
+        model=model, usage=usage, custom_llm_provider="openai", service_tier="flex"
+    )
+    assert flex_cost == pytest.approx(
+        200 * info["input_cost_per_token_flex"] + 800 * info["cache_creation_input_token_cost_flex"]
+    )
+
+    priority_cost, _ = generic_cost_per_token(
+        model=model, usage=usage, custom_llm_provider="openai", service_tier="priority"
+    )
+    assert priority_cost == pytest.approx(
+        200 * info["input_cost_per_token_priority"] + 800 * info["cache_creation_input_token_cost_priority"]
+    )
+    assert priority_cost > flex_cost
