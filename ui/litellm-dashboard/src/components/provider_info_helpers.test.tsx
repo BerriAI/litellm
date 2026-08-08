@@ -111,6 +111,12 @@ describe("provider_info_helpers", () => {
         }
       });
     });
+
+    it("should use distinct display names for hosted and deprecated vllm providers", () => {
+      expect(Providers.Hosted_Vllm).toBe("Hosted Vllm");
+      expect(Providers.VLLM).toBe("Vllm");
+      expect(Providers.Hosted_Vllm).not.toBe(Providers.VLLM);
+    });
   });
 
   describe("provider logo bundled assets", () => {
