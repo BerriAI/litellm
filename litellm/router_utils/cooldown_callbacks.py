@@ -38,15 +38,21 @@ async def router_cooldown_event_callback(
             deployment_id,
         )
         return
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
     _litellm_params: Final = _deployment["litellm_params"]
     temp_litellm_params = copy.deepcopy(_litellm_params)
     temp_litellm_params = dict(temp_litellm_params)
-    _model_name: Final = _deployment.get("model_name", None) or ""
-    _api_base: Final = litellm.get_api_base(model=_model_name, optional_params=temp_litellm_params) or ""
     model_info: Final = _deployment["model_info"]
     model_id: Final = model_info.id
 
     litellm_model_name: Final = temp_litellm_params.get("model") or ""
+    _api_base: Final = (
+        StandardLoggingPayloadSetup.strip_trailing_slash(
+            litellm.get_api_base(model=litellm_model_name, optional_params=temp_litellm_params)
+        )
+        or ""
+    )
     llm_provider = ""
     try:
         _, llm_provider, _, _ = litellm.get_llm_provider(
@@ -61,14 +67,13 @@ async def router_cooldown_event_callback(
 
     if prometheusLogger is not None:
         prometheusLogger.set_deployment_complete_outage(
-            litellm_model_name=_model_name,
+            litellm_model_name=litellm_model_name,
             model_id=model_id,
-            api_base=_api_base,
             api_provider=llm_provider,
         )
 
         prometheusLogger.increment_deployment_cooled_down(
-            litellm_model_name=_model_name,
+            litellm_model_name=litellm_model_name,
             model_id=model_id,
             api_base=_api_base,
             api_provider=llm_provider,
