@@ -179,7 +179,17 @@ class LiteLLMCompletionResponsesConfig:
         Cheaply estimate the token count of the input.
         ~4 chars per token for strings; for message lists, stringify first.
         """
-        pass
+        tokens = 0
+        for message in input:
+            # TODO replace with isinstance maybe
+            if message["type"] == "message":
+                if message["role"] == "user":
+                    tokens += len(message["content"]) // 4
+                elif message["role"] == "assistant":
+                    for submsg in message["content"]:
+                        tokens += len(submsg["text"]) // 4
+
+        return tokens
 
     @staticmethod
     async def _transform_context_management(
@@ -195,6 +205,8 @@ class LiteLLMCompletionResponsesConfig:
 
         Returns the (possibly compacted) input.
         """
+        import pdb
+        pdb.set_trace()
         pass
 
     @staticmethod
