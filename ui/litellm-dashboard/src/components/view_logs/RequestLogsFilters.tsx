@@ -204,15 +204,12 @@ function InternalUserFilterField({
   );
 
   const options = useMemo<SearchSelectOption[]>(() => {
-    const seen = new Set<string>();
-    return (data?.pages ?? []).flatMap((page) =>
-      page.users.flatMap((user) => {
-        if (!user.user_id || seen.has(user.user_id)) return [];
-        seen.add(user.user_id);
-        const name = user.user_email || user.user_alias || "";
-        return [{ label: name || user.user_id, value: user.user_id, sublabel: name === "" ? undefined : user.user_id }];
-      }),
-    );
+    const users = (data?.pages ?? []).flatMap((page) => page.users.filter((user) => user.user_id !== ""));
+    const byId = new Map(users.map((user) => [user.user_id, user] as const));
+    return [...byId.values()].map((user) => {
+      const name = user.user_email || user.user_alias || "";
+      return { label: name || user.user_id, value: user.user_id, sublabel: name === "" ? undefined : user.user_id };
+    });
   }, [data]);
 
   return (

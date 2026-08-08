@@ -215,6 +215,26 @@ describe("RequestLogsFilters", () => {
     expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.USER_ID, "u-1");
   });
 
+  it("offers a user repeated across page boundaries only once", async () => {
+    const bob = { user_id: "u-1", user_email: "bob@acme.com", user_alias: null };
+    vi.mocked(useInfiniteUsers).mockReturnValue({
+      ...emptyInfiniteQuery,
+      data: {
+        pages: [
+          { users: [bob], page: 1, page_size: 1, total: 2, total_pages: 2 },
+          { users: [bob], page: 2, page_size: 1, total: 2, total_pages: 2 },
+        ],
+        pageParams: [1, 2],
+      },
+    } as unknown as ReturnType<typeof useInfiniteUsers>);
+    const user = userEvent.setup();
+    renderFilters();
+
+    await user.click(await screen.findByPlaceholderText("Search a user by email"));
+
+    expect(await screen.findAllByText("bob@acme.com")).toHaveLength(1);
+  });
+
   it("pushes the Internal User query to the server rather than filtering a preloaded list", async () => {
     const user = userEvent.setup();
     renderFilters();
