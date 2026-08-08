@@ -11,7 +11,7 @@ from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-from ....litellm_core_utils.realtime_streaming import RealTimeStreaming
+from ....litellm_core_utils.realtime_streaming import ClientWebSocketInterface, RealTimeStreaming
 from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..azure import AzureChatCompletion
 
@@ -128,12 +128,12 @@ class AzureOpenAIRealtime(AzureChatCompletion):
                 ssl=ssl_context,
             ) as backend_ws:
                 realtime_streaming: Final = RealTimeStreaming(
-                    websocket,
+                    cast(ClientWebSocketInterface, websocket),
                     cast(ClientConnection, backend_ws),
                     logging_obj,
                     model=model,
                     user_api_key_dict=user_api_key_dict,
-                    request_data={"litellm_metadata": litellm_metadata or {}},
+                    request_data=cast(dict[str, object], {"litellm_metadata": litellm_metadata or {}}),
                     backend_uses_beta_protocol=backend_uses_beta_protocol,
                     force_transcription_model=(
                         model if (query_params or {}).get("intent") == "transcription" else None

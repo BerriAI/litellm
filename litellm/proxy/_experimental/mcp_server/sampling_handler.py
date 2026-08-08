@@ -11,7 +11,7 @@ MCP Spec Reference:
 """
 
 import typing
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Final, NamedTuple, Optional, Protocol, Union, runtime_checkable
 
 if typing.TYPE_CHECKING:
@@ -439,9 +439,9 @@ def _convert_mcp_messages_to_openai(
         )
 
         # Separate marker items from regular content parts
-        tool_call_markers = []
-        tool_result_markers = []
-        regular_parts = []
+        tool_call_markers: list[dict[str, object]] = []
+        tool_result_markers: list[dict[str, object]] = []
+        regular_parts: list[Mapping[str, object]] = []
         for part in converted_parts:
             marker = part.get("_marker_type") if isinstance(part, dict) else None
             if marker == "tool_use":
@@ -520,7 +520,7 @@ def _extract_text_parts(
 ) -> str | None:
     """Extract text parts from mixed content."""
     items: Final = content if isinstance(content, list) else [content]
-    texts: Final = []
+    texts: Final[list[str]] = []
     for item in items:
         if getattr(item, "type", None) == "text":
             texts.append(getattr(item, "text", ""))
@@ -1176,15 +1176,15 @@ async def _build_completion_kwargs(
     )
 
 
-async def _run_guardrails_and_call_llm(
-    completion_kwargs: dict[str, Any],
+async def _apply_pre_call_hook(
+    completion_kwargs: dict[str, object],
     user_api_key_auth: "UserAPIKeyAuth",
-) -> Any:
+) -> dict[str, object]:
     try:
         from litellm.proxy.proxy_server import proxy_logging_obj as _plo
 
         if _plo is not None:
-            completion_kwargs = await typing.cast("ProxyLogging", _plo).pre_call_hook(
+            return await typing.cast("ProxyLogging", _plo).pre_call_hook(
                 user_api_key_dict=user_api_key_auth,
                 data=completion_kwargs,
                 call_type="acompletion",
@@ -1198,16 +1198,32 @@ async def _run_guardrails_and_call_llm(
         )
         raise
 
+    return completion_kwargs
+
+
+async def _call_acompletion(
+    acompletion_fn: "Callable[..., Awaitable[object]]",
+    completion_kwargs: dict[str, object],
+) -> object:
+    return await acompletion_fn(**completion_kwargs)
+
+
+async def _run_guardrails_and_call_llm(
+    completion_kwargs: dict[str, object],
+    user_api_key_auth: "UserAPIKeyAuth",
+) -> Any:
+    completion_kwargs = await _apply_pre_call_hook(completion_kwargs, user_api_key_auth)
+
     import litellm
 
     try:
         from litellm.proxy.proxy_server import llm_router
 
         if llm_router is not None:
-            return await llm_router.acompletion(**completion_kwargs)
-        return await litellm.acompletion(**completion_kwargs)
+            return await _call_acompletion(llm_router.acompletion, completion_kwargs)
+        return await _call_acompletion(litellm.acompletion, completion_kwargs)
     except ImportError:
-        return await litellm.acompletion(**completion_kwargs)
+        return await _call_acompletion(litellm.acompletion, completion_kwargs)
 
 
 async def handle_sampling_create_message(
@@ -1284,7 +1300,7 @@ async def handle_sampling_create_message(
             client_ip=client_ip,
         )
 
-        openai_messages: Final[Sequence[Mapping[str, object]]] = completion_kwargs["messages"]
+        openai_messages: Final[Sequence[Mapping[str, object]]] = completion_kwargs["messages"] or []
         openai_tools: Final = completion_kwargs.get("tools")
         verbose_logger.debug(
             "MCP sampling: calling litellm.acompletion with model=%s, num_messages=%d, has_tools=%s",

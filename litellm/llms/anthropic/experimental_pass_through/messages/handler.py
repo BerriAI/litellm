@@ -436,6 +436,15 @@ def anthropic_messages_handler(
     # This is needed by agentic hooks (e.g., websearch_interception) to make follow-up requests
     original_model: Final = model
 
+    messages_arg: Final = cast(list[dict[str, object]], messages)
+    metadata_arg: Final = cast(dict[str, object] | None, metadata)
+    system_arg: Final = cast(str | list[object] | None, system)
+    thinking_arg: Final = cast(dict[str, object] | None, thinking)
+    tool_choice_arg: Final = cast(dict[str, object] | None, tool_choice)
+    tools_arg: Final = cast(list[dict[str, object]] | None, tools)
+    container_arg: Final = cast(dict[str, object] | None, container)
+    kwargs_obj: Final = cast(dict[str, object], kwargs)
+
     litellm_params: Final = GenericLiteLLMParams(
         **kwargs,
         api_key=api_key,
@@ -493,24 +502,24 @@ def anthropic_messages_handler(
         if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools):
             return anthropic_messages_with_mcp(
                 max_tokens=max_tokens,
-                messages=messages,
+                messages=messages_arg,
                 model=model,
-                metadata=metadata,
+                metadata=metadata_arg,
                 stop_sequences=stop_sequences,
                 stream=stream,
-                system=system,
+                system=system_arg,
                 temperature=temperature,
-                thinking=thinking,
-                tool_choice=tool_choice,
-                tools=tools,
+                thinking=thinking_arg,
+                tool_choice=tool_choice_arg,
+                tools=tools_arg,
                 top_k=top_k,
                 top_p=top_p,
-                container=container,
+                container=container_arg,
                 api_key=api_key,
                 api_base=api_base,
                 client=client,
                 custom_llm_provider=custom_llm_provider,
-                **kwargs,
+                **kwargs_obj,
             )
 
     anthropic_messages_provider_config: BaseAnthropicMessagesConfig | None = None
@@ -532,16 +541,16 @@ def anthropic_messages_handler(
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
         _shared_kwargs: Final = dict(
             max_tokens=max_tokens,
-            messages=messages,
+            messages=messages_arg,
             model=model,
-            metadata=metadata,
+            metadata=metadata_arg,
             stop_sequences=stop_sequences,
             stream=stream,
-            system=system,
+            system=system_arg,
             temperature=temperature,
-            thinking=thinking,
-            tool_choice=tool_choice,
-            tools=tools,
+            thinking=thinking_arg,
+            tool_choice=tool_choice_arg,
+            tools=tools_arg,
             top_k=top_k,
             top_p=top_p,
             _is_async=is_async,
@@ -549,7 +558,7 @@ def anthropic_messages_handler(
             api_base=api_base,
             client=client,
             custom_llm_provider=custom_llm_provider,
-            **kwargs,
+            **kwargs_obj,
         )
         if _should_route_to_responses_api(custom_llm_provider):
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(**_shared_kwargs)

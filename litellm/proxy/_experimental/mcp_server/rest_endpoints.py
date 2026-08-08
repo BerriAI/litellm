@@ -2,7 +2,7 @@ import asyncio
 import importlib
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -128,7 +128,7 @@ if MCP_AVAILABLE:
         logging_results: Final = await asyncio.gather(
             _fire_mcp_tool_call_logging(
                 logging_obj,
-                result,
+                cast("CallToolResult", result),
                 start_time,
                 end_time,
                 user_api_key_auth=user_api_key_auth,

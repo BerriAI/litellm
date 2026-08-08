@@ -6,15 +6,59 @@ This module provides fake streaming by converting non-streaming responses into s
 """
 
 import asyncio
-from collections.abc import AsyncIterator
-from typing import Any, Final, cast
+from collections.abc import AsyncIterator, Mapping, Sequence
+from typing import Any, Final, Protocol, cast, overload, runtime_checkable
 from uuid import uuid4
+
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
+
+
+class _A2AStatusView(TypedDict, total=False):
+    state: str
+
+
+class _A2AMessageView(TypedDict, total=False):
+    role: str
+    parts: Sequence[Mapping[str, object]]
+    messageId: str
+
+
+class _A2AArtifactView(TypedDict, total=False):
+    parts: Sequence[Mapping[str, object]]
+
+
+class _A2ATaskResultView(TypedDict, total=False):
+    id: str
+    status: _A2AStatusView
+    history: Sequence[_A2AMessageView]
+    artifacts: Sequence[_A2AArtifactView]
+    message: _A2AMessageView
+
+
+class _A2ATaskResponseView(TypedDict, total=False):
+    result: _A2ATaskResultView
+
+
+@runtime_checkable
+class _SupportsModelDump(Protocol):
+    def model_dump(self, *, mode: str, exclude_none: bool) -> Mapping[str, object]: ...
+
+
+@runtime_checkable
+class _SupportsDict(Protocol):
+    def dict(self, *, exclude_none: bool) -> Mapping[str, object]: ...
+
+
+_JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_TASK_VIEW_ADAPTER: Final = TypeAdapter(_A2ATaskResponseView)
+_STR_ADAPTER: Final = TypeAdapter(str)
 
 
 class PydanticAITransformation:
@@ -27,8 +71,16 @@ class PydanticAITransformation:
     - Fake streaming by chunking non-streaming responses
     """
 
+    @overload
     @staticmethod
-    def _remove_none_values(obj: Any) -> Any:
+    def _remove_none_values(obj: Mapping[str, object]) -> dict[str, object]: ...
+
+    @overload
+    @staticmethod
+    def _remove_none_values(obj: object) -> object: ...
+
+    @staticmethod
+    def _remove_none_values(obj: object) -> object:
         """
         Recursively remove None values from a dict/list structure.
 
@@ -42,14 +94,18 @@ class PydanticAITransformation:
             Cleaned object with None values removed
         """
         if isinstance(obj, dict):
-            return {k: PydanticAITransformation._remove_none_values(v) for k, v in obj.items() if v is not None}
+            mapping: Final[dict[str, object]] = obj
+            return {k: PydanticAITransformation._remove_none_values(v) for k, v in mapping.items() if v is not None}
         elif isinstance(obj, list):
-            return [PydanticAITransformation._remove_none_values(item) for item in obj if item is not None]
+            items: Final[list[object]] = obj
+            return [PydanticAITransformation._remove_none_values(item) for item in items if item is not None]
         else:
             return obj
 
     @staticmethod
-    def _params_to_dict(params: Any) -> dict[str, Any]:
+    def _params_to_dict(
+        params: "_SupportsModelDump | _SupportsDict | Mapping[str, object]",
+    ) -> Mapping[str, object]:
         """
         Convert params to a dict, handling Pydantic models.
 
@@ -59,10 +115,10 @@ class PydanticAITransformation:
         Returns:
             Dict representation of params
         """
-        if hasattr(params, "model_dump"):
+        if isinstance(params, _SupportsModelDump):
             # Pydantic v2 model
             return params.model_dump(mode="python", exclude_none=True)
-        elif hasattr(params, "dict"):
+        elif isinstance(params, _SupportsDict):
             # Pydantic v1 model
             return params.dict(exclude_none=True)
         elif isinstance(params, dict):
@@ -80,7 +136,7 @@ class PydanticAITransformation:
         max_attempts: int = 30,
         poll_interval: float = 0.5,
         agent_extra_headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Poll for task completion using tasks/get method.
 
@@ -112,9 +168,10 @@ class PydanticAITransformation:
                 },
             )
             response.raise_for_status()
-            poll_data = response.json()
+            poll_data = _JSON_OBJECT_ADAPTER.validate_python(response.json())
 
-            result = poll_data.get("result", {})
+            view = _TASK_VIEW_ADAPTER.validate_python(poll_data)
+            result = view.get("result", {})
             status = result.get("status", {})
             state = status.get("state", "")
 
@@ -133,10 +190,10 @@ class PydanticAITransformation:
     async def _send_and_poll_raw(
         api_base: str,
         request_id: str,
-        params: Any,
+        params: "_SupportsModelDump | _SupportsDict | Mapping[str, object]",
         timeout: float = 60.0,
         agent_extra_headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Send a request to Pydantic AI agent and return the raw task response.
 
@@ -160,7 +217,9 @@ class PydanticAITransformation:
 
         # Ensure the message has 'kind': 'message' as required by FastA2A/Pydantic AI
         if "message" in params_dict:
-            params_dict["message"]["kind"] = "message"
+            message: Final = _JSON_OBJECT_ADAPTER.validate_python(params_dict["message"])
+            message["kind"] = "message"
+            params_dict["message"] = message
 
         # Build A2A JSON-RPC request using message/send method for FastA2A compatibility
         a2a_request: Final = {
@@ -189,10 +248,11 @@ class PydanticAITransformation:
             },
         )
         response.raise_for_status()
-        response_data = response.json()
+        response_data = _JSON_OBJECT_ADAPTER.validate_python(response.json())
 
         # Check if task is already completed
-        result: Final = response_data.get("result", {})
+        view: Final = _TASK_VIEW_ADAPTER.validate_python(response_data)
+        result: Final = view.get("result", {})
         status: Final = result.get("status", {})
         state: Final = status.get("state", "")
 
@@ -217,10 +277,10 @@ class PydanticAITransformation:
     async def send_non_streaming_request(
         api_base: str,
         request_id: str,
-        params: Any,
+        params: "_SupportsModelDump | _SupportsDict | Mapping[str, object]",
         timeout: float = 60.0,
         agent_extra_headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Send a non-streaming A2A request to Pydantic AI agent and wait for completion.
 
@@ -253,10 +313,10 @@ class PydanticAITransformation:
     async def send_and_get_raw_response(
         api_base: str,
         request_id: str,
-        params: Any,
+        params: "_SupportsModelDump | _SupportsDict | Mapping[str, object]",
         timeout: float = 60.0,
         agent_extra_headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Send a request to Pydantic AI agent and return the raw task response.
 
@@ -282,9 +342,9 @@ class PydanticAITransformation:
 
     @staticmethod
     def _transform_to_a2a_response(
-        response_data: dict[str, Any],
+        response_data: Mapping[str, object],
         request_id: str,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Transform Pydantic AI task response to standard A2A non-streaming format.
 
@@ -313,7 +373,7 @@ class PydanticAITransformation:
         full_text, message_id, parts = PydanticAITransformation._extract_response_text(response_data)
 
         # Build standard A2A message
-        a2a_message: Final = {
+        a2a_message: Final[Mapping[str, object]] = {
             "kind": "message",
             "role": "agent",
             "parts": parts if parts else [{"kind": "text", "text": full_text}],
@@ -328,7 +388,7 @@ class PydanticAITransformation:
         }
 
     @staticmethod
-    def _extract_response_text(response_data: dict[str, Any]) -> tuple[str, str, list]:
+    def _extract_response_text(response_data: Mapping[str, object]) -> tuple[str, str, Sequence[Mapping[str, object]]]:
         """
         Extract response text from completed task response.
 
@@ -342,7 +402,8 @@ class PydanticAITransformation:
         Returns:
             Tuple of (full_text, message_id, parts)
         """
-        result: Final = response_data.get("result", {})
+        view: Final = _TASK_VIEW_ADAPTER.validate_python(response_data)
+        result: Final = view.get("result", {})
 
         # Try to extract from artifacts first (preferred for results)
         artifacts: Final = result.get("artifacts", [])
@@ -351,7 +412,7 @@ class PydanticAITransformation:
                 parts = artifact.get("parts", [])
                 for part in parts:
                     if part.get("kind") == "text":
-                        text = part.get("text", "")
+                        text = _STR_ADAPTER.validate_python(part.get("text", ""))
                         if text:
                             return text, str(uuid4()), parts
 
@@ -364,7 +425,7 @@ class PydanticAITransformation:
                 full_text = ""
                 for part in parts:
                     if part.get("kind") == "text":
-                        full_text += part.get("text", "")
+                        full_text += _STR_ADAPTER.validate_python(part.get("text", ""))
                 if full_text:
                     return full_text, message_id, parts
 
@@ -376,18 +437,18 @@ class PydanticAITransformation:
             full_text = ""
             for part in parts:
                 if part.get("kind") == "text":
-                    full_text += part.get("text", "")
+                    full_text += _STR_ADAPTER.validate_python(part.get("text", ""))
             return full_text, message_id, parts
 
         return "", str(uuid4()), []
 
     @staticmethod
     async def fake_streaming_from_response(
-        response_data: dict[str, Any],
+        response_data: Mapping[str, object],
         request_id: str,
         chunk_size: int = 50,
         delay_ms: int = 10,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, object]]:
         """
         Convert a non-streaming A2A response into fake streaming chunks.
 
@@ -410,9 +471,10 @@ class PydanticAITransformation:
         full_text, message_id, parts = PydanticAITransformation._extract_response_text(response_data)
 
         # Extract input message from raw response for history
-        result: Final = response_data.get("result", {})
+        view: Final = _TASK_VIEW_ADAPTER.validate_python(response_data)
+        result: Final = view.get("result", {})
         history: Final = result.get("history", [])
-        input_message = {}
+        input_message: _A2AMessageView = {}
         for msg in history:
             if msg.get("role") == "user":
                 input_message = msg
@@ -426,7 +488,7 @@ class PydanticAITransformation:
 
         # 1. Emit initial task event (kind: "task", status: "submitted")
         # Format matches A2ACompletionBridgeTransformation.create_task_event
-        task_event: Final = {
+        task_event: Final[dict[str, object]] = {
             "jsonrpc": "2.0",
             "id": request_id,
             "result": {
@@ -452,7 +514,7 @@ class PydanticAITransformation:
 
         # 2. Emit status update (kind: "status-update", status: "working")
         # Format matches A2ACompletionBridgeTransformation.create_status_update_event
-        working_event: Final = {
+        working_event: Final[dict[str, object]] = {
             "jsonrpc": "2.0",
             "id": request_id,
             "result": {
@@ -478,7 +540,7 @@ class PydanticAITransformation:
                 chunk_text = full_text[i : i + chunk_size]
                 is_last_chunk = (i + chunk_size) >= len(full_text)
 
-                artifact_event = {
+                artifact_event: dict[str, object] = {
                     "jsonrpc": "2.0",
                     "id": request_id,
                     "result": {
@@ -503,7 +565,7 @@ class PydanticAITransformation:
                     await asyncio.sleep(delay_ms / 1000.0)
 
         # 4. Emit final status update (kind: "status-update", status: "completed", final: true)
-        completed_event: Final = {
+        completed_event: Final[dict[str, object]] = {
             "jsonrpc": "2.0",
             "id": request_id,
             "result": {

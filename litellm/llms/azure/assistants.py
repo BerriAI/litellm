@@ -212,9 +212,9 @@ class AzureAssistantsAPI(BaseAzureLLM):
         response_obj: OpenAIMessage | None = None
         if getattr(thread_message, "status", None) is None:
             thread_message.status = "completed"
-            response_obj = OpenAIMessage(**thread_message.dict())
+            response_obj = OpenAIMessage.model_validate(thread_message.dict())
         else:
-            response_obj = OpenAIMessage(**thread_message.dict())
+            response_obj = OpenAIMessage.model_validate(thread_message.dict())
         return response_obj
 
     # fmt: off
@@ -301,9 +301,9 @@ class AzureAssistantsAPI(BaseAzureLLM):
         response_obj: OpenAIMessage | None = None
         if getattr(thread_message, "status", None) is None:
             thread_message.status = "completed"
-            response_obj = OpenAIMessage(**thread_message.dict())
+            response_obj = OpenAIMessage.model_validate(thread_message.dict())
         else:
-            response_obj = OpenAIMessage(**thread_message.dict())
+            response_obj = OpenAIMessage.model_validate(thread_message.dict())
         return response_obj
 
     async def async_get_messages(
@@ -443,7 +443,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
 
         message_thread: Final = await openai_client.beta.threads.create(**data)
 
-        return Thread(**message_thread.dict())
+        return Thread.model_validate(message_thread.dict())
 
     # fmt: off
 
@@ -539,7 +539,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
 
         message_thread: Final = azure_openai_client.beta.threads.create(**data)
 
-        return Thread(**message_thread.dict())
+        return Thread.model_validate(message_thread.dict())
 
     async def async_get_thread(
         self,
@@ -566,7 +566,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
 
         response: Final = await openai_client.beta.threads.retrieve(thread_id=thread_id)
 
-        return Thread(**response.dict())
+        return Thread.model_validate(response.dict())
 
     # fmt: off
 
@@ -642,7 +642,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
 
         response: Final = openai_client.beta.threads.retrieve(thread_id=thread_id)
 
-        return Thread(**response.dict())
+        return Thread.model_validate(response.dict())
 
     # def delete_thread(self):
     #     pass
@@ -655,7 +655,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: dict | None,
+        metadata: dict[str, str] | None,
         model: str | None,
         stream: bool | None,
         tools: Iterable[AssistantToolParam] | None,
@@ -698,7 +698,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: dict | None,
+        metadata: dict[str, str] | None,
         model: str | None,
         tools: Iterable[AssistantToolParam] | None,
         event_handler: AssistantEventHandler | None,
@@ -724,24 +724,33 @@ class AzureAssistantsAPI(BaseAzureLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: dict | None,
+        metadata: dict[str, str] | None,
         model: str | None,
         tools: Iterable[AssistantToolParam] | None,
         event_handler: AssistantEventHandler | None,
         litellm_params: dict | None = None,
     ) -> AssistantStreamManager[AssistantEventHandler]:
-        data: Final[dict[str, Any]] = {
-            "thread_id": thread_id,
-            "assistant_id": assistant_id,
-            "additional_instructions": additional_instructions,
-            "instructions": instructions,
-            "metadata": metadata,
-            "model": model,
-            "tools": tools,
-        }
+        stream_method: Final = client.beta.threads.runs.stream
         if event_handler is not None:
-            data["event_handler"] = event_handler
-        return client.beta.threads.runs.stream(**data)
+            return stream_method(
+                thread_id=thread_id,
+                assistant_id=assistant_id,
+                additional_instructions=additional_instructions,
+                instructions=instructions,
+                metadata=metadata,
+                model=model,
+                tools=tools,
+                event_handler=event_handler,
+            )
+        return stream_method(
+            thread_id=thread_id,
+            assistant_id=assistant_id,
+            additional_instructions=additional_instructions,
+            instructions=instructions,
+            metadata=metadata,
+            model=model,
+            tools=tools,
+        )
 
     # fmt: off
 
@@ -752,7 +761,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: dict | None,
+        metadata: dict[str, str] | None,
         model: str | None,
         stream: bool | None,
         tools: Iterable[AssistantToolParam] | None,
@@ -774,7 +783,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: dict | None,
+        metadata: dict[str, str] | None,
         model: str | None,
         stream: bool | None,
         tools: Iterable[AssistantToolParam] | None,
@@ -797,7 +806,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: dict | None,
+        metadata: dict[str, str] | None,
         model: str | None,
         stream: bool | None,
         tools: Iterable[AssistantToolParam] | None,

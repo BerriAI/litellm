@@ -19,7 +19,7 @@ from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
+from litellm.litellm_core_utils.realtime_streaming import ClientWebSocketInterface, RealTimeStreaming
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -5848,7 +5848,7 @@ class BaseLLMHTTPHandler:
                 if litellm_metadata:
                     _request_data["litellm_metadata"] = litellm_metadata
                 realtime_streaming: Final = RealTimeStreaming(
-                    websocket,
+                    cast(ClientWebSocketInterface, websocket),
                     cast(ClientConnection, backend_ws),
                     logging_obj,
                     provider_config,
