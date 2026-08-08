@@ -2045,3 +2045,79 @@ def test_non_bash_tool_result_skipped():
     assert (
         len(code_results) == 0
     ), f"Expected 0 code_interpreter_results for text_editor result, got {len(code_results)}"
+
+
+def test_non_json_sse_payload_does_not_swallow_rest_of_stream():
+    """
+    A single non-JSON SSE payload (e.g. the OpenAI-style "[DONE]" sentinel some
+    Anthropic-compatible gateways emit) used to put the iterator into permanent
+    accumulation mode, silently dropping every later event: the tool_use block and
+    the stop_reason disappeared while the already-streamed text survived.
+
+    See: https://github.com/BerriAI/litellm/issues/36262
+    """
+    events = [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "I will call the tool."},
+        },
+        {"type": "content_block_stop", "index": 0},
+        "[DONE]",
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": "submit_result",
+                "input": {},
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": '{"value": 1}'},
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use"},
+            "usage": {"output_tokens": 20},
+        },
+    ]
+    lines = [
+        f"data: {event if isinstance(event, str) else json.dumps(event)}\n".encode()
+        for event in events
+    ]
+
+    iterator = ModelResponseIterator(
+        streaming_response=iter(lines), sync_stream=True, json_mode=False
+    )
+    parsed = list(iterator)
+
+    tool_call_names = [
+        tool_call["function"]["name"]
+        for chunk in parsed
+        for tool_call in (chunk.choices[0].delta.tool_calls or [])
+        if tool_call["function"]["name"]
+    ]
+    tool_call_args = "".join(
+        tool_call["function"]["arguments"] or ""
+        for chunk in parsed
+        for tool_call in (chunk.choices[0].delta.tool_calls or [])
+    )
+    finish_reasons = [
+        chunk.choices[0].finish_reason
+        for chunk in parsed
+        if chunk.choices[0].finish_reason
+    ]
+
+    assert tool_call_names == ["submit_result"]
+    assert tool_call_args == '{"value": 1}'
+    assert finish_reasons == ["tool_calls"]
