@@ -508,11 +508,6 @@ async def test_get_form_data():
     # Create a mock request with transcription form data
     mock_request = MagicMock()
 
-    # Real multipart/form-data requests can repeat the same field name (e.g. the
-    # OpenAI SDK sends `timestamp_granularities[]=word` and
-    # `timestamp_granularities[]=segment` as two separate parts). Starlette
-    # represents this as a FormData multidict, not a plain dict, so the mock must
-    # preserve repeated keys the way a real request.form() would.
     mock_form_data = FormData(
         [
             ("file", "file_object"),  # In a real request this would be an UploadFile
@@ -548,9 +543,6 @@ async def test_get_form_data():
     assert isinstance(result["include"], list)
     assert "logprobs" in result["include"]
 
-    # Regression test for https://github.com/BerriAI/litellm/issues/35937:
-    # both repeated timestamp_granularities[] values must be preserved, not just
-    # the last one.
     assert "timestamp_granularities" in result
     assert isinstance(result["timestamp_granularities"], list)
     assert result["timestamp_granularities"] == ["word", "segment"]
