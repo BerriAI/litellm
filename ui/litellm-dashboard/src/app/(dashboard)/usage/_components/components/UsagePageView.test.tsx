@@ -689,6 +689,55 @@ describe("UsagePage", () => {
     expect(screen.queryByTestId("gateway-requests-by-endpoint")).not.toBeInTheDocument();
   });
 
+  it("should not show an SGR limit banner when no limit is configured", async () => {
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockGatewayDailyActivityCall).toHaveBeenCalled();
+    });
+    expect(screen.queryByText(/gateway request limit/i)).not.toBeInTheDocument();
+  });
+
+  it("should warn on the usage page once the SGR soft limit is crossed", async () => {
+    mockGatewayDailyActivityCall.mockResolvedValue({
+      ...mockGatewayActivity,
+      sgr_limit: {
+        limit: 1000000,
+        soft_limit: 800000,
+        window: "month",
+        window_start: "2026-08-01",
+        successful_requests: 900000,
+        state: "soft_exceeded",
+      },
+    });
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    const headline = await screen.findByText(/Approaching the gateway request limit/i);
+    expect(headline).toHaveTextContent("900,000 of 1,000,000 successful requests this month");
+    expect(headline.closest("[data-testid='antd-alert']")).toHaveAttribute("data-type", "warning");
+  });
+
+  it("should escalate the banner once the SGR limit itself is reached", async () => {
+    mockGatewayDailyActivityCall.mockResolvedValue({
+      ...mockGatewayActivity,
+      sgr_limit: {
+        limit: 1000000,
+        soft_limit: 800000,
+        window: "month",
+        window_start: "2026-08-01",
+        successful_requests: 1100000,
+        state: "hard_exceeded",
+      },
+    });
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    const headline = await screen.findByText(/Gateway request limit reached/i);
+    expect(headline).toHaveTextContent("1,100,000 of 1,000,000 successful requests this month");
+    expect(headline.closest("[data-testid='antd-alert']")).toHaveAttribute("data-type", "error");
+  });
+
   it("should display usage metrics and charts", async () => {
     renderWithProviders(<UsagePage {...defaultProps} />);
 

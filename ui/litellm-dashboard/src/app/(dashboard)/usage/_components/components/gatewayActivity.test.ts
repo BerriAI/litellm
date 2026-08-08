@@ -4,8 +4,10 @@ import {
   fetchedRangeKey,
   selectForRange,
   selectGatewayActivity,
+  sgrLimitBanner,
   topGatewayRoutes,
   type GatewayActivity,
+  type SGRLimit,
 } from "./gatewayActivity";
 
 const activity = (total: number): GatewayActivity => ({
@@ -104,5 +106,41 @@ describe("topGatewayRoutes", () => {
 
   it("renders no bars when there is nothing to show", () => {
     expect(topGatewayRoutes(null)).toEqual([]);
+  });
+});
+
+describe("sgrLimitBanner", () => {
+  const withLimit = (sgrLimit: SGRLimit | null): GatewayActivity => ({ ...activity(0), sgr_limit: sgrLimit });
+
+  const limit: SGRLimit = {
+    limit: 1_000_000,
+    soft_limit: 800_000,
+    window: "month",
+    window_start: "2026-08-01",
+    successful_requests: 900_000,
+    state: "soft_exceeded",
+  };
+
+  it("says nothing when the deployment has no allowance, or is under it", () => {
+    expect(sgrLimitBanner(null)).toBeNull();
+    expect(sgrLimitBanner(activity(0))).toBeNull();
+    expect(sgrLimitBanner(withLimit(null))).toBeNull();
+    expect(sgrLimitBanner(withLimit({ ...limit, successful_requests: 10, state: "under" }))).toBeNull();
+  });
+
+  it("warns once past the soft threshold, naming the count, the limit and the window", () => {
+    const banner = sgrLimitBanner(withLimit(limit));
+    expect(banner?.severity).toEqual("warning");
+    expect(banner?.headline).toContain("900,000 of 1,000,000");
+    expect(banner?.headline).toContain("this month");
+    expect(banner?.detail).toContain("80%");
+    expect(banner?.detail).toContain("2026-08-01");
+  });
+
+  it("escalates to an error once the limit itself is reached, and says traffic is unaffected", () => {
+    const banner = sgrLimitBanner(withLimit({ ...limit, successful_requests: 1_100_000, state: "hard_exceeded" }));
+    expect(banner?.severity).toEqual("error");
+    expect(banner?.headline).toContain("1,100,000 of 1,000,000");
+    expect(banner?.detail).toContain("still being served");
   });
 });

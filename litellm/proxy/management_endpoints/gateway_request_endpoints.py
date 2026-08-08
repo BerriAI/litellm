@@ -13,7 +13,7 @@ and the endpoint is restricted to proxy admin roles.
 
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Final
+from typing import TYPE_CHECKING, Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, TypeAdapter
@@ -21,11 +21,16 @@ from pydantic import BaseModel, TypeAdapter
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.gateway_request_limits import get_sgr_limit_status, resolve_sgr_limit
 from litellm.types.proxy.gateway_requests import (
     GatewayRequestActivityResponse,
     GatewayRequestBreakdownEntry,
     GatewayRequestDailyEntry,
+    SGRLimitStatus,
 )
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
 
 router: Final = APIRouter()
 
@@ -55,6 +60,28 @@ class _AggregateRow(BaseModel):
 
 
 _ROWS_ADAPTER: Final = TypeAdapter(tuple[_AggregateRow, ...])
+
+
+async def _sgr_limit_status(prisma_client: "PrismaClient") -> SGRLimitStatus | None:
+    """
+    Standing against the SGR allowance, or None when none is configured.
+
+    Read at request time rather than at import: the license and the YAML
+    `general_settings` both land after this module is imported.
+    """
+    from litellm.proxy.proxy_server import _license_check, general_settings
+
+    config: Final = resolve_sgr_limit(
+        general_settings=general_settings,
+        license_data=_license_check.airgapped_license_data,
+    )
+    if config is None:
+        return None
+    try:
+        return await get_sgr_limit_status(prisma_client=prisma_client, config=config, now=datetime.now(timezone.utc))
+    except Exception:  # noqa: BLE001  # the activity numbers are worth serving even when the limit read fails
+        verbose_proxy_logger.warning("SGR limit - could not read the limit status", exc_info=True)
+        return None
 
 
 def _default_range() -> tuple[str, str]:
@@ -136,4 +163,5 @@ async def get_gateway_daily_activity(
         total_failed_requests=sum(row.failed_requests for row in rows),
         by_date=_fold_by_date(rows),
         by_route=_fold_by_route(rows),
+        sgr_limit=await _sgr_limit_status(prisma_client),
     )

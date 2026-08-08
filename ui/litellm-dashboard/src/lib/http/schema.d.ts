@@ -21237,7 +21237,7 @@ export interface components {
          * @description Enum for alert types and management event types
          * @enum {string}
          */
-        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
+        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "sgr_limit_alerts" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
         /** AllowedVectorStoreIndexItem */
         AllowedVectorStoreIndexItem: {
             /** Index Name */
@@ -21391,6 +21391,13 @@ export interface components {
              * @description What the routed traffic actually cost
              */
             spend: number;
+            /**
+             * Tier Turns
+             * @description Turns per tier, keyed by the tier name the routing decision recorded at request time (never re-derived at read time, since the tier-to-model mapping is mutable config). Tier names are scoped to this group's router_type and are not comparable across types: a complexity router reports 'simple'/'medium'/'complex'/'reasoning', a quality router reports its numeric quality tier, and an adaptive router records no tier at all. Turns no tier served (the classifier fell back to default_model) are absent rather than pooled under a sentinel key, so the values may sum to less than turns
+             */
+            tier_turns?: {
+                [key: string]: number;
+            };
             /** Turns */
             turns: number;
         };
@@ -23622,6 +23629,21 @@ export interface components {
              */
             reject_clientside_metadata_tags?: boolean | null;
             /**
+             * Sgr Limit
+             * @description Limit on successful gateway requests (SGR) per window. Crossing it alerts on the admin UI and over any configured alerting integration, it does not reject traffic. Takes precedence over an enterprise license's `max_sgr`
+             */
+            sgr_limit?: number | null;
+            /**
+             * Sgr Limit Window
+             * @description Period `sgr_limit` is counted over, calendar aligned in UTC. Defaults to `month`
+             */
+            sgr_limit_window?: ("month" | "year") | null;
+            /**
+             * Sgr Soft Limit Percent
+             * @description Fraction of `sgr_limit` at which the soft alert fires. Defaults to 0.8
+             */
+            sgr_soft_limit_percent?: number | null;
+            /**
              * Store Model In Db
              * @description If True, models and config are stored in and loaded from the database. Default is False.
              */
@@ -24860,6 +24882,8 @@ export interface components {
              * @default []
              */
             by_route: components["schemas"]["GatewayRequestBreakdownEntry"][];
+            /** @description Standing against the configured SGR allowance, or null when no allowance is configured. The totals above cover the requested date range, this covers the limit window, so the two counts are not the same number */
+            sgr_limit?: components["schemas"]["SGRLimitStatus"] | null;
             /**
              * Total Failed Requests
              * @default 0
@@ -32227,6 +32251,33 @@ export interface components {
             /** Middlename */
             middleName?: string | null;
         };
+        /**
+         * SGRLimitState
+         * @enum {string}
+         */
+        SGRLimitState: "soft_exceeded" | "hard_exceeded" | "under";
+        /**
+         * SGRLimitStatus
+         * @description Where the deployment sits against its SGR allowance for the current window.
+         */
+        SGRLimitStatus: {
+            /** Limit */
+            limit: number;
+            /** Soft Limit */
+            soft_limit: number;
+            state: components["schemas"]["SGRLimitState"];
+            /** Successful Requests */
+            successful_requests: number;
+            window: components["schemas"]["SGRLimitWindow"];
+            /** Window Start */
+            window_start: string;
+        };
+        /**
+         * SGRLimitWindow
+         * @description Period an SGR allowance is counted over. Calendar aligned and UTC.
+         * @enum {string}
+         */
+        SGRLimitWindow: "month" | "year";
         /**
          * SSOConfig
          * @description Configuration for SSO environment variables and settings
