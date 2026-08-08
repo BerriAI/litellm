@@ -257,10 +257,10 @@ class LowestCostLoggingHandler(CustomLogger):
             # check if user provided input_cost_per_token and output_cost_per_token in litellm_params
             item_input_cost = None
             item_output_cost = None
-            if _deployment.get("litellm_params", {}).get("input_cost_per_token", None):
+            if _deployment.get("litellm_params", {}).get("input_cost_per_token") is not None:
                 item_input_cost = _deployment.get("litellm_params", {}).get("input_cost_per_token")
 
-            if _deployment.get("litellm_params", {}).get("output_cost_per_token", None):
+            if _deployment.get("litellm_params", {}).get("output_cost_per_token") is not None:
                 item_output_cost = _deployment.get("litellm_params", {}).get("output_cost_per_token")
 
             if item_input_cost is None:

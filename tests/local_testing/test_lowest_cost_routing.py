@@ -80,6 +80,40 @@ async def test_get_available_deployments_provider_prefixed_model_pricing():
 
 
 @pytest.mark.asyncio
+async def test_get_available_deployments_zero_custom_price_is_honored():
+    test_cache = DualCache()
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "anthropic/claude-3-5-haiku-latest",
+                "input_cost_per_token": 0,
+                "output_cost_per_token": 0,
+            },
+            "model_info": {"id": "byok-zero-cost"},
+        },
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "azure/some-custom-deployment",
+                "input_cost_per_token": 0.5,
+                "output_cost_per_token": 0.5,
+            },
+            "model_info": {"id": "custom-priced"},
+        },
+    ]
+    lowest_cost_logger = LowestCostLoggingHandler(
+        router_cache=test_cache,
+    )
+
+    selected_model = await lowest_cost_logger.async_get_available_deployments(
+        model_group="gpt-3.5-turbo", healthy_deployments=model_list
+    )
+
+    assert selected_model["model_info"]["id"] == "byok-zero-cost"
+
+
+@pytest.mark.asyncio
 async def test_get_available_deployments_custom_price():
     from litellm._logging import verbose_router_logger
     import logging
