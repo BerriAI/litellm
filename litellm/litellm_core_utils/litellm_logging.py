@@ -52,6 +52,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
+from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.sqs import SQSLogger
 from litellm.litellm_core_utils.core_helpers import reconstruct_model_name
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
@@ -3827,9 +3828,11 @@ def _init_custom_logger_compatible_class(
                 for callback in _in_memory_loggers:
                     if type(callback) is OpenTelemetryV2:
                         return callback
-                otel_logger_v2: Final = OpenTelemetryV2(
-                    **_get_custom_logger_settings_from_proxy_server(callback_name=logging_integration)
-                )
+                settings = _get_custom_logger_settings_from_proxy_server(callback_name=logging_integration)
+                config = OpenTelemetryV2Config(**settings)
+                if not config.exporters:
+                    config = OpenTelemetryV2Config(**{**settings, "exporter": config.exporter})
+                otel_logger_v2 = OpenTelemetryV2(config=config)
                 _in_memory_loggers.append(otel_logger_v2)
                 _maybe_auto_initialize_arize_phoenix(_in_memory_loggers)
                 return otel_logger_v2
@@ -4040,6 +4043,8 @@ def _init_custom_logger_compatible_class(
             _otel_logger = WeaveOtelLogger(config=otel_config, callback_name="weave_otel")
             _in_memory_loggers.append(_otel_logger)
             return _otel_logger
+        elif logging_integration == "generic":
+            return _maybe_construct_otel_v2("generic", _in_memory_loggers)
         elif logging_integration == "pagerduty":
             for callback in _in_memory_loggers:
                 if isinstance(callback, PagerDutyAlerting):
@@ -4165,11 +4170,17 @@ def _init_custom_logger_compatible_class(
 
 
 def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> Any | None:
-    """If ``LITELLM_OTEL_V2`` is on, build (or reuse) a single ``OpenTelemetryV2``
-    instance configured via the preset for ``callback_name``.
+    """Build (or reuse) a single ``OpenTelemetryV2`` instance configured via the
+    preset for ``callback_name`` when V2 owns this backend.
 
-    Returns ``None`` when V2 is off OR when there's no preset registered for
-    ``callback_name`` — callers should then fall through to the legacy path.
+    Ownership is the operator's configuration alone: the ``LITELLM_OTEL_V2`` flag plus
+    whatever credentials or ``OTEL_*`` settings the backend has. Returns ``None`` when the
+    flag is off, when no preset is registered for ``callback_name``, or when the preset
+    cannot build; callers then fall through to the legacy path.
+
+    Admin-owned destinations deliberately play no part here. They are sinks, delivered to
+    by ``AdminDestinationLogger``, so registering one for a single team cannot move any
+    other tenant's backend onto a different logger.
     """
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
@@ -4185,14 +4196,51 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> An
         if isinstance(callback, OpenTelemetryV2) and getattr(callback, "callback_name", None) == callback_name:
             return callback
     try:
-        config: Final = preset_fn()
+        config = preset_fn(allow_missing_credentials=False)
     except Exception:
-        # If env vars are missing or the preset raises, defer to the legacy path
-        # so customers get the same error story they had before V2 landed.
         return None
-    v2_logger: Final = OpenTelemetryV2(config=config, callback_name=callback_name)
+    if not config.exporters:
+        # An operator asked for this backend and nothing resolved to send spans to, so it
+        # would export nothing at all. v2 no longer degrades to a console exporter (that
+        # printed every span, prompt content included, synchronously on the request path),
+        # so without this the deployment is silently dark.
+        verbose_logger.warning(
+            "OTel v2: '%s' is enabled but no exporter is configured, so no spans will be "
+            "exported. Set OTEL_EXPORTER/OTEL_ENDPOINT, this backend's credentials, or "
+            "register a logging destination for it.",
+            callback_name,
+        )
+    v2_logger = OpenTelemetryV2(config=config, callback_name=callback_name)
     _in_memory_loggers.append(v2_logger)
     return v2_logger
+
+
+def otel_v2_owned_backends() -> frozenset[str]:
+    """Backend names an ``OpenTelemetryV2`` instance already owns.
+
+    An owning logger fans its gen-AI span out to the request's destinations for its own
+    backend, so the destination sink must not emit for these or the destination receives
+    the same call twice as two sibling spans.
+
+    Keyed on actual dispatch, not construction. A logger can be built and land in
+    ``_in_memory_loggers`` while never reaching the success-callback list, and treating
+    that as owned made the sink stand down for a backend nobody delivers, turning a
+    duplicate into a silent total loss of the tenant's traces.
+
+    ``OpenTelemetryV2`` is imported here rather than at module scope because it pulls
+    ``opentelemetry``, which ships only in the proxy extras: importing it eagerly makes
+    ``import litellm`` fail for an SDK install that never asked for OTEL.
+    """
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+
+    dispatched = litellm._async_success_callback
+    return frozenset(
+        name
+        for logger in _in_memory_loggers
+        if isinstance(logger, OpenTelemetryV2)
+        and (name := getattr(logger, "callback_name", None))
+        and any(cb is logger for cb in dispatched)
+    )
 
 
 def _maybe_auto_initialize_arize_phoenix(_in_memory_loggers: list) -> None:
@@ -4358,6 +4406,12 @@ def get_custom_logger_compatible_class(
                 raise ValueError("ARIZE_API_KEY not found in environment variables")
             for callback in _in_memory_loggers:
                 if isinstance(callback, ArizeLogger) and callback.callback_name == "arize":
+                    return callback
+        elif logging_integration == "generic":
+            from litellm.integrations.otel.logger import OpenTelemetryV2
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, OpenTelemetryV2) and getattr(callback, "callback_name", None) == "generic":
                     return callback
         elif logging_integration == "logfire":
             if "LOGFIRE_TOKEN" not in os.environ:

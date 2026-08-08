@@ -87,3 +87,33 @@ def test_config_folds_legacy_exporter_triple_into_exporters_list():
     assert len(cfg.exporters) == 1
     assert cfg.exporters[0].kind == "otlp_http"
     assert cfg.exporters[0].endpoint == "https://api.example.com"
+
+
+def _processor_names(provider):
+    return [type(p).__name__ for p in provider._active_span_processor._span_processors]
+
+
+def test_main_logger_provider_always_carries_fan_out():
+    # The FastAPI server span (and auth/db/cost spans) bind to the main v2 logger's
+    # provider. That provider MUST carry the TenantFanOutSpanProcessor even for the
+    # generic global logger (no backend named) -- otherwise, for an admin-owned-
+    # destination-only deployment, the server span never reaches the destination and
+    # the gen-AI child is orphaned. Regression for the orphaned-span RCA.
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+
+    generic = OpenTelemetryV2()
+    assert "TenantFanOutSpanProcessor" in _processor_names(generic._tracer_provider)
+
+    named = OpenTelemetryV2(callback_name="arize")
+    assert "TenantFanOutSpanProcessor" in _processor_names(named._tracer_provider)
+
+
+def test_build_tracer_provider_attach_fan_out_flag():
+    cfg = OpenTelemetryV2Config(exporter="console")
+    # Per-tenant clone providers pass neither flag and must NOT fan out (else the
+    # gen-AI span they carry would be double-exported).
+    clone = build_tracer_provider(cfg)
+    assert "TenantFanOutSpanProcessor" not in _processor_names(clone)
+    # The main provider opts in explicitly.
+    main = build_tracer_provider(cfg, attach_tenant_fan_out=True)
+    assert "TenantFanOutSpanProcessor" in _processor_names(main)

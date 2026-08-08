@@ -1,3 +1,4 @@
+import inspect
 import asyncio
 import copy
 import json
@@ -6304,6 +6305,28 @@ async def test_resolve_logging_exporters_noop_when_flag_off(monkeypatch):
 
     assert destinations == ()
     assert backends == ()
+
+
+@pytest.mark.asyncio
+async def test_mcp_auth_chokepoint_refreshes_destinations_per_message(monkeypatch):
+    """Regression: a stateful MCP session outlived an admin's re-scope of a destination.
+
+    Every JSON-RPC message after ``initialize`` is dispatched on a descendant of the task
+    that POST spawned, and a ContextVar is copied at task creation, so the destinations
+    resolved for the first message stayed frozen for the session's life. A destination
+    re-scoped to another team kept receiving the original team's spans until the client
+    disconnected. The shared auth chokepoint now re-resolves per message.
+    """
+    import litellm.proxy._experimental.mcp_server.server as mcp_server
+
+    src = inspect.getsource(mcp_server)
+    assert "_refresh_request_otel_destinations" in src
+    # It must hang off the one helper every JSON-RPC handler funnels through, not off a
+    # single handler; tools/list, get_prompt and read_resource all leaked precisely
+    # because only the tool-call path re-resolved.
+    chokepoint = src[src.index("async def get_or_extract_auth_context"):]
+    chokepoint = chokepoint[: chokepoint.index("def get_active_mcp_session")]
+    assert "await _refresh_request_otel_destinations(user_api_key_auth)" in chokepoint
 
 
 @pytest.mark.asyncio
