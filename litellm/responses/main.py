@@ -1,6 +1,6 @@
 import asyncio
 import contextvars
-from collections.abc import Coroutine, Iterable
+from collections.abc import Coroutine, Iterable, Mapping
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 
@@ -640,8 +640,8 @@ def _pop_use_chat_completions_api_kw(kwargs: dict[str, Any]) -> bool:
 
 
 def _merge_forwarded_client_headers(
-    extra_headers: dict[str, Any] | None,
-    kwargs: dict[str, Any],
+    extra_headers: Mapping[str, Any] | None,
+    kwargs: Mapping[str, object],
 ) -> dict[str, Any] | None:
     """Merge the proxy's forwarded client headers (`headers` kwarg) into `extra_headers`."""
     client_headers: Final = kwargs.get("headers")
@@ -1236,8 +1236,8 @@ def delete_responses(
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("adelete_responses", False) is True
-        extra_headers = _merge_forwarded_client_headers(extra_headers, kwargs)
-        local_vars["extra_headers"] = extra_headers
+        merged_extra_headers: Final = _merge_forwarded_client_headers(extra_headers, kwargs)
+        local_vars["extra_headers"] = merged_extra_headers
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -1285,7 +1285,7 @@ def delete_responses(
             responses_api_provider_config=responses_api_provider_config,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
-            extra_headers=extra_headers,
+            extra_headers=merged_extra_headers,
             extra_body=extra_body,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
@@ -1409,8 +1409,8 @@ def get_responses(
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aget_responses", False) is True
-        extra_headers = _merge_forwarded_client_headers(extra_headers, kwargs)
-        local_vars["extra_headers"] = extra_headers
+        merged_extra_headers: Final = _merge_forwarded_client_headers(extra_headers, kwargs)
+        local_vars["extra_headers"] = merged_extra_headers
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -1458,7 +1458,7 @@ def get_responses(
             responses_api_provider_config=responses_api_provider_config,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
-            extra_headers=extra_headers,
+            extra_headers=merged_extra_headers,
             extra_body=extra_body,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
@@ -1560,8 +1560,8 @@ def list_input_items(
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("alist_input_items", False) is True
-        extra_headers = _merge_forwarded_client_headers(extra_headers, kwargs)
-        local_vars["extra_headers"] = extra_headers
+        merged_extra_headers: Final = _merge_forwarded_client_headers(extra_headers, kwargs)
+        local_vars["extra_headers"] = merged_extra_headers
 
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
@@ -1603,7 +1603,7 @@ def list_input_items(
             include=include,
             limit=limit,
             order=order,
-            extra_headers=extra_headers,
+            extra_headers=merged_extra_headers,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
@@ -1706,8 +1706,8 @@ def cancel_responses(
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("acancel_responses", False) is True
-        extra_headers = _merge_forwarded_client_headers(extra_headers, kwargs)
-        local_vars["extra_headers"] = extra_headers
+        merged_extra_headers: Final = _merge_forwarded_client_headers(extra_headers, kwargs)
+        local_vars["extra_headers"] = merged_extra_headers
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -1755,7 +1755,7 @@ def cancel_responses(
             responses_api_provider_config=responses_api_provider_config,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
-            extra_headers=extra_headers,
+            extra_headers=merged_extra_headers,
             extra_body=extra_body,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
@@ -1880,8 +1880,8 @@ def compact_responses(
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("acompact_responses", False) is True
-        extra_headers = _merge_forwarded_client_headers(extra_headers, kwargs)
-        local_vars["extra_headers"] = extra_headers
+        merged_extra_headers: Final = _merge_forwarded_client_headers(extra_headers, kwargs)
+        local_vars["extra_headers"] = merged_extra_headers
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -1950,7 +1950,7 @@ def compact_responses(
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
             custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
+            extra_headers=merged_extra_headers,
             extra_body=extra_body,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
