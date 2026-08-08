@@ -114,7 +114,8 @@ class SpendCounterReseed:
                 org_id: Final = counter_key[len("spend:org:") :]
                 row = await OrganizationRepository(prisma_client).table.find_unique(where={"organization_id": org_id})
             elif counter_key.startswith("spend:project:"):
-                project_id = counter_key[len("spend:project:") :]
+                project_id: Final = counter_key[len("spend:project:") :]
+                # rebind-ok: one repository lookup per mutually exclusive counter-key branch
                 row = await ProjectRepository(prisma_client).table.find_unique(where={"project_id": project_id})
             else:
                 return None

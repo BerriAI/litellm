@@ -1054,44 +1054,50 @@ async def _team_member_budget_check_for_key(
     if prisma_client is None:
         return
 
-    _cache_key = f"{valid_token.team_id}_{valid_token.user_id}"
+    _cache_key: Final = f"{valid_token.team_id}_{valid_token.user_id}"
 
-    team_member_info = await user_api_key_cache.async_get_cache(
+    cached_member: Final = await user_api_key_cache.async_get_cache(
         key=_cache_key,
         model_type=LiteLLM_TeamMembership,
     )
-    if team_member_info is None and valid_token.user_id is not None and valid_token.team_id is not None:
-        _db_member = await TeamMembershipRepository(prisma_client).table.find_first(
+    _db_member: Final = (
+        await TeamMembershipRepository(prisma_client).table.find_first(
             where={  # mutable-ok: prisma query argument shape
                 "user_id": valid_token.user_id,
                 "team_id": valid_token.team_id,
             },
             include={"litellm_budget_table": True},  # mutable-ok: prisma query argument shape
         )
-        if _db_member is not None:
-            team_member_info = LiteLLM_TeamMembership(**_db_member.dict())
-            await user_api_key_cache.async_set_cache(
-                key=_cache_key,
-                value=team_member_info,
-                model_type=LiteLLM_TeamMembership,
-                ttl=5,
-            )
+        if cached_member is None and valid_token.user_id is not None and valid_token.team_id is not None
+        else None
+    )
+    fresh_member: Final = LiteLLM_TeamMembership(**_db_member.dict()) if _db_member is not None else None
+    if fresh_member is not None:
+        await user_api_key_cache.async_set_cache(
+            key=_cache_key,
+            value=fresh_member,
+            model_type=LiteLLM_TeamMembership,
+            ttl=5,
+        )
 
+    team_member_info: Final = cached_member if cached_member is not None else fresh_member
     if team_member_info is None or team_member_info.litellm_budget_table is None:
         return
-    team_member_budget = team_member_info.litellm_budget_table.max_budget
+    team_member_budget: Final = team_member_info.litellm_budget_table.max_budget
     if team_member_budget is None or team_member_budget <= 0:
         return
 
     from litellm.proxy.proxy_server import get_current_spend
 
-    team_member_spend = valid_token.team_member_spend
-    if valid_token.user_id is not None and valid_token.team_id is not None:
-        team_member_spend = await get_current_spend(
+    team_member_spend: Final = (
+        await get_current_spend(
             counter_key=f"spend:team_member:{valid_token.user_id}:{valid_token.team_id}",
-            fallback_spend=team_member_spend,
+            fallback_spend=valid_token.team_member_spend,
             max_budget=team_member_budget,
         )
+        if valid_token.user_id is not None and valid_token.team_id is not None
+        else valid_token.team_member_spend
+    )
     if team_member_spend > team_member_budget:
         raise litellm.BudgetExceededError(
             current_cost=team_member_spend,

@@ -437,7 +437,7 @@ async def _get_budget_counters(
     if org_counter is not None:
         counters.append(org_counter)
 
-    project_counter = await _get_project_budget_counter(
+    project_counter: Final = await _get_project_budget_counter(
         valid_token=valid_token,
         user_api_key_cache=user_api_key_cache,
     )
@@ -583,13 +583,13 @@ async def _get_project_budget_counter(
     if valid_token.project_id is None:
         return None
 
-    source_cache_key = f"project_id:{valid_token.project_id}"
-    project_object = await user_api_key_cache.async_get_cache(key=source_cache_key)
+    source_cache_key: Final = f"project_id:{valid_token.project_id}"
+    project_object: Final = await user_api_key_cache.async_get_cache(key=source_cache_key)
     if project_object is None:
         return None
 
-    budget_table = _get_value(project_object, "litellm_budget_table")
-    max_budget = _to_float(_get_value(budget_table, "max_budget"))
+    budget_table: Final = _get_value(project_object, "litellm_budget_table")
+    max_budget: Final = _to_float(_get_value(budget_table, "max_budget"))
     if max_budget is None or max_budget <= 0:
         return None
 

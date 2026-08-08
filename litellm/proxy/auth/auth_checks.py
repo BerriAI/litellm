@@ -4192,7 +4192,7 @@ async def _project_max_budget_check(
 
     from litellm.proxy.proxy_server import get_current_spend
 
-    project_spend = await get_current_spend(
+    project_spend: Final = await get_current_spend(
         counter_key=f"spend:project:{project_object.project_id}",
         fallback_spend=project_object.spend or 0.0,
         max_budget=max_budget,

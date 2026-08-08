@@ -720,7 +720,7 @@ class DBSpendUpdateWriter:
         response_cost: float | None,
         project_id: str | None,
         prisma_client: PrismaClient | None,
-    ):
+    ) -> None:
         try:
             if project_id is None or prisma_client is None:
                 return
@@ -1390,7 +1390,7 @@ class DBSpendUpdateWriter:
                     )
 
         ### UPDATE PROJECT TABLE ###
-        project_list_transactions = db_spend_update_transactions.get("project_list_transactions")
+        project_list_transactions: Final = db_spend_update_transactions.get("project_list_transactions")
         await DBSpendUpdateWriter._update_entity_spend_in_db(
             entity_name="Project",
             transactions=project_list_transactions,
@@ -1401,10 +1401,10 @@ class DBSpendUpdateWriter:
             proxy_logging_obj=proxy_logging_obj,
         )
         if project_list_transactions and proxy_logging_obj is not None:
-            user_api_key_cache = proxy_logging_obj.call_details.get("user_api_key_cache")
-            if user_api_key_cache is not None:
+            project_api_key_cache: Final = proxy_logging_obj.call_details.get("user_api_key_cache")
+            if project_api_key_cache is not None:
                 for project_id in project_list_transactions:
-                    await user_api_key_cache.async_delete_cache(key=f"project_id:{project_id}")
+                    await project_api_key_cache.async_delete_cache(key=f"project_id:{project_id}")
 
         ### UPDATE TAG TABLE ###
         tag_list_transactions: Final = db_spend_update_transactions["tag_list_transactions"]
