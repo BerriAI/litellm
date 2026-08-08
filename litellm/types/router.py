@@ -214,6 +214,22 @@ class CredentialLiteLLMParams(BaseModel):
 
 _RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
 
+_NUMERIC_LITELLM_PARAMS: Final = frozenset(
+    {"weight", "tpm", "rpm", "itpm", "otpm", "max_retries", "max_parallel_requests", "order"}
+)
+
+
+def _coerce_numeric_litellm_param(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    try:
+        return int(value)
+    except ValueError:
+        try:
+            return float(value)
+        except ValueError:
+            return value
+
 
 class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     """
@@ -293,13 +309,15 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         Pre-process input data before validation:
         1. Filter out reserved Python keywords ('self', 'params', '__class__') to prevent
            'got multiple values for argument' errors when user data contains these keys.
-        2. Convert max_retries from string to int if needed.
+        2. Coerce numeric router params (weight/rpm/tpm/...) from str to number, since
+           os.environ/ substitution is string-only and these are used arithmetically.
         """
         if isinstance(data, dict):
-            filtered: Final = {k: v for k, v in data.items() if k not in _RESERVED_INIT_KEYS}
-            if "max_retries" in filtered and isinstance(filtered["max_retries"], str):
-                filtered["max_retries"] = int(filtered["max_retries"])
-            return filtered
+            return {
+                k: (_coerce_numeric_litellm_param(v) if k in _NUMERIC_LITELLM_PARAMS else v)
+                for k, v in data.items()
+                if k not in _RESERVED_INIT_KEYS
+            }
         return data
 
     def __contains__(self, key) -> bool:
