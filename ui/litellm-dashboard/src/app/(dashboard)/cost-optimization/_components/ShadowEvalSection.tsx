@@ -140,15 +140,16 @@ const StartForm: React.FC<{ accessToken: string | null }> = ({ accessToken }) =>
   const start = useStartShadowEval();
 
   const parsedPct = Number.parseFloat(percentage);
-  const valid = Boolean(accessToken) && apiKeyId.trim() !== "" && routerName.trim() !== "" && parsedPct > 0 && parsedPct <= 100;
+  const valid =
+    Boolean(accessToken) && apiKeyId.trim() !== "" && routerName.trim() !== "" && parsedPct > 0 && parsedPct <= 100;
 
   return (
     <Card size="sm">
       <CardHeader>
         <CardTitle className="text-sm font-medium text-foreground">Start a shadow eval</CardTitle>
         <p className="text-xs text-muted-foreground">
-          Duplicates a sampled slice of the key&apos;s traffic through the auto-router and has an LLM judge compare
-          both answers blind. The router&apos;s answers are never served to users. Judge calls bill to the proxy — an
+          Duplicates a sampled slice of the key&apos;s traffic through the auto-router and has an LLM judge compare both
+          answers blind. The router&apos;s answers are never served to users. Judge calls bill to the proxy — an
           estimate is shown before anything runs.
         </p>
       </CardHeader>

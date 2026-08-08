@@ -25,7 +25,6 @@ import json
 import random
 import re
 from collections.abc import Callable
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Final, Optional, cast
 
 import litellm
@@ -35,7 +34,7 @@ from litellm.integrations.custom_logger import CustomLogger
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
-    from litellm.types.utils import ModelResponse, StandardLoggingPayload
+    from litellm.types.utils import StandardLoggingPayload
 
 _JSON_FENCE_RE: Final = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
 

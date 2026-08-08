@@ -55,20 +55,16 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
   ...overrides,
 });
 
-const mockHooks = ({
-  jobs = [],
-  detail = undefined,
-}: {
-  jobs?: ShadowEvalJob[];
-  detail?: ShadowEvalJob;
-}) => {
+const mockHooks = ({ jobs = [], detail = undefined }: { jobs?: ShadowEvalJob[]; detail?: ShadowEvalJob }) => {
   vi.mocked(useShadowEvalJobs).mockReturnValue({ data: jobs, error: null } as unknown as ReturnType<
     typeof useShadowEvalJobs
   >);
   vi.mocked(useShadowEvalJob).mockReturnValue({ data: detail } as unknown as ReturnType<typeof useShadowEvalJob>);
-  vi.mocked(useStartShadowEval).mockReturnValue({ mutate: vi.fn(), isPending: false, error: null } as unknown as ReturnType<
-    typeof useStartShadowEval
-  >);
+  vi.mocked(useStartShadowEval).mockReturnValue({
+    mutate: vi.fn(),
+    isPending: false,
+    error: null,
+  } as unknown as ReturnType<typeof useStartShadowEval>);
   vi.mocked(useStopShadowEval).mockReturnValue({ mutate: vi.fn(), isPending: false } as unknown as ReturnType<
     typeof useStopShadowEval
   >);
