@@ -1445,6 +1445,67 @@ model LiteLLM_AutoRouterSession {
   @@index([last_turn_at], map: "idx_autorouter_session_last_turn")
 }
 
+// Shadow Eval: Pre-adoption evaluation of the auto-router against real traffic.
+// Shadows a percentage of requests through the router, judges outputs blind,
+// and stratifies results by the router's own tier classification.
+model LiteLLM_ShadowEvalJob {
+  id                  String   @id @default(cuid())
+  team_id             String?
+  organization_id     String?
+  api_key_id          String   // the deployment/key being shadowed
+  router_name         String   // the auto-router config to shadow
+
+  shadow_percentage   Float    // 5.0 to 50.0
+  judge_model         String   // claude-3-5-sonnet-20241022 or user-provided
+
+  status              String   @default("pending") // pending | running | completed | failed
+
+  request_count       Int      @default(0) // total requests on the shadowed key during the job
+  completed_count     Int      @default(0) // verdicts written
+  failed_count        Int      @default(0) // shadow calls or judge calls that failed
+
+  // Results (written incrementally or at end)
+  // { groups: [ { tier: "SIMPLE", turn_count: N, real_win_rate_pct: X, shadow_win_rate_pct: Y, tie_rate_pct: Z, avg_confidence: C } ] }
+  result_json         Json?
+
+  cost_estimate       Float?   // estimated cost of running the judge
+  cost_actual         Float    @default(0) // actual cost (judge calls * price)
+
+  created_at          DateTime @default(now())
+  created_by          String?  // user_id of the key that created this job
+  completed_at        DateTime?
+
+  @@index([team_id, status])
+  @@index([api_key_id, status])
+  @@index([created_at])
+}
+
+// Per-turn judge verdicts (optional, for drill-down and auditing)
+model LiteLLM_ShadowEvalVerdict {
+  id                      String   @id @default(cuid())
+  job_id                  String
+
+  request_id              String   // the original real request ID
+  shadow_request_id       String?  // the shadow/duplicate request ID
+
+  tier_classification     String?  // "SIMPLE" | "COMPLEX" | "REASONING" or null if not classified
+  real_model              String   // the model that actually handled the request (Opus, etc)
+  shadow_model            String   // the model the router would have picked
+
+  real_response_tokens    Int?     // for cost calculations
+  shadow_response_tokens  Int?
+
+  judge_preference        String   // "real" | "shadow" | "tie"
+  judge_confidence        Float?   // 0.0 to 1.0
+  judge_reasoning         String?  // the judge's explanation
+  judge_model             String   // which model did the judging
+
+  created_at              DateTime @default(now())
+
+  @@index([job_id])
+  @@index([request_id])
+}
+
 // ---------------------------------------------------------------------------
 // Workflow Run Tracking
 //

@@ -807,6 +807,93 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/shadow_eval": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Shadow Eval Jobs
+         * @description List shadow eval jobs, newest first. Results are omitted; fetch a single job for them.
+         */
+        get: operations["list_shadow_eval_jobs_auto_router_shadow_eval_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto_router/shadow_eval/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Shadow Eval
+         * @description Start a pre-adoption shadow eval: duplicate a sampled slice of a key's live
+         *     traffic through an auto-router, judge real vs. shadow responses blind, and
+         *     stratify win rates by the router's tier classification.
+         *
+         *     The shadow responses are never served to users. The job stays active until
+         *     stopped via /auto_router/shadow_eval/{job_id}/stop. Judge calls bill to the
+         *     proxy; the estimate returned here prices them from the key's trailing
+         *     request volume.
+         */
+        post: operations["start_shadow_eval_auto_router_shadow_eval_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto_router/shadow_eval/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Shadow Eval Job
+         * @description Status, counters, and per-tier stratified results of one shadow eval job.
+         */
+        get: operations["get_shadow_eval_job_auto_router_shadow_eval__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto_router/shadow_eval/{job_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop Shadow Eval Job
+         * @description Stop an active shadow eval job. Existing verdicts are kept; sampling halts within ~30s.
+         */
+        post: operations["stop_shadow_eval_job_auto_router_shadow_eval__job_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/test_routing": {
         parameters: {
             query?: never;
@@ -25238,6 +25325,52 @@ export interface components {
             tools?: components["schemas"]["ChatCompletionToolParam"][];
         };
         /**
+         * GetShadowEvalJobResponse
+         * @description Status and, once available, results of a shadow-eval job.
+         */
+        GetShadowEvalJobResponse: {
+            /** Completed At */
+            completed_at?: string | null;
+            /**
+             * Completed Count
+             * @description Verdicts written so far
+             */
+            completed_count: number;
+            /**
+             * Cost Actual
+             * @description Running total of judge-call spend for this job
+             * @default 0
+             */
+            cost_actual: number;
+            /** Cost Estimate */
+            cost_estimate?: number | null;
+            /** Created At */
+            created_at: string;
+            /**
+             * Failed Count
+             * @description Shadow or judge calls that errored and were skipped
+             */
+            failed_count: number;
+            /** Job Id */
+            job_id: string;
+            /**
+             * Request Count
+             * @description Total requests observed on the shadowed key since the job started
+             */
+            request_count: number;
+            /** @description Present once at least one verdict has been recorded */
+            results?: components["schemas"]["ShadowEvalResult"] | null;
+            /** Router Name */
+            router_name: string;
+            /** Shadow Percentage */
+            shadow_percentage: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "running" | "completed" | "failed";
+        };
+        /**
          * GetTeamMemberPermissionsResponse
          * @description Response to get the team member permissions for a team
          */
@@ -32425,6 +32558,42 @@ export interface components {
             timeout?: number | null;
         };
         /**
+         * ShadowEvalResult
+         * @description Stratified results of a completed (or in-progress) shadow-eval job.
+         */
+        ShadowEvalResult: {
+            /** Groups */
+            groups: components["schemas"]["ShadowEvalTierResult"][];
+            /** Overall Shadow Win Rate Pct */
+            overall_shadow_win_rate_pct: number;
+            /** Overall Tie Rate Pct */
+            overall_tie_rate_pct: number;
+        };
+        /**
+         * ShadowEvalTierResult
+         * @description Judge outcomes for one router-tier classification (e.g. SIMPLE, COMPLEX, REASONING).
+         */
+        ShadowEvalTierResult: {
+            /** Avg Judge Confidence */
+            avg_judge_confidence: number;
+            /**
+             * Real Win Rate Pct
+             * @description Share of judged turns where the real (control) model won
+             */
+            real_win_rate_pct: number;
+            /**
+             * Shadow Win Rate Pct
+             * @description Share of judged turns where the shadowed router's pick won
+             */
+            shadow_win_rate_pct: number;
+            /** Tie Rate Pct */
+            tie_rate_pct: number;
+            /** Tier */
+            tier: string;
+            /** Turn Count */
+            turn_count: number;
+        };
+        /**
          * Skill
          * @description Represents a skill from the Anthropic Skills API
          */
@@ -32591,6 +32760,61 @@ export interface components {
             medium_complex: number;
             /** Simple Medium */
             simple_medium: number;
+        };
+        /**
+         * StartShadowEvalRequest
+         * @description Start shadowing a deployment's traffic through an auto-router for comparison.
+         */
+        StartShadowEvalRequest: {
+            /**
+             * Api Key Id
+             * @description The hashed virtual key whose traffic will be shadowed
+             */
+            api_key_id: string;
+            /**
+             * Judge Model
+             * @description Model used to blindly judge real vs. shadow responses
+             * @default anthropic/claude-sonnet-5
+             */
+            judge_model: string;
+            /**
+             * Router Name
+             * @description The auto-router config to shadow requests through
+             */
+            router_name: string;
+            /**
+             * Shadow Percentage
+             * @description Percentage of the key's requests to duplicate through the router
+             */
+            shadow_percentage: number;
+            /**
+             * Team Id
+             * @description Team the shadowed key belongs to, for authorization
+             */
+            team_id?: string | null;
+        };
+        /**
+         * StartShadowEvalResponse
+         * @description Acknowledgement that a shadow-eval job was created, with an upfront cost estimate.
+         */
+        StartShadowEvalResponse: {
+            /**
+             * Estimated Cost
+             * @description Estimated dollar cost of the judge calls this job will make
+             */
+            estimated_cost: number;
+            /**
+             * Estimated Request Count
+             * @description Requests expected to be shadowed, based on the key's recent request volume
+             */
+            estimated_request_count: number;
+            /** Job Id */
+            job_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "running" | "completed" | "failed";
         };
         /**
          * SuccessfulKeyUpdate
@@ -36803,6 +37027,133 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AutoRouterClassifierDefaultPromptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_shadow_eval_jobs_auto_router_shadow_eval_get: {
+        parameters: {
+            query?: {
+                /** @description Filter to jobs shadowing this key */
+                api_key_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GetShadowEvalJobResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_shadow_eval_auto_router_shadow_eval_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartShadowEvalRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartShadowEvalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_shadow_eval_job_auto_router_shadow_eval__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GetShadowEvalJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_shadow_eval_job_auto_router_shadow_eval__job_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GetShadowEvalJobResponse"];
                 };
             };
             /** @description Validation Error */

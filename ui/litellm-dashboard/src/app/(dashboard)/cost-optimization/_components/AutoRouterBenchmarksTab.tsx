@@ -29,6 +29,7 @@ import {
   type BucketRow,
 } from "./autoRouterBenchmarks";
 import { usd } from "./costOptimizationUtils";
+import ShadowEvalSection from "./ShadowEvalSection";
 import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
 
 const Message: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -320,6 +321,11 @@ const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ acces
       </div>
 
       <BenchmarksBody isPending={isPending} error={error} data={data} selectedKey={selectedKey} />
+
+      {/* Outside BenchmarksBody on purpose: pre-adoption keys have no router
+          sessions yet, and the shadow-eval section must render even when the
+          benchmarks body early-returns its empty state. */}
+      <ShadowEvalSection accessToken={accessToken} />
     </div>
   );
 };

@@ -2209,6 +2209,19 @@ def cost_tracking():
     if prisma_client is not None:
         litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger())
         litellm.logging_callback_manager.add_litellm_async_success_callback(_ProxyDBLogger())
+        _register_shadow_eval_logger()
+
+
+def _register_shadow_eval_logger() -> None:
+    """Register the shadow-eval success hook.
+
+    Cheap when idle: with no active LiteLLM_ShadowEvalJob rows the hook is one
+    cached dict lookup per request. Registered alongside cost tracking because
+    it has the same hard dependency on prisma_client.
+    """
+    from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
+
+    litellm.logging_callback_manager.add_litellm_callback(ShadowEvalLogger())
 
 
 # Bounds authoritative DB re-reads when enforcing a budget against a

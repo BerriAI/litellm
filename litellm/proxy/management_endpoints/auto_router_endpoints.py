@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BudgetExceededError
@@ -37,7 +37,13 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterCacheStats,
     AutoRouterRoutingTestRequest,
     AutoRouterRoutingTestResponse,
+    GetShadowEvalJobResponse,
     RequestComplexityRouterConfig,
+    ShadowEvalResult,
+    ShadowEvalStatus,
+    ShadowEvalTierResult,
+    StartShadowEvalRequest,
+    StartShadowEvalResponse,
 )
 
 if TYPE_CHECKING:
@@ -86,7 +92,7 @@ async def _authorize_routing_test(user_api_key_dict: UserAPIKeyAuth, team_id: st
         )
 
     team_row: Final = await TeamRepository(prisma_client).table.find_unique(
-        where={"team_id": team_id},  # mutable-ok: Prisma query filters are dict-shaped
+        where={"team_id": team_id},  # mutable-ok: Prisma filter
     )
     if team_row is None:
         raise HTTPException(
@@ -231,7 +237,7 @@ async def preview_auto_router_routing(
             model=data.router_name,
             request_kwargs=request_kwargs,
             messages=[  # mutable-ok: the routing hook's signature takes a list of message dicts
-                {"role": "user", "content": data.prompt},  # mutable-ok: a message is dict-shaped
+                {"role": "user", "content": data.prompt},  # mutable-ok: SDK message
             ],
         )
     except Exception as e:  # noqa: BLE001 -- surfaces any classifier/plugin failure to the caller as a 400 instead of a 500, since the config under test is caller input
@@ -476,3 +482,310 @@ async def get_auto_router_benchmarks(
         totals=_benchmark_totals(_summed_agg_row(rows)),
         groups=groups,
     )
+
+
+# ---------------------------------------------------------------------------
+# Shadow eval: pre-adoption evaluation of an auto-router against live traffic.
+# ---------------------------------------------------------------------------
+
+# Judge price assumption for the upfront estimate when the judge model has no
+# entry in the price map: roughly one Sonnet-class call on a mid-sized prompt.
+_FALLBACK_JUDGE_COST_PER_CALL: Final = 0.01
+
+# The estimate projects from the key's request volume over this many trailing days.
+_ESTIMATE_LOOKBACK_DAYS: Final = 7
+
+
+def _require_admin_viewer(user_api_key_dict: UserAPIKeyAuth, action: str) -> None:
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ):
+        raise HTTPException(status_code=403, detail=f"Only proxy admin roles can {action}")
+
+
+def _require_admin_writer(user_api_key_dict: UserAPIKeyAuth, action: str) -> None:
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(status_code=403, detail=f"Only a proxy admin can {action}")
+
+
+def _is_configured_pre_routing_strategy(llm_router: "Router", router_name: str) -> bool:
+    return any(
+        router_name in registry
+        for registry in (
+            llm_router.auto_routers,
+            llm_router.complexity_routers,
+            llm_router.adaptive_routers,
+            llm_router.quality_routers,
+        )
+    )
+
+
+def _estimate_judge_cost_per_call(judge_model: str) -> float:
+    """Price one judge call: ~4k prompt tokens (two responses + conversation) + 200 output."""
+    try:
+        import litellm as _litellm
+
+        prompt_cost, completion_cost = _litellm.cost_per_token(
+            model=judge_model, prompt_tokens=4000, completion_tokens=200
+        )
+        estimated: Final = prompt_cost + completion_cost
+        if estimated > 0:
+            return estimated
+    except Exception as e:  # noqa: BLE001  # unknown judge model: fall back to a flat per-call figure
+        verbose_proxy_logger.debug("shadow_eval: judge cost lookup failed for %s: %s", judge_model, e)
+    return _FALLBACK_JUDGE_COST_PER_CALL
+
+
+class _VerdictAggRow(BaseModel):
+    tier_classification: str | None
+    turn_count: int
+    real_wins: int
+    shadow_wins: int
+    ties: int
+    avg_confidence: float | None
+
+
+_VERDICT_AGG_ROWS: Final = TypeAdapter(list[_VerdictAggRow])
+
+_VERDICT_AGG_SQL: Final = """
+SELECT
+    tier_classification,
+    COUNT(*)::int AS turn_count,
+    COUNT(*) FILTER (WHERE judge_preference = 'real')::int AS real_wins,
+    COUNT(*) FILTER (WHERE judge_preference = 'shadow')::int AS shadow_wins,
+    COUNT(*) FILTER (WHERE judge_preference = 'tie')::int AS ties,
+    AVG(judge_confidence)::float AS avg_confidence
+FROM "LiteLLM_ShadowEvalVerdict"
+WHERE job_id = $1
+GROUP BY tier_classification
+"""
+
+
+def _shadow_eval_results(rows: Sequence[_VerdictAggRow]) -> ShadowEvalResult | None:
+    if not rows:
+        return None
+    total_turns: Final = sum(r.turn_count for r in rows)
+    total_shadow_wins: Final = sum(r.shadow_wins for r in rows)
+    total_ties: Final = sum(r.ties for r in rows)
+    groups: Final = tuple(
+        ShadowEvalTierResult(
+            tier=row.tier_classification or "UNCLASSIFIED",
+            turn_count=row.turn_count,
+            real_win_rate_pct=_pct(row.real_wins, row.turn_count),
+            shadow_win_rate_pct=_pct(row.shadow_wins, row.turn_count),
+            tie_rate_pct=_pct(row.ties, row.turn_count),
+            avg_judge_confidence=round(row.avg_confidence or 0.0, 3),
+        )
+        for row in sorted(rows, key=lambda r: r.turn_count, reverse=True)
+    )
+    return ShadowEvalResult(
+        groups=groups,
+        overall_shadow_win_rate_pct=_pct(total_shadow_wins, total_turns),
+        overall_tie_rate_pct=_pct(total_ties, total_turns),
+    )
+
+
+class _ShadowEvalJobRow(BaseModel):
+    """The prisma job record, validated into concrete types at the response boundary."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    status: ShadowEvalStatus
+    router_name: str
+    shadow_percentage: float
+    request_count: int
+    completed_count: int
+    failed_count: int
+    cost_estimate: float | None = None
+    cost_actual: float = 0.0
+    created_at: datetime
+    completed_at: datetime | None = None
+
+
+_SHADOW_EVAL_JOB_ROW: Final = TypeAdapter(_ShadowEvalJobRow)
+
+
+def _job_to_response(record: object, results: ShadowEvalResult | None) -> GetShadowEvalJobResponse:
+    row: Final = _SHADOW_EVAL_JOB_ROW.validate_python(record, from_attributes=True)
+    return GetShadowEvalJobResponse(
+        job_id=row.id,
+        status=row.status,
+        router_name=row.router_name,
+        shadow_percentage=row.shadow_percentage,
+        request_count=row.request_count,
+        completed_count=row.completed_count,
+        failed_count=row.failed_count,
+        results=results,
+        cost_estimate=row.cost_estimate,
+        cost_actual=row.cost_actual,
+        created_at=row.created_at.isoformat(),
+        completed_at=row.completed_at.isoformat() if row.completed_at else None,
+    )
+
+
+@router.post(
+    "/auto_router/shadow_eval/start",
+    tags=("auto router",),
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=StartShadowEvalResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def start_shadow_eval(
+    data: StartShadowEvalRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> StartShadowEvalResponse:
+    """
+    Start a pre-adoption shadow eval: duplicate a sampled slice of a key's live
+    traffic through an auto-router, judge real vs. shadow responses blind, and
+    stratify win rates by the router's tier classification.
+
+    The shadow responses are never served to users. The job stays active until
+    stopped via /auto_router/shadow_eval/{job_id}/stop. Judge calls bill to the
+    proxy; the estimate returned here prices them from the key's trailing
+    request volume.
+    """
+    from litellm.proxy.proxy_server import llm_router, prisma_client
+
+    _require_admin_writer(user_api_key_dict, "start a shadow eval")
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+    if llm_router is None or not _is_configured_pre_routing_strategy(llm_router, data.router_name):
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{data.router_name}' is not a configured auto-router",
+        )
+
+    existing: Final = await prisma_client.db.litellm_shadowevaljob.find_first(
+        where={  # mutable-ok: Prisma filter
+            "api_key_id": data.api_key_id,
+            "status": {"in": ["pending", "running"]},  # mutable-ok: Prisma filter
+        },
+    )
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Key already has an active shadow eval job ({existing.id}). Stop it first.",
+        )
+
+    lookback_start: Final = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=_ESTIMATE_LOOKBACK_DAYS)
+    recent_requests: Final = await prisma_client.db.litellm_spendlogs.count(
+        where={  # mutable-ok: Prisma filter
+            "api_key": data.api_key_id,
+            "startTime": {"gte": lookback_start},  # mutable-ok: Prisma filter
+        },
+    )
+    weekly_sampled: Final = int(recent_requests * data.shadow_percentage / 100.0)
+    per_call: Final = _estimate_judge_cost_per_call(data.judge_model)
+    estimated_cost: Final = round(weekly_sampled * per_call, 2)
+
+    job: Final = await prisma_client.db.litellm_shadowevaljob.create(
+        data={  # mutable-ok: Prisma payload
+            "api_key_id": data.api_key_id,
+            "router_name": data.router_name,
+            "shadow_percentage": data.shadow_percentage,
+            "judge_model": data.judge_model,
+            "team_id": data.team_id,
+            "status": "pending",
+            "cost_estimate": estimated_cost,
+            "created_by": user_api_key_dict.user_id,
+        }
+    )
+    return StartShadowEvalResponse(
+        job_id=job.id,
+        status="pending",
+        estimated_request_count=weekly_sampled,
+        estimated_cost=estimated_cost,
+    )
+
+
+@router.get(
+    "/auto_router/shadow_eval",
+    tags=("auto router",),
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=list[GetShadowEvalJobResponse],
+)
+async def list_shadow_eval_jobs(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    api_key_id: Annotated[str | None, Query(description="Filter to jobs shadowing this key")] = None,
+) -> list[GetShadowEvalJobResponse]:
+    """List shadow eval jobs, newest first. Results are omitted; fetch a single job for them."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    _require_admin_viewer(user_api_key_dict, "view shadow evals")
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+
+    where: Final = {"api_key_id": api_key_id} if api_key_id else {}  # mutable-ok: Prisma filter
+    records: Final = await prisma_client.db.litellm_shadowevaljob.find_many(
+        where=where,
+        order={"created_at": "desc"},  # mutable-ok: Prisma order
+        take=50,  # mutable-ok: Prisma order
+    )
+    return [_job_to_response(record, results=None) for record in records or ()]  # mutable-ok: FastAPI response_model
+
+
+@router.get(
+    "/auto_router/shadow_eval/{job_id}",
+    tags=("auto router",),
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=GetShadowEvalJobResponse,
+)
+async def get_shadow_eval_job(
+    job_id: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> GetShadowEvalJobResponse:
+    """Status, counters, and per-tier stratified results of one shadow eval job."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    _require_admin_viewer(user_api_key_dict, "view shadow evals")
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+
+    record: Final = await prisma_client.db.litellm_shadowevaljob.find_unique(
+        where={"id": job_id}  # mutable-ok: Prisma filter
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"No shadow eval job {job_id}")
+
+    raw_rows: Final = await prisma_client.db.query_raw(_VERDICT_AGG_SQL, job_id)
+    rows: Final = _VERDICT_AGG_ROWS.validate_python(raw_rows or ())
+    return _job_to_response(record, results=_shadow_eval_results(rows))
+
+
+@router.post(
+    "/auto_router/shadow_eval/{job_id}/stop",
+    tags=("auto router",),
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=GetShadowEvalJobResponse,
+)
+async def stop_shadow_eval_job(
+    job_id: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> GetShadowEvalJobResponse:
+    """Stop an active shadow eval job. Existing verdicts are kept; sampling halts within ~30s."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    _require_admin_writer(user_api_key_dict, "stop a shadow eval")
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+
+    record: Final = await prisma_client.db.litellm_shadowevaljob.find_unique(
+        where={"id": job_id}  # mutable-ok: Prisma filter
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"No shadow eval job {job_id}")
+    if record.status not in ("pending", "running"):
+        raise HTTPException(status_code=400, detail=f"Job {job_id} is already {record.status}")
+
+    updated: Final = await prisma_client.db.litellm_shadowevaljob.update(
+        where={"id": job_id},  # mutable-ok: Prisma filter
+        data={  # mutable-ok: Prisma payload
+            "status": "completed",
+            "completed_at": datetime.now(timezone.utc),
+        },
+    )
+    raw_rows: Final = await prisma_client.db.query_raw(_VERDICT_AGG_SQL, job_id)
+    rows: Final = _VERDICT_AGG_ROWS.validate_python(raw_rows or ())
+    return _job_to_response(updated, results=_shadow_eval_results(rows))

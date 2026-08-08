@@ -485,6 +485,8 @@ def test_load_from_azure_key_vault_missing_uri_failure_is_swallowed(monkeypatch)
 
 
 def test_cost_tracking_adds_two_callbacks_when_prisma_set(monkeypatch):
+    """_ProxyDBLogger and ShadowEvalLogger both register on litellm.callbacks;
+    only _ProxyDBLogger also registers on _async_success_callback."""
     import litellm
 
     fake_prisma = MagicMock()
@@ -503,7 +505,7 @@ def test_cost_tracking_adds_two_callbacks_when_prisma_set(monkeypatch):
         "prisma_was_set": True,
     }
     assert normalize(observed) == {
-        "added_to_callbacks": 1,
+        "added_to_callbacks": 2,
         "added_to_async_success": 1,
         "prisma_was_set": True,
     }

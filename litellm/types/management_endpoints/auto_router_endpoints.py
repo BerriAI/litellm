@@ -3,7 +3,7 @@ Types for auto-router management endpoints
 """
 
 from collections.abc import Mapping
-from typing import Final
+from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -141,3 +141,86 @@ class AutoRouterBenchmarksResponse(BaseModel):
     routers_in_scope: int
     totals: AutoRouterBenchmarkTotals
     groups: tuple[AutoRouterBenchmarkGroup, ...]
+
+
+# ---------------------------------------------------------------------------
+# Shadow Eval (pre-adoption): shadow a slice of a deployment's live traffic
+# through an auto-router, judge the two responses blind, and report how the
+# router would have fared without ever serving its answer to a real user.
+# ---------------------------------------------------------------------------
+
+ShadowEvalStatus: TypeAlias = Literal["pending", "running", "completed", "failed"]
+JudgePreference: TypeAlias = Literal["real", "shadow", "tie"]
+
+DEFAULT_SHADOW_EVAL_JUDGE_MODEL: Final[str] = "anthropic/claude-sonnet-5"
+
+
+class StartShadowEvalRequest(BaseModel):
+    """Start shadowing a deployment's traffic through an auto-router for comparison."""
+
+    api_key_id: str = Field(description="The hashed virtual key whose traffic will be shadowed")
+    router_name: str = Field(description="The auto-router config to shadow requests through")
+    shadow_percentage: float = Field(
+        ge=0.1,
+        le=100.0,
+        description="Percentage of the key's requests to duplicate through the router",
+    )
+    judge_model: str = Field(
+        default=DEFAULT_SHADOW_EVAL_JUDGE_MODEL,
+        description="Model used to blindly judge real vs. shadow responses",
+    )
+    team_id: str | None = Field(default=None, description="Team the shadowed key belongs to, for authorization")
+
+    @field_validator("shadow_percentage")
+    @classmethod
+    def _round_percentage(cls, value: float) -> float:
+        return round(value, 2)
+
+
+class StartShadowEvalResponse(BaseModel):
+    """Acknowledgement that a shadow-eval job was created, with an upfront cost estimate."""
+
+    job_id: str
+    status: ShadowEvalStatus
+    estimated_request_count: int = Field(
+        description="Requests expected to be shadowed, based on the key's recent request volume"
+    )
+    estimated_cost: float = Field(description="Estimated dollar cost of the judge calls this job will make")
+
+
+class ShadowEvalTierResult(BaseModel):
+    """Judge outcomes for one router-tier classification (e.g. SIMPLE, COMPLEX, REASONING)."""
+
+    tier: str
+    turn_count: int
+    real_win_rate_pct: float = Field(description="Share of judged turns where the real (control) model won")
+    shadow_win_rate_pct: float = Field(description="Share of judged turns where the shadowed router's pick won")
+    tie_rate_pct: float
+    avg_judge_confidence: float
+
+
+class ShadowEvalResult(BaseModel):
+    """Stratified results of a completed (or in-progress) shadow-eval job."""
+
+    groups: tuple[ShadowEvalTierResult, ...]
+    overall_shadow_win_rate_pct: float
+    overall_tie_rate_pct: float
+
+
+class GetShadowEvalJobResponse(BaseModel):
+    """Status and, once available, results of a shadow-eval job."""
+
+    job_id: str
+    status: ShadowEvalStatus
+    router_name: str
+    shadow_percentage: float
+    request_count: int = Field(description="Total requests observed on the shadowed key since the job started")
+    completed_count: int = Field(description="Verdicts written so far")
+    failed_count: int = Field(description="Shadow or judge calls that errored and were skipped")
+    results: ShadowEvalResult | None = Field(
+        default=None, description="Present once at least one verdict has been recorded"
+    )
+    cost_estimate: float | None = None
+    cost_actual: float = Field(default=0.0, description="Running total of judge-call spend for this job")
+    created_at: str
+    completed_at: str | None = None
