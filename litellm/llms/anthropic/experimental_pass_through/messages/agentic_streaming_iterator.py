@@ -9,11 +9,13 @@ follow-up response is chained as Phase 2 of the same iterator.
 
 In hold-back mode (``hold_back=True``), chunks are buffered instead of
 yielded live, with SSE ping events emitted while the upstream message is
-in flight. On exhaustion the hooks run first: if a follow-up response
-replaces the message, only the follow-up is yielded and the buffered
-message is dropped; otherwise the buffer is replayed verbatim. This is
-required for server-fulfilled tools (e.g. ``headroom_retrieve``), whose
-tool_use blocks must never reach a client that cannot execute them.
+in flight and while the agentic hooks run. On exhaustion the hooks run
+first: if a follow-up response replaces the message, only the follow-up
+is yielded and the buffered message is dropped; otherwise the buffer is
+replayed verbatim, unless it holds a tool_use for a server-fulfilled tool
+(e.g. ``headroom_retrieve``), in which case an SSE ``error`` event is
+emitted because such a block must never reach a client that cannot
+execute it.
 """
 
 import asyncio
@@ -26,6 +28,11 @@ from litellm._logging import verbose_logger
 
 PING_SSE_BYTES: Final = b'event: ping\ndata: {"type": "ping"}\n\n'
 HOLD_BACK_PING_INTERVAL_SECONDS: Final = 15.0
+SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES: Final = (
+    b"event: error\n"
+    b'data: {"type": "error", "error": {"type": "api_error", "message": '
+    b'"Server-side tool retrieval failed, so this turn could not be completed. Please retry."}}\n\n'
+)
 
 # ---------------------------------------------------------------------------
 # SSE parsing helpers (module-level to keep the class lean)
@@ -170,6 +177,7 @@ class AgenticAnthropicStreamingIterator:
         custom_llm_provider: str,
         kwargs: dict,
         hold_back: bool = False,
+        server_fulfilled_tool_names: frozenset[str] = frozenset(),
         ping_interval_seconds: float = HOLD_BACK_PING_INTERVAL_SECONDS,
     ):
         self._inner = completion_stream.__aiter__()
@@ -182,6 +190,7 @@ class AgenticAnthropicStreamingIterator:
         self._custom_llm_provider = custom_llm_provider
         self._kwargs = kwargs
         self._hold_back = hold_back
+        self._server_fulfilled_tool_names = server_fulfilled_tool_names
         self._ping_interval_seconds = ping_interval_seconds
 
         self._collected_bytes: list[bytes] = []
@@ -189,7 +198,9 @@ class AgenticAnthropicStreamingIterator:
         self._hook_processing_done = False
         self._follow_up_iterator: AsyncIterator | None = None
         self._drain_task: asyncio.Task | None = None
+        self._hook_task: asyncio.Task | None = None
         self._replay_index = 0
+        self._error_emitted = False
 
     def __aiter__(self):
         return self
@@ -223,21 +234,41 @@ class AgenticAnthropicStreamingIterator:
         except StopAsyncIteration:
             return
 
+    async def _completed_within_ping_interval(self, task: asyncio.Task) -> bool:
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=self._ping_interval_seconds)
+        except asyncio.TimeoutError:
+            return False
+        return True
+
     async def _anext_held_back(self) -> bytes:
         if self._drain_task is None:
             self._drain_task = asyncio.create_task(self._drain_upstream())
             return PING_SSE_BYTES
 
-        while not self._stream_exhausted:
-            try:
-                await asyncio.wait_for(asyncio.shield(self._drain_task), timeout=self._ping_interval_seconds)
-            except asyncio.TimeoutError:
+        if not self._stream_exhausted:
+            if not await self._completed_within_ping_interval(self._drain_task):
                 return PING_SSE_BYTES
             self._stream_exhausted = True
-            await self._process_agentic_hooks()
+
+        if self._hook_task is None:
+            self._hook_task = asyncio.create_task(self._process_agentic_hooks())
+        if not await self._completed_within_ping_interval(self._hook_task):
+            return PING_SSE_BYTES
 
         if self._follow_up_iterator is not None:
             return await self._follow_up_iterator.__anext__()
+
+        if self._buffer_holds_server_fulfilled_tool_use():
+            if self._error_emitted:
+                raise StopAsyncIteration
+            self._error_emitted = True
+            verbose_logger.error(
+                "AgenticStreamingIterator: hooks did not replace a message containing a server-fulfilled "
+                "tool_use [model=%s]; emitting an SSE error instead of leaking the tool call to the client",
+                self._model,
+            )
+            return SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES
 
         if self._replay_index < len(self._collected_bytes):
             chunk: Final = self._collected_bytes[self._replay_index]
@@ -246,18 +277,40 @@ class AgenticAnthropicStreamingIterator:
 
         raise StopAsyncIteration
 
+    def _buffer_holds_server_fulfilled_tool_use(self) -> bool:
+        if not self._server_fulfilled_tool_names:
+            return False
+        started_blocks: Final = (
+            data.get("content_block")
+            for event_type, data in _parse_sse_events(b"".join(self._collected_bytes))
+            if event_type == "content_block_start"
+        )
+        return any(
+            isinstance(block, dict)
+            and block.get("type") == "tool_use"
+            and block.get("name") in self._server_fulfilled_tool_names
+            for block in started_blocks
+        )
+
+    @staticmethod
+    async def _settle_task(task: asyncio.Task | None) -> None:
+        if task is None:
+            return
+        if task.done():
+            if not task.cancelled():
+                task.exception()
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
     async def aclose(self) -> None:
         from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
             aclose_if_supported,
         )
 
-        if self._drain_task is not None and self._drain_task.done():
-            if not self._drain_task.cancelled():
-                self._drain_task.exception()
-        elif self._drain_task is not None:
-            self._drain_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._drain_task
+        await self._settle_task(self._drain_task)
+        await self._settle_task(self._hook_task)
         await aclose_if_supported(self._inner)
         await aclose_if_supported(self._follow_up_iterator)
 
