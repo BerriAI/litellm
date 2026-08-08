@@ -1,6 +1,7 @@
 import asyncio
 import aiohttp
 import json
+from typing import Any, Optional
 
 # Asynchronously fetch data from a given URL
 async def fetch_data(url):
@@ -20,6 +21,145 @@ async def fetch_data(url):
         # Print an error message if fetching data fails
         print("Error fetching data from URL:", e)
         return None
+
+
+FRIENDLI_API_URL = "https://api.friendli.ai/serverless/v1/models"
+FRIENDLI_PROVIDER = "friendliai"
+
+INHERITABLE_BASE_KEYS = (
+    "supports_reasoning",
+    "supports_function_calling",
+    "supports_parallel_function_calling",
+    "supports_response_schema",
+    "supports_system_messages",
+    "supports_tool_choice",
+    "supports_vision",
+    "supports_pdf_input",
+    "supports_prompt_caching",
+    "supports_assistant_prefill",
+    "supports_low_reasoning_effort",
+    "supports_minimal_reasoning_effort",
+    "supports_max_reasoning_effort",
+    "supports_xhigh_reasoning_effort",
+    "supports_none_reasoning_effort",
+    "supports_adaptive_thinking",
+    "supports_output_config",
+    "supports_native_structured_output",
+)
+
+EFFORT_FLAG_MAP = {
+    "none": "supports_none_reasoning_effort",
+    "minimal": "supports_minimal_reasoning_effort",
+    "low": "supports_low_reasoning_effort",
+    "medium": "supports_low_reasoning_effort",
+    "high": "supports_max_reasoning_effort",
+    "xhigh": "supports_xhigh_reasoning_effort",
+    "max": "supports_max_reasoning_effort",
+}
+
+
+def _find_base_model_entry(base_model: str, local_data: dict) -> Optional[str]:
+    if not base_model:
+        return None
+    bm_tail = base_model.split("/")[-1].lower()
+    if base_model in local_data:
+        return base_model
+    for key in local_data:
+        if key.startswith("sample_spec") or key == "fallback_generalizations":
+            continue
+        if key.split("/")[-1].lower() == bm_tail:
+            return key
+    return None
+
+
+def _effort_flags(reasoning_options: list) -> dict:
+    flags: dict[str, bool] = {}
+    for opt in reasoning_options or []:
+        if opt.get("type") == "effort":
+            for val in opt.get("values", []):
+                flag = EFFORT_FLAG_MAP.get(val)
+                if flag:
+                    flags[flag] = True
+    return flags
+
+
+def _pricing(pricing: dict) -> dict:
+    out: dict[str, Any] = {}
+    if not pricing:
+        return out
+    if "input" in pricing:
+        out["input_cost_per_token"] = float(pricing["input"])
+    if "output" in pricing:
+        out["output_cost_per_token"] = float(pricing["output"])
+    if "input_cache_read" in pricing and pricing["input_cache_read"] is not None:
+        out["cache_read_input_token_cost"] = float(pricing["input_cache_read"])
+    return out
+
+
+def _modality_flags(input_mods: list) -> dict:
+    has_image = "image" in (input_mods or [])
+    return {
+        "supports_vision": has_image,
+        "supports_image_input": has_image,
+    }
+
+
+def transform_friendli_data(data: list, local_data: dict) -> dict:
+    transformed: dict[str, dict] = {}
+    for model in data:
+        model_id = model["id"]
+        base_model = model.get("base_model") or ""
+        entry: dict[str, Any] = {
+            "litellm_provider": FRIENDLI_PROVIDER,
+        }
+
+        base_key = _find_base_model_entry(base_model, local_data)
+        if base_key:
+            base_entry = local_data[base_key]
+            for k in INHERITABLE_BASE_KEYS:
+                if k in base_entry:
+                    entry[k] = base_entry[k]
+
+        ctx = model.get("context_length")
+        if ctx is not None:
+            entry["max_input_tokens"] = int(ctx)
+            entry["max_tokens"] = int(ctx)
+        max_out = model.get("max_completion_tokens")
+        if max_out is not None:
+            entry["max_output_tokens"] = int(max_out)
+
+        entry.update(_pricing(model.get("pricing", {})))
+
+        reasoning = model.get("reasoning") is True
+        entry["supports_reasoning"] = reasoning
+        if reasoning:
+            entry.update(_effort_flags(model.get("reasoning_options", [])))
+
+        func = model.get("functionality", {})
+        entry["supports_function_calling"] = func.get("tool_call") is True
+        entry["supports_parallel_function_calling"] = func.get("parallel_tool_call") is True
+        is_struct = func.get("structured_output") is True
+        entry["supports_response_schema"] = is_struct
+        entry["supports_native_structured_output"] = is_struct
+        entry["supports_system_messages"] = func.get("system_messages") is True
+        entry["supports_tool_choice"] = func.get("tool_choice") is True
+
+        entry.update(_modality_flags(model.get("input_modalities", [])))
+
+        entry["mode"] = model.get("mode", "chat")
+
+        desc = model.get("description")
+        if desc:
+            entry["comment"] = desc
+
+        dep = model.get("deprecation_date")
+        if dep:
+            entry["deprecation_date"] = dep.split("T")[0]
+
+        entry["source"] = FRIENDLI_API_URL
+
+        transformed[f"{FRIENDLI_PROVIDER}/{model_id}"] = entry
+    return transformed
 
 # Synchronize local data with remote data
 def sync_local_data_with_remote(local_data, remote_data):
@@ -143,9 +283,12 @@ def main():
     vercel_data = asyncio.run(fetch_data(vercel_ai_gateway_url))
     # Transform the fetched Vercel AI Gateway data
     vercel_data = transform_vercel_ai_gateway_data(vercel_data)
+
+    friendli_data = asyncio.run(fetch_data(FRIENDLI_API_URL))
+    friendli_data = transform_friendli_data(friendli_data, local_data)
     
     # Combine both datasets
-    all_remote_data = {**openrouter_data, **vercel_data}
+    all_remote_data = {**openrouter_data, **vercel_data, **friendli_data}
 
     # If both local and openrouter data are available, synchronize and save
     if local_data and all_remote_data:
