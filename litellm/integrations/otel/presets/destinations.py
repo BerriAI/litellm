@@ -131,9 +131,7 @@ def build_destination(callback_name: str, values: Mapping[str, str]) -> OtelDest
     host (an easy slip in the create form) yields a malformed OTLP URL the
     exporter rejects with a 404, so whitespace is never significant here.
     """
-    trimmed: Final = MappingProxyType(
-        {key: value.strip() for key, value in values.items()}
-    )
+    trimmed: Final = MappingProxyType({key: value.strip() for key, value in values.items()})
     adapter: Final = _ADAPTERS.get(callback_name)
     if adapter is not None:
         destination: Final = adapter(trimmed)

@@ -120,11 +120,6 @@ async def create_credential(
         raise handle_exception_on_proxy(e)
 
 
-@router.get(
-    "/credentials",
-    dependencies=[Depends(user_api_key_auth)],
-    tags=["credential management"],
-)
 def _destination_verdict(credential: CredentialItem) -> Mapping[str, bool]:
     """Whether this logging credential actually builds, for the listing. Empty for a
     provider credential, which has no destination to report on."""
@@ -133,6 +128,11 @@ def _destination_verdict(credential: CredentialItem) -> Mapping[str, bool]:
     return {"resolves_to_destination": destination_for_credential(credential) is not None}  # mutable-ok: JSON body
 
 
+@router.get(
+    "/credentials",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["credential management"],
+)
 async def get_credentials(
     request: Request,
     fastapi_response: Response,

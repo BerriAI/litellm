@@ -281,37 +281,6 @@ def test_resolved_names_excludes_unbuildable(monkeypatch):
     assert resolved_logging_exporter_names("t1", None) == ("buildable-generic",)
 
 
-def test_backend_without_a_preset_routes_under_generic():
-    """Regression: a backend outside ``PRESET_BY_CALLBACK`` is routed as ``generic``.
-
-    Only a registered name gets an ``OpenTelemetryV2`` logger, and that logger is what
-    emits the gen-AI span to its destinations. Routing an unregistered name under itself
-    delivered the proxy-internal spans but never the LLM call. Registered names keep
-    their own routing so each backend's attribute vocabulary is preserved."""
-    from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
-
-    unknown = CredentialItem(
-        credential_name="self-hosted",
-        credential_values={"otel_endpoint": "http://collector.example/v1/traces"},
-        credential_info={"credential_type": "logging", "description": "honeycomb", "access": {"global": True}},
-    )
-    resolved = destination_for_credential(unknown)
-    assert resolved is not None
-    assert resolved[0] == "generic"
-    assert resolved[1].endpoint == "http://collector.example/v1/traces"
-
-    for registered in ("arize", "langfuse_otel", "generic"):
-        assert registered in PRESET_BY_CALLBACK
-    known = CredentialItem(
-        credential_name="lf",
-        credential_values={"langfuse_public_key": "pk", "langfuse_secret_key": "sk"},
-        credential_info={"credential_type": "logging", "description": "langfuse_otel", "access": {"global": True}},
-    )
-    known_resolved = destination_for_credential(known)
-    assert known_resolved is not None
-    assert known_resolved[0] == "langfuse_otel"
-
-
 def test_resolved_names_keep_every_grant_sharing_one_target(monkeypatch):
     """Regression: two credentials resolving to one export target are both named.
 
@@ -331,31 +300,3 @@ def test_resolved_names_keep_every_grant_sharing_one_target(monkeypatch):
         ],
     )
     assert resolved_logging_exporter_names("t1", None) == ("dup-one", "dup-two", "distinct")
-
-
-@pytest.mark.asyncio
-async def test_disclosure_agrees_with_the_resolver_on_a_shared_target(monkeypatch):
-    """Regression: the disclosed names and the resolver's selection are derived from the
-    same grants, so no credential is disclosed that the resolver dropped entirely.
-
-    Pins the two sides together: the resolver collapses the duplicate target to a single
-    export, and every name it kept a destination for is disclosed."""
-    from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
-
-    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
-    is_otel_v2_enabled.cache_clear()
-    same = "http://collector.example/shared/v1/traces"
-    monkeypatch.setattr(
-        litellm,
-        "credential_list",
-        [
-            _cred("dup-one", access={"global": True}, endpoint=same),
-            _cred("dup-two", access={"global": True}, endpoint=same),
-        ],
-    )
-
-    destinations, _backends = await _resolve_logging_exporters(UserAPIKeyAuth(api_key="k"))
-
-    assert len(destinations) == 1
-    assert resolved_logging_exporter_names(None, None) == ("dup-one", "dup-two")

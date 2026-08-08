@@ -169,6 +169,24 @@ def test_patch_credentials_route_targets_update_credential():
     assert patch_route.endpoint is endpoints.update_credential
 
 
+def test_get_credentials_route_targets_get_credentials():
+    """Regression: the @router.get decorator on /credentials must decorate
+    get_credentials, not one of the extracted helpers. A helper interposed
+    between the decorator and the handler binds the route to a function taking
+    a CredentialItem body, so the listing 422s for every caller. The other
+    tests import get_credentials directly and stay green while that happens.
+    """
+    from fastapi.routing import APIRoute
+
+    get_route = next(
+        route
+        for route in endpoints.router.routes
+        if isinstance(route, APIRoute) and route.path == "/credentials" and "GET" in route.methods
+    )
+    assert get_route.endpoint is endpoints.get_credentials
+    assert get_route.body_field is None
+
+
 @pytest.mark.asyncio
 async def test_get_credentials_masks_secret_values(monkeypatch):
     """GET /credentials masks secret-bearing values; in particular a destination's
