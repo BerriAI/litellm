@@ -247,3 +247,72 @@ def test_a_client_litellm_built_its_own_http_client_for_is_still_closed(monkeypa
     closer.reap()
 
     assert wrapper.is_closed() is True
+
+
+class TestOpenAICompatibleProviderCredentials:
+    """get_openai_credentials must not resolve a non-openai OpenAI-compatible provider
+    to api.openai.com.
+
+    Regression: /v1/files and /v1/batches share the OpenAI branch for every provider in
+    OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, and credential resolution only consulted
+    OPENAI_BASE_URL / OPENAI_API_BASE / OPENAI_API_KEY before defaulting to
+    "https://api.openai.com/v1". A hosted_vllm batch call therefore succeeded silently
+    against OpenAI (billing the caller's OpenAI account and uploading their payload)
+    instead of reaching the self-hosted server named by HOSTED_VLLM_API_BASE.
+    """
+
+    def test_hosted_vllm_resolves_its_own_api_base(self, monkeypatch):
+        from litellm.llms.openai.common_utils import get_openai_credentials
+
+        monkeypatch.setenv("HOSTED_VLLM_API_BASE", "http://localhost:8080")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-must-not-be-used")
+        monkeypatch.setattr(litellm, "api_base", None)
+        monkeypatch.setattr(litellm, "api_key", None)
+
+        creds = get_openai_credentials(custom_llm_provider="hosted_vllm")
+
+        assert creds.api_base == "http://localhost:8080"
+        assert creds.api_key != "sk-openai-must-not-be-used", (
+            "hosted_vllm must not authenticate with the caller's OpenAI key"
+        )
+
+    def test_hosted_vllm_without_api_base_raises_instead_of_defaulting_to_openai(self, monkeypatch):
+        """The load-bearing case: no api_base configured anywhere. Silently resolving to
+        OpenAI is the bug, so this must raise."""
+        from litellm.llms.openai.common_utils import get_openai_credentials
+
+        monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-must-not-be-used")
+        monkeypatch.setattr(litellm, "api_base", None)
+        monkeypatch.setattr(litellm, "api_key", None)
+
+        with pytest.raises(litellm.BadRequestError) as excinfo:
+            get_openai_credentials(custom_llm_provider="hosted_vllm")
+
+        assert "api_base" in str(excinfo.value)
+        assert "hosted_vllm" in str(excinfo.value)
+
+    def test_explicit_api_base_wins_for_hosted_vllm(self, monkeypatch):
+        from litellm.llms.openai.common_utils import get_openai_credentials
+
+        monkeypatch.setenv("HOSTED_VLLM_API_BASE", "http://from-env:8080")
+        monkeypatch.setattr(litellm, "api_base", None)
+
+        creds = get_openai_credentials(api_base="http://explicit:9000", custom_llm_provider="hosted_vllm")
+
+        assert creds.api_base == "http://explicit:9000"
+
+    def test_openai_provider_still_defaults_to_openai(self, monkeypatch):
+        """The fix must not disturb the openai path, which legitimately defaults."""
+        from litellm.llms.openai.common_utils import get_openai_credentials
+
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-is-correct-here")
+        monkeypatch.setattr(litellm, "api_base", None)
+        monkeypatch.setattr(litellm, "api_key", None)
+
+        for provider in (None, "openai"):
+            creds = get_openai_credentials(custom_llm_provider=provider)
+            assert creds.api_base == "https://api.openai.com/v1"
+            assert creds.api_key == "sk-openai-is-correct-here"
