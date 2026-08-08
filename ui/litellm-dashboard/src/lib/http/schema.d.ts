@@ -21478,6 +21478,13 @@ export interface components {
              * @description What the routed traffic actually cost
              */
             spend: number;
+            /**
+             * Tier Turns
+             * @description Turns per tier, keyed by the tier name the routing decision recorded at request time (never re-derived at read time, since the tier-to-model mapping is mutable config). Tier names are scoped to this group's router_type and are not comparable across types: a complexity router reports 'simple'/'medium'/'complex'/'reasoning', a quality router reports its numeric quality tier, and an adaptive router records no tier at all. Turns no tier served (the classifier fell back to default_model) are absent rather than pooled under a sentinel key, so the values may sum to less than turns
+             */
+            tier_turns?: {
+                [key: string]: number;
+            };
             /** Turns */
             turns: number;
         };
@@ -35510,6 +35517,10 @@ export interface components {
             base_model?: string | null;
             /** Blocked */
             blocked?: boolean | null;
+            /** Cache Creation Input Token Cost */
+            cache_creation_input_token_cost?: number | null;
+            /** Cache Read Input Token Cost */
+            cache_read_input_token_cost?: number | null;
             /** Created At */
             created_at?: string | null;
             /** Created By */
@@ -35521,6 +35532,14 @@ export interface components {
             db_model: boolean;
             /** Id */
             id: string | null;
+            /** Input Cost Per Character */
+            input_cost_per_character?: number | null;
+            /** Input Cost Per Token */
+            input_cost_per_token?: number | null;
+            /** Output Cost Per Character */
+            output_cost_per_character?: number | null;
+            /** Output Cost Per Token */
+            output_cost_per_token?: number | null;
             /** Team Id */
             team_id?: string | null;
             /** Team Public Model Name */
