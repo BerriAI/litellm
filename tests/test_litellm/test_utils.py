@@ -768,6 +768,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr": {"type": "number"},
                 "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
+                "cache_creation_input_token_cost_above_256k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens_flex": {
                     "type": "number"
@@ -3139,7 +3140,7 @@ def test_model_info_for_openrouter_kimi_k2_5():
 
     Model properties from OpenRouter API:
     - context_length: 262144
-    - pricing: prompt=$0.0000006, completion=$0.000003, input_cache_read=$0.0000001
+    - pricing: prompt=$0.00000057, completion=$0.00000285, input_cache_read=$0.000000095
     - modality: text+image->text (supports vision)
     - supports: tool_choice, tools (function calling)
     """
@@ -3164,9 +3165,9 @@ def test_model_info_for_openrouter_kimi_k2_5():
     assert model_info["max_tokens"] == 262144
 
     # Verify pricing
-    assert model_info["input_cost_per_token"] == 6e-07
-    assert model_info["output_cost_per_token"] == 3e-06
-    assert model_info["cache_read_input_token_cost"] == 1e-07
+    assert model_info["input_cost_per_token"] == 5.7e-07
+    assert model_info["output_cost_per_token"] == 2.85e-06
+    assert model_info["cache_read_input_token_cost"] == 9.5e-08
 
     # Verify capabilities
     assert model_info["supports_vision"] is True
