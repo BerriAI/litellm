@@ -445,6 +445,8 @@ async def aresponses(
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     # LiteLLM specific params,
     custom_llm_provider: Optional[str] = None,
+
+    context_management: Optional[Iterable[Any]] = None,
     **kwargs,
 ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
     """
