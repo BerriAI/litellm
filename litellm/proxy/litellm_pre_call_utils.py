@@ -18,6 +18,7 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
@@ -226,6 +227,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "applied_policies",
     "policy_sources",
     "routing_decision",
+    SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     "standard_logging_object",
     "proxy_server_request",
