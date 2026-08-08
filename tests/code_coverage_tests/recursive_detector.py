@@ -50,6 +50,7 @@ IGNORE_FUNCTIONS = [
     "_resolve",  # OCI: $ref resolver bounded by `resolving_stack` cycle guard.
     "resolve_oci_schema_anyof",  # OCI: bounded by JSON-schema tree depth (no cycles possible in well-formed input).
     "sanitize_oci_schema",  # OCI: bounded by JSON-schema tree depth.
+    "_iter_fallback_targets",  # max depth set (2 * ROUTER_MAX_FALLBACKS); fails closed by raising ValueError at the cap.
 ]
 
 
