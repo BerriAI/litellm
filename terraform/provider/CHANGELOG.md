@@ -7,13 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-06
+
 ### Fixed
 
 - **organization**: Send `PATCH` instead of `POST` to `/organization/update` and `/organization/member_update`, matching the methods the LiteLLM proxy serves; organization and organization member updates previously failed with a 405
+- **team_member**: Include `role` in the update payload so a role change on an existing `litellm_team_member` is applied instead of being silently dropped
 
 ### Changed
 
 - The provider source of truth moved to `terraform/provider/` in [BerriAI/litellm](https://github.com/BerriAI/litellm); this repository is now a release mirror. CI in the monorepo statically audits every endpoint the provider calls against the proxy's OpenAPI schema on every change
+- **mcp_server**, **vector_store**: `env` and `litellm_params` are now marked sensitive, so they are redacted from plan/apply output, and they are no longer read back from the API into state — the configured value is authoritative. If the proxy returns values that differ from the configuration, that drift is no longer surfaced on refresh
+- Dependency updates: `grpc` and `golang.org/x` modules
+
+## [0.3.0] - 2026-07-13
+
+Released from the mirror repository before the source move was complete; this entry backfills it in the monorepo changelog.
+
+### Added
+
+- **model**: Add optional `pricing_base_model` attribute that sets `model_info.base_model` (the cost-map lookup key) independently of routing. Deployments whose routing name differs from the pricing key (for example Azure Data Zone, routed as `azure/gpt-4.1` but priced via `us/gpt-4.1-2025-04-14`) can now be billed correctly without breaking routing. When unset, behavior is unchanged and `base_model` continues to drive both routing and pricing (#47)
 
 ## [0.2.2] - 2026-05-13
 

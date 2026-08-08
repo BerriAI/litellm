@@ -356,6 +356,7 @@ def _mcp_payload(**overrides):
                 "arguments": {"city": "Paris"},
                 "result": {"temp_c": 21},
                 "mcp_server_name": "weather-mcp",
+                "mcp_server_resource": "https://weather.example.com",
                 "mcp_session_id": "sess-abc123",
             },
         },
@@ -452,6 +453,8 @@ def test_mcp_tool_call_failure_marks_error():
     assert span.name == "tools/call get_weather"
     assert span.status.status_code is StatusCode.ERROR
     assert span.attributes["error.type"] == "MCPError"
+    assert span.attributes["rpc.system"] == "jsonrpc"
+    assert span.attributes["server.address"] == "weather.example.com"
 
 
 def test_mcp_tool_call_deduped_on_repeat():
@@ -529,6 +532,82 @@ _MCP_SPAN_CASES = [
     (_mcp_payload, "tools/call get_weather"),
     (_mcp_list_payload, "tools/list"),
 ]
+
+
+def test_mcp_tool_call_names_its_rpc_system_and_upstream():
+    """A tool-call span names the RPC system, and always alongside the upstream it called.
+
+    A CLIENT span holding none of the ``rpc.*``/``http.*``/``db.*``/``messaging.*``
+    families is unclassifiable, so a backend deriving a span type from them has nothing
+    to derive from: Elastic APM indexed these spans as ``span.type=unknown`` with no
+    ``span.subtype`` at all, and its span-links API then rejected the whole trace with
+    ``Missing required fields (span.subtype)``.
+
+    The two assertions are one invariant, not two. Naming the RPC system makes a
+    consumer treat the span as a downstream dependency and key that dependency off
+    ``server.address``/``server.port``; emitting the first without the second names the
+    dependency ``:0``, which is worse than leaving the span unclassified.
+    """
+    logger, exporter = _logger()
+    asyncio.run(
+        logger.async_log_success_event(
+            {"standard_logging_object": _mcp_payload()}, None, None, None
+        )
+    )
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes["rpc.system"] == "jsonrpc"
+    assert span.attributes["server.address"] == "weather.example.com"
+    assert span.attributes["server.port"] == 443
+
+
+@pytest.mark.parametrize(
+    "resource",
+    [None, "mcp://weather.example.com", "ws://weather.example.com"],
+    ids=["no-resource", "scheme-with-no-default-port", "ws-scheme"],
+)
+def test_mcp_tool_call_omits_rpc_system_without_a_complete_upstream(resource):
+    """A tool call drops the RPC system unless the full destination resolved.
+
+    ``mcp_server_resource`` is absent whenever the tool name resolves to no registered
+    server, and it is ``None`` for a transport with no host to log at all (stdio). A
+    host-bearing scheme outside the HTTP(S) default-port map resolves an address but no
+    port, and the ``url`` field is not scheme-validated, so that state is reachable from
+    config. Each case names the dependency ``:0`` or ``host:0`` if ``rpc.system`` ships
+    on its own, so the pairing is enforced here rather than left to the extractors
+    happening to agree.
+    """
+    logger, exporter = _logger()
+    payload = _mcp_payload()
+    if resource is None:
+        del payload["metadata"]["mcp_tool_call_metadata"]["mcp_server_resource"]
+    else:
+        payload["metadata"]["mcp_tool_call_metadata"]["mcp_server_resource"] = resource
+    asyncio.run(
+        logger.async_log_success_event({"standard_logging_object": payload}, None, None, None)
+    )
+    (span,) = exporter.get_finished_spans()
+    assert "rpc.system" not in span.attributes
+    assert "server.port" not in span.attributes
+    assert span.attributes["mcp.method.name"] == "tools/call"
+
+
+def test_mcp_list_tools_omits_rpc_system_without_an_upstream():
+    """The discovery span carries no upstream identity, so it must not claim to be RPC.
+
+    ``tools/list`` reaches the callbacks with no ``mcp_tool_call_metadata``, so there is
+    no ``server.address`` to attach and a listing can span several upstreams anyway.
+    Naming ``rpc.system`` here would buy a ``span.subtype`` at the cost of a bogus ``:0``
+    dependency node in every consumer that aggregates on it.
+    """
+    logger, exporter = _logger()
+    asyncio.run(
+        logger.async_log_success_event(
+            {"standard_logging_object": _mcp_list_payload()}, None, None, None
+        )
+    )
+    (span,) = exporter.get_finished_spans()
+    assert "rpc.system" not in span.attributes
+    assert "server.address" not in span.attributes
 
 
 @pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
@@ -1116,8 +1195,13 @@ def test_async_post_call_failure_hook_skips_a_transport_that_already_answered():
 def test_record_error_attributes_on_span_decorates_without_ending():
     """PATH A: a failure that dies before any LLM-call span (malformed body,
     validation) is stamped onto the instrumentor-owned SERVER span. The method must
-    not end the span or emit a duplicate exception event, and must pin error.code
-    to the real response status (not the exception's own code)."""
+    not end the span, and must pin error.code to the real response status (not the
+    exception's own code).
+
+    LIT-4780: the instrumentor never sees the exception (the proxy handler turns it
+    into a JSONResponse), so nothing else marks the span as failed; the status and
+    the exception event have to come from here or the trace shows the error message
+    on an otherwise successful-looking request."""
     logger, exporter = _logger()
     server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     logger.record_error_attributes_on_span(server, _proxy_exc("Invalid JSON body", 400), 422)
@@ -1127,7 +1211,31 @@ def test_record_error_attributes_on_span_decorates_without_ending():
     assert span.attributes["error.type"] == "ProxyException"
     assert span.attributes["error.message"] == "Invalid JSON body"
     assert span.attributes["litellm.provider.error.code"] == "422"
-    assert all(e.name != "exception" for e in span.events)
+    assert span.status.status_code is StatusCode.ERROR
+    assert [e.name for e in span.events] == ["exception"]
+
+
+def test_record_error_attributes_on_span_does_not_duplicate_an_already_stamped_error():
+    """A failure that already went through ``async_post_call_failure_hook`` reaches
+    the exception handler too; the second stamp must keep one exception event while
+    still repinning error.code to the real response status."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    set_request_root_span(server)
+    exc = _proxy_exc("Authentication Error, invalid key", 401)
+    asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={}, original_exception=exc, user_api_key_dict=UserAPIKeyAuth()
+        )
+    )
+    logger.record_error_attributes_on_span(server, exc, 400)
+    server.end()
+    (span,) = exporter.get_finished_spans()
+    assert [e.name for e in span.events] == ["exception"]
+    assert span.attributes["litellm.provider.error.code"] == "400"
+    assert span.status.status_code is StatusCode.ERROR
 
 
 def test_record_error_attributes_on_span_ignores_below_400_and_missing_span():
