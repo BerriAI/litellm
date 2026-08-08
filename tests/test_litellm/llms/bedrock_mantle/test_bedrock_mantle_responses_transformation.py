@@ -339,7 +339,7 @@ class TestBedrockMantleResponsesTools:
         params = cfg.map_openai_params(
             response_api_optional_params={
                 "tools": [
-                    {"type": "web_search"},
+                    {"type": "file_search", "vector_store_ids": ["vs_123"]},
                     {"type": "function", "name": "exec_command"},
                 ]
             },
@@ -351,7 +351,7 @@ class TestBedrockMantleResponsesTools:
     def test_map_openai_params_removes_tools_when_all_unsupported(self):
         cfg = BedrockMantleResponsesAPIConfig()
         params = cfg.map_openai_params(
-            response_api_optional_params={"tools": [{"type": "web_search"}]},
+            response_api_optional_params={"tools": [{"type": "file_search", "vector_store_ids": ["vs_123"]}]},
             model="openai.gpt-5.5",
             drop_params=False,
         )
@@ -365,12 +365,86 @@ class TestBedrockMantleResponsesTools:
             "litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.warning"
         ) as mock_warning:
             cfg.map_openai_params(
-                response_api_optional_params={"tools": [{"type": "web_search"}]},
+                response_api_optional_params={"tools": [{"type": "file_search", "vector_store_ids": ["vs_123"]}]},
                 model="openai.gpt-5.5",
                 drop_params=False,
             )
         assert mock_warning.call_count == 1
-        assert "web_search" in str(mock_warning.call_args)
+        assert "file_search" in str(mock_warning.call_args)
+
+
+class TestBedrockMantleResponsesWebSearch:
+    """Web Search on Amazon Bedrock is a server-side built-in tool that Mantle runs
+    itself when the caller passes {"type": "web_search"} on the Responses path, so
+    the config must forward the tool and its options untouched instead of filtering
+    it out and returning an ungrounded answer."""
+
+    _WEB_SEARCH_TOOL = {"type": "web_search", "external_web_access": False}
+
+    def test_web_search_survives_map_openai_params_with_its_options(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"tools": [self._WEB_SEARCH_TOOL]},
+            model="openai.gpt-5.6-sol",
+            drop_params=False,
+        )
+        assert params["tools"] == [self._WEB_SEARCH_TOOL]
+
+    def test_web_search_reaches_outbound_body_alongside_function_tools(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        function_tool = {"type": "function", "name": "exec_command"}
+        params = cfg.map_openai_params(
+            response_api_optional_params={"tools": [self._WEB_SEARCH_TOOL, function_tool]},
+            model="openai.gpt-5.6-sol",
+            drop_params=False,
+        )
+        body = cfg.transform_responses_api_request(
+            model="openai.gpt-5.6-sol",
+            input="What did AWS announce today?",
+            response_api_optional_request_params=params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["tools"] == [self._WEB_SEARCH_TOOL, function_tool]
+
+    def test_web_search_is_not_logged_as_dropped(self):
+        from unittest.mock import patch
+
+        cfg = BedrockMantleResponsesAPIConfig()
+        with patch("litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.warning") as mock_warning:
+            cfg.map_openai_params(
+                response_api_optional_params={"tools": [self._WEB_SEARCH_TOOL]},
+                model="openai.gpt-5.6-sol",
+                drop_params=False,
+            )
+        assert mock_warning.call_count == 0
+
+    def test_hoisted_web_search_tool_survives(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        body = cfg.transform_responses_api_request(
+            model="openai.gpt-5.6-sol",
+            input=[
+                {"type": "additional_tools", "role": "developer", "tools": [self._WEB_SEARCH_TOOL]},
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            ],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["tools"] == [self._WEB_SEARCH_TOOL]
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "bedrock_mantle/openai.gpt-5.6-sol",
+            "bedrock_mantle/openai.gpt-5.6-terra",
+            "bedrock_mantle/openai.gpt-5.6-luna",
+            "bedrock_mantle/openai.gpt-5.5",
+            "bedrock_mantle/openai.gpt-5.4",
+        ],
+    )
+    def test_cost_map_advertises_web_search_support(self, model):
+        assert litellm.supports_web_search(model=model) is True
 
 
 def _codex_exec_tool():
@@ -558,7 +632,7 @@ class TestBedrockMantleCodexAdditionalTools:
                     "type": "additional_tools",
                     "role": "developer",
                     "tools": [
-                        {"type": "web_search"},
+                        {"type": "file_search", "vector_store_ids": ["vs_123"]},
                         {"type": "function", "name": "wait"},
                     ],
                 },
@@ -570,7 +644,11 @@ class TestBedrockMantleCodexAdditionalTools:
     def test_item_stripped_even_when_no_hoisted_tool_survives(self):
         body = self._transform(
             input=[
-                {"type": "additional_tools", "role": "developer", "tools": [{"type": "web_search"}]},
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [{"type": "file_search", "vector_store_ids": ["vs_123"]}],
+                },
                 self._USER_MESSAGE,
             ]
         )
