@@ -54,6 +54,7 @@ import snowflakeLogo from "../../public/assets/logos/snowflake.svg";
 import sonioxLogo from "../../public/assets/logos/soniox.svg";
 import togetheraiLogo from "../../public/assets/logos/togetherai.svg";
 import topazLogo from "../../public/assets/logos/topaz.svg";
+import trustedrouterLogo from "../../public/assets/logos/trustedrouter.svg";
 import v0Logo from "../../public/assets/logos/v0.svg";
 import vercelLogo from "../../public/assets/logos/vercel.svg";
 import vllmLogo from "../../public/assets/logos/vllm.png";
@@ -157,6 +158,7 @@ export enum Providers {
   TogetherAI = "TogetherAI",
   TOPAZ = "Topaz",
   Triton = "Triton",
+  Trustedrouter = "Trustedrouter",
   V0 = "V0",
   VERCEL_AI_GATEWAY = "Vercel Ai Gateway",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
@@ -266,6 +268,7 @@ export const provider_map: Record<string, string> = {
   TogetherAI: "together_ai",
   TOPAZ: "topaz",
   Triton: "triton",
+  Trustedrouter: "trustedrouter",
   V0: "v0",
   VERCEL_AI_GATEWAY: "vercel_ai_gateway",
   Vertex_AI: "vertex_ai",
@@ -357,6 +360,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.TogetherAI]: togetheraiLogo.src,
   [Providers.TOPAZ]: topazLogo.src,
   [Providers.Triton]: nvidiaTritonLogo.src,
+  [Providers.Trustedrouter]: trustedrouterLogo.src,
   [Providers.V0]: v0Logo.src,
   [Providers.VERCEL_AI_GATEWAY]: vercelLogo.src,
   [Providers.Vertex_AI]: googleLogo.src,
