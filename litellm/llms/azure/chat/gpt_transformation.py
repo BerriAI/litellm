@@ -169,6 +169,8 @@ class AzureOpenAIConfig(BaseConfig):
             api_version_day = None
 
         for param, value in non_default_params.items():
+            if param == "max_tokens" and "max_completion_tokens" in non_default_params:
+                continue
             if param == "tool_choice":
                 """
                 This parameter requires API version 2023-12-01-preview or later
