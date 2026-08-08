@@ -8,7 +8,6 @@ because they are direct dependents on the lifecycle state.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,7 +16,6 @@ import pytest
 import litellm
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import (
-    InternalUsageCache,
     ProxyLogging,
 )
 
@@ -102,9 +100,7 @@ def test_update_values_with_no_args_is_noop(proxy_logging):
 
 
 def test_update_values_invalid_type_for_alerting_raises(proxy_logging):
-    proxy_logging.slack_alerting_instance = MagicMock(
-        update_values=MagicMock(side_effect=TypeError("bad type"))
-    )
+    proxy_logging.slack_alerting_instance = MagicMock(update_values=MagicMock(side_effect=TypeError("bad type")))
     with pytest.raises(TypeError):
         proxy_logging.update_values(alerting={"not": "a list"})  # type: ignore[arg-type]
 
@@ -190,6 +186,90 @@ def test_add_proxy_hooks_registers_callbacks(proxy_logging, monkeypatch):
     }
 
 
+def _stub_hook_classes():
+    class _PrismaFreeHook:
+        def __init__(self, internal_usage_cache):
+            self.internal_usage_cache = internal_usage_cache
+
+    class _PrismaRequiringHook:
+        def __init__(self, internal_usage_cache, prisma_client):
+            self.internal_usage_cache = internal_usage_cache
+            self.prisma_client = prisma_client
+
+    class _PrismaOnlyHook:
+        def __init__(self, prisma_client):
+            self.prisma_client = prisma_client
+
+    return {
+        "cache_control_check": _PrismaFreeHook,
+        "needs_db_hook": _PrismaRequiringHook,
+        "db_only_hook": _PrismaOnlyHook,
+    }
+
+
+def test_add_proxy_hooks_skips_prisma_requiring_hook_when_no_db(proxy_logging, monkeypatch):
+    hook_classes = _stub_hook_classes()
+    registered: List[Any] = []
+
+    from litellm.proxy import utils as utils_mod
+
+    monkeypatch.setattr(utils_mod, "PROXY_HOOKS", list(hook_classes.keys()))
+    monkeypatch.setattr(utils_mod, "get_proxy_hook", hook_classes.__getitem__)
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "add_litellm_callback",
+        lambda cb: registered.append(cb),
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        proxy_logging._add_proxy_hooks(llm_router=None)
+
+    snapshot = {
+        "mapping_keys": list(proxy_logging.proxy_hook_mapping.keys()),
+        "registered_types": [type(r).__name__ for r in registered],
+        "needs_db_hook_lookup": proxy_logging.get_proxy_hook("needs_db_hook"),
+        "db_only_hook_lookup": proxy_logging.get_proxy_hook("db_only_hook"),
+    }
+    assert snapshot == {
+        "mapping_keys": ["cache_control_check"],
+        "registered_types": ["_PrismaFreeHook"],
+        "needs_db_hook_lookup": None,
+        "db_only_hook_lookup": None,
+    }
+
+
+def test_add_proxy_hooks_registers_prisma_requiring_hook_with_db(proxy_logging, monkeypatch):
+    hook_classes = _stub_hook_classes()
+    registered: List[Any] = []
+    fake_prisma = MagicMock()
+
+    from litellm.proxy import utils as utils_mod
+
+    monkeypatch.setattr(utils_mod, "PROXY_HOOKS", list(hook_classes.keys()))
+    monkeypatch.setattr(utils_mod, "get_proxy_hook", hook_classes.__getitem__)
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "add_litellm_callback",
+        lambda cb: registered.append(cb),
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
+        proxy_logging._add_proxy_hooks(llm_router=None)
+
+    snapshot = {
+        "mapping_keys": list(proxy_logging.proxy_hook_mapping.keys()),
+        "registered_count": len(registered),
+        "needs_db_hook_got_prisma": proxy_logging.proxy_hook_mapping["needs_db_hook"].prisma_client is fake_prisma,
+        "db_only_hook_got_prisma": proxy_logging.proxy_hook_mapping["db_only_hook"].prisma_client is fake_prisma,
+    }
+    assert snapshot == {
+        "mapping_keys": ["cache_control_check", "needs_db_hook", "db_only_hook"],
+        "registered_count": 3,
+        "needs_db_hook_got_prisma": True,
+        "db_only_hook_got_prisma": True,
+    }
+
+
 def test_add_proxy_hooks_unknown_hook_raises(proxy_logging, monkeypatch):
     from litellm.proxy import utils as utils_mod
 
@@ -267,9 +347,7 @@ def test_init_litellm_callbacks_replaces_string_with_instance(proxy_logging, mon
     snapshot = {
         "replaced_first_item": litellm.callbacks[0] is sentinel_instance,
         "callbacks_grew_with_service": len(litellm.callbacks) >= 2,
-        "service_logging_appended": any(
-            "ServiceLogging" in type(c).__name__ for c in litellm.callbacks
-        ),
+        "service_logging_appended": any("ServiceLogging" in type(c).__name__ for c in litellm.callbacks),
     }
     assert snapshot == {
         "replaced_first_item": True,
