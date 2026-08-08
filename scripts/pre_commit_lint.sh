@@ -2,17 +2,19 @@
 #
 # pre_commit_lint.sh — shift CI lint left. Run it (via `make pre-commit`) right
 # before `git commit`; it inspects your staged files and runs only the matching
-# gating CI checks, so a clean run means a green CI lint:
-#   - litellm/ Python staged -> `make lint` (test-linting.yml's lint job)
-#   - tests/e2e Python staged -> `make lint-e2e-basedpyright` (test-linting.yml's e2e type-check step)
-#                                + raw HTTP client ban (test-code-quality.yml's check_e2e_no_raw_requests)
+# gating CI checks, so a clean run plus a clean `make typecheck` means a green CI lint:
+#   - litellm/ Python staged -> `make lint` (test-linting.yml's lint job, minus basedpyright)
+#   - tests/e2e Python staged -> raw HTTP client ban (test-code-quality.yml's check_e2e_no_raw_requests)
 #   - dashboard staged        -> prettier + eslint + lint budgets (test-litellm-ui-build.yml's frontend-lint)
 #   - proxy/types staged      -> regenerate dashboard API types and fail on drift (check-ui-api-types.yml)
 #
-# Each block is skipped when no matching files are staged, so unrelated commits stay
-# fast. This is intentionally not auto-installed as a git hook (see scripts/install_git_hooks.sh):
-# the dashboard and basedpyright passes can take minutes, so it's run on demand rather
-# than firing on every human commit. It is hook-compatible if you want that anyway:
+# CI's two basedpyright steps are deliberately not here: they take minutes while
+# everything above takes seconds, so they live in `make typecheck`, which this script
+# reminds you to run when you stage Python. Each block is skipped when no matching files
+# are staged, so unrelated commits stay fast. This is intentionally not auto-installed as
+# a git hook (see scripts/install_git_hooks.sh): the dashboard pass can still take a
+# while, so it's run on demand rather than firing on every human commit. It is
+# hook-compatible if you want that anyway:
 # `ln -s ../../scripts/pre_commit_lint.sh .git/hooks/pre-commit`.
 
 set -eu
@@ -97,10 +99,9 @@ EOF
         # Whole-folder lint budgets, exactly as the frontend-lint job runs them: the
         # counts are not diff-scoped, so a local pass here means the budget step will
         # pass in CI too.
-        report=$(mktemp)
+        report="$work_dir/eslint-report.json"
         npx eslint . -f json -o "$report" || true
         node scripts/check-lint-budgets.mjs "$report" eslint-budgets.json || rc=1
-        rm -f "$report"
         exit $rc
     )
 }
@@ -129,25 +130,21 @@ python_checks() {
 
 on_interrupt() {
     trap - INT TERM
-    rm -f "${python_log:-}" "${dash_log:-}" "${gen_log:-}"
     for job_pid in ${python_pid:-} ${dash_pid:-} ${gen_pid:-}; do
         kill -- "-$job_pid" 2>/dev/null || true
     done
+    rm -rf "${work_dir:-}"
     exit 130
 }
 trap on_interrupt INT TERM
+work_dir=$(mktemp -d)
 
 if [ -n "$litellm_py_files" ]; then
-    python_log=$(mktemp)
+    python_log="$work_dir/python.log"
     set -m
     python_checks > "$python_log" 2>&1 &
     python_pid=$!
     set +m
-fi
-
-if [ -n "$e2e_py_files" ] && [ -z "$litellm_py_files" ]; then
-    echo "pre-commit: type-checking tests/e2e (make lint-e2e-basedpyright)"
-    make lint-e2e-basedpyright || { echo "✗ tests/e2e basedpyright failed. Fix the errors above, then re-run make pre-commit." >&2; status=1; }
 fi
 
 if [ -n "$e2e_py_files" ]; then
@@ -167,7 +164,7 @@ dashboard_checks() {
 }
 
 if [ -n "$ui_prettier_files" ] || [ -n "$ui_eslint_files" ]; then
-    dash_log=$(mktemp)
+    dash_log="$work_dir/dashboard.log"
     set -m
     dashboard_checks > "$dash_log" 2>&1 &
     dash_pid=$!
@@ -205,7 +202,7 @@ genapi_checks() {
 }
 
 if [ -n "$spec_files" ]; then
-    gen_log=$(mktemp)
+    gen_log="$work_dir/genapi.log"
     set -m
     genapi_checks > "$gen_log" 2>&1 &
     gen_pid=$!
@@ -214,15 +211,20 @@ fi
 
 if [ -n "${python_pid:-}" ]; then
     wait "$python_pid" || status=1
-    cat "$python_log"; rm -f "$python_log"
+    cat "$python_log"
 fi
 if [ -n "${dash_pid:-}" ]; then
     wait "$dash_pid" || status=1
-    cat "$dash_log"; rm -f "$dash_log"
+    cat "$dash_log"
 fi
 if [ -n "${gen_pid:-}" ]; then
     wait "$gen_pid" || status=1
-    cat "$gen_log"; rm -f "$gen_log"
+    cat "$gen_log"
+fi
+rm -rf "$work_dir"
+
+if [ -n "$litellm_py_files" ] || [ -n "$e2e_py_files" ]; then
+    echo "pre-commit: basedpyright is not part of this run; CI still type-checks. Run: make typecheck"
 fi
 
 exit $status

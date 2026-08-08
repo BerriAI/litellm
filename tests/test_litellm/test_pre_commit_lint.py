@@ -29,6 +29,7 @@ BARRIER_HELPER = """barrier_sync() {
 
 MAKE_STUB = """#!/bin/sh
 . "$STUB_BIN/barrier.sh"
+echo "$*" >> "$STUB_CALLS"
 case "$*" in
     lint)
         [ "${STUB_FAIL:-}" = "make-lint" ] && exit 1
@@ -51,6 +52,12 @@ case "$*" in
         ;;
     "eslint --no-warn-ignored"*)
         [ "${STUB_FAIL:-}" = "eslint" ] && exit 1
+        ;;
+    "eslint . -f json"*)
+        if [ -n "${STUB_HANG_ESLINT_DIR:-}" ]; then
+            touch "$STUB_HANG_ESLINT_DIR/eslint.started"
+            sleep 60
+        fi
         ;;
 esac
 exit 0
@@ -85,11 +92,15 @@ def _write_executable(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
-def _sandbox(tmp_path: Path) -> tuple[Path, Path]:
+def _sandbox(tmp_path: Path, *, litellm_python: bool = True, e2e_python: bool = False) -> tuple[Path, Path]:
     repo = tmp_path / "repo"
     (repo / "litellm" / "proxy").mkdir(parents=True)
-    (repo / "litellm" / "foo.py").write_text("x = 1\n")
-    (repo / "litellm" / "proxy" / "spec.py").write_text("y = 2\n")
+    if litellm_python:
+        (repo / "litellm" / "foo.py").write_text("x = 1\n")
+        (repo / "litellm" / "proxy" / "spec.py").write_text("y = 2\n")
+    if e2e_python:
+        (repo / "tests" / "e2e").mkdir(parents=True)
+        (repo / "tests" / "e2e" / "test_flow.py").write_text("z = 3\n")
     dashboard = repo / "ui" / "litellm-dashboard"
     (dashboard / "src").mkdir(parents=True)
     (dashboard / "node_modules").mkdir()
@@ -113,8 +124,20 @@ def _env(repo: Path, bin_dir: Path, extra_env: dict[str, str]) -> dict[str, str]
         "PATH": os.pathsep.join([str(bin_dir), "/usr/bin", "/bin"]),
         "HOME": str(repo.parent),
         "STUB_BIN": str(bin_dir),
+        "STUB_CALLS": str(_calls_file(bin_dir)),
         **extra_env,
     }
+
+
+def _calls_file(bin_dir: Path) -> Path:
+    return bin_dir.parent / "make_calls.log"
+
+
+def _make_calls(bin_dir: Path) -> list[str]:
+    calls = _calls_file(bin_dir)
+    if not calls.exists():
+        return []
+    return [line for line in calls.read_text().splitlines() if line]
 
 
 def _run(repo: Path, bin_dir: Path, extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -140,6 +163,30 @@ def test_python_dashboard_and_gen_api_blocks_run_concurrently_with_grouped_outpu
     dashboard_at = proc.stdout.index("linting dashboard")
     gen_api_at = proc.stdout.index("API types")
     assert python_at < dashboard_at < gen_api_at
+
+
+def test_staged_litellm_python_lints_without_type_checking_and_points_at_typecheck(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert _make_calls(bin_dir) == ["lint"]
+    assert "make typecheck" in proc.stdout
+
+
+def test_staged_e2e_python_skips_basedpyright_but_keeps_the_raw_http_ban(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path, litellm_python=False, e2e_python=True)
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert _make_calls(bin_dir) == []
+    assert "raw HTTP client ban" in proc.stdout
+    assert "make typecheck" in proc.stdout
+
+
+def test_commit_without_python_gets_no_typecheck_reminder(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path, litellm_python=False)
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "typecheck" not in proc.stdout
 
 
 def test_all_blocks_passing_exits_zero(tmp_path: Path) -> None:
@@ -222,6 +269,31 @@ def test_interrupt_kills_background_jobs_and_removes_logs(tmp_path: Path) -> Non
         make_pid = int((hang_dir / "make.pid").read_text())
         assert _wait_until(lambda: _pid_gone(make_pid), 5)
         assert list(tmp_dir.iterdir()) == []
+    finally:
+        with suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, signal.SIGTERM)
+
+
+def test_interrupt_mid_dashboard_leaves_no_scratch_files_behind(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path, litellm_python=False)
+    hang_dir = tmp_path / "hang"
+    hang_dir.mkdir()
+    tmp_dir = tmp_path / "tmpdir"
+    tmp_dir.mkdir()
+    extra = {"STUB_HANG_ESLINT_DIR": str(hang_dir), "TMPDIR": str(tmp_dir)}
+    proc = subprocess.Popen(
+        [str(SCRIPT)],
+        cwd=repo,
+        env=_env(repo, bin_dir, extra),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        assert _wait_until((hang_dir / "eslint.started").exists, 10)
+        os.killpg(proc.pid, signal.SIGINT)
+        assert proc.wait(timeout=10) != 0
+        assert _wait_until(lambda: list(tmp_dir.iterdir()) == [], 5), list(tmp_dir.iterdir())
     finally:
         with suppress(ProcessLookupError, PermissionError):
             os.killpg(proc.pid, signal.SIGTERM)

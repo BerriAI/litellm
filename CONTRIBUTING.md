@@ -14,7 +14,7 @@ Here are the core requirements for any PR submitted to LiteLLM:
 - [ ] **Add testing** - Adding at least 1 test is a hard requirement - [see details](#adding-testing)
 - [ ] **Ensure your PR passes all checks**:
   - [ ] [Unit Tests](#running-unit-tests) - `make test-unit`
-  - [ ] [Linting / Formatting](#running-linting-and-formatting-checks) - `make lint`
+  - [ ] [Linting / Formatting](#running-linting-and-formatting-checks) - `make lint` and `make typecheck`
 
 #### UI PRs
 
@@ -70,6 +70,7 @@ make format
 
 # Run all linting checks (matches CI exactly)
 make lint
+make typecheck
 
 # Run unit tests to ensure nothing is broken
 make test-unit
@@ -144,17 +145,19 @@ uv run pytest tests/test_litellm/test_your_file.py -v
 
 ### Running Linting and Formatting Checks
 
-Run all linting checks (matches CI exactly):
+Run all linting checks (matches CI exactly). `make lint` covers everything except type checking, which is slower and lives on its own target:
 
 ```bash
 make lint
+make typecheck
 ```
 
 Individual linting commands:
 ```bash
 make format-check       # Check Black formatting
 make lint-ruff          # Run Ruff linting
-make lint-basedpyright  # Run basedpyright type checking
+make lint-basedpyright  # Run basedpyright over litellm/
+make lint-e2e-basedpyright     # Run basedpyright over tests/e2e
 make check-circular-imports    # Check for circular imports
 make check-import-safety       # Check import safety
 ```
@@ -184,6 +187,7 @@ To ensure your changes will pass CI, run the exact same checks locally:
 ```bash
 # This runs the same checks as the GitHub workflows
 make lint
+make typecheck
 make test-unit
 ```
 
@@ -203,7 +207,8 @@ make install-proxy-dev         # Install proxy development dependencies
 make install-test-deps         # Install the full local test environment
 make format                    # Apply Black code formatting
 make format-check              # Check Black formatting (matches CI)
-make lint                      # Run all linting checks
+make lint                      # Run all linting checks except type checking
+make typecheck                 # Run basedpyright (litellm/ budget + tests/e2e)
 make test-unit                 # Run unit tests
 make test-integration          # Run integration tests
 make test-unit-helm            # Run Helm unit tests
@@ -226,7 +231,7 @@ All checks must pass before your PR can be merged.
 
 ### 1. Linting Failures
 
-If `make lint` fails:
+If `make lint` or `make typecheck` fails:
 
 1. **Formatting issues**: Run `make format` to auto-fix
 2. **Ruff issues**: Check the output and fix manually
