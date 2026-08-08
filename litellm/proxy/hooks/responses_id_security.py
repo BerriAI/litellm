@@ -6,7 +6,7 @@ instead of writing immediately on each request.
 """
 
 from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from fastapi import HTTPException
 
@@ -40,7 +40,7 @@ class ResponsesIDSecurity(CustomLogger):
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         # MAP all the responses api response ids to the encrypted response ids
-        responses_api_call_types = {
+        responses_api_call_types: Final = {
             "aresponses",
             "aget_responses",
             "adelete_responses",
@@ -51,13 +51,13 @@ class ResponsesIDSecurity(CustomLogger):
             return None
         if call_type == "aresponses":
             # check 'previous_response_id' if present in the data
-            previous_response_id = data.get("previous_response_id")
+            previous_response_id: Final = data.get("previous_response_id")
             if previous_response_id and self._is_encrypted_response_id(previous_response_id):
                 original_response_id, user_id, team_id = self._decrypt_response_id(previous_response_id)
                 self.check_user_access_to_response_id(user_id, team_id, user_api_key_dict)
                 data["previous_response_id"] = original_response_id
         elif call_type in {"aget_responses", "adelete_responses", "acancel_responses", "alist_input_items"}:
-            response_id = data.get("response_id")
+            response_id: Final = data.get("response_id")
 
             if response_id and self._is_encrypted_response_id(response_id):
                 original_response_id, user_id, team_id = self._decrypt_response_id(response_id)
@@ -83,7 +83,9 @@ class ResponsesIDSecurity(CustomLogger):
         if response_id_user_id and response_id_user_id != user_api_key_dict.user_id:
             if general_settings.get("disable_responses_id_security", False):
                 verbose_proxy_logger.debug(
-                    f"Responses ID Security is disabled. User {user_api_key_dict.user_id} is accessing response id {response_id_user_id} which is not associated with them."
+                    "Responses ID Security is disabled. User %s is accessing response id %s which is not associated with them.",
+                    user_api_key_dict.user_id,
+                    response_id_user_id,
                 )
                 return True
             raise HTTPException(
@@ -94,7 +96,10 @@ class ResponsesIDSecurity(CustomLogger):
         if response_id_team_id and response_id_team_id != user_api_key_dict.team_id:
             if general_settings.get("disable_responses_id_security", False):
                 verbose_proxy_logger.debug(
-                    f"Responses ID Security is disabled. Response belongs to team {response_id_team_id} but user {user_api_key_dict.user_id} is accessing it with team id {user_api_key_dict.team_id}."
+                    "Responses ID Security is disabled. Response belongs to team %s but user %s is accessing it with team id %s.",
+                    response_id_team_id,
+                    user_api_key_dict.user_id,
+                    user_api_key_dict.team_id,
                 )
                 return True
             raise HTTPException(
@@ -105,11 +110,11 @@ class ResponsesIDSecurity(CustomLogger):
         return True
 
     def _is_encrypted_response_id(self, response_id: str) -> bool:
-        split_result = response_id.split("resp_")
+        split_result: Final = response_id.split("resp_")
         if len(split_result) < 2:
             return False
 
-        remaining_string = split_result[1]
+        remaining_string: Final = split_result[1]
         decrypted_value = decrypt_value_helper(value=remaining_string, key="response_id", return_original_value=True)
 
         if decrypted_value is None:
@@ -126,11 +131,11 @@ class ResponsesIDSecurity(CustomLogger):
          - user_id: the user id
          - team_id: the team id
         """
-        split_result = response_id.split("resp_")
+        split_result: Final = response_id.split("resp_")
         if len(split_result) < 2:
             return response_id, None, None
 
-        remaining_string = split_result[1]
+        remaining_string: Final = split_result[1]
         decrypted_value = decrypt_value_helper(value=remaining_string, key="response_id", return_original_value=True)
 
         if decrypted_value is None:
@@ -138,20 +143,20 @@ class ResponsesIDSecurity(CustomLogger):
 
         if decrypted_value.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
             # Expected format: "litellm_proxy:responses_api:response_id:{response_id};user_id:{user_id}"
-            parts = decrypted_value.split(";")
+            parts: Final = decrypted_value.split(";")
 
             if len(parts) >= 2:
                 # Extract response_id from "litellm_proxy:responses_api:response_id:{response_id}"
-                response_id_part = parts[0]
-                original_response_id = response_id_part.split("response_id:")[-1]
+                response_id_part: Final = parts[0]
+                original_response_id: Final = response_id_part.split("response_id:")[-1]
 
                 # Extract user_id from "user_id:{user_id}"
-                user_id_part = parts[1]
-                user_id = user_id_part.split("user_id:")[-1]
+                user_id_part: Final = parts[1]
+                user_id: Final = user_id_part.split("user_id:")[-1]
 
                 # Extract team_id from "team_id:{team_id}"
-                team_id_part = parts[2]
-                team_id = team_id_part.split("team_id:")[-1]
+                team_id_part: Final = parts[2]
+                team_id: Final = team_id_part.split("team_id:")[-1]
 
                 return original_response_id, user_id, team_id
             else:
@@ -180,7 +185,7 @@ class ResponsesIDSecurity(CustomLogger):
         # encrypt the response id, and encode the user id and response id in base64
 
         # Check if signing key is available
-        signing_key = self._get_signing_key()
+        signing_key: Final = self._get_signing_key()
         if signing_key is None:
             verbose_proxy_logger.debug(
                 "Response ID encryption is enabled but no signing key is configured. "
@@ -190,8 +195,8 @@ class ResponsesIDSecurity(CustomLogger):
             )
             return response
 
-        response_id = getattr(response, "id", None)
-        response_obj = getattr(response, "response", None)
+        response_id: Final = getattr(response, "id", None)
+        response_obj: Final = getattr(response, "response", None)
 
         if response_id and isinstance(response_id, str) and response_id.startswith("resp_"):
             # Check request-scoped cache first (for streaming consistency)
@@ -251,13 +256,13 @@ class ResponsesIDSecurity(CustomLogger):
             )
         return response
 
-    async def async_post_call_streaming_iterator_hook(  # type: ignore
+    async def async_post_call_streaming_iterator_hook(
         self, user_api_key_dict: "UserAPIKeyAuth", response: Any, request_data: dict
     ) -> AsyncGenerator[BaseLiteLLMOpenAIResponseObject, None]:
         from litellm.proxy.proxy_server import general_settings
 
         # Create a request-scoped cache for consistent encryption across streaming chunks.
-        request_encryption_cache: dict[str, str] = {}
+        request_encryption_cache: Final[dict[str, str]] = {}
 
         async for chunk in response:
             if (

@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
@@ -36,7 +38,7 @@ class BasetenConfig(OpenAIGPTConfig):
         frequency_penalty: int | None = None,
         stream_options: dict | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -73,7 +75,7 @@ class BasetenConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_openai_params = self.get_supported_openai_params(model=model)
+        supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
@@ -86,8 +88,8 @@ class BasetenConfig(OpenAIGPTConfig):
         Get the OpenAI compatible provider info for Baseten
         """
         # Default to Model API
-        default_api_base = "https://inference.baseten.co/v1"
-        default_api_key = api_key or "BASETEN_API_KEY"
+        default_api_base: Final = "https://inference.baseten.co/v1"
+        default_api_key: Final = api_key or "BASETEN_API_KEY"
 
         return default_api_base, default_api_key
 
@@ -97,7 +99,7 @@ class BasetenConfig(OpenAIGPTConfig):
         Check if the model is a dedicated deployment (8-digit alphanumeric code)
         """
         # Remove 'baseten/' prefix if present
-        model_id = model.replace("baseten/", "")
+        model_id: Final = model.replace("baseten/", "")
 
         # Check if it's an 8-digit alphanumeric code
         import re
@@ -111,7 +113,7 @@ class BasetenConfig(OpenAIGPTConfig):
         """
         if BasetenConfig.is_dedicated_deployment(model):
             # Extract the model ID (remove 'baseten/' prefix if present)
-            model_id = model.replace("baseten/", "")
+            model_id: Final = model.replace("baseten/", "")
             return f"https://model-{model_id}.api.baseten.co/environments/production/sync/v1"
         else:
             # Use Model API

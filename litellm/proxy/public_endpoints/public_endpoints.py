@@ -2,7 +2,7 @@ import json
 import os
 import re
 from importlib.resources import files
-from typing import Any
+from typing import Any, Final
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -32,14 +32,14 @@ from litellm.types.proxy.public_endpoints.public_endpoints import (
 )
 from litellm.types.utils import LlmProviders
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
 # ---------------------------------------------------------------------------
 # /public/endpoints — helpers
 # ---------------------------------------------------------------------------
 
-_ENDPOINT_METADATA: dict[str, dict[str, str]] = {
+_ENDPOINT_METADATA: Final[dict[str, dict[str, str]]] = {
     "chat_completions": {"label": "Chat Completions", "endpoint": "/chat/completions"},
     "messages": {"label": "Messages", "endpoint": "/messages"},
     "responses": {"label": "Responses", "endpoint": "/responses"},
@@ -98,7 +98,7 @@ _ENDPOINT_METADATA: dict[str, dict[str, str]] = {
     "rag_query": {"label": "RAG Query", "endpoint": "/rag/query"},
 }
 
-_SLUG_SUFFIX_RE = re.compile(r"\s*\(`[^`]+`\)\s*$")
+_SLUG_SUFFIX_RE: Final = re.compile(r"\s*\(`[^`]+`\)\s*$")
 
 # Loaded once on first request; never invalidated (local file, no TTL needed).
 _cached_endpoints: SupportedEndpointsResponse | None = None
@@ -110,18 +110,18 @@ def _clean_display_name(raw: str) -> str:
 
 def _build_endpoints(raw: dict[str, Any]) -> list[dict[str, Any]]:
     """Transform raw provider_endpoints_support_backup.json into the response shape."""
-    providers: dict[str, Any] = raw.get("providers", {})
+    providers: Final[dict[str, Any]] = raw.get("providers", {})
 
     # Collect endpoint keys in insertion order (union across all providers).
-    seen: set = set()
-    all_keys: list[str] = []
+    seen: Final[set] = set()
+    all_keys: Final[list[str]] = []
     for provider_data in providers.values():
         for key in provider_data.get("endpoints", {}):
             if key not in seen:
                 seen.add(key)
                 all_keys.append(key)
 
-    result: list[dict[str, Any]] = []
+    result: Final[list[dict[str, Any]]] = []
     for key in all_keys:
         meta = _ENDPOINT_METADATA.get(key)
         label = meta["label"] if meta else key.replace("_", " ").title()
@@ -176,10 +176,10 @@ async def public_model_hub():
         )
 
     # Fetch health check information if available
-    health_checks_map = {}
+    health_checks_map: Final = {}
     if prisma_client is not None:
         try:
-            latest_checks = await prisma_client.get_all_latest_health_checks()
+            latest_checks: Final = await prisma_client.get_all_latest_health_checks()
             for check in latest_checks:
                 key = check.model_id if check.model_id else check.model_name
                 if key:
@@ -209,7 +209,7 @@ async def get_agents(request: Request):
     import litellm
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
-    agents = global_agent_registry.get_public_agent_list()
+    agents: Final = global_agent_registry.get_public_agent_list()
 
     if litellm.public_agent_groups is None:
         return []
@@ -220,7 +220,7 @@ async def get_agents(request: Request):
             "url": get_custom_url(str(request.base_url), route=f"a2a/{agent.agent_id}"),
         }
         for agent in agents
-        if agent.agent_id in litellm.public_agent_groups
+        if not global_agent_registry.ids_for_agent(agent.agent_id).isdisjoint(litellm.public_agent_groups)
     ]
 
 
@@ -234,7 +234,7 @@ async def get_mcp_servers():
         global_mcp_server_manager,
     )
 
-    public_mcp_servers = global_mcp_server_manager.get_public_mcp_servers()
+    public_mcp_servers: Final = global_mcp_server_manager.get_public_mcp_servers()
     return [
         MCPPublicServer(
             **server.model_dump(),
@@ -258,9 +258,9 @@ async def public_skill_hub():
     )
 
     try:
-        prisma_client = await _get_prisma_client()
-        plugins = await ClaudeCodePluginRepository(prisma_client).table.find_many(where={"enabled": True})
-        items = []
+        prisma_client: Final = await _get_prisma_client()
+        plugins: Final = await ClaudeCodePluginRepository(prisma_client).table.find_many(where={"enabled": True})
+        items: Final = []
         for plugin in plugins:
             raw = plugin.manifest_json or {}
             manifest = json.loads(raw) if isinstance(raw, str) else raw
@@ -334,7 +334,7 @@ async def get_provider_fields() -> list[ProviderCreateInfo]:
     Return provider metadata required by the dashboard create-model flow.
     """
 
-    provider_create_fields_path = os.path.join(
+    provider_create_fields_path: Final = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
         "proxy",
         "public_endpoints",
@@ -342,7 +342,7 @@ async def get_provider_fields() -> list[ProviderCreateInfo]:
     )
 
     with open(provider_create_fields_path, "r") as f:
-        provider_create_fields = json.load(f)
+        provider_create_fields: Final = json.load(f)
 
     return provider_create_fields
 
@@ -359,12 +359,12 @@ async def get_litellm_model_cost_map():
     import litellm
 
     try:
-        _model_cost_map = litellm.model_cost
+        _model_cost_map: Final = litellm.model_cost
         return _model_cost_map
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Internal Server Error ({e!s})",
+            detail=f"Internal Server Error ({e})",
         )
 
 
@@ -386,7 +386,7 @@ async def get_litellm_blog_posts():
         verbose_logger.warning("LiteLLM: get_litellm_blog_posts endpoint fallback triggered: %s", str(e))
         posts_data = GetBlogPosts.load_local_blog_posts()
 
-    posts = [BlogPost(**p) for p in posts_data[:5]]
+    posts: Final = [BlogPost(**p) for p in posts_data[:5]]
     return BlogPostsResponse(posts=posts)
 
 
@@ -404,7 +404,7 @@ async def get_supported_endpoints() -> SupportedEndpointsResponse:
     """
     global _cached_endpoints
     if _cached_endpoints is None:
-        _cached_endpoints = SupportedEndpointsResponse(endpoints=_load_endpoints())  # type: ignore[arg-type]
+        _cached_endpoints = SupportedEndpointsResponse(endpoints=_load_endpoints())
     return _cached_endpoints
 
 
@@ -420,23 +420,23 @@ async def get_agent_fields() -> list[AgentCreateInfo]:
     If an agent has `inherit_credentials_from_provider`, the provider's credential
     fields are automatically appended to the agent's credential_fields.
     """
-    base_path = os.path.join(
+    base_path: Final = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
         "proxy",
         "public_endpoints",
     )
 
-    agent_create_fields_path = os.path.join(base_path, "agent_create_fields.json")
-    provider_create_fields_path = os.path.join(base_path, "provider_create_fields.json")
+    agent_create_fields_path: Final = os.path.join(base_path, "agent_create_fields.json")
+    provider_create_fields_path: Final = os.path.join(base_path, "provider_create_fields.json")
 
     with open(agent_create_fields_path, "r") as f:
-        agent_create_fields = json.load(f)
+        agent_create_fields: Final = json.load(f)
 
     with open(provider_create_fields_path, "r") as f:
-        provider_create_fields = json.load(f)
+        provider_create_fields: Final = json.load(f)
 
     # Build a lookup map for providers by name
-    provider_map = {p["provider"]: p for p in provider_create_fields}
+    provider_map: Final = {p["provider"]: p for p in provider_create_fields}
 
     # Merge inherited credential fields
     for agent in agent_create_fields:

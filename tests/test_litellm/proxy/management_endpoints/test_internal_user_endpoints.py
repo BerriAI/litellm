@@ -1384,6 +1384,39 @@ async def test_user_info_nonexistent_user(mocker):
 
 
 @pytest.mark.asyncio
+async def test_user_info_no_user_id_view_only_admin_gets_proxy_admin_payload(mocker):
+    """PROXY_ADMIN_VIEW_ONLY must take the proxy-admin branch; otherwise /user/info
+    silently narrows to the viewer's own row instead of the whole tenant."""
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth, UserInfoResponse
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.get_data = mocker.AsyncMock(return_value=None)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    admin_payload = UserInfoResponse(user_id=None, user_info=None, keys=[], teams=[])
+    mock_get_user_info_for_proxy_admin = mocker.AsyncMock(return_value=admin_payload)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._get_user_info_for_proxy_admin",
+        mock_get_user_info_for_proxy_admin,
+    )
+
+    viewer = UserAPIKeyAuth(
+        user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+    )
+    mock_request = mocker.MagicMock(spec=Request)
+
+    response = await user_info(
+        user_id=None, user_api_key_dict=viewer, request=mock_request
+    )
+
+    mock_get_user_info_for_proxy_admin.assert_awaited_once_with(user_api_key_dict=viewer)
+    assert response is admin_payload
+
+
+@pytest.mark.asyncio
 async def test_new_user_default_teams_flow(mocker):
     """
     Test that when teams are set via default_internal_user_params:
@@ -2259,6 +2292,75 @@ async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch)
         api_key=None,
         timezone_offset_minutes=480,
     )
+
+
+@pytest.mark.asyncio
+async def test_get_user_daily_activity_aggregated_non_admin_cannot_view_other_users(
+    monkeypatch,
+):
+    """
+    Same scoping contract as
+    test_get_user_daily_activity_non_admin_cannot_view_other_users, on the
+    aggregated route. Non-admins reach this handler now that the route is in
+    self_managed_routes, so the 403-on-mismatch and default-to-self behaviour
+    has to hold here too: opening the route must not widen access.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        get_user_daily_activity_aggregated,
+    )
+
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    non_admin_key_dict = UserAPIKeyAuth(
+        user_id="regular-user-123",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    # Case 1: Non-admin targets another user's data — 403, helper never reached
+    with patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity_aggregated",
+        new_callable=AsyncMock,
+    ) as mock_get_daily_agg:
+        with pytest.raises(HTTPException) as exc_info:
+            await get_user_daily_activity_aggregated(
+                start_date="2025-01-01",
+                end_date="2025-01-31",
+                model=None,
+                api_key=None,
+                user_id="other-user-456",
+                timezone=None,
+                user_api_key_dict=non_admin_key_dict,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "Non-admin users can only view their own spend data" in str(exc_info.value.detail)
+        mock_get_daily_agg.assert_not_called()
+
+    # Case 2: Non-admin omits user_id — scoped to their own user_id, not global
+    mock_response = MagicMock()
+    with patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity_aggregated",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ) as mock_get_daily_agg:
+        result = await get_user_daily_activity_aggregated(
+            start_date="2025-01-01",
+            end_date="2025-01-31",
+            model=None,
+            api_key=None,
+            user_id=None,
+            timezone=None,
+            user_api_key_dict=non_admin_key_dict,
+        )
+
+        assert result is mock_response
+        mock_get_daily_agg.assert_called_once()
+        assert mock_get_daily_agg.call_args.kwargs["entity_id"] == "regular-user-123"
 
 
 @pytest.mark.asyncio
@@ -3213,13 +3315,9 @@ def test_enforce_user_info_access_admin_bypass():
     _enforce_user_info_access(user_id="someone_else", user_api_key_dict=admin)
 
 
-def test_enforce_user_info_access_view_only_admin_blocked_from_other_users():
-    """PROXY_ADMIN_VIEW_ONLY is not a true admin for /user/info — the upstream
-    route check applies the same `user_id == valid_token.user_id` rule, so the
-    re-check here must mirror that and deny cross-user lookups."""
-    import pytest
-    from fastapi import HTTPException
-
+def test_enforce_user_info_access_view_only_admin_can_read_other_users():
+    """PROXY_ADMIN_VIEW_ONLY has read parity with PROXY_ADMIN, so the ownership
+    re-check must wave it through for another user's id."""
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
         _enforce_user_info_access,
@@ -3229,9 +3327,7 @@ def test_enforce_user_info_access_view_only_admin_blocked_from_other_users():
         user_id="viewer",
         user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
     )
-    with pytest.raises(HTTPException) as exc_info:
-        _enforce_user_info_access(user_id="someone_else", user_api_key_dict=viewer)
-    assert exc_info.value.status_code == 403
+    _enforce_user_info_access(user_id="someone_else", user_api_key_dict=viewer)
 
 
 def test_enforce_user_info_access_view_only_admin_can_read_own():

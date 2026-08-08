@@ -114,10 +114,7 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
               <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
             </div>
           </div>
-          <Tabs
-            value={dimension}
-            onValueChange={(value) => setDimension(value === "model" ? "model" : "key")}
-          >
+          <Tabs value={dimension} onValueChange={(value) => setDimension(value === "model" ? "model" : "key")}>
             <TabsList>
               <TabsTrigger value="key">By virtual key</TabsTrigger>
               <TabsTrigger value="model">By model</TabsTrigger>

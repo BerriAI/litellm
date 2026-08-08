@@ -4,7 +4,7 @@ Check if prompt caching is valid for a given deployment
 Route to previously cached model id, if valid
 """
 
-from typing import cast
+from typing import Final, cast
 
 from litellm import verbose_logger
 from litellm.caching.dual_cache import DualCache
@@ -59,16 +59,16 @@ class PromptCachingDeploymentCheck(CustomLogger):
             model=model,
             min_token_count=_get_min_token_count_for_deployments(healthy_deployments),
         ):
-            prompt_cache = PromptCachingCache(
+            prompt_cache: Final = PromptCachingCache(
                 cache=self.cache,
             )
 
-            model_id_dict = await prompt_cache.async_get_model_id(
+            model_id_dict: Final = await prompt_cache.async_get_model_id(
                 messages=cast(list[AllMessageValues], messages),
                 tools=None,
             )
             if model_id_dict is not None:
-                model_id = model_id_dict["model_id"]
+                model_id: Final = model_id_dict["model_id"]
                 for deployment in healthy_deployments:
                     if deployment["model_info"]["id"] == model_id:
                         return [deployment]
@@ -76,12 +76,12 @@ class PromptCachingDeploymentCheck(CustomLogger):
         return healthy_deployments
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        standard_logging_object: StandardLoggingPayload | None = kwargs.get("standard_logging_object", None)
+        standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 
         if standard_logging_object is None:
             return
 
-        call_type = standard_logging_object["call_type"]
+        call_type: Final = standard_logging_object["call_type"]
 
         if (
             call_type != CallTypes.completion.value
@@ -93,9 +93,9 @@ class PromptCachingDeploymentCheck(CustomLogger):
             )
             return
 
-        model = standard_logging_object["model"]
-        messages = standard_logging_object["messages"]
-        model_id = standard_logging_object["model_id"]
+        model: Final = standard_logging_object["model"]
+        messages: Final = standard_logging_object["messages"]
+        model_id: Final = standard_logging_object["model_id"]
 
         if messages is None or not isinstance(messages, list):
             verbose_logger.debug(
@@ -113,7 +113,7 @@ class PromptCachingDeploymentCheck(CustomLogger):
             model=model,
             messages=cast(list[AllMessageValues], messages),
         ):
-            cache = PromptCachingCache(
+            cache: Final = PromptCachingCache(
                 cache=self.cache,
             )
             await cache.async_add_model_id(

@@ -8,7 +8,7 @@ Pattern follows litellm/llms/litellm_proxy/responses/transformation.py
 """
 
 from collections.abc import Coroutine
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm.types.llms.anthropic_skills import (
     DeleteSkillResponse,
@@ -84,7 +84,7 @@ class LiteLLMSkillsTransformationHandler:
         # files is a list of tuples: [(filename, content, content_type), ...]
         if files and not file_content:
             if isinstance(files, list) and len(files) > 0:
-                first_file = files[0]
+                first_file: Final = files[0]
                 if isinstance(first_file, tuple) and len(first_file) >= 2:
                     file_name = first_file[0]
                     file_content = first_file[1]
@@ -136,7 +136,7 @@ class LiteLLMSkillsTransformationHandler:
         from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
         from litellm.proxy._types import NewSkillRequest
 
-        skill_request = NewSkillRequest(
+        skill_request: Final = NewSkillRequest(
             display_title=display_title,
             description=description,
             instructions=instructions,
@@ -146,7 +146,7 @@ class LiteLLMSkillsTransformationHandler:
             metadata=metadata,
         )
 
-        db_skill = await LiteLLMSkillsHandler.create_skill(
+        db_skill: Final = await LiteLLMSkillsHandler.create_skill(
             data=skill_request,
             user_id=user_id,
             user_api_key_dict=user_api_key_dict,
@@ -214,13 +214,13 @@ class LiteLLMSkillsTransformationHandler:
         # Lazy import to avoid SDK dependency on proxy
         from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 
-        db_skills = await LiteLLMSkillsHandler.list_skills(
+        db_skills: Final = await LiteLLMSkillsHandler.list_skills(
             limit=limit,
             offset=offset,
             user_api_key_dict=user_api_key_dict,
         )
 
-        skills = [self._db_skill_to_response(s) for s in db_skills]
+        skills: Final = [self._db_skill_to_response(s) for s in db_skills]
         return ListSkillsResponse(
             data=skills,
             has_more=len(skills) >= limit,
@@ -282,7 +282,7 @@ class LiteLLMSkillsTransformationHandler:
         # Lazy import to avoid SDK dependency on proxy
         from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 
-        db_skill = await LiteLLMSkillsHandler.get_skill(
+        db_skill: Final = await LiteLLMSkillsHandler.get_skill(
             skill_id=skill_id,
             user_api_key_dict=user_api_key_dict,
         )
@@ -343,7 +343,7 @@ class LiteLLMSkillsTransformationHandler:
         # Lazy import to avoid SDK dependency on proxy
         from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 
-        result = await LiteLLMSkillsHandler.delete_skill(
+        result: Final = await LiteLLMSkillsHandler.delete_skill(
             skill_id=skill_id,
             user_api_key_dict=user_api_key_dict,
         )
