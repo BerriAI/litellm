@@ -9,9 +9,14 @@ from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system-path
+import pytest
+
 import litellm
+from litellm.caching.dual_cache import DualCache
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.proxy._types import CallInfo, Litellm_EntityType
+from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES, AlertType
+from litellm.types.proxy.gateway_requests import SGRLimitState, SGRLimitStatus, SGRLimitWindow
 
 
 class TestSlackAlerting(unittest.TestCase):
@@ -245,3 +250,86 @@ class TestSlackAlerting(unittest.TestCase):
         )
         self.assertEqual(parsed_data["alerts"], [408])
         self.assertEqual(parsed_data["provider_region_id"], "vertex_aius-east1")
+
+
+class RecordingSlackAlerting(SlackAlerting):
+    """Records what would have been sent instead of posting to Slack."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.sent: List[Tuple[str, str]] = []
+
+    async def send_alert(self, message: str, level: str, alert_type, alerting_metadata=None, **kwargs) -> None:
+        self.sent.append((level, message))
+
+
+def _sgr_status(state: SGRLimitState, window_start: str = "2026-08-01") -> SGRLimitStatus:
+    return SGRLimitStatus(
+        limit=1_000_000,
+        soft_limit=800_000,
+        window=SGRLimitWindow.MONTH,
+        window_start=window_start,
+        successful_requests=900_000 if state is SGRLimitState.SOFT_EXCEEDED else 1_100_000,
+        state=state,
+    )
+
+
+def _alerting(**kwargs) -> RecordingSlackAlerting:
+    return RecordingSlackAlerting(internal_usage_cache=DualCache(), alerting=["slack"], **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_sgr_soft_limit_alerts_once_per_window():
+    alerting = _alerting()
+    status = _sgr_status(SGRLimitState.SOFT_EXCEEDED)
+
+    await alerting.sgr_limit_alert(status=status)
+    await alerting.sgr_limit_alert(status=status)
+
+    assert len(alerting.sent) == 1
+    level, message = alerting.sent[0]
+    assert level == "Medium"
+    assert "900,000" in message and "1,000,000" in message
+
+
+@pytest.mark.asyncio
+async def test_sgr_hard_limit_alerts_even_after_the_soft_one():
+    alerting = _alerting()
+
+    await alerting.sgr_limit_alert(status=_sgr_status(SGRLimitState.SOFT_EXCEEDED))
+    await alerting.sgr_limit_alert(status=_sgr_status(SGRLimitState.HARD_EXCEEDED))
+
+    assert [level for level, _ in alerting.sent] == ["Medium", "High"]
+
+
+@pytest.mark.asyncio
+async def test_a_new_window_alerts_again():
+    alerting = _alerting()
+
+    await alerting.sgr_limit_alert(status=_sgr_status(SGRLimitState.HARD_EXCEEDED, window_start="2026-08-01"))
+    await alerting.sgr_limit_alert(status=_sgr_status(SGRLimitState.HARD_EXCEEDED, window_start="2026-09-01"))
+
+    assert len(alerting.sent) == 2
+
+
+@pytest.mark.asyncio
+async def test_no_alert_while_under_the_soft_limit():
+    alerting = _alerting()
+
+    await alerting.sgr_limit_alert(status=_sgr_status(SGRLimitState.UNDER))
+
+    assert alerting.sent == []
+
+
+@pytest.mark.asyncio
+async def test_sgr_alerts_can_be_switched_off_by_alert_type():
+    alerting = _alerting(alert_types=[AlertType.budget_alerts])
+
+    await alerting.sgr_limit_alert(status=_sgr_status(SGRLimitState.HARD_EXCEEDED))
+
+    assert alerting.sent == []
+
+
+@pytest.mark.asyncio
+async def test_sgr_alerts_are_on_by_default():
+    assert AlertType.sgr_limit_alerts in DEFAULT_ALERT_TYPES

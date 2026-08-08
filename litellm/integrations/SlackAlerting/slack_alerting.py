@@ -40,6 +40,7 @@ from litellm.proxy._types import (
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.integrations.slack_alerting import *
+from litellm.types.proxy.gateway_requests import SGRLimitState, SGRLimitStatus
 
 from ..email_templates.templates import *
 from .batching_handler import send_to_webhook, squash_payloads
@@ -479,6 +480,49 @@ class SlackAlerting(CustomBatchLogger):
                 value="SENT",
                 ttl=self.alerting_args.budget_alert_ttl,
             )
+
+    async def sgr_limit_alert(self, status: SGRLimitStatus) -> None:
+        """
+        Alert once per window per threshold crossed on the SGR allowance.
+
+        The window start is part of the dedup key, so a new month re-alerts even
+        while the previous month's key is still cached, and the two states are
+        separate keys so a deployment that crosses the soft threshold and later
+        the hard one gets both.
+        """
+        if self.alerting is None or self.alert_types is None:
+            return
+        if AlertType.sgr_limit_alerts not in self.alert_types:
+            return
+        if status.state is SGRLimitState.UNDER:
+            return
+
+        cache_key: Final = f"sgr_limit_alert:{status.window_start}:{status.state.value}"
+        if await self.internal_usage_cache.async_get_cache(key=cache_key) is not None:
+            return
+
+        hard_exceeded: Final = status.state is SGRLimitState.HARD_EXCEEDED
+        headline: Final = (
+            "SGR limit reached"
+            if hard_exceeded
+            else f"SGR soft limit reached ({int(100 * status.soft_limit / status.limit)}% of the limit)"
+        )
+        await self.send_alert(
+            message=(
+                f"*{headline}*\n"
+                f"Successful gateway requests this {status.window.value}: "
+                f"`{status.successful_requests:,}` of `{status.limit:,}`\n"
+                f"Window started `{status.window_start}` (UTC)\n"
+                "Requests are still being served, this is an alert only"
+            ),
+            level="High" if hard_exceeded else "Medium",
+            alert_type=AlertType.sgr_limit_alerts,
+        )
+        await self.internal_usage_cache.async_set_cache(
+            key=cache_key,
+            value="SENT",
+            ttl=self.alerting_args.budget_alert_ttl,
+        )
 
     async def budget_alerts(
         self,
@@ -1239,7 +1283,7 @@ Model Info:
         message: str,
         level: Literal["Low", "Medium", "High"],
         alert_type: AlertType,
-        alerting_metadata: dict,
+        alerting_metadata: dict | None = None,
         user_info: WebhookEvent | None = None,
         request_model: str | None = None,
         api_base: str | None = None,

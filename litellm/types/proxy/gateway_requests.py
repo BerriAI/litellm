@@ -2,9 +2,10 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import Enum
 from typing import TypeAlias
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +43,39 @@ class GatewayRequestDailyEntry(BaseModel):
     failed_requests: int = 0
 
 
+class SGRLimitWindow(str, Enum):
+    """Period an SGR allowance is counted over. Calendar aligned and UTC."""
+
+    MONTH = "month"
+    YEAR = "year"
+
+
+class SGRLimitState(str, Enum):
+    SOFT_EXCEEDED = "soft_exceeded"
+    HARD_EXCEEDED = "hard_exceeded"
+    UNDER = "under"
+
+
+@dataclass(frozen=True, slots=True)
+class SGRLimitConfig:
+    """A resolved SGR allowance: the hard limit plus the soft alerting threshold."""
+
+    limit: int
+    soft_limit: int
+    window: SGRLimitWindow
+
+
+class SGRLimitStatus(BaseModel):
+    """Where the deployment sits against its SGR allowance for the current window."""
+
+    limit: int
+    soft_limit: int
+    window: SGRLimitWindow
+    window_start: str
+    successful_requests: int
+    state: SGRLimitState
+
+
 class GatewayRequestActivityResponse(BaseModel):
     """Response for GET /gateway/daily/activity."""
 
@@ -49,3 +83,11 @@ class GatewayRequestActivityResponse(BaseModel):
     total_failed_requests: int = 0
     by_date: tuple[GatewayRequestDailyEntry, ...] = ()
     by_route: tuple[GatewayRequestBreakdownEntry, ...] = ()
+    sgr_limit: SGRLimitStatus | None = Field(
+        default=None,
+        description=(
+            "Standing against the configured SGR allowance, or null when no allowance is configured. "
+            "The totals above cover the requested date range, this covers the limit window, "
+            "so the two counts are not the same number"
+        ),
+    )

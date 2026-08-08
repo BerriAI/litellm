@@ -239,6 +239,7 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
+    SGR_LIMIT_CHECK_INTERVAL,
 )
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import ModifyResponseException
@@ -357,6 +358,7 @@ from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
     call_with_db_reconnect_retry,
 )
+from litellm.proxy.db.gateway_request_limits import check_sgr_limit
 from litellm.proxy.db.gateway_request_tracking import (
     GatewayRequestAccumulator,
     flush_gateway_requests,
@@ -8345,6 +8347,17 @@ class ProxyStartupEvent:
             seconds=batch_writing_interval,
             args=(prisma_client, gateway_request_accumulator),
             id="update_gateway_requests_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+
+        ### ALERT ON THE GATEWAY REQUEST (SGR) LIMIT ###
+        scheduler.add_job(
+            check_sgr_limit,
+            "interval",
+            seconds=SGR_LIMIT_CHECK_INTERVAL,
+            args=(prisma_client, proxy_logging_obj),
+            id="check_sgr_limit_job",
             replace_existing=True,
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )

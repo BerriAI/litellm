@@ -10,12 +10,61 @@
 
 export const GATEWAY_TOP_ROUTES = 15;
 
+export type SGRLimitState = "under" | "soft_exceeded" | "hard_exceeded";
+
+/**
+ * Standing against the configured SGR allowance, for the limit's own window.
+ *
+ * `successful_requests` here is not the total above: that one covers the
+ * selected date range, this one covers the window the limit is counted over.
+ */
+export interface SGRLimit {
+  limit: number;
+  soft_limit: number;
+  window: "month" | "year";
+  window_start: string;
+  successful_requests: number;
+  state: SGRLimitState;
+}
+
 export interface GatewayActivity {
   total_successful_requests: number;
   total_failed_requests: number;
   by_date: { date: string; successful_requests: number; failed_requests: number }[];
   by_route: { category: string; route: string; successful_requests: number; failed_requests: number }[];
+  /** Absent on a deployment with no allowance configured, and on older proxies. */
+  sgr_limit?: SGRLimit | null;
 }
+
+export interface SGRLimitBanner {
+  severity: "warning" | "error";
+  headline: string;
+  detail: string;
+}
+
+/**
+ * The banner to show for the SGR allowance, or null when there is nothing to say.
+ *
+ * Nothing to say covers three cases: no allowance configured, an allowance the
+ * deployment is still under, and a proxy too old to report one.
+ */
+export const sgrLimitBanner = (activity: GatewayActivity | null): SGRLimitBanner | null => {
+  const sgrLimit = activity?.sgr_limit;
+  if (sgrLimit == null || sgrLimit.state === "under") return null;
+  const used = `${sgrLimit.successful_requests.toLocaleString()} of ${sgrLimit.limit.toLocaleString()}`;
+  const percent = Math.floor((100 * sgrLimit.soft_limit) / sgrLimit.limit);
+  return sgrLimit.state === "hard_exceeded"
+    ? {
+        severity: "error",
+        headline: `Gateway request limit reached: ${used} successful requests this ${sgrLimit.window}`,
+        detail: `Counted since ${sgrLimit.window_start} (UTC). Requests are still being served, this is an alert only.`,
+      }
+    : {
+        severity: "warning",
+        headline: `Approaching the gateway request limit: ${used} successful requests this ${sgrLimit.window}`,
+        detail: `Past ${percent}% of the limit, counted since ${sgrLimit.window_start} (UTC).`,
+      };
+};
 
 /** A fetched result carrying the range key it was fetched for. */
 export interface FetchedForRange<T> {

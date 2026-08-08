@@ -2390,6 +2390,28 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="sends alerts if requests hang for 5min+",
     )
+    sgr_limit: int | None = Field(
+        None,
+        ge=1,
+        description=(
+            "Limit on successful gateway requests (SGR) per window. Crossing it alerts on the admin UI and over "
+            "any configured alerting integration, it does not reject traffic. Takes precedence over an "
+            "enterprise license's `max_sgr`"
+        ),
+    )
+    sgr_soft_limit_percent: float | None = Field(
+        None,
+        gt=0,
+        le=1,
+        description="Fraction of `sgr_limit` at which the soft alert fires. Defaults to 0.8",
+    )
+    sgr_limit_window: Literal["month", "year"] | None = Field(
+        None,
+        description=(
+            "Period `sgr_limit` is counted over, calendar aligned in UTC. Takes precedence over an enterprise "
+            "license's `sgr_window`, and defaults to `year`"
+        ),
+    )
     ui_access_mode: Literal["admin_only", "all"] | None = Field("all", description="Control access to the Proxy UI")
     allowed_routes: list | None = Field(None, description="Proxy API Endpoints you want users to be able to access")
     reject_clientside_metadata_tags: bool | None = Field(
@@ -4691,6 +4713,8 @@ class EnterpriseLicenseData(TypedDict, total=False):
     allowed_features: list[str]
     max_users: int
     max_teams: int
+    max_sgr: int
+    sgr_window: Literal["month", "year"]
 
 
 class ResponseLiteLLM_ManagedVectorStore(TypedDict, total=False):

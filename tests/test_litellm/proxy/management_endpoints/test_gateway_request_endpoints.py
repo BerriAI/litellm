@@ -300,4 +300,41 @@ class TestGatewayDailyActivityRoute:
                     "failed_requests": 3,
                 }
             ],
+            "sgr_limit": None,
         }
+
+
+class TestSGRLimitOnTheActivityEndpoint:
+    @pytest.mark.asyncio
+    async def test_no_limit_status_when_the_deployment_has_no_allowance(self):
+        with patch("litellm.proxy.proxy_server.prisma_client", _prisma_returning([])):
+            with patch("litellm.proxy.proxy_server.general_settings", {}):
+                response = await get_gateway_daily_activity(user_api_key_dict=_admin())
+        assert response.sgr_limit is None
+
+    @pytest.mark.asyncio
+    async def test_reports_the_windows_count_against_a_configured_allowance(self):
+        client = MagicMock()
+        client.db = MagicMock()
+        client.db.query_raw = AsyncMock(side_effect=[[], [{"successful_requests": 900}]])
+        with patch("litellm.proxy.proxy_server.prisma_client", client):
+            with patch("litellm.proxy.proxy_server.general_settings", {"sgr_limit": 1000}):
+                response = await get_gateway_daily_activity(user_api_key_dict=_admin())
+
+        assert response.sgr_limit is not None
+        assert response.sgr_limit.limit == 1000
+        assert response.sgr_limit.soft_limit == 800
+        assert response.sgr_limit.successful_requests == 900
+        assert response.sgr_limit.state.value == "soft_exceeded"
+
+    @pytest.mark.asyncio
+    async def test_a_failed_limit_read_still_serves_the_activity_numbers(self):
+        client = MagicMock()
+        client.db = MagicMock()
+        client.db.query_raw = AsyncMock(side_effect=[[], RuntimeError("limit query failed")])
+        with patch("litellm.proxy.proxy_server.prisma_client", client):
+            with patch("litellm.proxy.proxy_server.general_settings", {"sgr_limit": 1000}):
+                response = await get_gateway_daily_activity(user_api_key_dict=_admin())
+
+        assert response.sgr_limit is None
+        assert response.total_successful_requests == 0
