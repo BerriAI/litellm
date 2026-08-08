@@ -25,9 +25,11 @@ async def route_a2a_agent_request(
     Returns None if not an A2A request (allows normal routing to continue).
     """
     # Import here to avoid circular imports
-    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
     from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
         AgentRequestHandler,
+    )
+    from litellm.proxy.common_utils.registry_read_through import (
+        get_agent_with_read_through,
     )
     from litellm.proxy.route_llm_request import (
         ROUTE_ENDPOINT_MAPPING,
@@ -44,7 +46,7 @@ async def route_a2a_agent_request(
     agent_name: Final = model_name[4:]
 
     # Look up agent in registry
-    agent: Final = global_agent_registry.get_agent_by_name(agent_name)
+    agent: Final = await get_agent_with_read_through(agent_name)
     if agent is None:
         verbose_proxy_logger.error("[A2A] Agent '%s' not found in registry", agent_name)
         route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)

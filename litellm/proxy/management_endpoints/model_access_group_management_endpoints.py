@@ -7,7 +7,10 @@ Endpoints here:
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -50,6 +53,23 @@ def validate_models_exist(model_names: list[str], llm_router) -> tuple[bool, lis
     router_model_names: Final = set(llm_router.get_model_names())
     missing: Final = [m for m in model_names if m not in router_model_names]
     return (len(missing) == 0, missing)
+
+
+async def _missing_models_after_read_through(
+    model_names: Sequence[str], llm_router: "Router | None"
+) -> tuple[str, ...]:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.registry_read_through import (
+        model_registry_read_through,
+    )
+
+    _, missing = validate_models_exist(model_names=list(model_names), llm_router=llm_router)
+    if not missing:
+        return ()
+    for name in missing:
+        await model_registry_read_through.attempt(name)
+    _, still_missing = validate_models_exist(model_names=list(model_names), llm_router=proxy_server.llm_router)
+    return tuple(still_missing)
 
 
 def add_access_group_to_deployment(model_info: dict[str, Any], access_group: str) -> tuple[dict[str, Any], bool]:
@@ -369,12 +389,12 @@ async def create_model_group(
     # Validate model_names exist in router (only if using model_names path)
     if not use_model_ids and has_model_names:
         assert data.model_names is not None
-        all_valid, missing_models = validate_models_exist(
+        missing_models: Final = await _missing_models_after_read_through(
             model_names=data.model_names,
             llm_router=llm_router,
         )
 
-        if not all_valid:
+        if missing_models:
             raise HTTPException(
                 status_code=400,
                 detail={"error": f"Model(s) not found: {', '.join(missing_models)}"},
@@ -633,12 +653,12 @@ async def update_access_group(
     # Validation: Check if all new models exist (only if using model_names path)
     if not use_model_ids and has_model_names:
         assert data.model_names is not None
-        all_valid, missing_models = validate_models_exist(
+        missing_models: Final = await _missing_models_after_read_through(
             model_names=data.model_names,
             llm_router=llm_router,
         )
 
-        if not all_valid:
+        if missing_models:
             raise HTTPException(
                 status_code=400,
                 detail={"error": f"Model(s) not found: {', '.join(missing_models)}"},
