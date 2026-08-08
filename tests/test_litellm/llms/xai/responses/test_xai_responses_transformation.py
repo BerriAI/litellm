@@ -37,43 +37,29 @@ class TestXAIResponsesAPITransformation:
         )
 
         assert config is not None, "Config should not be None for XAI provider"
-        assert isinstance(
-            config, XAIResponsesAPIConfig
-        ), f"Expected XAIResponsesAPIConfig, got {type(config)}"
-        assert (
-            config.custom_llm_provider == LlmProviders.XAI
-        ), "custom_llm_provider should be XAI"
+        assert isinstance(config, XAIResponsesAPIConfig), f"Expected XAIResponsesAPIConfig, got {type(config)}"
+        assert config.custom_llm_provider == LlmProviders.XAI, "custom_llm_provider should be XAI"
 
     def test_code_interpreter_container_field_removed(self):
         """Test that container field is removed from code_interpreter tools"""
         config = XAIResponsesAPIConfig()
 
-        params = ResponsesAPIOptionalRequestParams(
-            tools=[{"type": "code_interpreter", "container": {"type": "auto"}}]
-        )
+        params = ResponsesAPIOptionalRequestParams(tools=[{"type": "code_interpreter", "container": {"type": "auto"}}])
 
-        result = config.map_openai_params(
-            response_api_optional_params=params, model="grok-4-fast", drop_params=False
-        )
+        result = config.map_openai_params(response_api_optional_params=params, model="grok-4-fast", drop_params=False)
 
         assert "tools" in result
         assert len(result["tools"]) == 1
         assert result["tools"][0]["type"] == "code_interpreter"
-        assert (
-            "container" not in result["tools"][0]
-        ), "Container field should be removed"
+        assert "container" not in result["tools"][0], "Container field should be removed"
 
     def test_instructions_parameter_dropped(self):
         """Test that instructions parameter is dropped for XAI"""
         config = XAIResponsesAPIConfig()
 
-        params = ResponsesAPIOptionalRequestParams(
-            instructions="You are a helpful assistant.", temperature=0.7
-        )
+        params = ResponsesAPIOptionalRequestParams(instructions="You are a helpful assistant.", temperature=0.7)
 
-        result = config.map_openai_params(
-            response_api_optional_params=params, model="grok-4-fast", drop_params=False
-        )
+        result = config.map_openai_params(response_api_optional_params=params, model="grok-4-fast", drop_params=False)
 
         assert "instructions" not in result, "Instructions should be dropped"
         assert result.get("temperature") == 0.7, "Other params should be preserved"
@@ -94,25 +80,15 @@ class TestXAIResponsesAPITransformation:
 
         # Test with default XAI API base
         url = config.get_complete_url(api_base=None, litellm_params={})
-        assert (
-            url == "https://api.x.ai/v1/responses"
-        ), f"Expected XAI responses endpoint, got {url}"
+        assert url == "https://api.x.ai/v1/responses", f"Expected XAI responses endpoint, got {url}"
 
         # Test with custom api_base
-        custom_url = config.get_complete_url(
-            api_base="https://custom.x.ai/v1", litellm_params={}
-        )
-        assert (
-            custom_url == "https://custom.x.ai/v1/responses"
-        ), f"Expected custom endpoint, got {custom_url}"
+        custom_url = config.get_complete_url(api_base="https://custom.x.ai/v1", litellm_params={})
+        assert custom_url == "https://custom.x.ai/v1/responses", f"Expected custom endpoint, got {custom_url}"
 
         # Test with trailing slash
-        url_with_slash = config.get_complete_url(
-            api_base="https://api.x.ai/v1/", litellm_params={}
-        )
-        assert (
-            url_with_slash == "https://api.x.ai/v1/responses"
-        ), "Should handle trailing slash"
+        url_with_slash = config.get_complete_url(api_base="https://api.x.ai/v1/", litellm_params={})
+        assert url_with_slash == "https://api.x.ai/v1/responses", "Should handle trailing slash"
 
     def test_web_search_tool_transformation(self):
         """Test that web_search tools are transformed to XAI format"""
@@ -173,9 +149,7 @@ class TestXAIResponsesAPITransformation:
         config = XAIResponsesAPIConfig()
 
         params = ResponsesAPIOptionalRequestParams(
-            tools=[
-                {"type": "web_search", "excluded_domains": ["example.com", "test.com"]}
-            ]
+            tools=[{"type": "web_search", "excluded_domains": ["example.com", "test.com"]}]
         )
 
         result = config.map_openai_params(
@@ -338,9 +312,7 @@ class TestXAIResponsesToolUsageAttach:
     def test_server_side_tool_usage_details_from_usage_attr(self):
         usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
         setattr(usage, "server_side_tool_usage_details", self._TOOL_DETAILS)
-        details = XAIResponsesAPIConfig._server_side_tool_usage_details_from_usage(
-            usage
-        )
+        details = XAIResponsesAPIConfig._server_side_tool_usage_details_from_usage(usage)
         assert details == self._TOOL_DETAILS
 
     def test_server_side_tool_usage_details_from_model_extra(self):
@@ -350,16 +322,11 @@ class TestXAIResponsesToolUsageAttach:
             total_tokens=15,
             server_side_tool_usage_details=self._TOOL_DETAILS,
         )
-        details = XAIResponsesAPIConfig._server_side_tool_usage_details_from_usage(
-            usage
-        )
+        details = XAIResponsesAPIConfig._server_side_tool_usage_details_from_usage(usage)
         assert details == self._TOOL_DETAILS
 
     def test_server_side_tool_usage_details_from_usage_none(self):
-        assert (
-            XAIResponsesAPIConfig._server_side_tool_usage_details_from_usage(None)
-            is None
-        )
+        assert XAIResponsesAPIConfig._server_side_tool_usage_details_from_usage(None) is None
         assert (
             XAIResponsesAPIConfig._server_side_tool_usage_details_from_usage(
                 Usage(prompt_tokens=1, completion_tokens=0, total_tokens=1)
@@ -368,17 +335,13 @@ class TestXAIResponsesToolUsageAttach:
         )
 
     def test_attach_noop_when_usage_missing(self):
-        response = ResponsesAPIResponse.model_construct(
-            id="resp_1", created_at=0, output=[], usage=None
-        )
+        response = ResponsesAPIResponse.model_construct(id="resp_1", created_at=0, output=[], usage=None)
         XAIResponsesAPIConfig._attach_server_side_tool_usage_details_to_usage(response)
         assert response.usage is None
 
     def test_attach_noop_when_details_missing(self):
         usage = ResponseAPIUsage(input_tokens=3, output_tokens=1, total_tokens=4)
-        response = ResponsesAPIResponse.model_construct(
-            id="resp_2", created_at=0, output=[], usage=usage
-        )
+        response = ResponsesAPIResponse.model_construct(id="resp_2", created_at=0, output=[], usage=usage)
         XAIResponsesAPIConfig._attach_server_side_tool_usage_details_to_usage(response)
         assert isinstance(response.usage, ResponseAPIUsage)
 
@@ -389,31 +352,52 @@ class TestXAIResponsesToolUsageAttach:
             total_tokens=120,
             server_side_tool_usage_details=self._TOOL_DETAILS,
         )
-        response = ResponsesAPIResponse.model_construct(
-            id="resp_3", created_at=0, output=[], usage=usage
-        )
+        response = ResponsesAPIResponse.model_construct(id="resp_3", created_at=0, output=[], usage=usage)
         XAIResponsesAPIConfig._attach_server_side_tool_usage_details_to_usage(response)
 
         assert isinstance(response.usage, Usage)
         assert response.usage.prompt_tokens == 100
         assert response.usage.completion_tokens == 20
-        assert getattr(response.usage, "server_side_tool_usage_details") == (
-            self._TOOL_DETAILS
-        )
+        assert getattr(response.usage, "server_side_tool_usage_details") == (self._TOOL_DETAILS)
         assert response.usage.prompt_tokens_details is not None
         assert response.usage.prompt_tokens_details.web_search_requests == 2
 
     def test_attach_updates_existing_chat_usage_in_place(self):
         usage = Usage(prompt_tokens=5, completion_tokens=5, total_tokens=10)
         setattr(usage, "server_side_tool_usage_details", self._TOOL_DETAILS)
-        response = ResponsesAPIResponse.model_construct(
-            id="resp_4", created_at=0, output=[], usage=usage
-        )
+        response = ResponsesAPIResponse.model_construct(id="resp_4", created_at=0, output=[], usage=usage)
         XAIResponsesAPIConfig._attach_server_side_tool_usage_details_to_usage(response)
 
         assert response.usage is usage
         assert usage.prompt_tokens_details is not None
         assert usage.prompt_tokens_details.web_search_requests == 2
+
+    def test_chat_bridge_retransform_after_attach_keeps_tool_usage(self):
+        """completion(..., web_search_options={}) re-converts usage after xAI attach."""
+        from litellm.responses.utils import ResponseAPILoggingUtils
+
+        usage = ResponseAPIUsage(
+            input_tokens=100,
+            output_tokens=20,
+            total_tokens=120,
+            server_side_tool_usage_details=self._TOOL_DETAILS,
+        )
+        response = ResponsesAPIResponse.model_construct(id="resp_bridge", created_at=0, output=[], usage=usage)
+        XAIResponsesAPIConfig._attach_server_side_tool_usage_details_to_usage(response)
+        assert isinstance(response.usage, Usage)
+
+        bridged = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(response.usage)
+        assert bridged is response.usage
+        assert getattr(bridged, "server_side_tool_usage_details") == self._TOOL_DETAILS
+        assert bridged.prompt_tokens_details is not None
+        assert bridged.prompt_tokens_details.web_search_requests == 2
+
+        from_dump = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(bridged.model_dump())
+        assert from_dump.prompt_tokens == 100
+        assert from_dump.completion_tokens == 20
+        assert getattr(from_dump, "server_side_tool_usage_details") == self._TOOL_DETAILS
+        assert from_dump.prompt_tokens_details is not None
+        assert from_dump.prompt_tokens_details.web_search_requests == 2
 
     def test_transform_streaming_response_completed_attaches_tool_usage(self):
         config = XAIResponsesAPIConfig()
@@ -431,15 +415,11 @@ class TestXAIResponsesToolUsageAttach:
                 },
             },
         }
-        event = config.transform_streaming_response(
-            model="grok-4.3", parsed_chunk=chunk, logging_obj=MagicMock()
-        )
+        event = config.transform_streaming_response(model="grok-4.3", parsed_chunk=chunk, logging_obj=MagicMock())
 
         assert isinstance(event, ResponseCompletedEvent)
         assert isinstance(event.response.usage, Usage)
-        assert getattr(event.response.usage, "server_side_tool_usage_details") == (
-            self._TOOL_DETAILS
-        )
+        assert getattr(event.response.usage, "server_side_tool_usage_details") == (self._TOOL_DETAILS)
         assert event.response.usage.prompt_tokens_details is not None
         assert event.response.usage.prompt_tokens_details.web_search_requests == 2
 
@@ -452,9 +432,7 @@ class TestXAIResponsesToolUsageAttach:
             "content_index": 0,
             "delta": "hi",
         }
-        event = config.transform_streaming_response(
-            model="grok-4.3", parsed_chunk=chunk, logging_obj=MagicMock()
-        )
+        event = config.transform_streaming_response(model="grok-4.3", parsed_chunk=chunk, logging_obj=MagicMock())
         assert getattr(event, "type", None) is not None
         assert not isinstance(
             event,

@@ -1033,13 +1033,17 @@ class ResponseAPILoggingUtils:
 
     @staticmethod
     def _transform_response_api_usage_to_chat_usage(
-        usage_input: dict | ResponseAPIUsage | None,
+        usage_input: dict | ResponseAPIUsage | Usage | None,
     ) -> Usage:
         """
         Transforms ResponseAPIUsage or ImageUsage to a Usage object.
 
         Both have the same spec with input_tokens, output_tokens, and
         input_tokens_details (text_tokens, image_tokens).
+
+        Providers that already converted usage to chat Usage (e.g. xAI Responses
+        attaching server_side_tool_usage_details) are returned as-is so the chat
+        completions bridge can re-run this helper without dropping extra fields.
         """
         if usage_input is None:
             return Usage(
@@ -1047,6 +1051,10 @@ class ResponseAPILoggingUtils:
                 completion_tokens=0,
                 total_tokens=0,
             )
+        if isinstance(usage_input, Usage):
+            return usage_input
+        if isinstance(usage_input, dict) and not ResponseAPILoggingUtils._is_response_api_usage(usage_input):
+            return Usage(**usage_input)
         response_api_usage: ResponseAPIUsage
         if isinstance(usage_input, dict):
             usage_input = dict(usage_input)  # shallow copy; avoid mutating caller
