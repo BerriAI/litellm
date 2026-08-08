@@ -349,6 +349,14 @@ def get_llm_provider(
                     elif endpoint == "https://api.meta.ai/v1":
                         custom_llm_provider = "meta"
                         dynamic_api_key = get_secret_str("META_API_KEY")
+                    elif endpoint == "https://api.flex.ai/v1":
+                        custom_llm_provider = "flexai"
+                        # Prefer an explicitly supplied credential; only fall back
+                        # to the server environment. completion() overwrites
+                        # api_key with dynamic_api_key whenever it is set, so
+                        # reading the env unconditionally would silently spend the
+                        # server's key on a caller-supplied api_base.
+                        dynamic_api_key = api_key or get_secret_str("FLEXAI_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(f"api base needs to be a string. api_base={api_base}")
