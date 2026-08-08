@@ -3,7 +3,7 @@ when the stream ends, including on client disconnect (generator aclose), so
 the provider connection is released and backends like vLLM stop generating.
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Coroutine
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -51,7 +51,7 @@ def _logging_obj_stub() -> MagicMock:
     return logging_obj
 
 
-def _chunk_processor(response: httpx.Response):
+def _chunk_processor(response: httpx.Response) -> AsyncIterator[bytes]:
     return PassThroughStreamingHandler.chunk_processor(
         response=response,
         request_body={"model": "claude-sonnet-4-5"},
@@ -63,7 +63,7 @@ def _chunk_processor(response: httpx.Response):
     )
 
 
-def _drop_scheduled_coroutine(async_coroutine) -> None:
+def _drop_scheduled_coroutine(async_coroutine: Coroutine[object, object, object]) -> None:
     async_coroutine.close()
 
 
