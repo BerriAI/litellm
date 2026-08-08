@@ -1261,6 +1261,7 @@ def test_get_config_returns_email_settings_set_only_in_process_env(monkeypatch):
     monkeypatch.setenv("SMTP_HOST", "smtp.env-host.com")
     monkeypatch.setenv("SMTP_PORT", "2525")
     monkeypatch.setenv("SMTP_TLS", "False")
+    monkeypatch.setenv("SMTP_USE_SSL", "True")
     monkeypatch.setenv("SMTP_USERNAME", "env-user")
     monkeypatch.setenv("SMTP_PASSWORD", smtp_password)
     monkeypatch.setenv("SMTP_SENDER_EMAIL", "alerts@env-host.com")
@@ -1279,6 +1280,7 @@ def test_get_config_returns_email_settings_set_only_in_process_env(monkeypatch):
     assert variables["SMTP_HOST"] == "smtp.env-host.com"
     assert variables["SMTP_PORT"] == "2525"
     assert variables["SMTP_TLS"] == "False"
+    assert variables["SMTP_USE_SSL"] == "True"
     assert variables["SMTP_USERNAME"] == "env-user"
     assert variables["SMTP_SENDER_EMAIL"] == "alerts@env-host.com"
     assert variables["TEST_EMAIL_ADDRESS"] == "admin@env-host.com"
@@ -1312,7 +1314,15 @@ def test_get_config_email_settings_prefer_stored_over_process_env(monkeypatch):
 
 def test_get_config_email_settings_absent_everywhere_stay_none(monkeypatch):
     """A field set in neither source is reported unset rather than invented."""
-    for var in ("SMTP_HOST", "SMTP_PORT", "SMTP_TLS", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_SENDER_EMAIL"):
+    for var in (
+        "SMTP_HOST",
+        "SMTP_PORT",
+        "SMTP_TLS",
+        "SMTP_USE_SSL",
+        "SMTP_USERNAME",
+        "SMTP_PASSWORD",
+        "SMTP_SENDER_EMAIL",
+    ):
         monkeypatch.delenv(var, raising=False)
 
     variables = _get_email_alert_variables(

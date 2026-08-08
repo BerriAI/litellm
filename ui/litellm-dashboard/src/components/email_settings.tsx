@@ -14,13 +14,24 @@ interface EmailSettingsProps {
 
 const REQUIRED_MARKER = <span className="text-destructive"> Required * </span>;
 
+const REQUIRED_FIELDS = new Set(["SMTP_HOST", "SMTP_SENDER_EMAIL"]);
+
+const FIELD_TYPES: Record<string, React.HTMLInputTypeAttribute> = {
+  SMTP_PORT: "number",
+  SMTP_PASSWORD: "password",
+};
+
+const BOOLEAN_FIELDS = new Set(["SMTP_TLS", "SMTP_USE_SSL"]);
+
 const FIELD_HELP: Record<string, React.ReactNode> = {
   SMTP_HOST: <>Enter the SMTP host address, e.g. `smtp.resend.com`{REQUIRED_MARKER}</>,
-  SMTP_PORT: <>Enter the SMTP port number, e.g. `587`{REQUIRED_MARKER}</>,
-  SMTP_USERNAME: <>Enter the SMTP username, e.g. `username`{REQUIRED_MARKER}</>,
-  SMTP_PASSWORD: REQUIRED_MARKER,
+  SMTP_PORT: <>Enter the SMTP port number, e.g. `587`</>,
+  SMTP_TLS: <>Use STARTTLS for the SMTP connection. Defaults to `True`</>,
+  SMTP_USE_SSL: <>Use implicit SSL for the SMTP connection. Defaults to `False`</>,
+  SMTP_USERNAME: <>Optional SMTP username for authenticated servers</>,
+  SMTP_PASSWORD: <>Optional SMTP password for authenticated servers</>,
   SMTP_SENDER_EMAIL: <>Enter the sender email address, e.g. `sender@berri.ai`{REQUIRED_MARKER}</>,
-  TEST_EMAIL_ADDRESS: <>Email Address to send `Test Email Alert` to. example: `info@berri.ai`{REQUIRED_MARKER}</>,
+  TEST_EMAIL_ADDRESS: <>Optional address for the `Test Email Alert` action</>,
   EMAIL_LOGO_URL: <>(Optional) Customize the Logo that appears in the email, pass a url to your logo</>,
   EMAIL_SUPPORT_CONTACT: (
     <>(Optional) Customize the support email address that appears in the email. Default is support@berri.ai</>
@@ -41,18 +52,18 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
       .filter((alert) => alert.name === "email")
       .forEach((alert) => {
         Object.entries(alert.variables ?? {}).forEach(([key, value]) => {
-          const inputElement = document.querySelector(`input[name="${key}"]`) as HTMLInputElement;
-          if (!inputElement || !inputElement.value) {
+          const fieldElement = document.querySelector(`[name="${key}"]`) as HTMLInputElement | HTMLSelectElement;
+          if (!fieldElement) {
             return;
           }
           // Only send fields the admin actually edited. Values rendered from the
           // server are masked (SMTP_PASSWORD) or sourced from the process
           // environment, so re-submitting an untouched field would persist a mask
           // or copy env-managed config into the database.
-          if (inputElement.value === (value == null ? "" : String(value))) {
+          if (fieldElement.value === (value == null ? "" : String(value))) {
             return;
           }
-          updatedVariables[key] = inputElement.value;
+          updatedVariables[key] = fieldElement.value;
         });
       });
 
@@ -113,13 +124,27 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
                       ) : (
                         <p className="text-sm">{key}</p>
                       )}
-                      <Input
-                        name={key}
-                        defaultValue={value as string}
-                        type="password"
-                        disabled={isLocked}
-                        className="max-w-100"
-                      />
+                      {BOOLEAN_FIELDS.has(key) ? (
+                        <select
+                          name={key}
+                          defaultValue={value as string | undefined}
+                          required={REQUIRED_FIELDS.has(key)}
+                          disabled={isLocked}
+                          className="max-w-100 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                        >
+                          <option value="True">True</option>
+                          <option value="False">False</option>
+                        </select>
+                      ) : (
+                        <Input
+                          name={key}
+                          defaultValue={value as string | undefined}
+                          type={FIELD_TYPES[key] ?? "text"}
+                          required={REQUIRED_FIELDS.has(key)}
+                          disabled={isLocked}
+                          className="max-w-100"
+                        />
+                      )}
                       <div className="text-xs text-muted-foreground italic">{FIELD_HELP[key]}</div>
                     </div>
                   );

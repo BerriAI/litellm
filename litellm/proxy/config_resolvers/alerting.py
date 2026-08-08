@@ -14,6 +14,7 @@ EMAIL_DESCRIPTORS: Final[tuple[FieldDescriptor, ...]] = (
     FieldDescriptor("SMTP_HOST", "SMTP_HOST", "SMTP_HOST"),
     FieldDescriptor("SMTP_PORT", "SMTP_PORT", "SMTP_PORT", default="587"),
     FieldDescriptor("SMTP_TLS", "SMTP_TLS", "SMTP_TLS", default="True"),
+    FieldDescriptor("SMTP_USE_SSL", "SMTP_USE_SSL", "SMTP_USE_SSL", default="False"),
     FieldDescriptor("SMTP_USERNAME", "SMTP_USERNAME", "SMTP_USERNAME", is_secret=True),
     FieldDescriptor("SMTP_PASSWORD", "SMTP_PASSWORD", "SMTP_PASSWORD", is_secret=True),
     FieldDescriptor("SMTP_SENDER_EMAIL", "SMTP_SENDER_EMAIL", "SMTP_SENDER_EMAIL"),
