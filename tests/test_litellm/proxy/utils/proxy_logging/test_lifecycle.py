@@ -190,6 +190,62 @@ def test_add_proxy_hooks_registers_callbacks(proxy_logging, monkeypatch):
     }
 
 
+def _patch_hooks_with_db_dependent_hook(monkeypatch, registered: List[Any]) -> None:
+    from litellm.proxy import utils as utils_mod
+
+    class _DbHook:
+        def __init__(self, internal_usage_cache, prisma_client):
+            self.hook_name = "managed_files"
+            self.prisma_client = prisma_client
+
+    class _PlainHook:
+        def __init__(self, internal_usage_cache):
+            self.hook_name = "cache_control_check"
+
+    monkeypatch.setattr(utils_mod, "PROXY_HOOKS", ["cache_control_check", "managed_files"])
+    monkeypatch.setattr(
+        utils_mod,
+        "get_proxy_hook",
+        lambda hook_name: _DbHook if hook_name == "managed_files" else _PlainHook,
+    )
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "add_litellm_callback",
+        lambda cb: registered.append(cb),
+    )
+
+
+def test_add_proxy_hooks_skips_db_dependent_hook_without_prisma_client(proxy_logging, monkeypatch):
+    """A hook whose constructor requires ``prisma_client`` must not be registered on a
+    DB-less proxy, otherwise it raises mid-request after the upstream call succeeded.
+    """
+    registered: List[Any] = []
+    _patch_hooks_with_db_dependent_hook(monkeypatch, registered)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        proxy_logging._add_proxy_hooks(llm_router=None)
+
+    assert list(proxy_logging.proxy_hook_mapping.keys()) == ["cache_control_check"]
+    assert [r.hook_name for r in registered] == ["cache_control_check"]
+    assert proxy_logging.get_proxy_hook("managed_files") is None
+
+
+def test_add_proxy_hooks_registers_db_dependent_hook_with_prisma_client(proxy_logging, monkeypatch):
+    registered: List[Any] = []
+    _patch_hooks_with_db_dependent_hook(monkeypatch, registered)
+    prisma_client = MagicMock()
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma_client):
+        proxy_logging._add_proxy_hooks(llm_router=None)
+
+    assert list(proxy_logging.proxy_hook_mapping.keys()) == [
+        "cache_control_check",
+        "managed_files",
+    ]
+    assert [r.hook_name for r in registered] == ["cache_control_check", "managed_files"]
+    assert proxy_logging.get_proxy_hook("managed_files").prisma_client is prisma_client
+
+
 def test_add_proxy_hooks_unknown_hook_raises(proxy_logging, monkeypatch):
     from litellm.proxy import utils as utils_mod
 

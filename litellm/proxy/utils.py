@@ -548,6 +548,12 @@ class ProxyLogging:
             if "internal_usage_cache" in expected_args:
                 passed_in_args["internal_usage_cache"] = self.internal_usage_cache
             if "prisma_client" in expected_args:
+                if prisma_client is None:
+                    verbose_proxy_logger.info(
+                        "Skipping proxy hook '%s' - it requires a database and no prisma_client is configured.",
+                        hook,
+                    )
+                    continue
                 passed_in_args["prisma_client"] = prisma_client
             proxy_hook_obj = cast(CustomLogger, proxy_hook(**passed_in_args))
             litellm.logging_callback_manager.add_litellm_callback(proxy_hook_obj)
