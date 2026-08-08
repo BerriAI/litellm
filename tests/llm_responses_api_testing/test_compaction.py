@@ -19,7 +19,7 @@ async def test_responses_api_compaction_with_conversation_history():
     litellm.set_verbose = True
 
     response = await litellm.aresponses(
-        model="groq/llama-3.3-70b-versatile",
+        model="groq/openai/gpt-oss-120b",
         input=[
             {
                 "type": "message",
@@ -68,7 +68,7 @@ async def test_responses_api_compaction_with_trimming():
     litellm.set_verbose = True
 
     response = await litellm.aresponses(
-        model="groq/llama-3.3-70b-versatile",
+        model="groq/openai/gpt-oss-120b",
         input=[
             {
                 "type": "message",
@@ -103,8 +103,6 @@ async def test_responses_api_compaction_with_trimming():
     assert response.id is not None
     assert response.output is not None
     assert len(response.output) > 0
-
-    assert []
 
 
 async def test_compatct_input():
