@@ -42,7 +42,7 @@ from litellm.types.integrations.websearch_interception import (
     WebSearchInterceptionConfig,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import CallTypes, LlmProviders
+from litellm.types.utils import AgenticLoopParams, CallTypes, LlmProviders
 from litellm.utils import ProviderConfigManager
 
 if TYPE_CHECKING:
@@ -265,7 +265,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             return None
 
         # Check if request has tools with native web_search
-        tools: Final = kwargs.get("tools")
+        tools: Final[Sequence[dict[str, object]] | None] = kwargs.get("tools")
         if not tools:
             return None
 
@@ -314,7 +314,9 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         return kwargs
 
-    def _convert_responses_tools(self, kwargs: Mapping[str, object], tools: list[dict[str, object]]) -> dict | None:
+    def _convert_responses_tools(
+        self, kwargs: Mapping[str, object], tools: Sequence[dict[str, object]]
+    ) -> dict[str, object] | None:
         """Convert Responses API web search tools to the LiteLLM standard function tool."""
         if not any(is_web_search_tool_responses(tool) for tool in tools):
             return None
@@ -379,7 +381,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
 
     @staticmethod
-    def _tool_name(tool: dict[str, Any]) -> str | None:
+    def _tool_name(tool: Mapping[str, object]) -> object:
         """Effective tool name, handling OpenAI ``function`` wrapper shape."""
         fn: Final = tool.get("function")
         if tool.get("type") == "function" and isinstance(fn, dict):
@@ -1271,7 +1273,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         kwargs_for_followup: Final = self._prepare_followup_kwargs(kwargs)
 
         if logging_obj is not None:
-            agentic_params: Final = logging_obj.model_call_details.get("agentic_loop_params", {})
+            agentic_params: Final[AgenticLoopParams] = logging_obj.model_call_details.get("agentic_loop_params", {})
             full_model_name = agentic_params.get("model", model)
         verbose_logger.debug(
             "WebSearchInterception: Built anthropic request patch [call_id=%s model=%s messages=%d searches=%d]",
