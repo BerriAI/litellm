@@ -130,7 +130,7 @@ async def get_credentials(
         ]
         return {"success": True, "credentials": masked_credentials}
     except Exception as e:
-        return handle_exception_on_proxy(e)
+        raise handle_exception_on_proxy(e)
 
 
 @router.get(
@@ -240,7 +240,7 @@ async def delete_credential(
         litellm.credential_list = [cred for cred in litellm.credential_list if cred.credential_name != credential_name]
         return {"success": True, "message": "Credential deleted successfully"}
     except Exception as e:
-        return handle_exception_on_proxy(e)
+        raise handle_exception_on_proxy(e)
 
 
 def update_db_credential(
