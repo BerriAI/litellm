@@ -1,4 +1,5 @@
 import json
+import re
 import time
 from collections.abc import Mapping, Sequence
 from enum import Enum
@@ -3366,6 +3367,41 @@ def shared_backend_model_info(model_info: dict[str, Any]) -> dict[str, Any]:
     it stays under the deployment's unique model id.
     """
     return {k: v for k, v in model_info.items() if k in SHARED_BACKEND_MODEL_INFO_FIELDS}
+
+
+ABOVE_THRESHOLD_COST_KEY_PATTERN: Final = re.compile(r"_above_\d+k?_tokens$")
+
+# ``output_vector_size`` is an embedding dimension that happens to live on
+# ``CustomPricingLiteLLMParams``. It is operator metadata, not a rate, so clients keep
+# writing it.
+_PRICING_FIELD_EXEMPTIONS: Final[frozenset[str]] = frozenset({"output_vector_size"})
+
+SERVER_DERIVED_PRICING_FIELDS: Final[frozenset[str]] = (
+    frozenset(CustomPricingLiteLLMParams.model_fields) - _PRICING_FIELD_EXEMPTIONS
+)
+
+
+def is_server_derived_pricing_key(key: str) -> bool:
+    """Whether ``/model/info`` can fill ``key`` into ``model_info`` from the cost map.
+
+    Two sources, because ``get_model_info`` emits two: the declared pricing fields, and
+    the tiered ``*_above_<N>_tokens`` rates that ride through on a pattern match and are
+    declared nowhere. Both are read here from the same objects the read path uses, so the
+    set cannot drift as new rates are added.
+    """
+    return key in SERVER_DERIVED_PRICING_FIELDS or ABOVE_THRESHOLD_COST_KEY_PATTERN.search(key) is not None
+
+
+def without_server_derived_pricing(model_info: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Drop the pricing ``/model/info`` derives for display, keeping everything else.
+
+    ``/model/info`` fills a deployment's missing pricing in from the cost map so the
+    Admin UI has a rate to show. Clients that echo that response back on save would
+    otherwise persist the display value as a real per-deployment override, freezing the
+    deployment at that day's price where no cost map refresh can reach it. A deployment's
+    own pricing belongs on ``litellm_params``, which is unaffected.
+    """
+    return MappingProxyType({k: v for k, v in model_info.items() if not is_server_derived_pricing_key(k)})
 
 
 # Server-controlled fields that bound or drive an interceptor's agentic loop

@@ -171,6 +171,7 @@ from litellm.types.llms.openai import (
     OpenAIWebSearchOptions,
 )
 from litellm.types.utils import (
+    ABOVE_THRESHOLD_COST_KEY_PATTERN,
     OPENAI_RESPONSE_HEADERS,
     CallTypes,
     ChatCompletionDeltaToolCall,
@@ -5268,7 +5269,7 @@ def _is_potential_model_name_in_model_cost(
     )
 
 
-_ABOVE_THRESHOLD_COST_KEY: Final = re.compile(r"_above_\d+k?_tokens$")
+_ABOVE_THRESHOLD_COST_KEY: Final = ABOVE_THRESHOLD_COST_KEY_PATTERN
 
 
 def _get_model_info_helper(
