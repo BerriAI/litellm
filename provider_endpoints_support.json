@@ -2941,6 +2941,23 @@
         "rerank": false,
         "a2a": false
       }
+    },
+    "cafe24": {
+      "display_name": "Cafe24 LLM Router (`cafe24`)",
+      "url": "https://llm-router.cafe24.com/docs",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
     }
   },
   "endpoints": {
