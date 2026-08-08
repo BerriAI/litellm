@@ -685,3 +685,36 @@ def test_gemma_4_models_register_under_bedrock_mantle(local_cost_map, model_id):
     resolved_model, provider, _, _ = litellm.get_llm_provider(full_model_name)
     assert provider == "bedrock_mantle"
     assert resolved_model == model_id
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "openai.gpt-5.6-sol",
+        "openai.gpt-5.6-terra",
+        "openai.gpt-5.6-luna",
+    ],
+)
+def test_gpt_5_6_long_context_window(local_cost_map, model_id):
+    """GPT-5.6 Sol/Terra/Luna support 1M-token context on Bedrock.
+
+    Announced 2026-08-03:
+    https://aws.amazon.com/about-aws/whats-new/2026/08/gpt-sol-terra-luna-long-context-bedrock/
+
+    The endpoint reports 1050000 as the hard cap; requests above it fail with
+    "prompt tokens (N) exceed model maximum (1050000)".
+    """
+    info = litellm.get_model_info(model=model_id, custom_llm_provider="bedrock_mantle")
+    assert info["max_input_tokens"] == 1050000
+    assert info["max_output_tokens"] == 128000
+
+
+@pytest.mark.parametrize("model_id", ["openai.gpt-5.5", "openai.gpt-5.4"])
+def test_gpt_5_5_and_5_4_keep_shorter_context_window(local_cost_map, model_id):
+    """The 1M launch covered only GPT-5.6; earlier models are unchanged.
+
+    Guards against widening the long-context values to every openai.gpt-5.x
+    entry: these models report a 278528 cap from the same endpoint.
+    """
+    info = litellm.get_model_info(model=model_id, custom_llm_provider="bedrock_mantle")
+    assert info["max_input_tokens"] == 272000
