@@ -20,6 +20,7 @@ import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPServerHealth } from "@/app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
+import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { deleteMCPServer } from "@/components/networking";
 import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
@@ -109,6 +110,7 @@ const readToolsOAuthServerId = (): string | null => {
 
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID }) => {
   const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
+  const proxySettings = useProxySettings(accessToken);
 
   // Fetch health status for all servers
   const {
@@ -707,7 +709,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             <MCPToolsetsTab accessToken={accessToken} userRole={userRole} />
           </TabsContent>
           <TabsContent value="connect">
-            <MCPConnect />
+            <MCPConnect proxySettings={proxySettings} />
           </TabsContent>
           {isAdminRole(userRole) && (
             <TabsContent value="semantic-filter">
