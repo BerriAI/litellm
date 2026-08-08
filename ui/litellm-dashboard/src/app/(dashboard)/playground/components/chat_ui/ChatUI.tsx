@@ -421,10 +421,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
         setModelInfo(uniqueModels);
 
-        const hasSelection = uniqueModels.some((m) => m.model_group === selectedModel);
-        if (!uniqueModels.length || !hasSelection) {
-          setSelectedModel(undefined);
-        }
+        setSelectedModel((currentModel) =>
+          uniqueModels.some((model) => model.model_group === currentModel) ? currentModel : undefined,
+        );
       } catch (error) {
         if (cancelled) {
           return;
@@ -633,7 +632,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       options.push({
         value: server.server_id,
         label: server.alias || server.server_name || server.server_id,
-        description: server.description,
+        description: server.description ?? undefined,
       });
     }
     return options;
