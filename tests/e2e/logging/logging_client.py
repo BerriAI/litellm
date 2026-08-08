@@ -23,7 +23,7 @@ from typing import Callable, Literal
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
-from e2e_config import POLL_INTERVAL, POLL_TIMEOUT
+from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, settle_propagation
 from proxy_client import ProxyClient
 from e2e_http import (
     URL,
@@ -409,6 +409,7 @@ class LoggingClient:
         )
         guardrail_id = response.guardrail_id
         assert guardrail_id, f"create guardrail returned no id: {response!r}"
+        settle_propagation(time.monotonic())
         return guardrail_id
 
     def delete_guardrail(self, guardrail_id: str) -> None:
