@@ -375,8 +375,8 @@ def validate_anthropic_api_metadata(metadata: dict | None = None) -> dict | None
 def _drop_unsupported_anthropic_messages_params(
     anthropic_messages_optional_request_params: dict,
     model: str,
-    custom_llm_provider: Optional[str],
-    additional_drop_params: Optional[list] = None,
+    custom_llm_provider: str | None,
+    additional_drop_params: list | None = None,
 ) -> dict:
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
     from litellm.utils import _should_drop_param
