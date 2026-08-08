@@ -24,5 +24,17 @@
     "entrypoint": "litellm_plugin_language_detector.plugin.language_detector_plugin",
     "license": "MIT",
     "tags": ["language", "classification", "routing"]
+  },
+  {
+    "name": "openrouter-pareto",
+    "description": "Picks the best-value OpenRouter provider per request via a pareto walk over price vs throughput, reroutes around rate-limited, input-capped, and region-excluded providers, and publishes the winner as the deployment routing decision.",
+    "author": "Gideon Zenz",
+    "repo": "https://github.com/gzenz/litellm-plugin-openrouter-pareto",
+    "version": "0.3.0",
+    "pypi": "litellm-plugin-openrouter-pareto==0.3.0",
+    "litellm_version": ">=1.94.0",
+    "entrypoint": "litellm_plugin_openrouter_pareto.plugin.openrouter_pareto_callback",
+    "license": "MIT",
+    "tags": ["openrouter", "pareto", "routing", "cost", "throughput", "region", "rate-limit"]
   }
 ]
