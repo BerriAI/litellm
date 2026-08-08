@@ -127,6 +127,93 @@ def test_get_usage_from_image_generation_response():
     assert usage.completion_tokens_details.text_tokens == 100
 
 
+def test_get_usage_from_rerank_response():
+    """
+    RerankResponse has no top-level `usage` field - token usage lives under
+    `meta.billed_units`/`meta.tokens` (Cohere-style API), which is also what
+    hosted_vllm/other rerank servers return. Without this, /ui/usage always
+    showed 0 tokens for every rerank call.
+    """
+    response_obj = {
+        "id": "rerank-d618748e0f5543e8ba09ee7dd131ac59",
+        "results": [],
+        "meta": {
+            "billed_units": {"total_tokens": 42},
+            "tokens": {"input_tokens": 42},
+        },
+    }
+
+    usage = StandardLoggingPayloadSetup.get_usage_from_response_obj(response_obj)
+
+    assert usage.prompt_tokens == 42
+    assert usage.completion_tokens == 0
+    assert usage.total_tokens == 42
+
+
+def test_get_usage_from_rerank_response_no_meta():
+    """
+    A rerank response with no usable `meta` (and no `usage`) should still
+    fall back to all-zero usage instead of raising.
+    """
+    response_obj = {"id": "rerank-abc", "results": [], "meta": None}
+
+    usage = StandardLoggingPayloadSetup.get_usage_from_response_obj(response_obj)
+
+    assert usage.prompt_tokens == 0
+    assert usage.completion_tokens == 0
+    assert usage.total_tokens == 0
+
+
+def test_get_usage_as_dict_from_rerank_response():
+    """
+    get_usage_as_dict() is the function actually called by
+    get_standard_logging_object_payload() (the hot path used to build spend
+    logs / /ui/usage). It must handle the rerank `meta.billed_units`/`meta.tokens`
+    shape the same way get_usage_from_response_obj() does, or /ui/usage keeps
+    showing 0 tokens for rerank calls even after fixing the other function.
+    """
+    response_obj = {
+        "id": "rerank-d618748e0f5543e8ba09ee7dd131ac59",
+        "results": [],
+        "meta": {
+            "billed_units": {"total_tokens": 42},
+            "tokens": {"input_tokens": 42},
+        },
+    }
+
+    usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj)
+
+    assert usage_dict["prompt_tokens"] == 42
+    assert usage_dict["completion_tokens"] == 0
+    assert usage_dict["total_tokens"] == 42
+
+
+def test_get_usage_as_dict_from_rerank_response_no_meta():
+    response_obj = {"id": "rerank-abc", "results": [], "meta": None}
+
+    usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj)
+
+    assert usage_dict["prompt_tokens"] == 0
+    assert usage_dict["completion_tokens"] == 0
+    assert usage_dict["total_tokens"] == 0
+
+
+def test_get_usage_as_dict_from_chat_response():
+    response_obj = {
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "total_tokens": 30,
+        }
+    }
+
+    usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj)
+
+    assert usage_dict["prompt_tokens"] == 10
+    assert usage_dict["completion_tokens"] == 20
+    assert usage_dict["total_tokens"] == 30
+
+
 def test_get_additional_headers():
     additional_headers = {
         "x-ratelimit-limit-requests": "2000",

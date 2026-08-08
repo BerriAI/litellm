@@ -131,6 +131,25 @@ class TestHostedVLLMRerankTransform:
         assert result.meta["billed_units"]["total_tokens"] == 42
         assert result.meta["tokens"]["input_tokens"] == 42
 
+    def test_transform_response_with_meta(self):
+        """Some vLLM rerank servers (Cohere-compatible API) return usage under
+        `meta.billed_units`/`meta.tokens` instead of a top-level `usage` key."""
+        response_dict = {
+            "id": "rerank-d618748e0f5543e8ba09ee7dd131ac59",
+            "results": [
+                {"index": 0, "relevance_score": 0.9, "document": {"text": "doc1 text"}},
+                {"index": 1, "relevance_score": 0.7, "document": {"text": "doc2 text"}},
+            ],
+            "meta": {
+                "billed_units": {"total_tokens": 42},
+                "tokens": {"input_tokens": 42},
+            },
+        }
+        result = self.config._transform_response(response_dict)
+        assert result.id == "rerank-d618748e0f5543e8ba09ee7dd131ac59"
+        assert result.meta["billed_units"]["total_tokens"] == 42
+        assert result.meta["tokens"]["input_tokens"] == 42
+
     def test_transform_response_missing_results(self):
         response_dict = {"id": "abc123", "usage": {"total_tokens": 10}}
         with pytest.raises(ValueError, match="No results found in the response="):
