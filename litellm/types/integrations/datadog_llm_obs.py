@@ -45,6 +45,9 @@ class LLMMetrics(TypedDict, total=False):
     time_to_first_token: float
     time_per_output_token: float
     total_cost: float
+    cache_read_input_tokens: float
+    cache_write_input_tokens: float
+    non_cached_input_tokens: float
 
 
 class LLMObsPayload(TypedDict, total=False):
