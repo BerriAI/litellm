@@ -552,12 +552,12 @@ def _quality_signals_for(
     baseline_rows: Final = tuple(row for row in turns if row.router_name is None and row.api_key in router_keys)
 
     router_key_rows: Final = tuple(row for row in turns if row.api_key in router_keys)
-    reachable_by_key: Final = MappingProxyType(
-        {
-            key: frozenset(row.model for row in router_key_rows if row.api_key == key)
-            for key in frozenset(row.api_key for row in router_key_rows)
-        }
-    )
+    reachable_by_key_dict: dict[str, set[str]] = {}
+    for row in router_key_rows:
+        if row.api_key not in reachable_by_key_dict:
+            reachable_by_key_dict[row.api_key] = set()
+        reachable_by_key_dict[row.api_key].add(row.model)
+    reachable_by_key: Final = MappingProxyType({key: frozenset(models) for key, models in reachable_by_key_dict.items()})
     reachable_models: Final = tuple(frozenset(row.model for row in router_key_rows))
     ranks: Final = rank_models_by_cost(llm_router, reachable_models) if llm_router is not None else MappingProxyType({})
 
