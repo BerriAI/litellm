@@ -130,9 +130,23 @@ class JsonRpc:
     """JSON-RPC keys carried on MCP spans. The error/status code lives in the
     ``rpc.*`` namespace per semconv, not ``jsonrpc.*``."""
 
+    SYSTEM: Final = "rpc.system"
     REQUEST_ID: Final = "jsonrpc.request.id"
     PROTOCOL_VERSION: Final = "jsonrpc.protocol.version"
     RESPONSE_STATUS_CODE: Final = "rpc.response.status_code"
+
+
+class RpcSystem(str, Enum):
+    """Well-known values for ``rpc.system``. MCP frames every message as JSON-RPC 2.0.
+
+    Naming the system also classifies the span: a CLIENT span carrying none of the
+    ``rpc.*``/``http.*``/``db.*``/``messaging.*`` families records no span type or
+    subtype in backends that derive those from the attribute family. It is emitted
+    only alongside ``server.address``/``server.port``, since a backend that reads it
+    as a downstream dependency names that dependency from the server address.
+    """
+
+    JSONRPC = "jsonrpc"
 
 
 class NetworkTransport(str, Enum):

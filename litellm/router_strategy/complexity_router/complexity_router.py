@@ -1651,6 +1651,28 @@ class ComplexityRouter(CustomLogger):
         caller_scope: Final = self._get_user_api_key_hash_from_request_kwargs(request_kwargs) or "unscoped"
         return f"complexity_router_session_affinity:v1:{self.model_name}:{caller_scope}:{session_id}"
 
+    @property
+    def _uses_tier_pin(self) -> bool:
+        return bool(self.config.session_affinity and not self.config.plugins)
+
+    @property
+    def _uses_deployment_pin(self) -> bool:
+        """session_affinity implies the deployment pin: a session frozen onto one model
+        group but load-balanced across its deployments would still go cache-cold, which
+        is the exact failure both flags exist to prevent."""
+        return bool((self.config.deployment_affinity or self.config.session_affinity) and not self.config.plugins)
+
+    def _with_session_deployment_affinity(
+        self, response: PreRoutingHookResponse | None
+    ) -> PreRoutingHookResponse | None:
+        if response is None or not self._uses_deployment_pin:
+            return response
+        return response.model_copy(
+            update={  # mutable-ok: model_copy types update as a plain dict
+                "session_affinity_ttl_seconds": self.config.session_affinity_ttl_seconds
+            }
+        )
+
     async def async_pre_routing_hook(
         self,
         model: str,
@@ -1685,7 +1707,7 @@ class ComplexityRouter(CustomLogger):
         resolved_messages: Final = self._resolve_messages(messages, request_kwargs)
         conversation_continuing: Final = _conversation_is_continuing(resolved_messages)
 
-        use_session_affinity: Final = self.config.session_affinity and not self.config.plugins
+        use_session_affinity: Final = self._uses_tier_pin
         session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs) if use_session_affinity else None
         cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
 
@@ -1724,16 +1746,19 @@ class ComplexityRouter(CustomLogger):
                         "ComplexityRouter: routing decision cause=%s, routed_model=%s", cause, routed_model
                     )
                     has_original_messages: Final = messages is not None and len(messages) > 0
-                    return PreRoutingHookResponse(
-                        model=routed_model,
-                        messages=messages if has_original_messages else None,
-                        routing_decision=self._build_routing_decision(
-                            routed_model=routed_model,
-                            cause=cause,
-                            escalation_keyword=pin_escalation_keyword,
-                            escalated=escalated,
-                            conversation_continuing=conversation_continuing,
-                        ),
+                    return self._with_session_deployment_affinity(
+                        PreRoutingHookResponse(
+                            model=routed_model,
+                            messages=messages if has_original_messages else None,
+                            routing_decision=self._build_routing_decision(
+                                routed_model=routed_model,
+                                cause=cause,
+                                tier=self._tier_for_model(routed_model),
+                                escalation_keyword=pin_escalation_keyword,
+                                escalated=escalated,
+                                conversation_continuing=conversation_continuing,
+                            ),
+                        )
                     )
 
         response: Final = await self._classify_and_route(
@@ -1751,7 +1776,7 @@ class ComplexityRouter(CustomLogger):
                 value=response.model,
                 ttl=self.config.session_affinity_ttl_seconds,
             )
-        return response
+        return self._with_session_deployment_affinity(response)
 
     async def _classify_and_route(
         self,
@@ -1797,7 +1822,8 @@ class ComplexityRouter(CustomLogger):
 
         if user_message is None:
             verbose_router_logger.debug("ComplexityRouter: No user message found, routing to default model")
-            if not self.config.plugins and self.config.default_model:
+            default_model_first: Final = not self.config.plugins and self.config.default_model
+            if default_model_first:
                 # No plugins configured: preserve the pre-existing default_model-first
                 # priority exactly (changing it would be a silent behavior change for
                 # every non-plugin user, not just a security fix).
@@ -1809,12 +1835,14 @@ class ComplexityRouter(CustomLogger):
                 routed_model = await self._pick_model_for_tier(
                     ComplexityTier.MEDIUM, messages, resolved_messages, request_kwargs
                 )
+            fallback_tier: Final = None if default_model_first else ComplexityTier.MEDIUM
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
                 routing_decision=self._build_routing_decision(
                     routed_model=routed_model,
                     cause="default_fallback",
+                    tier=fallback_tier,
                     conversation_continuing=conversation_continuing,
                 ),
             )

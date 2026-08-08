@@ -2,7 +2,28 @@
 Type definitions for WebSearch Interception integration.
 """
 
-from typing import TypedDict
+from typing import Literal, TypedDict
+
+from pydantic import BaseModel
+
+
+class AnthropicSearchQuery(BaseModel):
+    """``input`` of an Anthropic ``server_tool_use`` block for a web search."""
+
+    query: str
+
+
+class AnthropicServerToolUseBlock(BaseModel):
+    """
+    The ``server_tool_use`` block that must accompany a ``web_search_tool_result``.
+
+    Anthropic requires the pair, with a ``srvtoolu_``-prefixed id shared by both.
+    """
+
+    type: Literal["server_tool_use"] = "server_tool_use"
+    id: str
+    name: Literal["web_search"] = "web_search"
+    input: AnthropicSearchQuery
 
 
 class WebSearchInterceptionConfig(TypedDict, total=False):

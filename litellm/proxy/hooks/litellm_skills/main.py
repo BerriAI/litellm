@@ -26,7 +26,8 @@ Usage:
 
 import base64
 import json
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -36,7 +37,10 @@ from litellm.llms.litellm_proxy.skills.prompt_injection import (
     SkillPromptInjectionHandler,
 )
 from litellm.proxy._types import LiteLLM_SkillsTable, UserAPIKeyAuth
-from litellm.types.utils import CallTypes, CallTypesLiteral
+from litellm.types.utils import CallTypes, CallTypesLiteral, LLMResponseTypes
+
+if TYPE_CHECKING:
+    from litellm.llms.litellm_proxy.skills.sandbox_executor import SkillsSandboxExecutor
 
 
 class SkillsInjectionHook(CustomLogger):
@@ -99,7 +103,7 @@ class SkillsInjectionHook(CustomLogger):
         verbose_proxy_logger.debug("SkillsInjectionHook: Processing %s skills", len(skills))
 
         litellm_skills: Final[list[LiteLLM_SkillsTable]] = []
-        anthropic_skills: Final[list[dict[str, Any]]] = []
+        anthropic_skills: Final[list[dict[str, object]]] = []
 
         # Separate skills by prefix
         for skill in skills:
@@ -324,9 +328,9 @@ class SkillsInjectionHook(CustomLogger):
     async def async_post_call_success_deployment_hook(
         self,
         request_data: dict,
-        response: Any,
+        response: LLMResponseTypes,
         call_type: CallTypes | None,
-    ) -> Any | None:
+    ) -> LLMResponseTypes | None:
         """
         Post-call hook to handle automatic code execution.
 
@@ -372,7 +376,7 @@ class SkillsInjectionHook(CustomLogger):
         # Check if any tool call needs execution (litellm_code_execution or skill tool)
         has_executable_tool = False
         for tc in tool_calls:
-            tool_name = tc.get("name", "")
+            tool_name: str = tc.get("name", "")
             # Execute if it's litellm_code_execution OR a skill tool (litellm_skill_xxx)
             if tool_name == LiteLLMInternalTools.CODE_EXECUTION.value or tool_name.startswith(LITELLM_SKILL_ID_PREFIX):
                 has_executable_tool = True
@@ -441,7 +445,7 @@ class SkillsInjectionHook(CustomLogger):
         data: dict,
         response: Any,
         skill_files: dict[str, bytes],
-    ) -> Any:
+    ) -> LLMResponseTypes | None:
         """
         Execute the code execution loop for messages API (Anthropic format).
 
@@ -466,7 +470,7 @@ class SkillsInjectionHook(CustomLogger):
         max_tokens: Final = data.get("max_tokens", 4096)
 
         executor: Final = SkillsSandboxExecutor(timeout=self.sandbox_timeout)
-        generated_files: Final[list[dict[str, Any]]] = []
+        generated_files: Final[list[dict[str, object]]] = []
         current_response = response
 
         for iteration in range(self.max_iterations):
@@ -511,9 +515,9 @@ class SkillsInjectionHook(CustomLogger):
             # Process tool calls
             tool_results = []
             for tc in tool_calls:
-                tool_name = tc.get("name", "")
+                tool_name: str = tc.get("name", "")
                 tool_id = tc.get("id", "")
-                tool_input = tc.get("input", {})
+                tool_input: Mapping[str, str] = tc.get("input", {})
 
                 # Execute if it's litellm_code_execution OR a skill tool
                 if tool_name == LiteLLMInternalTools.CODE_EXECUTION.value:
@@ -561,8 +565,8 @@ class SkillsInjectionHook(CustomLogger):
         self,
         code: str,
         skill_files: dict[str, bytes],
-        executor: Any,
-        generated_files: list[dict[str, Any]],
+        executor: "SkillsSandboxExecutor",
+        generated_files: list[dict[str, object]],
     ) -> str:
         """Execute code in sandbox and return result string."""
         try:
@@ -574,7 +578,8 @@ class SkillsInjectionHook(CustomLogger):
 
             # Collect generated files
             if exec_result.get("files"):
-                for f in exec_result["files"]:
+                files: Final[Sequence[Mapping[str, str]]] = exec_result["files"]
+                for f in files:
                     generated_files.append(
                         {
                             "name": f["name"],
@@ -595,10 +600,10 @@ class SkillsInjectionHook(CustomLogger):
     async def _execute_skill_tool(
         self,
         tool_name: str,
-        tool_input: dict[str, Any],
+        tool_input: Mapping[str, str],
         skill_files: dict[str, bytes],
-        executor: Any,
-        generated_files: list[dict[str, Any]],
+        executor: "SkillsSandboxExecutor",
+        generated_files: list[dict[str, object]],
     ) -> str:
         """Execute a skill tool by generating and running code based on skill content."""
         # Generate code based on available skill modules
@@ -670,7 +675,7 @@ print('No executable skill module found')
         data: dict,
         response: Any,
         skill_files: dict[str, bytes],
-    ) -> Any:
+    ) -> LLMResponseTypes:
         """
         Execute the code execution loop until model gives final response.
 
@@ -704,7 +709,7 @@ print('No executable skill module found')
         kwargs: Final = {k: v for k, v in data.items() if k not in _EXCLUDED_ACOMPLETION_KEYS}
 
         executor: Final = SkillsSandboxExecutor(timeout=self.sandbox_timeout)
-        generated_files: Final[list[dict[str, Any]]] = []
+        generated_files: Final[list[dict[str, object]]] = []
         current_response: Any = response
 
         for iteration in range(self.max_iterations):
@@ -713,7 +718,7 @@ print('No executable skill module found')
             stop_reason = current_response.choices[0].finish_reason
 
             # Build assistant message for conversation history
-            assistant_msg_dict: dict[str, Any] = {
+            assistant_msg_dict: dict[str, object] = {
                 "role": "assistant",
                 "content": assistant_message.content,
             }
@@ -781,13 +786,13 @@ print('No executable skill module found')
         self,
         tool_call: Any,
         skill_files: dict[str, bytes],
-        executor: Any,
-        generated_files: list[dict[str, Any]],
+        executor: "SkillsSandboxExecutor",
+        generated_files: list[dict[str, object]],
     ) -> str:
         """Execute a litellm_code_execution tool call and return result string."""
         try:
             args: Final = json.loads(tool_call.function.arguments)
-            code: Final = args.get("code", "")
+            code: Final[str] = args.get("code", "")
 
             verbose_proxy_logger.debug("SkillsInjectionHook: Executing code (%s chars)", len(code))
 
@@ -802,7 +807,8 @@ print('No executable skill module found')
             # Collect generated files
             if exec_result.get("files"):
                 tool_result += "\n\nGenerated files:"
-                for f in exec_result["files"]:
+                files: Final[Sequence[Mapping[str, str]]] = exec_result["files"]
+                for f in files:
                     file_content = base64.b64decode(f["content_base64"])
                     generated_files.append(
                         {
@@ -830,8 +836,8 @@ print('No executable skill module found')
     def _attach_files_to_response(
         self,
         response: Any,
-        generated_files: list[dict[str, Any]],
-    ) -> Any:
+        generated_files: list[dict[str, object]],
+    ) -> LLMResponseTypes:
         """
         Attach generated files to the response object.
 
@@ -841,11 +847,13 @@ print('No executable skill module found')
         if not generated_files:
             return response
 
+        raw_response: Final = response
+
         # Handle dict response (Anthropic/messages API format)
         if isinstance(response, dict):
             response["_litellm_generated_files"] = generated_files
             verbose_proxy_logger.debug("SkillsInjectionHook: Attached %s files to dict response", len(generated_files))
-            return response
+            return raw_response
 
         # Handle object response (OpenAI format)
         try:
