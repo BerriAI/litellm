@@ -339,6 +339,7 @@ def _build_responses_followup_items(
 
 class HeadroomGuardrail(CustomGuardrail):
     records_own_guardrail_information: ClassVar[bool] = True
+    server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset({HEADROOM_RETRIEVE_TOOL_NAME})
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
