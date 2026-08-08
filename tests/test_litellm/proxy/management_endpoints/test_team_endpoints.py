@@ -932,8 +932,11 @@ async def test_add_team_member_budget_table_success():
     )
 
     # Verify the result
-    assert result == team_info_response
     assert result.team_member_budget_table == mock_budget_record
+    assert result == team_info_response.model_copy(
+        update={"team_member_budget_table": mock_budget_record}
+    )
+    assert team_info_response.team_member_budget_table is None
 
     # Verify database call was made correctly
     mock_prisma_client.db.litellm_budgettable.find_unique.assert_called_once_with(
