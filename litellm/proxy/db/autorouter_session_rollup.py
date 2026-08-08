@@ -49,6 +49,7 @@ class AutoRouterTurnTransaction:
     cache_hit: bool
     cache_ttl_seconds: int | None
     cache_touched: bool
+    tier: str | None = None
 
 
 class TurnCacheFacts(NamedTuple):
@@ -152,11 +153,13 @@ def build_autorouter_turn_transaction(
         return None
     usage_object_raw: Final = metadata.get("usage_object")
     cache: Final = turn_cache_facts(usage_object_raw if isinstance(usage_object_raw, Mapping) else None)
+    tier_raw: Final = routing_decision.get("tier")
     return AutoRouterTurnTransaction(
         api_key=api_key,
         session_id=_bounded_session_id(session_id),
         router_name=router_name,
         router_type=str(routing_decision.get("router_type") or "unknown"),
+        tier=tier_raw if isinstance(tier_raw, str) and tier_raw else None,
         model=model,
         turn_at=turn_at,
         total_tokens=int(payload.get("prompt_tokens") or 0) + int(payload.get("completion_tokens") or 0),
@@ -184,6 +187,8 @@ _COVERED: Final = _p("covered")
 _CACHE_HIT: Final = _p("cache_hit")
 _CACHE_TTL: Final = _p("cache_ttl_seconds")
 _TOUCHED: Final = _p("cache_touched")
+_TIER: Final = f"{_p('tier')}::text"
+_TIER_DELTA: Final = f"(CASE WHEN {_TIER} IS NULL THEN '{{}}'::jsonb ELSE jsonb_build_object({_TIER}, 1) END)"
 
 _IN_ORDER: Final = f"{_TURN_AT}::timestamp >= t.last_turn_at"
 _SAME: Final = f"{_IN_ORDER} AND t.last_model = {_MODEL}"
@@ -201,7 +206,7 @@ INSERT INTO "LiteLLM_AutoRouterSession" AS t (
     last_model, models, turns, unordered_turns, covered_turns, cache_hits,
     same_model_turns, same_model_hits, first_visit_turns, first_visit_hits,
     return_turns, return_hits, return_expired_misses, return_within_ttl_misses,
-    ttl_5m_turns, ttl_1h_turns, total_tokens, spend, saved_spend
+    ttl_5m_turns, ttl_1h_turns, total_tokens, spend, saved_spend, tier_turns
 )
 VALUES (
     {_p("api_key")}, {_p("session_id")}, {_p("router_name")}, {_p("router_type")}, {_TURN_AT}::timestamp, {_TURN_AT}::timestamp,
@@ -211,7 +216,8 @@ VALUES (
     0, 0, 0, 0,
     (CASE WHEN {_CACHE_TTL}::int = {CACHE_TTL_5M_SECONDS} THEN 1 ELSE 0 END),
     (CASE WHEN {_CACHE_TTL}::int = {CACHE_TTL_1H_SECONDS} THEN 1 ELSE 0 END),
-    {_p("total_tokens")}::bigint, {_p("spend")}::float8, {_p("saved_spend")}::float8
+    {_p("total_tokens")}::bigint, {_p("spend")}::float8, {_p("saved_spend")}::float8,
+    {_TIER_DELTA}
 )
 ON CONFLICT (api_key, session_id, router_name) DO UPDATE SET
     turns = t.turns + 1,
@@ -242,6 +248,9 @@ ON CONFLICT (api_key, session_id, router_name) DO UPDATE SET
                 ELSE COALESCE((t.models -> {_MODEL} ->> 'ttl')::int, {_CACHE_TTL}::int) END)
     )),
     last_model = (CASE WHEN {_IN_ORDER} THEN {_MODEL} ELSE t.last_model END),
+    tier_turns = (CASE WHEN {_TIER} IS NOT NULL AND t.router_type = {_p("router_type")}
+        THEN t.tier_turns || jsonb_build_object({_TIER}, COALESCE((t.tier_turns ->> {_TIER})::int, 0) + 1)
+        ELSE t.tier_turns END),
     first_turn_at = LEAST(t.first_turn_at, EXCLUDED.first_turn_at),
     last_turn_at = GREATEST(t.last_turn_at, EXCLUDED.last_turn_at)
 """
