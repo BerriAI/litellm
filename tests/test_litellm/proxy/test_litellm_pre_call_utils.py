@@ -2711,6 +2711,149 @@ def test_get_chain_id_from_headers_generic_vendor_session_id():
     )
 
 
+def test_trace_id_from_traceparent_valid():
+    from litellm.proxy.litellm_pre_call_utils import _trace_id_from_traceparent
+
+    assert (
+        _trace_id_from_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+        == "4bf92f3577b34da6a3ce929d0e0e4736"
+    )
+    # Case-insensitive, normalized to lowercase
+    assert (
+        _trace_id_from_traceparent("00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01")
+        == "4bf92f3577b34da6a3ce929d0e0e4736"
+    )
+
+
+@pytest.mark.parametrize(
+    "traceparent",
+    [
+        "not-a-traceparent",
+        "00-tooshort-00f067aa0ba902b7-01",
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7",  # missing flags segment
+        "00-4bf92f3577g34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",  # non-hex char
+        "00-00000000000000000000000000000000-00f067aa0ba902b7-01",  # all-zero trace-id, invalid per spec
+        "",
+    ],
+)
+def test_trace_id_from_traceparent_rejects_malformed(traceparent: str):
+    from litellm.proxy.litellm_pre_call_utils import _trace_id_from_traceparent
+
+    assert _trace_id_from_traceparent(traceparent) is None
+
+
+def test_session_id_from_baggage_valid():
+    from litellm.proxy.litellm_pre_call_utils import _session_id_from_baggage
+
+    assert _session_id_from_baggage("session.id=abc-123,user.id=42") == "abc-123"
+    assert _session_id_from_baggage("user.id=42, session.id=xyz-789") == "xyz-789"
+
+
+@pytest.mark.parametrize(
+    "baggage",
+    [
+        "user.id=42",
+        "",
+        "session.id=",
+    ],
+)
+def test_session_id_from_baggage_absent_or_empty(baggage: str):
+    from litellm.proxy.litellm_pre_call_utils import _session_id_from_baggage
+
+    assert _session_id_from_baggage(baggage) is None
+
+
+def test_add_litellm_metadata_from_request_headers_traceparent_sets_trace_id_only():
+    """A bare traceparent header (no litellm-specific headers) sets litellm_trace_id
+    from its trace-id component and leaves litellm_session_id unset."""
+    headers = {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["litellm_trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert data["metadata"]["trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert "litellm_session_id" not in data
+
+
+def test_add_litellm_metadata_from_request_headers_baggage_sets_session_id_only():
+    """A bare baggage header (no litellm-specific headers) sets litellm_session_id
+    from its session.id entry and leaves litellm_trace_id unset."""
+    headers = {"baggage": "session.id=baggage-session-42,user.id=7"}
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["litellm_session_id"] == "baggage-session-42"
+    assert data["metadata"]["session_id"] == "baggage-session-42"
+    assert "litellm_trace_id" not in data
+
+
+def test_add_litellm_metadata_from_request_headers_baggage_session_id_not_logged_raw(caplog):
+    """The raw baggage session.id value must never reach the debug log line -
+    it isn't sanitized until set_session_id() runs much later in
+    Logging.__init__(), so logging it here would let a caller with control
+    characters or terminal escape sequences forge plaintext log output."""
+    import logging
+
+    poisoned = "poisoned\x1b[31mFAKE_RED_TEXT\x1b[0m"
+    headers = {"baggage": f"session.id={poisoned}"}
+    data = {"metadata": {}}
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=headers, data=data, _metadata_variable_name="metadata"
+        )
+    assert data["litellm_session_id"] == poisoned
+    assert not any(poisoned in record.getMessage() for record in caplog.records)
+
+
+def test_add_litellm_metadata_from_request_headers_traceparent_and_baggage_together():
+    """traceparent and baggage are resolved independently - trace_id and
+    session_id do not have to be the same value, unlike the chain_id path."""
+    headers = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "baggage": "session.id=baggage-session-42",
+    }
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["litellm_trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert data["litellm_session_id"] == "baggage-session-42"
+
+
+def test_add_litellm_metadata_from_request_headers_explicit_trace_id_beats_traceparent():
+    """x-litellm-trace-id must win over a traceparent header carrying a
+    different trace-id - explicit litellm headers are always highest priority."""
+    headers = {
+        "x-litellm-trace-id": "explicit-trace-id-value",
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+    }
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["litellm_trace_id"] == "explicit-trace-id-value"
+    assert data["litellm_session_id"] == "explicit-trace-id-value"
+
+
+def test_add_litellm_metadata_from_request_headers_anthropic_metadata_beats_baggage():
+    """The existing Anthropic metadata.user_id session_id path must win over a
+    baggage session.id fallback."""
+    data = {
+        "metadata": {
+            "user_id": "user_abc123_account__session_e96634a3-fa28-4083-b354-55542e2dca01",
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"baggage": "session.id=baggage-session-42"},
+        data=data,
+        _metadata_variable_name="metadata",
+    )
+    assert data["litellm_session_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
+    assert "litellm_trace_id" not in data
+
+
 def test_get_internal_user_header_from_mapping_returns_expected_header():
     mappings = [
         {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
