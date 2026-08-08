@@ -820,8 +820,17 @@ export interface paths {
          *     model mid-session, and how often they hung up mid-stream, for auto-routed traffic and for
          *     the same keys' directly-addressed traffic.
          *
-         *     Reads LiteLLM_SpendLogs rather than the per-session rollup, because escalation is a
-         *     question about turn order and the rollup folds order away.
+         *     Both cohorts come from one scan of LiteLLM_SpendLogs rather than the per-session rollup,
+         *     so they cannot drift apart -- same window, same session grouping, same disconnect test --
+         *     and because escalation is a question about turn order, which the rollup folds away.
+         *     `router_name` is NULL for a directly-addressed request, which is what separates the two
+         *     populations downstream. Abandonment reads `error_information.error_code` rather than
+         *     `status`, because a client disconnect still bills its partial streamed spend as a success
+         *     and so does not show up in `status`. `session_turn_count` counts, per api_key, how many
+         *     rows in the window share a session_id; a fallback uuid minted by the spend writer
+         *     (`_get_session_id_for_spend_log`) is always unique to its one request, so a repeating
+         *     session_id can only have come from the caller, which needs nothing beyond columns every
+         *     deployment already writes, prompt storage on or off.
          *
          *     The two cohorts self-select, so this is directional evidence and not an experiment: a
          *     deployment that pins its hardest prompts to one model and routes only the easy ones will

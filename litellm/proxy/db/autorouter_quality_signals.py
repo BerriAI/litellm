@@ -51,13 +51,13 @@ class Turn:
     """
 
     __slots__ = (
-        "session_id",
         "api_key",
-        "model",
-        "started_at",
         "client_disconnected",
-        "router_name",
         "has_client_session_id",
+        "model",
+        "router_name",
+        "session_id",
+        "started_at",
     )
 
     def __init__(
@@ -83,7 +83,7 @@ class Turn:
 class CohortSignals:
     """What one population evidences, and how much of it there was to look at."""
 
-    __slots__ = ("sessions", "escalation_rate_pct", "abandonment_rate_pct")
+    __slots__ = ("abandonment_rate_pct", "escalation_rate_pct", "sessions")
 
     def __init__(
         self,
@@ -97,7 +97,7 @@ class CohortSignals:
         self.abandonment_rate_pct = abandonment_rate_pct
 
 
-def rank_models_by_cost(router: "Router", models: Iterable[str]) -> Mapping[str, int]:
+def rank_models_by_cost(router: Router, models: Iterable[str]) -> Mapping[str, int]:
     """Order models cheapest-first, by what one fixed reference request would cost on each.
 
     Rank has to come from a request, not from a rate card: a model dearer per output token
