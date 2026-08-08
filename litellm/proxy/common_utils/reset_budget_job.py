@@ -651,7 +651,6 @@ class ResetBudgetJob:
                     },
                 )
             )
-            return outcome
         except Exception as e:
             end_time = time.time()
             asyncio.create_task(
@@ -670,6 +669,8 @@ class ResetBudgetJob:
             )
             verbose_proxy_logger.exception("Failed to reset budget for keys: %s", e)
             return _NO_PROGRESS
+        else:
+            return outcome
 
     async def reset_budget_for_litellm_users(self) -> None:
         """
@@ -761,7 +762,6 @@ class ResetBudgetJob:
                     },
                 )
             )
-            return outcome
         except Exception as e:
             end_time = time.time()
             asyncio.create_task(
@@ -780,6 +780,8 @@ class ResetBudgetJob:
             )
             verbose_proxy_logger.exception("Failed to reset budget for users: %s", e)
             return _NO_PROGRESS
+        else:
+            return outcome
 
     async def reset_budget_for_litellm_teams(self) -> None:
         """
@@ -869,7 +871,6 @@ class ResetBudgetJob:
                     },
                 )
             )
-            return outcome
         except Exception as e:
             end_time = time.time()
             asyncio.create_task(
@@ -888,6 +889,8 @@ class ResetBudgetJob:
             )
             verbose_proxy_logger.exception("Failed to reset budget for teams: %s", e)
             return _NO_PROGRESS
+        else:
+            return outcome
 
     @staticmethod
     async def _reset_expired_window(
