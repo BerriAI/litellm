@@ -124,6 +124,19 @@ _ratchet_spec.loader.exec_module(ratchet)
             "class Foo(BaseModel):\n    model_config = CONFIG\n",
             id="one_branch_of_a_conditional_binding_allows",
         ),
+        pytest.param(
+            'class Foo(BaseModel):\n    _CONFIG = ConfigDict(extra="allow")\n    model_config = _CONFIG\n',
+            id="class_local_constant",
+        ),
+        pytest.param(
+            'FORBID = ConfigDict(extra="forbid")\n\n\nclass Foo(BaseModel):\n'
+            '    FORBID = ConfigDict(extra="allow")\n    model_config = FORBID\n',
+            id="class_local_constant_shadowing_a_harmless_module_one",
+        ),
+        pytest.param(
+            'class Foo(BaseModel):\n    class Config:\n        _EXTRA = "allow"\n        extra = _EXTRA\n',
+            id="legacy_inner_config_reading_its_own_constant",
+        ),
     ],
 )
 def test_detects_extra_allow(source):
@@ -180,6 +193,15 @@ def test_detects_extra_allow(source):
             'if IS_V2:\n    CONFIG = ConfigDict(extra="allow")\nCONFIG = ConfigDict(extra="forbid")\n\n\n'
             "class Foo(BaseModel):\n    model_config = CONFIG\n",
             id="conditional_allow_rebound_unconditionally_before_the_class",
+        ),
+        pytest.param(
+            'ALLOW = ConfigDict(extra="allow")\n\n\nclass Foo(BaseModel):\n'
+            '    ALLOW = ConfigDict(extra="forbid")\n    model_config = ALLOW\n',
+            id="class_local_constant_shadowing_a_permissive_module_one",
+        ),
+        pytest.param(
+            'class Foo(BaseModel):\n    model_config = LATER\n    LATER = ConfigDict(extra="allow")\n',
+            id="class_local_constant_bound_below_the_line_reading_it",
         ),
     ],
 )
