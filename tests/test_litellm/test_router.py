@@ -3131,7 +3131,7 @@ def test_pre_call_checks_skips_token_count_without_max_input_tokens(monkeypatch)
         {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
         {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d2"}},
     ]
-    result = router._pre_call_checks(
+    result = router._pre_call_checks_sync(
         model="m",
         healthy_deployments=deployments,
         messages=[{"role": "user", "content": "hi"}],
@@ -3167,7 +3167,7 @@ def test_pre_call_checks_counts_once_and_filters_on_max_input_tokens(monkeypatch
         {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d2"}},
     ]
     with pytest.raises(litellm.ContextWindowExceededError):
-        router._pre_call_checks(
+        router._pre_call_checks_sync(
             model="m",
             healthy_deployments=deployments,
             messages=[{"role": "user", "content": "hi"}],
@@ -3196,7 +3196,7 @@ def test_pre_call_checks_counts_tokens_from_responses_input_string(monkeypatch):
         {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
     ]
     with pytest.raises(litellm.ContextWindowExceededError):
-        router._pre_call_checks(
+        router._pre_call_checks_sync(
             model="m",
             healthy_deployments=deployments,
             input="a very long prompt that exceeds the tiny context window",
@@ -3223,7 +3223,7 @@ def test_pre_call_checks_counts_tokens_from_responses_input_list(monkeypatch):
         {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
     ]
     with pytest.raises(litellm.ContextWindowExceededError):
-        router._pre_call_checks(
+        router._pre_call_checks_sync(
             model="m",
             healthy_deployments=deployments,
             input=[
@@ -3263,7 +3263,7 @@ def test_pre_call_checks_counts_responses_instructions_tokens(monkeypatch):
         router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": input_only_tokens}
     )
     with pytest.raises(litellm.ContextWindowExceededError):
-        router._pre_call_checks(
+        router._pre_call_checks_sync(
             model="m",
             healthy_deployments=deployments,
             input=short_input,
@@ -3324,7 +3324,7 @@ def test_pre_call_checks_no_messages_or_input_does_not_crash(monkeypatch):
     deployments = [
         {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
     ]
-    result = router._pre_call_checks(model="m", healthy_deployments=deployments)
+    result = router._pre_call_checks_sync(model="m", healthy_deployments=deployments)
     assert len(result) == 1
     assert counted == []  # token counting skipped entirely, so no misleading error is logged
 
@@ -7319,7 +7319,7 @@ def test_pre_call_checks_uses_deployment_model_when_model_info_lookup_raises(mon
             "model_info": {"id": "d1"},
         }
     ]
-    result = router._pre_call_checks(
+    result = router._pre_call_checks_sync(
         model="custom-alias",
         healthy_deployments=deployments,
         messages=[{"role": "user", "content": "hi"}],
@@ -7363,7 +7363,7 @@ def test_pre_call_checks_keeps_deployment_when_provider_is_unresolvable(monkeypa
             "model_info": {"id": "d1"},
         }
     ]
-    result = router._pre_call_checks(
+    result = router._pre_call_checks_sync(
         model="custom-alias",
         healthy_deployments=deployments,
         messages=[{"role": "user", "content": "hi"}],

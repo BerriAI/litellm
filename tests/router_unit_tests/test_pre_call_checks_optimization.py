@@ -61,7 +61,7 @@ class TestPreCallChecksOptimization:
         snapshot = copy.deepcopy(deployments)
 
         # Call the function under test
-        router._pre_call_checks(
+        router._pre_call_checks_sync(
             model="gpt-5-mini",
             healthy_deployments=deployments,
             messages=[{"role": "user", "content": "test"}],
@@ -113,7 +113,7 @@ class TestPreCallChecksOptimization:
         original_large_deployment = deployments[1]  # max_input_tokens=10000
 
         # Send a long message (100 words) that exceeds 50 tokens but fits in 10000 tokens
-        filtered = router._pre_call_checks(
+        filtered = router._pre_call_checks_sync(
             model="test",
             healthy_deployments=deployments,
             messages=[{"role": "user", "content": " ".join(["word"] * 100)}],

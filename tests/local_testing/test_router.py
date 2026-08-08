@@ -634,7 +634,7 @@ def test_router_rpm_pre_call_check():
         router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)  # type: ignore
 
         try:
-            router._pre_call_checks(
+            router._pre_call_checks_sync(
                 model="fake-openai-endpoint",
                 healthy_deployments=model_list,
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
@@ -831,7 +831,7 @@ def test_filter_invalid_params_pre_call_check():
 
         router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)  # type: ignore
 
-        filtered_deployments = router._pre_call_checks(
+        filtered_deployments = router._pre_call_checks_sync(
             model="gpt-3.5-turbo",
             healthy_deployments=model_list,
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
@@ -874,7 +874,7 @@ def test_router_region_pre_call_check(allowed_model_region):
 
     router = Router(model_list=model_list, enable_pre_call_checks=True)
 
-    _healthy_deployments = router._pre_call_checks(
+    _healthy_deployments = router._pre_call_checks_sync(
         model="gpt-3.5-turbo",
         healthy_deployments=model_list,
         messages=[{"role": "user", "content": "Hey!"}],
@@ -1895,7 +1895,7 @@ def test_router_context_window_pre_call_check(model, base_model, llm_provider):
 
         litellm.token_counter.side_effect = token_counter_side_effect
         try:
-            updated_list = router._pre_call_checks(
+            updated_list = router._pre_call_checks_sync(
                 model="gpt-4",
                 healthy_deployments=model_list,
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
