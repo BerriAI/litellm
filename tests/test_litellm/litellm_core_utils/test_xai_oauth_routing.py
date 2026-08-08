@@ -79,3 +79,19 @@ def test_xai_oauth_flag_is_generic_litellm_param():
     assert litellm_params.use_xai_oauth is True
     assert runtime_params["use_xai_oauth"] is True
     assert "use_xai_oauth" not in result
+
+
+def test_xai_oauth_openai_compatible_provider_info():
+    model, custom_llm_provider, dynamic_api_key, api_base = (
+        _get_openai_compatible_provider_info(
+            model="xai-oauth/grok-3-mini",
+            api_base="https://api.x.ai/v1",
+            api_key="api-key",
+            dynamic_api_key=None,
+        )
+    )
+
+    assert model == "grok-3-mini"
+    assert custom_llm_provider == "xai"
+    assert api_base == "https://api.x.ai/v1"
+    assert dynamic_api_key == "api-key"
