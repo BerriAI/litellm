@@ -137,6 +137,18 @@ _ratchet_spec.loader.exec_module(ratchet)
             'class Foo(BaseModel):\n    class Config:\n        _EXTRA = "allow"\n        extra = _EXTRA\n',
             id="legacy_inner_config_reading_its_own_constant",
         ),
+        pytest.param(
+            'class Foo(BaseModel):\n    model_config = ConfigDict(**{"extra": "allow"})\n',
+            id="config_dict_kwargs_spread",
+        ),
+        pytest.param(
+            'ALLOW = ConfigDict(extra="allow")\n\n\nclass Foo(BaseModel):\n    model_config = {**ALLOW}\n',
+            id="permissive_constant_spread_into_a_dict",
+        ),
+        pytest.param(
+            'ALLOW = {"extra": "allow"}\n\n\nclass Foo(BaseModel, **ALLOW):\n    pass\n',
+            id="permissive_constant_spread_into_the_class_keywords",
+        ),
     ],
 )
 def test_detects_extra_allow(source):
@@ -202,6 +214,10 @@ def test_detects_extra_allow(source):
         pytest.param(
             'class Foo(BaseModel):\n    model_config = LATER\n    LATER = ConfigDict(extra="allow")\n',
             id="class_local_constant_bound_below_the_line_reading_it",
+        ),
+        pytest.param(
+            'FORBID = ConfigDict(extra="forbid")\n\n\nclass Foo(BaseModel):\n    model_config = {**FORBID}\n',
+            id="harmless_constant_spread_into_a_dict",
         ),
     ],
 )

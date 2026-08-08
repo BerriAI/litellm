@@ -7,6 +7,10 @@ anything new must declare its fields.
 
 That list is a budget like the others, so ``scripts/budget_ratchet_check.py`` is what
 reds when it grows, and its ``limit`` must equal the number of models it lists.
+
+What it reads is the opt-in a module spells out, so it says nothing about a model that
+inherits ``extra="allow"`` from a base declared elsewhere. Subclassing a listed model
+still widens it, and only review catches that.
 """
 
 import ast
@@ -138,12 +142,18 @@ def _is_allow_literal(node: ast.expr, scope: Scope) -> bool:
 
 
 def _is_extra_allow_keyword(keyword: ast.keyword, scope: Scope) -> bool:
+    """A keyword with no ``arg`` is a ``**`` spread, so what it spreads is read as a config itself."""
+    if keyword.arg is None:
+        return _is_extra_allow_value(keyword.value, scope)
     return keyword.arg == "extra" and _is_allow_literal(keyword.value, scope)
 
 
 def _mapping_sets_extra_allow(node: ast.Dict, scope: Scope) -> bool:
+    """A ``None`` key is a ``**`` spread, so what it spreads is read as a config itself."""
     return any(
-        isinstance(key, ast.Constant) and key.value == "extra" and _is_allow_literal(value, scope)
+        _is_extra_allow_value(value, scope)
+        if key is None
+        else isinstance(key, ast.Constant) and key.value == "extra" and _is_allow_literal(value, scope)
         for key, value in zip(node.keys, node.values)
     )
 
