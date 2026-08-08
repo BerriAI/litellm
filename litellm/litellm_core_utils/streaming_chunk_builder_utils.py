@@ -611,7 +611,7 @@ class ChunkProcessor:
         for choice in response.choices:
             if (
                 hasattr(cast(Choices, choice).message, "reasoning_content")
-                and cast(Choices, choice).message.reasoning_content is not None
+                and cast(Choices, choice).message.reasoning_content
             ):
                 if reasoning_tokens is None:
                     reasoning_tokens = 0

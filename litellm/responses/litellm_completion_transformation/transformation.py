@@ -4,7 +4,7 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Final, Literal, cast
 
 from openai.types.chat.chat_completion_named_tool_choice_param import (
@@ -1738,6 +1738,12 @@ class LiteLLMCompletionResponsesConfig:
         return output_items
 
     @staticmethod
+    def _encode_thinking_blocks(message: Message) -> str | None:
+        thinking_blocks: Final[Sequence[Mapping[str, object]]] = getattr(message, "thinking_blocks", None) or ()
+        preserved: Final = tuple(block for block in thinking_blocks if block.get("signature") or block.get("data"))
+        return json.dumps(preserved, separators=(",", ":")) if preserved else None
+
+    @staticmethod
     def _extract_reasoning_output_items(
         chat_completion_response: ModelResponse,
         choices: list[Choices],
@@ -1745,12 +1751,14 @@ class LiteLLMCompletionResponsesConfig:
         for choice in choices:
             if hasattr(choice, "message") and choice.message:
                 message = choice.message
-                if hasattr(message, "reasoning_content") and message.reasoning_content:
+                reasoning_content = getattr(message, "reasoning_content", None) or ""
+                encrypted_content = LiteLLMCompletionResponsesConfig._encode_thinking_blocks(message)
+                if reasoning_content or encrypted_content:
                     # Only check the first choice for reasoning content
                     return [
                         GenericResponseOutputItem(
                             type="reasoning",
-                            id=f"rs_{hash(str(message.reasoning_content))}",
+                            id=f"rs_{hash(reasoning_content or encrypted_content)}",
                             status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                                 choice.finish_reason
                             ),
@@ -1758,10 +1766,13 @@ class LiteLLMCompletionResponsesConfig:
                             content=[
                                 OutputText(
                                     type="output_text",
-                                    text=message.reasoning_content,
+                                    text=text,
                                     annotations=[],
                                 )
+                                for text in (reasoning_content,)
+                                if text
                             ],
+                            encrypted_content=encrypted_content,
                         )
                     ]
         return []

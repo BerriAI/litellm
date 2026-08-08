@@ -1223,3 +1223,49 @@ def test_get_combined_tool_content_joins_many_custom_tool_input_fragments_in_ord
     assert isinstance(combined[1], ChatCompletionMessageCustomToolCall)
     assert combined[1].custom.name == "run_script"
     assert combined[1].custom.input == "".join(object_fragments)
+
+
+def _reasoning_stream_chunk() -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-reasoning",
+        model="claude-opus-4-8",
+        choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="10", role="assistant"))],
+    )
+
+
+def test_count_reasoning_tokens_returns_none_for_signature_only_thinking():
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    processor = ChunkProcessor(chunks=[_reasoning_stream_chunk()])
+    response = ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="10", role="assistant", reasoning_content=""),
+            )
+        ]
+    )
+
+    assert processor.count_reasoning_tokens(response) is None
+
+
+def test_count_reasoning_tokens_counts_visible_reasoning():
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    processor = ChunkProcessor(chunks=[_reasoning_stream_chunk()])
+    response = ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="10",
+                    role="assistant",
+                    reasoning_content="let me count the primes under thirty",
+                ),
+            )
+        ]
+    )
+
+    assert processor.count_reasoning_tokens(response) > 0

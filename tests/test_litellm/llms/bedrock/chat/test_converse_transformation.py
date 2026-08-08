@@ -5934,3 +5934,84 @@ def test_adaptive_thinking_dropped_when_max_tokens_too_small_converse():
     )
 
     assert "thinking" not in optional_params
+
+
+def test_converse_usage_reports_unknown_split_for_signature_only_thinking():
+    config = AmazonConverseConfig()
+
+    usage = config._transform_usage(
+        ConverseTokenUsageBlock(inputTokens=32, outputTokens=581, totalTokens=613),
+        reasoning_content="",
+        thinking_ran=True,
+    )
+
+    assert usage.completion_tokens == 581
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens is None
+    assert usage.completion_tokens_details.text_tokens is None
+
+
+def test_converse_usage_estimates_split_for_visible_thinking():
+    config = AmazonConverseConfig()
+
+    usage = config._transform_usage(
+        ConverseTokenUsageBlock(inputTokens=32, outputTokens=581, totalTokens=613),
+        reasoning_content="Let me think about how many primes there are under thirty.",
+        thinking_ran=True,
+    )
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens > 0
+    assert (
+        usage.completion_tokens_details.reasoning_tokens + usage.completion_tokens_details.text_tokens
+        == usage.completion_tokens
+    )
+
+
+def test_converse_usage_without_thinking_reports_all_output_as_text():
+    config = AmazonConverseConfig()
+
+    usage = config._transform_usage(ConverseTokenUsageBlock(inputTokens=32, outputTokens=171, totalTokens=203))
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 0
+    assert usage.completion_tokens_details.text_tokens == 171
+
+
+def test_converse_transform_response_signature_only_thinking_reports_unknown_split():
+    config = AmazonConverseConfig()
+    raw_response = MagicMock(status_code=200)
+    raw_response.text = json.dumps(
+        {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"reasoningContent": {"reasoningText": {"text": "", "signature": "sig"}}},
+                        {"text": "10"},
+                    ],
+                }
+            },
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 32, "outputTokens": 581, "totalTokens": 613},
+        }
+    )
+    raw_response.json.return_value = json.loads(raw_response.text)
+
+    response = config._transform_response(
+        model="bedrock/global.anthropic.claude-opus-4-8",
+        response=raw_response,
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data={},
+        messages=[],
+        encoding=None,
+    )
+
+    assert response.choices[0].message.reasoning_content == ""
+
+    assert response.usage.completion_tokens_details.reasoning_tokens is None
+    assert response.usage.completion_tokens_details.text_tokens is None
