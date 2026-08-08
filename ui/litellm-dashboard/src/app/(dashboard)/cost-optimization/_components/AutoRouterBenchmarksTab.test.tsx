@@ -1,10 +1,11 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/http/client";
 
 vi.mock("./useAutoRouterBenchmarks", () => ({ useAutoRouterBenchmarks: vi.fn() }));
+vi.mock("./useAutoRouterQualitySignals", () => ({ useAutoRouterQualitySignals: vi.fn() }));
 
 import AutoRouterBenchmarksTab from "./AutoRouterBenchmarksTab";
 import type {
@@ -12,9 +13,12 @@ import type {
   AutoRouterBenchmarksResponse,
   AutoRouterCacheStats,
 } from "./autoRouterBenchmarks";
+import type { AutoRouterQualitySignalsResponse } from "./autoRouterQualitySignals";
 import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
+import { useAutoRouterQualitySignals } from "./useAutoRouterQualitySignals";
 
 type HookResult = ReturnType<typeof useAutoRouterBenchmarks>;
+type QualityHookResult = ReturnType<typeof useAutoRouterQualitySignals>;
 
 const mockHook = (result: { data?: AutoRouterBenchmarksResponse; isPending?: boolean; error?: Error }) => {
   vi.mocked(useAutoRouterBenchmarks).mockReturnValue({
@@ -22,6 +26,14 @@ const mockHook = (result: { data?: AutoRouterBenchmarksResponse; isPending?: boo
     isPending: result.isPending ?? false,
     error: result.error ?? null,
   } as unknown as HookResult);
+};
+
+const mockQualityHook = (data?: AutoRouterQualitySignalsResponse) => {
+  vi.mocked(useAutoRouterQualitySignals).mockReturnValue({
+    data,
+    isPending: false,
+    error: null,
+  } as unknown as QualityHookResult);
 };
 
 const cache = (overrides: Partial<AutoRouterCacheStats> = {}): AutoRouterCacheStats => ({
@@ -73,7 +85,35 @@ const response = (groups: AutoRouterBenchmarkGroup[], shared: Totals = totals())
 
 const renderTab = () => render(<AutoRouterBenchmarksTab accessToken="sk-test" />);
 
+const cohort = (
+  overrides: Partial<AutoRouterQualitySignalsResponse["totals"]["routed"]> = {},
+): AutoRouterQualitySignalsResponse["totals"]["routed"] => ({
+  sessions: 120,
+  escalation_rate_pct: 6.9,
+  abandonment_rate_pct: 2.4,
+  ...overrides,
+});
+
+const qualityResponse = (
+  overrides: Partial<AutoRouterQualitySignalsResponse["totals"]> = {},
+): AutoRouterQualitySignalsResponse => ({
+  start_date: "2026-07-06",
+  end_date: "2026-08-05",
+  totals: {
+    router_name: null,
+    routed: cohort(),
+    baseline: cohort({ sessions: 80, escalation_rate_pct: 3.1, abandonment_rate_pct: 2.1 }),
+    baseline_unavailable_reason: null,
+    ...overrides,
+  },
+  groups: [],
+});
+
 describe("AutoRouterBenchmarksTab", () => {
+  beforeEach(() => {
+    mockQualityHook(undefined);
+  });
+
   it("leads with total estimated savings, before the three session-shape metrics", () => {
     mockHook({ data: response([group(), group({ router_name: "gpt-auto" })]) });
     renderTab();
@@ -263,5 +303,72 @@ describe("AutoRouterBenchmarksTab", () => {
 
     expect(screen.getByRole("tab", { name: "30d" })).toBeInTheDocument();
     expect(screen.getByText("All auto-routers")).toBeInTheDocument();
+  });
+
+  describe("quality signals", () => {
+    it("renders escalation and abandonment against the non-router baseline", () => {
+      mockHook({ data: response([group()]) });
+      mockQualityHook(qualityResponse());
+      renderTab();
+
+      expect(screen.getByText("Escalation rate")).toBeInTheDocument();
+      expect(screen.getByText("6.9%")).toBeInTheDocument();
+      expect(screen.getByText("vs. 3.1% on your non-router traffic")).toBeInTheDocument();
+
+      expect(screen.getByText("Stream abandonment")).toBeInTheDocument();
+      expect(screen.getByText("2.4%")).toBeInTheDocument();
+      expect(screen.getByText("vs. 2.1% on your non-router traffic")).toBeInTheDocument();
+    });
+
+    it("does not render the quality card when there is no quality data yet", () => {
+      mockHook({ data: response([group()]) });
+      mockQualityHook(undefined);
+      renderTab();
+
+      expect(screen.queryByText("Escalation rate")).not.toBeInTheDocument();
+    });
+
+    it("explains why the baseline is missing instead of showing a misleading rate", () => {
+      mockHook({ data: response([group()]) });
+      mockQualityHook(
+        qualityResponse({
+          baseline: null,
+          baseline_unavailable_reason: "no_session_ids",
+        }),
+      );
+      renderTab();
+
+      expect(
+        screen.getAllByText(
+          "Non-router traffic isn't sending session IDs, so it can't be grouped into sessions to compare",
+        ),
+      ).toHaveLength(2);
+    });
+
+    it("explains an insufficient-sessions baseline distinctly from a missing-session-id one", () => {
+      mockHook({ data: response([group()]) });
+      mockQualityHook(
+        qualityResponse({
+          baseline: null,
+          baseline_unavailable_reason: "insufficient_sessions",
+        }),
+      );
+      renderTab();
+
+      expect(screen.getAllByText("Not enough comparable non-router traffic in this window to compare")).toHaveLength(2);
+    });
+
+    it("flags escalation as worse than baseline visually distinctly from a healthy rate", () => {
+      mockHook({ data: response([group()]) });
+      mockQualityHook(
+        qualityResponse({
+          routed: cohort({ escalation_rate_pct: 9.0 }),
+          baseline: cohort({ escalation_rate_pct: 3.0 }),
+        }),
+      );
+      renderTab();
+
+      expect(screen.getByText("9.0%")).toHaveClass("text-destructive");
+    });
   });
 });

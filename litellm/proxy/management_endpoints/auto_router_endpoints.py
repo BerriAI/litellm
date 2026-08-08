@@ -35,6 +35,9 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterBenchmarkTotals,
     AutoRouterCacheBucket,
     AutoRouterCacheStats,
+    AutoRouterQualityCohort,
+    AutoRouterQualitySignals,
+    AutoRouterQualitySignalsResponse,
     AutoRouterRoutingTestRequest,
     AutoRouterRoutingTestResponse,
     RequestComplexityRouterConfig,
@@ -475,4 +478,184 @@ async def get_auto_router_benchmarks(
         routers_in_scope=len(rows),
         totals=_benchmark_totals(_summed_agg_row(rows)),
         groups=groups,
+    )
+
+
+class _QualityTurnRow(BaseModel):
+    """One request from the window, carrying only what the two signals read."""
+
+    session_id: str
+    model: str
+    started_at: float
+    router_name: str | None
+    client_disconnected: bool
+    session_turn_count: int
+    api_key: str
+
+
+_QUALITY_TURN_ROWS: Final = TypeAdapter(list[_QualityTurnRow])
+
+_QUALITY_SIGNALS_SQL: Final = """
+SELECT
+    session_id,
+    model,
+    EXTRACT(EPOCH FROM "startTime")::float8 AS started_at,
+    (metadata #>> '{routing_decision,router_model_name}') AS router_name,
+    COALESCE(metadata #>> '{error_information,error_code}' = '499', false) AS client_disconnected,
+    COUNT(*) OVER (PARTITION BY api_key, session_id)::int AS session_turn_count,
+    api_key
+FROM "LiteLLM_SpendLogs"
+WHERE "startTime" >= $1::timestamp AND "startTime" < $2::timestamp
+  AND session_id IS NOT NULL
+  AND model <> ''
+"""
+
+
+def _quality_signals_for(
+    turns: Sequence["_QualityTurnRow"],
+    router_name: str | None,
+    llm_router: "Router | None",
+) -> AutoRouterQualitySignals:
+    """Signals for one router (or all of them) against that router's own comparable traffic.
+
+    The baseline is drawn from the api_keys that used this router, not from every key on the
+    deployment. A key that can only reach one model has no escalation to make and would drag
+    the comparison toward zero for reasons that have nothing to do with routing quality;
+    restricting to keys that actually used the router keeps both sides of the comparison
+    inside the same reachable-model world.
+
+    Each session's eligibility is judged against every model its own api_key exercised
+    anywhere in the window, not against the models this one cohort happened to use or a pool
+    shared across keys. Scoping it to the cohort would make a cohort that never escalated
+    define its own ceiling, so every one of its sessions looks like it had nowhere to go and
+    the rate reads as unmeasurable rather than as zero -- silently deleting exactly the
+    well-behaved traffic the comparison exists to show. Pooling reachability across keys would
+    let a key that cannot reach a costlier model borrow one it never had, from another key
+    that only happens to share this cohort.
+    """
+    from litellm.proxy.db.autorouter_quality_signals import (
+        Turn,
+        baseline_unavailable_reason,
+        rank_models_by_cost,
+        signals_for_cohort,
+    )
+
+    routed_rows: Final = tuple(
+        row for row in turns if row.router_name is not None and (router_name is None or row.router_name == router_name)
+    )
+    router_keys: Final = frozenset(row.api_key for row in routed_rows)
+    baseline_rows: Final = tuple(row for row in turns if row.router_name is None and row.api_key in router_keys)
+
+    router_key_rows: Final = tuple(row for row in turns if row.api_key in router_keys)
+    reachable_by_key: Final = MappingProxyType(
+        {
+            key: frozenset(row.model for row in router_key_rows if row.api_key == key)
+            for key in frozenset(row.api_key for row in router_key_rows)
+        }
+    )
+    reachable_models: Final = tuple(frozenset(row.model for row in router_key_rows))
+    ranks: Final = rank_models_by_cost(llm_router, reachable_models) if llm_router is not None else MappingProxyType({})
+
+    def as_turns(rows: Sequence[_QualityTurnRow]) -> tuple[Turn, ...]:
+        return tuple(
+            Turn(
+                session_id=row.session_id,
+                api_key=row.api_key,
+                model=row.model,
+                started_at=row.started_at,
+                client_disconnected=row.client_disconnected,
+                router_name=row.router_name,
+                has_client_session_id=row.session_turn_count > 1,
+            )
+            for row in rows
+        )
+
+    routed: Final = signals_for_cohort(as_turns(routed_rows), ranks, reachable_by_key)
+    baseline: Final = signals_for_cohort(as_turns(baseline_rows), ranks, reachable_by_key)
+    unavailable: Final = baseline_unavailable_reason(as_turns(baseline_rows), baseline)
+    return AutoRouterQualitySignals(
+        router_name=router_name,
+        routed=AutoRouterQualityCohort(
+            sessions=routed.sessions,
+            escalation_rate_pct=routed.escalation_rate_pct,
+            abandonment_rate_pct=routed.abandonment_rate_pct,
+        ),
+        baseline=None
+        if unavailable
+        else AutoRouterQualityCohort(
+            sessions=baseline.sessions,
+            escalation_rate_pct=baseline.escalation_rate_pct,
+            abandonment_rate_pct=baseline.abandonment_rate_pct,
+        ),
+        baseline_unavailable_reason=unavailable,
+    )
+
+
+@router.get(
+    "/auto_router/quality_signals",
+    tags=("auto router",),
+    response_model=AutoRouterQualitySignalsResponse,
+)
+async def get_auto_router_quality_signals(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    start_date: Annotated[
+        str | None, Query(description="YYYY-MM-DD UTC, inclusive (defaults to 30 days before end_date)")
+    ] = None,
+    end_date: Annotated[str | None, Query(description="YYYY-MM-DD UTC, inclusive (defaults to today)")] = None,
+) -> AutoRouterQualitySignalsResponse:
+    """
+    Quality signals for the auto-router dashboard: how often callers escalated to a costlier
+    model mid-session, and how often they hung up mid-stream, for auto-routed traffic and for
+    the same keys' directly-addressed traffic.
+
+    Both cohorts come from one scan of LiteLLM_SpendLogs rather than the per-session rollup,
+    so they cannot drift apart -- same window, same session grouping, same disconnect test --
+    and because escalation is a question about turn order, which the rollup folds away.
+    `router_name` is NULL for a directly-addressed request, which is what separates the two
+    populations downstream. Abandonment reads `error_information.error_code` rather than
+    `status`, because a client disconnect still bills its partial streamed spend as a success
+    and so does not show up in `status`. `session_turn_count` counts, per api_key, how many
+    rows in the window share a session_id; a fallback uuid minted by the spend writer
+    (`_get_session_id_for_spend_log`) is always unique to its one request, so a repeating
+    session_id can only have come from the caller, which needs nothing beyond columns every
+    deployment already writes, prompt storage on or off.
+
+    The two cohorts self-select, so this is directional evidence and not an experiment: a
+    deployment that pins its hardest prompts to one model and routes only the easy ones will
+    show a flattering baseline.
+    """
+    from litellm.proxy.proxy_server import llm_router, prisma_client
+
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admin roles can view auto-router quality signals across the deployment",
+        )
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+
+    end_day: Final = (
+        _parse_benchmark_day(end_date)
+        if end_date
+        else datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    )
+    start_day: Final = _parse_benchmark_day(start_date) if start_date else end_day - timedelta(days=30)
+    if end_day < start_day:
+        raise HTTPException(status_code=400, detail="end_date must not be earlier than start_date")
+
+    raw_rows: Final = await prisma_client.db.query_raw(
+        _QUALITY_SIGNALS_SQL,
+        start_day.isoformat(),
+        (end_day + timedelta(days=1)).isoformat(),
+    )
+    turns: Final = _QUALITY_TURN_ROWS.validate_python(raw_rows or ())
+    router_names: Final = tuple(sorted(frozenset(row.router_name for row in turns if row.router_name is not None)))
+    return AutoRouterQualitySignalsResponse(
+        start_date=start_day.strftime("%Y-%m-%d"),
+        end_date=end_day.strftime("%Y-%m-%d"),
+        totals=_quality_signals_for(turns, None, llm_router),
+        groups=tuple(_quality_signals_for(turns, name, llm_router) for name in router_names),
     )

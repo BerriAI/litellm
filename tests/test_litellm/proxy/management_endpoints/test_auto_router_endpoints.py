@@ -21,10 +21,10 @@ from litellm.proxy.management_endpoints.auto_router_endpoints import (
     preview_auto_router_routing,
 )
 from litellm.router import Router
-from litellm.types.utils import Choices, Message, ModelResponse
 from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterRoutingTestRequest,
 )
+from litellm.types.utils import Choices, Message, ModelResponse
 
 ADMIN = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test", user_id="admin")
 
@@ -55,7 +55,7 @@ def _request(prompt: str, **config_overrides: object) -> AutoRouterRoutingTestRe
 
 
 async def _route(prompt: str, monkeypatch: pytest.MonkeyPatch, **config_overrides: object):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "llm_router", _router())
     return await preview_auto_router_routing(
@@ -119,7 +119,7 @@ async def test_tier_model_missing_from_the_proxy_is_reported(monkeypatch: pytest
 
 @pytest.mark.asyncio
 async def test_llm_classifier_call_is_billed_to_the_calling_key(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     router = _router()
     calls: list[dict] = []
@@ -164,7 +164,7 @@ async def test_llm_classifier_call_is_billed_to_the_calling_key(monkeypatch: pyt
 async def test_a_key_that_cannot_call_the_classifier_model_is_rejected_before_it_is_called(
     monkeypatch: pytest.MonkeyPatch, config_overrides: dict
 ):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     router = _router()
     calls: list[dict] = []
@@ -194,7 +194,7 @@ async def test_a_key_that_cannot_call_the_classifier_model_is_rejected_before_it
 
 @pytest.mark.asyncio
 async def test_a_key_over_its_budget_cannot_run_a_classifier_config(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     router = _router()
     calls: list[dict] = []
@@ -228,7 +228,7 @@ async def test_a_key_over_its_budget_cannot_run_a_classifier_config(monkeypatch:
 
 @pytest.mark.asyncio
 async def test_a_heuristic_config_does_not_need_a_budget(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "llm_router", _router())
 
@@ -249,7 +249,7 @@ async def test_a_heuristic_config_does_not_need_a_budget(monkeypatch: pytest.Mon
 
 @pytest.mark.asyncio
 async def test_no_llm_router_on_the_proxy_is_a_500(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "llm_router", None)
 
@@ -261,7 +261,7 @@ async def test_no_llm_router_on_the_proxy_is_a_500(monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.asyncio
 async def test_non_admin_without_a_team_is_rejected(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "llm_router", _router())
 
@@ -318,9 +318,7 @@ class TestAutoRouterBenchmarks:
         from litellm.proxy.management_endpoints.auto_router_endpoints import _benchmark_totals
 
         totals = _benchmark_totals(self.ROW)
-        bucket_hits = (
-            totals.cache.same_model.hits + totals.cache.first_visit.hits + totals.cache.return_to_tier.hits
-        )
+        bucket_hits = totals.cache.same_model.hits + totals.cache.first_visit.hits + totals.cache.return_to_tier.hits
         assert bucket_hits == 27
         assert totals.cache.hit_rate_pct == pytest.approx(100.0 * 28 / 38, abs=0.1)
 
@@ -466,3 +464,216 @@ class TestAutoRouterBenchmarks:
             end_date="2026-08-01",
         )
         assert response.groups[0].tier_turns == expected
+
+
+class TestAutoRouterQualitySignals:
+    """The endpoint's cohort split and its refusal to report a baseline it cannot stand behind.
+
+    Escalation/abandonment arithmetic itself is covered in
+    tests/test_litellm/proxy/db/test_autorouter_quality_signals.py; these tests cover the
+    wiring around it -- which rows become which cohort, and when the baseline is withheld.
+    """
+
+    CHEAP = "openai/gpt-4o-mini"
+    PRICEY = "openai/gpt-4o"
+
+    @staticmethod
+    def _row(
+        session_id: str,
+        model: str,
+        started_at: float,
+        *,
+        router_name: str | None = "live-auto",
+        client_disconnected: bool = False,
+        session_turn_count: int = 2,
+        api_key: str = "key-1",
+    ) -> dict:
+        return {
+            "session_id": session_id,
+            "model": model,
+            "started_at": started_at,
+            "router_name": router_name,
+            "client_disconnected": client_disconnected,
+            "session_turn_count": session_turn_count,
+            "api_key": api_key,
+        }
+
+    @staticmethod
+    def _pricing_router() -> Router:
+        return Router(
+            model_list=[
+                {"model_name": name, "litellm_params": {"model": name, "api_key": "fake-key"}}
+                for name in (TestAutoRouterQualitySignals.CHEAP, TestAutoRouterQualitySignals.PRICEY)
+            ]
+        )
+
+    async def _call(self, rows: list[dict], monkeypatch: pytest.MonkeyPatch, **kwargs: object):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.auto_router_endpoints import (
+            get_auto_router_quality_signals,
+        )
+
+        class _DB:
+            async def query_raw(self, sql: str, *params: object):
+                return rows
+
+        monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": _DB()})())
+        monkeypatch.setattr(proxy_server, "llm_router", self._pricing_router())
+        return await get_auto_router_quality_signals(
+            user_api_key_dict=ADMIN,
+            start_date="2026-08-01",
+            end_date="2026-08-02",
+            **kwargs,
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_admin_roles_cannot_read_quality_signals(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import (
+            get_auto_router_quality_signals,
+        )
+
+        with pytest.raises(HTTPException) as err:
+            await get_auto_router_quality_signals(
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-x"),
+                start_date="2026-08-01",
+                end_date="2026-08-02",
+            )
+        assert err.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_a_reversed_window_is_rejected(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.auto_router_endpoints import (
+            get_auto_router_quality_signals,
+        )
+
+        monkeypatch.setattr(proxy_server, "prisma_client", object())
+        with pytest.raises(HTTPException) as err:
+            await get_auto_router_quality_signals(
+                user_api_key_dict=ADMIN, start_date="2026-08-05", end_date="2026-08-01"
+            )
+        assert err.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_routed_escalation_is_measured_from_routed_rows(self, monkeypatch: pytest.MonkeyPatch):
+        rows = [
+            self._row("s1", self.CHEAP, 1.0),
+            self._row("s1", self.PRICEY, 2.0),
+        ]
+        response = await self._call(rows, monkeypatch)
+        assert response.totals.routed.sessions == 1
+        assert response.totals.routed.escalation_rate_pct == 100.0
+
+    @pytest.mark.asyncio
+    async def test_rows_without_a_routing_decision_are_the_baseline_not_the_routed_cohort(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Same key, same models; only the presence of a router name separates the cohorts.
+        # The routed session escalates and the direct one does not, so a cohort mix-up
+        # cannot produce these two numbers.
+        rows = [
+            self._row("routed-1", self.CHEAP, 1.0),
+            self._row("routed-1", self.PRICEY, 2.0),
+        ]
+        rows += [self._row(f"direct-{i}", self.CHEAP, 1.0, router_name=None) for i in range(30)]
+        rows += [self._row(f"direct-{i}", self.CHEAP, 2.0, router_name=None) for i in range(30)]
+        response = await self._call(rows, monkeypatch)
+        assert response.totals.routed.escalation_rate_pct == 100.0
+        assert response.totals.baseline is not None
+        assert response.totals.baseline.sessions == 30
+        assert response.totals.baseline.escalation_rate_pct == 0.0
+
+    @pytest.mark.asyncio
+    async def test_baseline_withheld_when_sessions_are_mostly_one_request_fallback_ids(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        # session_turn_count == 1 marks a session id the spend writer minted rather than one
+        # the caller supplied. A cohort made of those is not sessions, and reporting a rate
+        # over it would describe the fallback rather than the traffic.
+        rows = [self._row("routed-1", self.CHEAP, 1.0), self._row("routed-1", self.PRICEY, 2.0)]
+        rows += [self._row(f"direct-{i}", self.CHEAP, 1.0, router_name=None, session_turn_count=1) for i in range(50)]
+        response = await self._call(rows, monkeypatch)
+        assert response.totals.baseline is None
+        assert response.totals.baseline_unavailable_reason == "no_session_ids"
+
+    @pytest.mark.asyncio
+    async def test_baseline_withheld_when_there_is_too_little_comparable_traffic(self, monkeypatch: pytest.MonkeyPatch):
+        rows = [self._row("routed-1", self.CHEAP, 1.0), self._row("routed-1", self.PRICEY, 2.0)]
+        rows += [
+            self._row("direct-1", self.CHEAP, 1.0, router_name=None),
+            self._row("direct-1", self.CHEAP, 2.0, router_name=None),
+        ]
+        response = await self._call(rows, monkeypatch)
+        assert response.totals.baseline is None
+        assert response.totals.baseline_unavailable_reason == "insufficient_sessions"
+
+    @pytest.mark.asyncio
+    async def test_baseline_only_draws_on_keys_that_used_the_router(self, monkeypatch: pytest.MonkeyPatch):
+        # A key that never touched the router says nothing about the router, and its traffic
+        # must not be folded into the comparison.
+        rows = [self._row("routed-1", self.CHEAP, 1.0), self._row("routed-1", self.PRICEY, 2.0)]
+        rows += [self._row(f"other-{i}", self.CHEAP, 1.0, router_name=None, api_key="unrelated-key") for i in range(50)]
+        response = await self._call(rows, monkeypatch)
+        assert response.totals.baseline is None
+
+    @pytest.mark.asyncio
+    async def test_two_keys_reusing_the_same_session_id_are_not_merged(self, monkeypatch: pytest.MonkeyPatch):
+        # key-1 and key-2 both happen to send session_id="shared". key-1's own two turns
+        # under it escalate; key-2's own two turns under it do not (key-2's access to the
+        # pricey model is established by a separate "other" session so it is still eligible
+        # to escalate). Merging the two keys' rows by session_id alone would splice all four
+        # turns into one session and read key-1's escalation and key-2's non-escalation as a
+        # single, order-dependent sequence instead of two independent sessions.
+        rows = [
+            self._row("shared", self.CHEAP, 1.0, api_key="key-1"),
+            self._row("shared", self.PRICEY, 2.0, api_key="key-1"),
+            self._row("shared", self.CHEAP, 1.0, api_key="key-2"),
+            self._row("shared", self.CHEAP, 2.0, api_key="key-2"),
+            self._row("other", self.PRICEY, 1.0, api_key="key-2"),
+        ]
+        response = await self._call(rows, monkeypatch)
+        assert response.totals.routed.sessions == 2
+        assert response.totals.routed.escalation_rate_pct == 50.0
+
+    @pytest.mark.asyncio
+    async def test_reachability_is_not_pooled_across_keys_in_the_same_cohort(self, monkeypatch: pytest.MonkeyPatch):
+        # key-1 only ever calls the cheap model; key-2 reaches both. Pooling reachability
+        # across the cohort would credit key-1's session with key-2's ceiling and count it
+        # as eligible to escalate when key-1 never had a pricier model to reach for.
+        rows = [
+            self._row("k1-s1", self.CHEAP, 1.0, api_key="key-1"),
+            self._row("k1-s1", self.CHEAP, 2.0, api_key="key-1"),
+            self._row("k2-s1", self.CHEAP, 1.0, api_key="key-2"),
+            self._row("k2-s1", self.PRICEY, 2.0, api_key="key-2"),
+        ]
+        response = await self._call(rows, monkeypatch)
+        assert response.totals.routed.sessions == 1
+        assert response.totals.routed.escalation_rate_pct == 100.0
+
+    @pytest.mark.asyncio
+    async def test_groups_are_reported_per_router(self, monkeypatch: pytest.MonkeyPatch):
+        rows = [
+            self._row("a1", self.CHEAP, 1.0, router_name="router-a"),
+            self._row("a1", self.PRICEY, 2.0, router_name="router-a"),
+            self._row("b1", self.CHEAP, 1.0, router_name="router-b"),
+            self._row("b1", self.CHEAP, 2.0, router_name="router-b"),
+        ]
+        response = await self._call(rows, monkeypatch)
+        by_name = {group.router_name: group for group in response.groups}
+        assert set(by_name) == {"router-a", "router-b"}
+        assert by_name["router-a"].routed.escalation_rate_pct == 100.0
+        assert by_name["router-b"].routed.escalation_rate_pct == 0.0
+
+    @pytest.mark.asyncio
+    async def test_abandonment_reads_the_disconnect_flag_not_the_status(self, monkeypatch: pytest.MonkeyPatch):
+        # s2 gives the key a pricier model in the window, so s1 is eligible; without it s1
+        # sits at its own ceiling and is correctly excluded, measuring nothing.
+        rows = [
+            self._row("s1", self.CHEAP, 1.0, client_disconnected=True),
+            self._row("s1", self.CHEAP, 2.0, client_disconnected=False),
+            self._row("s2", self.PRICEY, 1.0),
+            self._row("s2", self.PRICEY, 2.0),
+        ]
+        response = await self._call(rows, monkeypatch)
+        assert response.totals.routed.sessions == 1
+        assert response.totals.routed.abandonment_rate_pct == 50.0

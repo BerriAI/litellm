@@ -807,6 +807,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/quality_signals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Auto Router Quality Signals
+         * @description Quality signals for the auto-router dashboard: how often callers escalated to a costlier
+         *     model mid-session, and how often they hung up mid-stream, for auto-routed traffic and for
+         *     the same keys' directly-addressed traffic.
+         *
+         *     Both cohorts come from one scan of LiteLLM_SpendLogs rather than the per-session rollup,
+         *     so they cannot drift apart -- same window, same session grouping, same disconnect test --
+         *     and because escalation is a question about turn order, which the rollup folds away.
+         *     `router_name` is NULL for a directly-addressed request, which is what separates the two
+         *     populations downstream. Abandonment reads `error_information.error_code` rather than
+         *     `status`, because a client disconnect still bills its partial streamed spend as a success
+         *     and so does not show up in `status`. `session_turn_count` counts, per api_key, how many
+         *     rows in the window share a session_id; a fallback uuid minted by the spend writer
+         *     (`_get_session_id_for_spend_log`) is always unique to its one request, so a repeating
+         *     session_id can only have come from the caller, which needs nothing beyond columns every
+         *     deployment already writes, prompt storage on or off.
+         *
+         *     The two cohorts self-select, so this is directional evidence and not an experiment: a
+         *     deployment that pins its hardest prompts to one model and routes only the easy ones will
+         *     show a flattering baseline.
+         */
+        get: operations["get_auto_router_quality_signals_auto_router_quality_signals_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/test_routing": {
         parameters: {
             query?: never;
@@ -21547,6 +21585,83 @@ export interface components {
             system_prompt: string;
         };
         /**
+         * AutoRouterQualityCohort
+         * @description One population's quality signals, over sessions that could have escalated.
+         *
+         *     Both the routed and the non-routed cohort are measured with the same definitions over
+         *     the same table, so the two are directly comparable. ``sessions`` is the denominator for
+         *     every rate here: sessions whose key had a strictly more capable model available than the
+         *     one the session ran on, since a session that could not escalate cannot evidence a miss.
+         */
+        AutoRouterQualityCohort: {
+            /**
+             * Abandonment Rate Pct
+             * @description Share of turns the client disconnected before the stream finished
+             */
+            abandonment_rate_pct: number | null;
+            /**
+             * Escalation Rate Pct
+             * @description Share of sessions where a turn moved to a more expensive model than the turn before it
+             */
+            escalation_rate_pct: number | null;
+            /**
+             * Sessions
+             * @description Sessions in this cohort that had somewhere to escalate to
+             */
+            sessions: number;
+        };
+        /**
+         * AutoRouterQualitySignals
+         * @description Quality signals for one auto-router, against the operator's own comparable traffic.
+         *
+         *     Not a controlled experiment: the two cohorts self-select, so a deployment that pins its
+         *     hardest prompts to a fixed model and routes only the easy ones will show a flattering
+         *     baseline. The comparison is directional evidence, and the UI says so.
+         */
+        AutoRouterQualitySignals: {
+            /** @description Comparable sessions on a directly-addressed model, or None when there are too few to compare, or too few carry a client-supplied session id to group into real sessions */
+            baseline: components["schemas"]["AutoRouterQualityCohort"] | null;
+            /**
+             * Baseline Unavailable Reason
+             * @description Why baseline is None: 'insufficient_sessions' or 'no_session_ids'
+             */
+            baseline_unavailable_reason?: string | null;
+            /** @description Sessions that went through the auto-router */
+            routed: components["schemas"]["AutoRouterQualityCohort"];
+            /**
+             * Router Name
+             * @description The router these signals cover; None when they cover all routers
+             */
+            router_name?: string | null;
+        };
+        /**
+         * AutoRouterQualitySignalsResponse
+         * @description Quality signals for the auto-router dashboard, computed from per-request spend logs.
+         *
+         *     Separate from the benchmarks endpoint because this reads LiteLLM_SpendLogs rather than the
+         *     per-session rollup: escalation is an ordered, per-turn question, and the rollup deliberately
+         *     folds ordering away.
+         */
+        AutoRouterQualitySignalsResponse: {
+            /**
+             * End Date
+             * @description Window end day, YYYY-MM-DD UTC, inclusive
+             */
+            end_date: string;
+            /**
+             * Groups
+             * @description Signals per auto-router
+             */
+            groups: components["schemas"]["AutoRouterQualitySignals"][];
+            /**
+             * Start Date
+             * @description Window start day, YYYY-MM-DD UTC, inclusive
+             */
+            start_date: string;
+            /** @description Signals over every auto-router in the window */
+            totals: components["schemas"]["AutoRouterQualitySignals"];
+        };
+        /**
          * AutoRouterRoutingTestRequest
          * @description A single prompt to classify against a complexity-router config that need not be saved yet.
          */
@@ -36803,6 +36918,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AutoRouterClassifierDefaultPromptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_auto_router_quality_signals_auto_router_quality_signals_get: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM-DD UTC, inclusive (defaults to 30 days before end_date) */
+                start_date?: string | null;
+                /** @description YYYY-MM-DD UTC, inclusive (defaults to today) */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRouterQualitySignalsResponse"];
                 };
             };
             /** @description Validation Error */

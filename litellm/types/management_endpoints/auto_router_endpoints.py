@@ -141,3 +141,57 @@ class AutoRouterBenchmarksResponse(BaseModel):
     routers_in_scope: int
     totals: AutoRouterBenchmarkTotals
     groups: tuple[AutoRouterBenchmarkGroup, ...]
+
+
+class AutoRouterQualityCohort(BaseModel):
+    """One population's quality signals, over sessions that could have escalated.
+
+    Both the routed and the non-routed cohort are measured with the same definitions over
+    the same table, so the two are directly comparable. ``sessions`` is the denominator for
+    every rate here: sessions whose key had a strictly more capable model available than the
+    one the session ran on, since a session that could not escalate cannot evidence a miss.
+    """
+
+    sessions: int = Field(description="Sessions in this cohort that had somewhere to escalate to")
+    escalation_rate_pct: float | None = Field(
+        description="Share of sessions where a turn moved to a more expensive model than the turn before it"
+    )
+    abandonment_rate_pct: float | None = Field(
+        description="Share of turns the client disconnected before the stream finished"
+    )
+
+
+class AutoRouterQualitySignals(BaseModel):
+    """Quality signals for one auto-router, against the operator's own comparable traffic.
+
+    Not a controlled experiment: the two cohorts self-select, so a deployment that pins its
+    hardest prompts to a fixed model and routes only the easy ones will show a flattering
+    baseline. The comparison is directional evidence, and the UI says so.
+    """
+
+    router_name: str | None = Field(
+        default=None, description="The router these signals cover; None when they cover all routers"
+    )
+    routed: AutoRouterQualityCohort = Field(description="Sessions that went through the auto-router")
+    baseline: AutoRouterQualityCohort | None = Field(
+        description="Comparable sessions on a directly-addressed model, or None when there are too few "
+        "to compare, or too few carry a client-supplied session id to group into real sessions"
+    )
+    baseline_unavailable_reason: str | None = Field(
+        default=None,
+        description="Why baseline is None: 'insufficient_sessions' or 'no_session_ids'",
+    )
+
+
+class AutoRouterQualitySignalsResponse(BaseModel):
+    """Quality signals for the auto-router dashboard, computed from per-request spend logs.
+
+    Separate from the benchmarks endpoint because this reads LiteLLM_SpendLogs rather than the
+    per-session rollup: escalation is an ordered, per-turn question, and the rollup deliberately
+    folds ordering away.
+    """
+
+    start_date: str = Field(description="Window start day, YYYY-MM-DD UTC, inclusive")
+    end_date: str = Field(description="Window end day, YYYY-MM-DD UTC, inclusive")
+    totals: AutoRouterQualitySignals = Field(description="Signals over every auto-router in the window")
+    groups: tuple[AutoRouterQualitySignals, ...] = Field(description="Signals per auto-router")

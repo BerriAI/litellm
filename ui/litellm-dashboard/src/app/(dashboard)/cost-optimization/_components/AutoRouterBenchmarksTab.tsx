@@ -28,8 +28,16 @@ import {
   type BenchmarkWindow,
   type BucketRow,
 } from "./autoRouterBenchmarks";
+import {
+  BASELINE_UNAVAILABLE_COPY,
+  ratePctLabel,
+  signalsFor,
+  type AutoRouterQualitySignals,
+  type AutoRouterQualitySignalsResponse,
+} from "./autoRouterQualitySignals";
 import { usd } from "./costOptimizationUtils";
 import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
+import { useAutoRouterQualitySignals } from "./useAutoRouterQualitySignals";
 
 const Message: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <p className="py-8 text-center text-sm text-muted-foreground">{children}</p>
@@ -64,6 +72,10 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
               {Math.abs(stats.saved_pct).toFixed(0)}%
             </Badge>
           </div>
+          <div className="flex items-baseline gap-2 border-t pt-3">
+            <p className="text-xs text-muted-foreground">Avg saved per session</p>
+            <p className="text-sm font-semibold tabular-nums text-foreground">{usd(stats.saved_per_session)}</p>
+          </div>
         </div>
 
         <div className="flex flex-col justify-center px-6 pb-6 md:py-6">
@@ -90,17 +102,71 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
               <p className="text-3xl font-semibold text-foreground">{stats.turns.toLocaleString()}</p>
             </div>
           </div>
-          <dl className="flex flex-col divide-y border-t text-sm">
-            <div className="flex items-center justify-between gap-2 px-6 py-3">
-              <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">Avg saved per session</dt>
-              <dd className="text-lg font-semibold tabular-nums text-foreground">{usd(stats.saved_per_session)}</dd>
-            </div>
-          </dl>
         </div>
       </div>
     </Card>
   );
 };
+
+const QualityMetric: React.FC<{
+  label: string;
+  hint: string;
+  routed: number | null | undefined;
+  baseline: number | null | undefined;
+  baselineUnavailableReason: string | null | undefined;
+}> = ({ label, hint, routed, baseline, baselineUnavailableReason }) => {
+  const worseThanBaseline = routed != null && baseline != null && routed > baseline;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                className="w-fit cursor-default text-left text-xs text-muted-foreground underline decoration-dotted underline-offset-4"
+              >
+                {label}
+              </button>
+            }
+          />
+          <TooltipContent className="max-w-xs">{hint}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+      <p
+        className={`text-2xl font-semibold tabular-nums ${worseThanBaseline ? "text-destructive" : "text-foreground"}`}
+      >
+        {ratePctLabel(routed)}
+      </p>
+      <p className="text-[11px] text-muted-foreground">
+        {baseline == null
+          ? (baselineUnavailableReason && BASELINE_UNAVAILABLE_COPY[baselineUnavailableReason]) ||
+            "No comparable non-router traffic"
+          : `vs. ${ratePctLabel(baseline)} on your non-router traffic`}
+      </p>
+    </div>
+  );
+};
+
+const QualityCard: React.FC<{ signals: AutoRouterQualitySignals }> = ({ signals }) => (
+  <Card className="flex flex-col justify-center gap-4 p-6">
+    <p className="text-sm text-muted-foreground">Quality signals</p>
+    <QualityMetric
+      label="Escalation rate"
+      hint="Share of sessions where someone moved to a more expensive model than the one they were given. When this fires the caller is saying the model could not do the job. It only sees callers who can switch, so an API-only integration can read zero while still suffering."
+      routed={signals.routed.escalation_rate_pct}
+      baseline={signals.baseline?.escalation_rate_pct}
+      baselineUnavailableReason={signals.baseline_unavailable_reason}
+    />
+    <QualityMetric
+      label="Stream abandonment"
+      hint="Share of turns where the caller hung up before the response finished. Catches the giving-up that escalation misses, but a dropped connection and 'I read enough' look the same from here."
+      routed={signals.routed.abandonment_rate_pct}
+      baseline={signals.baseline?.abandonment_rate_pct}
+      baselineUnavailableReason={signals.baseline_unavailable_reason}
+    />
+  </Card>
+);
 
 const StackedTurnBar: React.FC<{ buckets: BucketRow[] }> = ({ buckets }) => {
   const segments = buckets.filter((b) => b.turns > 0);
@@ -233,9 +299,10 @@ interface BenchmarksBodyProps {
   error: unknown;
   data: AutoRouterBenchmarksResponse | undefined;
   selectedKey: string;
+  qualityData: AutoRouterQualitySignalsResponse | undefined;
 }
 
-const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data, selectedKey }) => {
+const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data, selectedKey, qualityData }) => {
   if (isPending) return <Message>Loading auto-router usage...</Message>;
   if (error instanceof ApiError && error.status === 403) {
     return <Message>Auto-router usage is visible to proxy admin roles only</Message>;
@@ -245,9 +312,24 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
 
   const view = viewFor(data, selectedKey);
   const stats = view.stats;
+  const selectedGroup = data.groups.find((g) => groupKey(g) === selectedKey);
+  const signals = qualityData
+    ? signalsFor(qualityData, selectedKey === ALL_ROUTERS ? null : selectedGroup?.router_name ?? null)
+    : undefined;
   return (
     <>
-      <HeroCard view={view} />
+      <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
+        <HeroCard view={view} />
+        {signals ? <QualityCard signals={signals} /> : null}
+      </div>
+
+      {signals ? (
+        <p className="text-xs text-muted-foreground">
+          Quality signals compare this router against the same keys&apos; directly-addressed traffic. The two
+          populations self-select, so this is directional evidence rather than a controlled experiment: routing only
+          your easier prompts will flatter the comparison.
+        </p>
+      ) : null}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Metric label="Avg turns per session" value={stats.avg_turns_per_session.toFixed(1)} />
@@ -281,6 +363,7 @@ interface AutoRouterBenchmarksTabProps {
 const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken }) => {
   const [range, setRange] = useState<BenchmarkWindow>("30d");
   const { data, isPending, error } = useAutoRouterBenchmarks(accessToken, range);
+  const { data: qualityData } = useAutoRouterQualitySignals(accessToken, range);
   const [selectedKey, setSelectedKey] = useState<string>(ALL_ROUTERS);
 
   const groups = data?.groups ?? [];
@@ -319,7 +402,13 @@ const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ acces
         </div>
       </div>
 
-      <BenchmarksBody isPending={isPending} error={error} data={data} selectedKey={selectedKey} />
+      <BenchmarksBody
+        isPending={isPending}
+        error={error}
+        data={data}
+        selectedKey={selectedKey}
+        qualityData={qualityData}
+      />
     </div>
   );
 };
