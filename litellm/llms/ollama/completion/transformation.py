@@ -458,7 +458,7 @@ def _prompted_tool_names(prompted_tools: object) -> frozenset[str]:
     if not isinstance(prompted_tools, list):
         return frozenset()
 
-    schemas = ((tool.get("function") or tool) for tool in prompted_tools if isinstance(tool, dict))
+    schemas: Final = ((tool.get("function") or tool) for tool in prompted_tools if isinstance(tool, dict))
     return frozenset(
         schema["name"] for schema in schemas if isinstance(schema, dict) and isinstance(schema.get("name"), str)
     )
@@ -483,7 +483,7 @@ def _build_tool_call(response_text: str, tool_names: frozenset[str]) -> ChatComp
     applies to the same body, so it never converts anything that path would leave as content.
     """
     try:
-        function_call = _OllamaJsonModeToolCall.model_validate_json(response_text)
+        function_call: Final = _OllamaJsonModeToolCall.model_validate_json(response_text)
     except ValidationError:
         return None
 
@@ -525,11 +525,11 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
             return content
 
         self.tool_call_buffer += content
-        stripped = self.tool_call_buffer.lstrip()
+        stripped: Final = self.tool_call_buffer.lstrip()
         if not stripped or stripped.startswith("{"):
             return None
 
-        released = self.tool_call_buffer
+        released: Final = self.tool_call_buffer
         self.tool_call_buffer = None
         return released
 
@@ -559,9 +559,9 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                         total_tokens=prompt_eval_count + eval_count,
                     )
 
-                held_back = self.tool_call_buffer
+                held_back: Final = self.tool_call_buffer
                 self.tool_call_buffer = None
-                tool_call = _build_tool_call(held_back, self.tool_names) if held_back else None
+                tool_call: Final = _build_tool_call(held_back, self.tool_names) if held_back else None
                 if tool_call is not None:
                     return GenericStreamingChunk(
                         text="",
