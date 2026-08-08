@@ -15,7 +15,6 @@ import React from "react";
 import { BlogDropdown } from "./Navbar/BlogDropdown/BlogDropdown";
 import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
 import { NAV_PRODUCT_LINK_CLASS } from "./Navbar/navProductLinkClass";
-import { NotificationsBell } from "./Navbar/NotificationsBell/NotificationsBell";
 import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
 import ViewSwitcher from "./Navbar/ViewSwitcher";
 import WorkerDropdown from "./Navbar/WorkerDropdown/WorkerDropdown";
@@ -151,11 +150,7 @@ const Navbar: React.FC<NavbarProps> = ({
 
             {!isPublicPage && (
               <div className="flex shrink-0 items-center border-l border-gray-200 pl-4">
-                <div className="flex items-center gap-0.5 rounded-lg bg-gray-50 px-1 py-0 transition-colors hover:bg-gray-100">
-                  <NotificationsBell />
-                  <span className="mx-0.5 h-6 w-px shrink-0 bg-gray-200" aria-hidden />
-                  <UserDropdown onLogout={handleLogout} />
-                </div>
+                <UserDropdown onLogout={handleLogout} />
               </div>
             )}
           </div>
