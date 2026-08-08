@@ -181,6 +181,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
     return disabledPersonalKeyCreation ? "custom" : "session";
   });
   const [apiKey, setApiKey] = useState<string>(() => getSecureItem("apiKey") || "");
+  const [debouncedCustomApiKey, setDebouncedCustomApiKey] = useState<string>(() =>
+    (getSecureItem("apiKey") || "").trim(),
+  );
   const [customProxyBaseUrl, setCustomProxyBaseUrl] = useState<string>(
     () => sessionStorage.getItem("customProxyBaseUrl") || "",
   );
@@ -401,10 +404,21 @@ const ChatUI: React.FC<ChatUIProps> = ({
   ]);
 
   useEffect(() => {
-    const userApiKey = apiKeySource === "session" ? accessToken : apiKey.trim();
+    if (apiKeySource === "session") {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedCustomApiKey(apiKey.trim());
+    }, 300);
+    return () => window.clearTimeout(timeoutId);
+  }, [apiKey, apiKeySource]);
+
+  useEffect(() => {
+    const userApiKey = apiKeySource === "session" ? accessToken : debouncedCustomApiKey;
     if (!userApiKey) {
       setModelInfo([]);
       setModelLoadError(false);
+      setIsLoadingModels(false);
       return;
     }
 
@@ -447,7 +461,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [accessToken, apiKeySource, apiKey, simplified]);
+  }, [accessToken, apiKeySource, debouncedCustomApiKey, simplified]);
 
   // Load tools when MCP direct mode has a server (or toolset) selected
   useEffect(() => {
@@ -750,7 +764,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
-    const effectiveApiKey = simplified ? accessToken : apiKeySource === "session" ? accessToken : apiKey;
+    const effectiveApiKey =
+      simplified || apiKeySource === "session" ? accessToken : debouncedCustomApiKey || apiKey.trim();
 
     if (!effectiveApiKey) {
       NotificationsManager.fromBackend("Please provide a Virtual Key or select Current UI Session");
@@ -843,7 +858,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
           const requestProxyBaseUrl =
             simplified && proxySettings
-              ? proxySettings.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings.PROXY_BASE_URL ?? undefined
+              ? (proxySettings.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings.PROXY_BASE_URL ?? undefined)
               : customProxyBaseUrl || undefined;
           await makeOpenAIChatCompletionRequest(
             apiChatHistory,
@@ -1191,7 +1206,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     }}
                   >
                     <SelectTrigger className="w-full" size="sm" aria-label="Virtual Key Source">
-                      <SelectValue />
+                      <SelectValue>{apiKeySource === "custom" ? "Virtual Key" : "Current UI Session"}</SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="session">Current UI Session</SelectItem>
@@ -1199,15 +1214,30 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     </SelectContent>
                   </ShadcnSelect>
                   {apiKeySource === "custom" && (
-                    <div className="relative mt-2">
-                      <Key className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                      <Input
-                        className="h-8 pl-8"
-                        placeholder="Enter custom Virtual Key"
-                        type="password"
-                        onChange={(event) => setApiKey(event.target.value)}
-                        value={apiKey}
-                      />
+                    <div className="mt-2 space-y-1">
+                      <div className="relative">
+                        <Key className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          className="h-8 pl-8"
+                          placeholder="Enter custom Virtual Key"
+                          type="password"
+                          autoComplete="off"
+                          spellCheck={false}
+                          onChange={(event) => setApiKey(event.target.value)}
+                          onBlur={() => setDebouncedCustomApiKey(apiKey.trim())}
+                          value={apiKey}
+                          aria-label="Virtual Key"
+                        />
+                      </div>
+                      {isLoadingModels && apiKey.trim() !== "" && (
+                        <p className="text-xs text-muted-foreground">Loading models for this key...</p>
+                      )}
+                      {!isLoadingModels && apiKey.trim() !== "" && modelLoadError && (
+                        <p className="text-xs text-destructive">Unable to load models for this Virtual Key.</p>
+                      )}
+                      {!isLoadingModels && apiKey.trim() !== "" && !modelLoadError && modelInfo.length === 0 && (
+                        <p className="text-xs text-muted-foreground">No models available for this Virtual Key.</p>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1302,7 +1332,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         }}
                       >
                         <SelectTrigger className="w-full" size="sm" aria-label="Voice">
-                          <SelectValue />
+                          <SelectValue>
+                            {OPEN_AI_VOICE_SELECT_OPTIONS.find((voice) => voice.value === selectedVoice)?.label ??
+                              selectedVoice}
+                          </SelectValue>
                         </SelectTrigger>
                         <SelectContent>
                           {OPEN_AI_VOICE_SELECT_OPTIONS.map((voice) => (
@@ -2055,7 +2088,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               <p className="mb-1 text-sm font-medium text-gray-700">SDK Type</p>
               <ShadcnSelect value={selectedSdk} onValueChange={(value) => setSelectedSdk(value as "openai" | "azure")}>
                 <SelectTrigger className="w-[150px]" size="sm" aria-label="SDK Type">
-                  <SelectValue />
+                  <SelectValue>{selectedSdk === "azure" ? "Azure SDK" : "OpenAI SDK"}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="openai">OpenAI SDK</SelectItem>
