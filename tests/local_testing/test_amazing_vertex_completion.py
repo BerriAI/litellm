@@ -1880,8 +1880,9 @@ async def test_vertexai_multimodal_embedding():
 
         assert args_to_vertexai == expected_payload
         assert response.model == "multimodalembedding@001"
-        assert len(response.data) == 1
-        response_data = response.data[0]
+        assert len(response.data) == 2
+        assert response.data[0]["embedding"] == [0.4, 0.5, 0.6]
+        assert response.data[1]["embedding"] == [0.1, 0.2, 0.3]
 
         # Optional: Print for debugging
         print("Arguments passed to Vertex AI:", args_to_vertexai)
