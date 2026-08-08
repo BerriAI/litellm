@@ -213,3 +213,12 @@ class TestElevenLabsTextToSpeechTransformation:
 
         assert voice_id in url
         assert "output_format=pcm_44100" in url
+
+
+class TestElevenLabsScribeV2Pricing:
+    def test_scribe_v2_model_info(self):
+        info = litellm.get_model_info("elevenlabs/scribe_v2")
+        assert info["litellm_provider"] == "elevenlabs"
+        assert info["mode"] == "audio_transcription"
+        assert info["input_cost_per_second"] == pytest.approx(0.22 / 3600, rel=1e-3)
+        assert info["output_cost_per_second"] == 0.0
