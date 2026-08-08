@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -10,7 +10,14 @@ from typing import Final, Literal, Protocol, TypeVar
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import GLOBAL_PROXY_SPEND_CACHE_KEY, LITELLM_PROXY_BUDGET_NAME
+from litellm.constants import (
+    GLOBAL_PROXY_SPEND_CACHE_KEY,
+    LITELLM_PROXY_BUDGET_NAME,
+    RESET_BUDGET_JOB_BATCH_SIZE,
+    RESET_BUDGET_JOB_LOCK_TTL_SECONDS,
+    RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN,
+    RESET_BUDGET_JOB_NAME,
+)
 from litellm.proxy._types import (
     LiteLLM_BudgetTableFull,
     LiteLLM_EndUserTable,
@@ -23,6 +30,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     compute_budget_reset_at,
     get_budget_reset_settings,
 )
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import ReadOnlyTable, SpendLinkedTable
@@ -143,6 +151,52 @@ class _BudgetCascadeFailed:
 _EMPTY_CASCADE: Final = _BudgetCascade()
 
 
+@dataclass(frozen=True, slots=True)
+class _LeaderLockHeld:
+    manager: PodLockManager
+
+
+@dataclass(frozen=True, slots=True)
+class _LeaderLockUnavailable:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _LeaderLockNotConfigured:
+    pass
+
+
+_LeaderLock = _LeaderLockHeld | _LeaderLockUnavailable | _LeaderLockNotConfigured
+
+
+@dataclass(frozen=True, slots=True)
+class _ChunkOutcome:
+    """One chunk of a reset phase: rows read, and rows the write actually moved
+    past the due cutoff (a row with no budget_duration is rewritten but stays
+    due, so it does not count as progress)."""
+
+    fetched: int
+    advanced: int
+
+
+_NO_PROGRESS: Final = _ChunkOutcome(fetched=0, advanced=0)
+
+
+def _phase_is_drained(outcome: _ChunkOutcome) -> bool:
+    """A short chunk means the due rows ran out. A full chunk that advanced
+    nothing would be re-read unchanged forever, so it ends the phase too and
+    those rows wait for the next tick."""
+    return outcome.fetched < RESET_BUDGET_JOB_BATCH_SIZE or outcome.advanced == 0
+
+
+async def _run_phase_in_chunks(process_chunk: Callable[[], Awaitable[_ChunkOutcome]]) -> None:
+    """Drive one reset phase a chunk at a time, capped so a single run cannot
+    spin unbounded: leftovers are picked up by the next tick."""
+    for _ in range(RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN):
+        if _phase_is_drained(await process_chunk()):
+            return
+
+
 def _budget_cascade_event_metadata(cascade: _BudgetCascade) -> dict[str, object]:
     return {
         "num_budgets_found": len(cascade.budgets),
@@ -162,10 +216,28 @@ class ResetBudgetJob:
         proxy_logging_obj: ProxyLogging,
         prisma_client: PrismaClient,
         reset_settings: BudgetResetSettings | None = None,
+        pod_lock_manager: PodLockManager | None = None,
     ):
         self.proxy_logging_obj: ProxyLogging = proxy_logging_obj
         self.prisma_client: PrismaClient = prisma_client
         self.reset_settings: BudgetResetSettings = reset_settings or get_budget_reset_settings()
+        self.pod_lock_manager: PodLockManager | None = pod_lock_manager
+
+    async def _acquire_leader_lock(self) -> _LeaderLock:
+        """Elect one runner per reset tick.
+
+        Without Redis there is nothing to elect on, so every pod keeps running
+        the job as it always has.
+        """
+        if self.pod_lock_manager is None or self.pod_lock_manager.redis_cache is None:
+            return _LeaderLockNotConfigured()
+        acquired: Final = await self.pod_lock_manager.acquire_lock(
+            cronjob_id=RESET_BUDGET_JOB_NAME,
+            ttl=RESET_BUDGET_JOB_LOCK_TTL_SECONDS,
+        )
+        if acquired is True:
+            return _LeaderLockHeld(manager=self.pod_lock_manager)
+        return _LeaderLockUnavailable()
 
     async def reset_budget(
         self,
@@ -176,8 +248,23 @@ class ResetBudgetJob:
         Resets their spend
 
         Updates db
+
+        Only one pod runs a given tick when Redis is configured: every worker
+        firing these queries at the same calendar boundary is what piles up
+        lock contention on the budget tables.
         """
-        if self.prisma_client is not None:
+        if self.prisma_client is None:
+            return
+
+        lock: Final = await self._acquire_leader_lock()
+        if isinstance(lock, _LeaderLockUnavailable):
+            verbose_proxy_logger.info(
+                "Budget reset: another pod holds the '%s' lock, skipping this cycle.",
+                RESET_BUDGET_JOB_NAME,
+            )
+            return
+
+        try:
             ### RESET KEY BUDGET ###
             await self.reset_budget_for_litellm_keys()
 
@@ -192,6 +279,9 @@ class ResetBudgetJob:
 
             ### RESET MULTI-WINDOW BUDGETS ###
             await self.reset_budget_windows()
+        finally:
+            if isinstance(lock, _LeaderLockHeld):
+                await lock.manager.release_lock(cronjob_id=RESET_BUDGET_JOB_NAME)
 
     @staticmethod
     async def _invalidate_spend_counter(counter_key: str) -> None:
@@ -362,7 +452,10 @@ class ResetBudgetJob:
         now: Final = datetime.now(timezone.utc)
         try:
             budgets_to_reset: Final[Sequence[LiteLLM_BudgetTableFull] | None] = await self.prisma_client.get_data(
-                table_name="budget", query_type="find_all", reset_at=now
+                table_name="budget",
+                query_type="find_all",
+                reset_at=now,
+                limit=RESET_BUDGET_JOB_BATCH_SIZE,
             )
             cascade: Final = await self._collect_budget_cascade(budgets_to_reset or ())
         except Exception as e:
@@ -384,6 +477,9 @@ class ResetBudgetJob:
         Caches are invalidated only after the transaction commits, so a failed
         run cannot leave a zeroed counter in front of an un-reset DB row.
         """
+        await _run_phase_in_chunks(self._reset_budget_for_litellm_budget_table_chunk)
+
+    async def _reset_budget_for_litellm_budget_table_chunk(self) -> _ChunkOutcome:
         start_time: Final = time.time()
         outcome: Final = await self._reset_expired_budget_cascade()
         end_time: Final = time.time()
@@ -404,6 +500,7 @@ class ResetBudgetJob:
                         },
                     )
                 )
+                return _ChunkOutcome(fetched=len(cascade.budgets), advanced=len(cascade.budget_resets))
             case _BudgetCascadeFailed(cascade=cascade, error=error):
                 verbose_proxy_logger.exception(
                     "Failed to reset the budget table cascade (team member, enduser, org and tag spend, plus "
@@ -422,6 +519,7 @@ class ResetBudgetJob:
                         event_metadata=_budget_cascade_event_metadata(cascade),
                     )
                 )
+                return _NO_PROGRESS
 
     async def _get_endusers_with_no_budget_id(
         self,
@@ -482,18 +580,25 @@ class ResetBudgetJob:
             for t in updated_teams:
                 uow.teams.queue_spend_reset(team_id=t.team_id, budget_reset_at=t.budget_reset_at)
 
-    async def reset_budget_for_litellm_keys(self):
+    async def reset_budget_for_litellm_keys(self) -> None:
         """
         Resets the budget for all the litellm keys
 
         Catches Exceptions and logs them
         """
+        await _run_phase_in_chunks(self._reset_budget_for_litellm_keys_chunk)
+
+    async def _reset_budget_for_litellm_keys_chunk(self) -> _ChunkOutcome:
         now: Final = datetime.utcnow()
         start_time: Final = time.time()
         keys_to_reset: list[LiteLLM_VerificationToken] | None = None
         try:
             keys_to_reset = await self.prisma_client.get_data(
-                table_name="key", query_type="find_all", expires=now, reset_at=now
+                table_name="key",
+                query_type="find_all",
+                expires=now,
+                reset_at=now,
+                limit=RESET_BUDGET_JOB_BATCH_SIZE,
             )
             verbose_proxy_logger.debug("Keys to reset %s", json.dumps(keys_to_reset, indent=4, default=str))
             updated_keys: Final[list[LiteLLM_VerificationToken]] = []
@@ -544,6 +649,10 @@ class ResetBudgetJob:
                     },
                 )
             )
+            return _ChunkOutcome(
+                fetched=len(keys_to_reset) if keys_to_reset else 0,
+                advanced=sum(1 for k in updated_keys if k.budget_duration is not None),
+            )
         except Exception as e:
             end_time = time.time()
             asyncio.create_task(
@@ -561,16 +670,25 @@ class ResetBudgetJob:
                 )
             )
             verbose_proxy_logger.exception("Failed to reset budget for keys: %s", e)
+            return _NO_PROGRESS
 
-    async def reset_budget_for_litellm_users(self):
+    async def reset_budget_for_litellm_users(self) -> None:
         """
         Resets the budget for all LiteLLM Internal Users if their budget has expired
         """
+        await _run_phase_in_chunks(self._reset_budget_for_litellm_users_chunk)
+
+    async def _reset_budget_for_litellm_users_chunk(self) -> _ChunkOutcome:
         now: Final = datetime.utcnow()
         start_time: Final = time.time()
         users_to_reset: list[LiteLLM_UserTable] | None = None
         try:
-            users_to_reset = await self.prisma_client.get_data(table_name="user", query_type="find_all", reset_at=now)
+            users_to_reset = await self.prisma_client.get_data(
+                table_name="user",
+                query_type="find_all",
+                reset_at=now,
+                limit=RESET_BUDGET_JOB_BATCH_SIZE,
+            )
             updated_users: Final[list[LiteLLM_UserTable]] = []
             failed_users: Final = []
             if users_to_reset is not None and len(users_to_reset) > 0:
@@ -625,6 +743,10 @@ class ResetBudgetJob:
                     },
                 )
             )
+            return _ChunkOutcome(
+                fetched=len(users_to_reset) if users_to_reset else 0,
+                advanced=sum(1 for u in updated_users if u.budget_duration is not None),
+            )
         except Exception as e:
             end_time = time.time()
             asyncio.create_task(
@@ -642,16 +764,25 @@ class ResetBudgetJob:
                 )
             )
             verbose_proxy_logger.exception("Failed to reset budget for users: %s", e)
+            return _NO_PROGRESS
 
-    async def reset_budget_for_litellm_teams(self):
+    async def reset_budget_for_litellm_teams(self) -> None:
         """
         Resets the budget for all LiteLLM Internal Teams if their budget has expired
         """
+        await _run_phase_in_chunks(self._reset_budget_for_litellm_teams_chunk)
+
+    async def _reset_budget_for_litellm_teams_chunk(self) -> _ChunkOutcome:
         now: Final = datetime.utcnow()
         start_time: Final = time.time()
         teams_to_reset: list[LiteLLM_TeamTable] | None = None
         try:
-            teams_to_reset = await self.prisma_client.get_data(table_name="team", query_type="find_all", reset_at=now)
+            teams_to_reset = await self.prisma_client.get_data(
+                table_name="team",
+                query_type="find_all",
+                reset_at=now,
+                limit=RESET_BUDGET_JOB_BATCH_SIZE,
+            )
             updated_teams: Final[list[LiteLLM_TeamTable]] = []
             failed_teams: Final = []
             if teams_to_reset is not None and len(teams_to_reset) > 0:
@@ -704,6 +835,10 @@ class ResetBudgetJob:
                     },
                 )
             )
+            return _ChunkOutcome(
+                fetched=len(teams_to_reset) if teams_to_reset else 0,
+                advanced=sum(1 for t in updated_teams if t.budget_duration is not None),
+            )
         except Exception as e:
             end_time = time.time()
             asyncio.create_task(
@@ -721,6 +856,7 @@ class ResetBudgetJob:
                 )
             )
             verbose_proxy_logger.exception("Failed to reset budget for teams: %s", e)
+            return _NO_PROGRESS
 
     @staticmethod
     async def _reset_expired_window(

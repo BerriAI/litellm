@@ -712,6 +712,7 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
     mock_prisma_client = MagicMock()
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
     mock_proxy_config = AsyncMock()
 
     with (
@@ -773,6 +774,7 @@ async def test_periodic_reload_job_scheduled_without_store_model_in_db(monkeypat
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
     mock_proxy_config = AsyncMock()
     scheduler = AsyncIOScheduler()
 
@@ -799,6 +801,66 @@ async def test_periodic_reload_job_scheduled_without_store_model_in_db(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_reset_budget_job_is_wired_to_the_shared_pod_lock_manager(monkeypatch):
+    """
+    The reset job only elects a leader if it is handed the same PodLockManager the
+    rest of the proxy uses. Wired to None, every pod and worker goes back to
+    resetting budgets at the same calendar boundary.
+    """
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
+    constructor_kwargs = {}
+
+    class CapturingResetBudgetJob:
+        def __init__(self, **kwargs):
+            constructor_kwargs.update(kwargs)
+
+        async def reset_budget(self):
+            pass
+
+    scheduler = AsyncIOScheduler()
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.proxy_config", AsyncMock()),
+            patch("litellm.proxy.proxy_server.store_model_in_db", False),
+            patch("litellm.proxy.proxy_server.get_secret_bool", return_value=False),
+            patch(
+                "litellm.proxy.proxy_server.AsyncIOScheduler",
+                return_value=scheduler,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.ResetBudgetJob",
+                CapturingResetBudgetJob,
+            ),
+        ):
+            await ProxyStartupEvent.initialize_scheduled_background_jobs(
+                general_settings={},
+                prisma_client=mock_prisma_client,
+                proxy_budget_rescheduler_min_time=1,
+                proxy_budget_rescheduler_max_time=2,
+                proxy_batch_write_at=5,
+                proxy_logging_obj=mock_proxy_logging,
+            )
+
+        assert scheduler.get_job("reset_budget_job") is not None
+        assert (
+            constructor_kwargs["pod_lock_manager"]
+            is mock_proxy_logging.db_spend_update_writer.pod_lock_manager
+        )
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(monkeypatch):
     """
     The DB config-reload jobs (add_deployment, get_credentials) that keep multi-pod
@@ -813,6 +875,7 @@ async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(
     mock_prisma_client = MagicMock()
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
     mock_proxy_config = AsyncMock()
     mock_scheduler = MagicMock()
 
@@ -861,6 +924,7 @@ async def test_initialize_scheduled_jobs_rejects_non_positive_config_reload_inte
     mock_prisma_client = MagicMock()
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
     mock_proxy_config = AsyncMock()
     mock_scheduler = MagicMock()
 
@@ -907,6 +971,7 @@ async def test_initialize_scheduled_jobs_hydrates_mcp_when_store_model_in_db_fal
     mock_prisma_client = MagicMock()
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
     mock_proxy_config = AsyncMock()
 
     with (
@@ -7203,6 +7268,7 @@ async def test_store_model_in_db_db_override_when_config_false():
 
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
     mock_proxy_config = AsyncMock()
 
     with (
@@ -7245,6 +7311,7 @@ async def test_store_model_in_db_db_check_skipped_when_already_true(monkeypatch)
 
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
     mock_proxy_config = AsyncMock()
 
     with (
@@ -7289,6 +7356,7 @@ async def test_store_model_in_db_db_failure_graceful(monkeypatch):
 
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
     mock_proxy_config = AsyncMock()
 
     with (
