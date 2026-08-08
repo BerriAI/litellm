@@ -1182,6 +1182,112 @@ def test_vertex_ai_map_tool_with_anyof():
     }, f"Expected only anyOf field and its contents to be kept, but got {new_tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"
 
 
+def _anthropic_shaped_tool(input_schema: dict) -> dict:
+    return {
+        "name": "get_weather",
+        "description": "Get the current weather for a location.",
+        "input_schema": input_schema,
+    }
+
+
+def _declaration_for(tool: dict) -> dict:
+    """Map a single tool through the public entry point and return its FunctionDeclaration."""
+    transformed = VertexGeminiConfig().map_openai_params(
+        non_default_params={"tools": [deepcopy(tool)]},
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+    return transformed["tools"][0]["function_declarations"][0]
+
+
+def test_vertex_ai_map_tool_with_anthropic_input_schema():
+    """
+    Related issue: https://github.com/BerriAI/litellm/issues/35685
+
+    A tool that carries its schema under Anthropic's `input_schema` key instead of
+    OpenAI's `parameters` must still reach Gemini with its parameters. Dropping them
+    produces an HTTP 200 and a tool call with empty arguments, so the failure is
+    silent and the model never sees the schema it needed.
+    """
+    declaration = _declaration_for(
+        _anthropic_shaped_tool(
+            {
+                "type": "object",
+                "properties": {"location": {"type": "string"}},
+                "required": ["location"],
+            }
+        )
+    )
+
+    assert declaration["name"] == "get_weather"
+    assert declaration.get("parameters") == {
+        "type": "object",
+        "properties": {"location": {"type": "string"}},
+        "required": ["location"],
+    }, f"input_schema was dropped from the Gemini FunctionDeclaration: {declaration}"
+
+
+def test_vertex_ai_map_tool_input_schema_gets_vertex_schema_conversion():
+    """
+    `input_schema` is JSON Schema just like `parameters`, so it needs the same
+    OpenAPI conversion. Passing it through raw leaves `$defs`/`$ref` in place, which
+    Vertex rejects.
+    """
+    declaration = _declaration_for(
+        _anthropic_shaped_tool(
+            {
+                "type": "object",
+                "properties": {"loc": {"$ref": "#/$defs/Loc"}},
+                "$defs": {"Loc": {"type": "object", "properties": {"city": {"type": "string"}}}},
+            }
+        )
+    )
+
+    parameters = declaration["parameters"]
+    assert "$defs" not in parameters
+    assert parameters["properties"]["loc"] == {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+    }, f"$ref was not unwound: {parameters}"
+
+
+def test_vertex_ai_map_tool_explicit_parameters_wins_over_input_schema():
+    """A tool carrying both keys must keep `parameters` — `input_schema` is only a fallback."""
+    tool = {
+        **_anthropic_shaped_tool({"type": "object", "properties": {"ignored": {"type": "string"}}}),
+        "parameters": {"type": "object", "properties": {"location": {"type": "string"}}},
+    }
+
+    declaration = _declaration_for(tool)
+
+    assert declaration["parameters"]["properties"] == {"location": {"type": "string"}}
+
+
+def test_vertex_ai_map_tool_null_parameters_falls_back_to_input_schema():
+    """A JSON `"parameters": null` alongside `input_schema` must take the fallback, not
+    send a null schema upstream."""
+    tool = {
+        **_anthropic_shaped_tool({"type": "object", "properties": {"location": {"type": "string"}}}),
+        "parameters": None,
+    }
+
+    declaration = _declaration_for(tool)
+
+    assert declaration["parameters"] == {
+        "type": "object",
+        "properties": {"location": {"type": "string"}},
+    }
+
+
+def test_vertex_ai_map_tool_without_any_schema_is_unchanged():
+    """A named tool with no schema at all must still map, without inventing parameters."""
+    declaration = _declaration_for({"name": "ping", "description": "no args"})
+
+    assert declaration["name"] == "ping"
+    assert "parameters" not in declaration
+
+
 def test_vertex_ai_streaming_usage_calculation():
     """
     Ensure streaming usage calculation uses same function as non-streaming usage calculation

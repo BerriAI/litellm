@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from functools import partial
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
 
 import httpx
@@ -604,7 +605,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 openai_function_object = _openai_function_object
 
             elif "name" in tool:  # functions list
-                openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)
+                _input_schema = tool.get("input_schema") if tool.get("parameters") is None else None
+                _named_tool = (
+                    MappingProxyType({**tool, "parameters": _build_vertex_schema(_input_schema)})
+                    if isinstance(_input_schema, dict)
+                    else tool
+                )
+                openai_function_object = ChatCompletionToolParamFunctionChunk(**_named_tool)
 
             if "type" in tool and tool["type"] == "computer_use":
                 computer_use_config = {k: v for k, v in tool.items() if k != "type"}
