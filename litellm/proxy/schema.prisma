@@ -1478,6 +1478,7 @@ model LiteLLM_ShadowEvalJob {
 
   @@index([team_id, status])
   @@index([api_key_id, status])
+  @@index([status])
   @@index([created_at])
 }
 

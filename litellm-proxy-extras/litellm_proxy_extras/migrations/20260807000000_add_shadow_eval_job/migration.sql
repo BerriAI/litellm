@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS "LiteLLM_ShadowEvalJob" (
 
 CREATE INDEX IF NOT EXISTS "LiteLLM_ShadowEvalJob_team_id_status_idx" ON "LiteLLM_ShadowEvalJob"("team_id", "status");
 CREATE INDEX IF NOT EXISTS "LiteLLM_ShadowEvalJob_api_key_id_status_idx" ON "LiteLLM_ShadowEvalJob"("api_key_id", "status");
+CREATE INDEX IF NOT EXISTS "LiteLLM_ShadowEvalJob_status_idx" ON "LiteLLM_ShadowEvalJob"("status");
 CREATE INDEX IF NOT EXISTS "LiteLLM_ShadowEvalJob_created_at_idx" ON "LiteLLM_ShadowEvalJob"("created_at");
 
 CREATE TABLE IF NOT EXISTS "LiteLLM_ShadowEvalVerdict" (

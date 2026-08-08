@@ -35,7 +35,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeAlias
+from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, TypeAdapter
 
@@ -56,7 +56,7 @@ _JSON_FENCE_RE: Final = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re
 # success hook skips them instead of shadowing the shadow.
 SHADOW_EVAL_INTERNAL_MARKER: Final = "shadow_eval_internal"
 
-# How long the per-key active-job lookup is cached. A shadow-eval job starting
+# How long the active-job snapshot is cached. A shadow-eval job starting
 # or stopping takes up to this long to be noticed by running pods.
 _JOB_CACHE_TTL_SECONDS: Final = 30.0
 
@@ -251,9 +251,6 @@ def _job_is_over_spend_cap(job: ActiveShadowEvalJob) -> bool:
     return job.cost_actual >= max(job.cost_estimate * _SPEND_CAP_MULTIPLIER, _SPEND_CAP_FLOOR_USD)
 
 
-_JobCache: TypeAlias = "dict[str, tuple[float, ActiveShadowEvalJob | None]]"  # mutable-ok: TTL cache
-
-
 class ShadowEvalLogger(CustomLogger):
     """Fires blind pairwise shadow evaluations for keys with an active shadow-eval job."""
 
@@ -266,8 +263,13 @@ class ShadowEvalLogger(CustomLogger):
         resolved at call time, not at logger construction."""
         self._router_provider = router_provider or _default_router_provider
         self._prisma_provider = prisma_provider or _default_prisma_provider
-        # api_key_hash -> (fetched_at_monotonic, job_record_or_None)
-        self._job_cache: _JobCache = {}  # mutable-ok: a TTL cache is mutable state by definition
+        # Snapshot of every active job, keyed by shadowed api_key_id. Refreshed as a
+        # whole: active jobs are admin-started and capped at one per key, so the set is
+        # tiny, and one find_many per pod per TTL keeps DB load flat no matter how many
+        # distinct keys the proxy serves.
+        self._jobs_by_key: dict[str, ActiveShadowEvalJob] = {}  # mutable-ok: TTL cache
+        self._jobs_fetched_at: float | None = None
+        self._jobs_refresh_lock: asyncio.Lock = asyncio.Lock()
         self._inflight_shadow_tasks: int = 0
         self._pending_seen: dict[str, int] = {}  # mutable-ok: flush buffer
         self._last_seen_flush: float = 0.0
@@ -352,23 +354,34 @@ class ShadowEvalLogger(CustomLogger):
     #### job lookup ####
 
     async def _get_active_job(self, api_key_hash: str) -> ActiveShadowEvalJob | None:
-        cached: Final = self._job_cache.get(api_key_hash)
         now: Final = asyncio.get_event_loop().time()
-        if cached is not None and now - cached[0] < _JOB_CACHE_TTL_SECONDS:
-            return cached[1]
-        prisma: Final = self._prisma_provider()
-        if prisma is None:
-            return None
-        try:
-            record: Final = await prisma.db.litellm_shadowevaljob.find_first(
-                where={  # mutable-ok: Prisma filter
-                    "api_key_id": api_key_hash,
-                    "status": {"in": ["pending", "running"]},  # mutable-ok: Prisma filter
-                },
-                order={"created_at": "desc"},  # mutable-ok: Prisma order
-            )
-            job: Final = (
-                ActiveShadowEvalJob(
+        if self._jobs_fetched_at is None or now - self._jobs_fetched_at >= _JOB_CACHE_TTL_SECONDS:
+            await self._refresh_active_jobs(now)
+        return self._jobs_by_key.get(api_key_hash)
+
+    async def _refresh_active_jobs(self, now: float) -> None:
+        """Reload the active-job set, at most once per TTL across concurrent requests.
+
+        On a DB blip the stale snapshot is kept and the next TTL retries, so a blip
+        degrades freshness rather than turning the feature off.
+        """
+        async with self._jobs_refresh_lock:
+            if self._jobs_fetched_at is not None and now - self._jobs_fetched_at < _JOB_CACHE_TTL_SECONDS:
+                return
+            prisma: Final = self._prisma_provider()
+            if prisma is None:
+                return
+            try:
+                records: Final = await prisma.db.litellm_shadowevaljob.find_many(
+                    where={"status": {"in": ["pending", "running"]}},  # mutable-ok: Prisma filter
+                    order={"created_at": "desc"},  # mutable-ok: Prisma order
+                )
+            except Exception as e:  # noqa: BLE001  # a DB blip must not break request logging
+                verbose_logger.debug("shadow_eval: active-job refresh failed: %s", e)
+                return
+            jobs_by_key: Final[dict[str, ActiveShadowEvalJob]] = {}  # mutable-ok: building the new snapshot
+            for record in reversed(records or []):
+                jobs_by_key[str(record.api_key_id)] = ActiveShadowEvalJob(
                     id=str(record.id),
                     router_name=str(record.router_name),
                     shadow_percentage=float(record.shadow_percentage),
@@ -378,14 +391,8 @@ class ShadowEvalLogger(CustomLogger):
                     cost_actual=float(record.cost_actual or 0.0),
                     ends_at=_as_utc(getattr(record, "ends_at", None)),
                 )
-                if record is not None
-                else None
-            )
-        except Exception as e:  # noqa: BLE001  # a DB blip must not break request logging
-            verbose_logger.debug("shadow_eval: job lookup failed: %s", e)
-            return cached[1] if cached is not None else None
-        self._job_cache[api_key_hash] = (now, job)
-        return job
+            self._jobs_by_key = jobs_by_key  # mutable-ok: atomic snapshot swap
+            self._jobs_fetched_at = now
 
     async def _finalize_job(self, job: ActiveShadowEvalJob, reason: str) -> None:
         """Flip a finished job to completed, keeping the verdicts it already produced.
@@ -396,8 +403,8 @@ class ShadowEvalLogger(CustomLogger):
         prisma: Final = self._prisma_provider()
         if prisma is None:
             return
-        self._job_cache = {  # mutable-ok: TTL cache
-            k: v for k, v in self._job_cache.items() if v[1] is None or v[1].id != job.id
+        self._jobs_by_key = {  # mutable-ok: atomic snapshot swap
+            k: v for k, v in self._jobs_by_key.items() if v.id != job.id
         }
         verbose_logger.info("shadow_eval: stopping job %s: %s", job.id, reason)
         try:

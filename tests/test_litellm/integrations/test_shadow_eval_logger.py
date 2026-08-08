@@ -120,9 +120,8 @@ def _logger_with_mocks(job=None):
     router = MagicMock()
     logger = ShadowEvalLogger(router_provider=lambda: router, prisma_provider=lambda: prisma)
     if job is not None:
-        # Pre-warm the cache so no DB call is needed.
-        loop_time = asyncio.get_event_loop().time()
-        logger._job_cache["key-hash"] = (loop_time, job)
+        logger._jobs_by_key["key-hash"] = job
+        logger._jobs_fetched_at = asyncio.get_event_loop().time()
     return logger, prisma, router
 
 
@@ -131,7 +130,7 @@ class TestSuccessHookSkipPaths:
     async def test_skips_without_standard_logging_object(self):
         logger, prisma, _ = _logger_with_mocks()
         await logger.async_log_success_event({"messages": []}, MagicMock(), None, None)
-        prisma.db.litellm_shadowevaljob.find_first.assert_not_called()
+        prisma.db.litellm_shadowevaljob.find_many.assert_not_called()
 
     async def test_skips_own_internal_traffic(self):
         job = ActiveShadowEvalJob(id="j1", router_name="r", shadow_percentage=100.0, judge_model="m", status="running")
@@ -150,7 +149,7 @@ class TestSuccessHookSkipPaths:
 
     async def test_skips_when_no_active_job(self):
         logger, prisma, _ = _logger_with_mocks()
-        prisma.db.litellm_shadowevaljob.find_first = AsyncMock(return_value=None)
+        prisma.db.litellm_shadowevaljob.find_many = AsyncMock(return_value=[])
         kwargs = {
             "standard_logging_object": {
                 "id": "req-1",
@@ -701,12 +700,65 @@ class TestPerJobSpendCap:
         )
         logger, prisma, _ = _logger_with_mocks(job)
         prisma.db.litellm_shadowevaljob.update_many = AsyncMock()
-        prisma.db.litellm_shadowevaljob.find_first = AsyncMock(return_value=None)
+        prisma.db.litellm_shadowevaljob.find_many = AsyncMock(return_value=[])
 
         await logger.async_log_success_event(self._success_kwargs(), MagicMock(), None, None)
         await logger.async_log_success_event(self._success_kwargs(), MagicMock(), None, None)
 
         assert prisma.db.litellm_shadowevaljob.update_many.await_count == 1
+
+
+@pytest.mark.asyncio
+class TestActiveJobSnapshot:
+    """One find_many per pod per TTL serves every key, so DB load stays flat no
+    matter how many distinct keys send traffic through the proxy."""
+
+    @staticmethod
+    def _record(job_id: str, api_key_id: str) -> MagicMock:
+        record = MagicMock()
+        record.id = job_id
+        record.api_key_id = api_key_id
+        record.router_name = "r"
+        record.shadow_percentage = 100.0
+        record.judge_model = "m"
+        record.status = "running"
+        record.cost_estimate = 10.0
+        record.cost_actual = 0.0
+        record.ends_at = None
+        return record
+
+    async def test_one_query_serves_lookups_for_many_distinct_keys(self):
+        logger, prisma, _ = _logger_with_mocks()
+        prisma.db.litellm_shadowevaljob.find_many = AsyncMock(return_value=[self._record("j1", "key-1")])
+
+        job_hit = await logger._get_active_job("key-1")
+        misses = [await logger._get_active_job(f"other-{i}") for i in range(50)]
+
+        assert job_hit is not None and job_hit.id == "j1"
+        assert all(m is None for m in misses)
+        assert prisma.db.litellm_shadowevaljob.find_many.await_count == 1
+
+    async def test_newest_job_wins_when_a_key_somehow_has_two(self):
+        logger, prisma, _ = _logger_with_mocks()
+        prisma.db.litellm_shadowevaljob.find_many = AsyncMock(
+            return_value=[self._record("j-newest", "key-1"), self._record("j-oldest", "key-1")]
+        )
+
+        job = await logger._get_active_job("key-1")
+
+        assert job is not None and job.id == "j-newest"
+
+    async def test_db_blip_keeps_the_stale_snapshot_instead_of_disabling_the_feature(self):
+        logger, prisma, _ = _logger_with_mocks()
+        prisma.db.litellm_shadowevaljob.find_many = AsyncMock(return_value=[self._record("j1", "key-1")])
+        assert (await logger._get_active_job("key-1")) is not None
+
+        logger._jobs_fetched_at = asyncio.get_event_loop().time() - 61.0
+        prisma.db.litellm_shadowevaljob.find_many = AsyncMock(side_effect=RuntimeError("db down"))
+
+        job = await logger._get_active_job("key-1")
+
+        assert job is not None and job.id == "j1"
 
 
 @pytest.mark.asyncio
@@ -766,7 +818,7 @@ class TestJobsStopAtTheirScheduledEnd:
     async def test_expiry_evicts_the_cached_job_so_later_requests_do_not_rewrite_it(self):
         logger, prisma, _ = _logger_with_mocks(self._job(datetime.now(timezone.utc) - timedelta(seconds=1)))
         prisma.db.litellm_shadowevaljob.update_many = AsyncMock()
-        prisma.db.litellm_shadowevaljob.find_first = AsyncMock(return_value=None)
+        prisma.db.litellm_shadowevaljob.find_many = AsyncMock(return_value=[])
 
         await logger.async_log_success_event(TestPerJobSpendCap._success_kwargs(), MagicMock(), None, None)
         await logger.async_log_success_event(TestPerJobSpendCap._success_kwargs(), MagicMock(), None, None)
@@ -777,6 +829,7 @@ class TestJobsStopAtTheirScheduledEnd:
         logger, prisma, _ = _logger_with_mocks()
         record = MagicMock()
         record.id = "j1"
+        record.api_key_id = "key-hash"
         record.router_name = "r"
         record.shadow_percentage = 100.0
         record.judge_model = "m"
@@ -784,7 +837,7 @@ class TestJobsStopAtTheirScheduledEnd:
         record.cost_estimate = 10.0
         record.cost_actual = 0.0
         record.ends_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1)
-        prisma.db.litellm_shadowevaljob.find_first = AsyncMock(return_value=record)
+        prisma.db.litellm_shadowevaljob.find_many = AsyncMock(return_value=[record])
 
         job = await logger._get_active_job("key-hash")
 
