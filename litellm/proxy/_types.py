@@ -3894,12 +3894,19 @@ class OrganizationMemberUpdateResponse(MemberUpdateResponse):
 ##########################################
 
 
+class TeamAccessGroupModelGrant(LiteLLMPydanticObjectBase):
+    access_group_id: str
+    access_group_name: str
+    models: tuple[str, ...]
+
+
 class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     team_member_budget_table: LiteLLM_BudgetTableFull | None = None
     # Resources inherited from access groups (separate from direct assignments)
     access_group_models: list[str] | None = None
     access_group_mcp_server_ids: list[str] | None = None
     access_group_agent_ids: list[str] | None = None
+    access_group_details: tuple[TeamAccessGroupModelGrant, ...] | None = None
 
 
 class TeamInfoResponseObject(TypedDict):
