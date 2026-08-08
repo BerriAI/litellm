@@ -9,6 +9,8 @@ store_message for backend events, store_input for client events, log_messages on
 import asyncio
 import contextlib
 import json
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from pydantic import TypeAdapter
@@ -25,6 +27,7 @@ if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
 
 _CLIENT_MODALITIES_ADAPTER: Final[TypeAdapter["list[str] | None"]] = TypeAdapter(list[str] | None)
+_EMPTY_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 class BedrockRealtime(BaseAWSLLM):
@@ -53,8 +56,8 @@ class BedrockRealtime(BaseAWSLLM):
         aws_bedrock_runtime_endpoint: str | None = None,
         aws_external_id: str | None = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        litellm_metadata: dict | None = None,
-        **kwargs,
+        litellm_metadata: Mapping[str, object] | None = None,
+        **kwargs: object,
     ):
         """
         Establish bidirectional streaming connection with Bedrock Nova Sonic.
@@ -128,25 +131,31 @@ class BedrockRealtime(BaseAWSLLM):
 
         transformation_config: Final = BedrockRealtimeConfig()
 
+        pre_call_args: Final = MappingProxyType(
+            {
+                "api_base": endpoint_uri,
+                "complete_input_dict": MappingProxyType({"model": model}),
+            }
+        )
         logging_obj.pre_call(
             input=None,
             api_key=api_key or "",
-            additional_args={
-                "api_base": endpoint_uri,
-                "complete_input_dict": {"model": model},
-            },
+            additional_args=dict(pre_call_args),  # mutable-ok: Logging.pre_call expects a mutable dict
         )
 
         # RealTimeStreaming owns spend logging for other realtime providers. Bedrock cannot
         # use its WebSocket bidirectional_forward (AWS SDK stream instead), but store_message /
         # store_input / log_messages are the same path used by OpenAI and Azure.
+        request_data: Final = MappingProxyType(
+            {"litellm_metadata": litellm_metadata if litellm_metadata is not None else _EMPTY_METADATA}
+        )
         realtime_streaming: Final = RealTimeStreaming(
             websocket=websocket,
-            backend_ws=cast(Any, object()),
+            backend_ws=cast(Any, object()),  # cast-ok: Bedrock uses AWS SDK stream; backend_ws unused for store/log
             logging_obj=logging_obj,
             model=model,
             user_api_key_dict=user_api_key_dict,
-            request_data={"litellm_metadata": litellm_metadata or {}},
+            request_data=dict(request_data),  # mutable-ok: RealTimeStreaming stores request_data as dict
         )
 
         try:
@@ -227,10 +236,10 @@ class BedrockRealtime(BaseAWSLLM):
         if not isinstance(message, dict) or message.get("type") != "response.function_call_arguments.done":
             return
         realtime_streaming.tool_calls.append(
-            {
+            {  # mutable-ok: spend logger tool_calls is a mutable list of JSON dicts
                 "id": message.get("call_id", ""),
                 "type": "function",
-                "function": {
+                "function": {  # mutable-ok: nested tool function payload
                     "name": message.get("name", ""),
                     "arguments": message.get("arguments", "{}"),
                 },
@@ -291,7 +300,7 @@ class BedrockRealtime(BaseAWSLLM):
                                 parsed_client_message.get("session", {}).get("modalities")
                             )
                     if client_message_type == "session.update":
-                        session_updated: Final = transformation_config.session_updated_event(
+                        session_updated = transformation_config.session_updated_event(  # rebind-ok: per-iteration local
                             model, logging_obj, requested_modalities
                         )
                         if realtime_streaming is not None:

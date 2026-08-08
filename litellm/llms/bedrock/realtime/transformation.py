@@ -7,6 +7,8 @@ Transforms between OpenAI Realtime API format and Bedrock Nova Sonic format.
 import base64
 import json
 import uuid as uuid_lib
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final
 
 from pydantic import BaseModel
@@ -48,16 +50,27 @@ TRIGGER_LEADING_SILENCE: Final = bytes(TRIGGER_AUDIO_BYTES_PER_SECOND // 2)
 TRIGGER_TRAILING_SILENCE: Final = bytes(TRIGGER_AUDIO_BYTES_PER_SECOND * 3)
 TRIGGER_AUDIO_CHUNK_SIZE: Final = 1024
 
+_EMPTY_USAGE_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
+_USAGE_SNAPSHOT_KEYS: Final = (
+    "input_speech",
+    "input_text",
+    "output_speech",
+    "output_text",
+    "total_input",
+    "total_output",
+    "total",
+)
+
 
 def _parse_bedrock_tool_use_input(raw_input: object) -> object:
     if not raw_input:
-        return {}
+        return {}  # mutable-ok: tool args are JSON-serializable wire values
     if not isinstance(raw_input, str):
         return raw_input
     try:
         return json.loads(raw_input)
     except json.JSONDecodeError:
-        return {}
+        return {}  # mutable-ok: tool args are JSON-serializable wire values
 
 
 def _as_nonneg_int(value: object) -> int:
@@ -66,23 +79,29 @@ def _as_nonneg_int(value: object) -> int:
     return max(0, int(value))
 
 
-def _empty_usage_snapshot() -> dict[str, int]:
-    return {
-        "input_speech": 0,
-        "input_text": 0,
-        "output_speech": 0,
-        "output_text": 0,
-        "total_input": 0,
-        "total_output": 0,
-        "total": 0,
-    }
+def _mapping_or_empty(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, Mapping) else _EMPTY_USAGE_MAPPING
 
 
-def _usage_snapshot_from_event(usage_event: dict) -> dict[str, int]:
-    details: Final = usage_event.get("details") if isinstance(usage_event.get("details"), dict) else {}
-    total_block: Final = details.get("total") if isinstance(details.get("total"), dict) else {}
-    input_block: Final = total_block.get("input") if isinstance(total_block.get("input"), dict) else {}
-    output_block: Final = total_block.get("output") if isinstance(total_block.get("output"), dict) else {}
+def _empty_usage_snapshot() -> Mapping[str, int]:
+    return MappingProxyType(
+        {
+            "input_speech": 0,
+            "input_text": 0,
+            "output_speech": 0,
+            "output_text": 0,
+            "total_input": 0,
+            "total_output": 0,
+            "total": 0,
+        }
+    )
+
+
+def _usage_snapshot_from_event(usage_event: Mapping[str, object]) -> Mapping[str, int]:
+    details: Final = _mapping_or_empty(usage_event.get("details"))
+    total_block: Final = _mapping_or_empty(details.get("total"))
+    input_block: Final = _mapping_or_empty(total_block.get("input"))
+    output_block: Final = _mapping_or_empty(total_block.get("output"))
     input_speech: Final = _as_nonneg_int(input_block.get("speechTokens"))
     input_text: Final = _as_nonneg_int(input_block.get("textTokens"))
     output_speech: Final = _as_nonneg_int(output_block.get("speechTokens"))
@@ -90,38 +109,40 @@ def _usage_snapshot_from_event(usage_event: dict) -> dict[str, int]:
     total_input: Final = _as_nonneg_int(usage_event.get("totalInputTokens")) or (input_speech + input_text)
     total_output: Final = _as_nonneg_int(usage_event.get("totalOutputTokens")) or (output_speech + output_text)
     total: Final = _as_nonneg_int(usage_event.get("totalTokens")) or (total_input + total_output)
-    return {
-        "input_speech": input_speech,
-        "input_text": input_text,
-        "output_speech": output_speech,
-        "output_text": output_text,
-        "total_input": total_input,
-        "total_output": total_output,
-        "total": total,
-    }
+    return MappingProxyType(
+        {
+            "input_speech": input_speech,
+            "input_text": input_text,
+            "output_speech": output_speech,
+            "output_text": output_text,
+            "total_input": total_input,
+            "total_output": total_output,
+            "total": total,
+        }
+    )
 
 
-def _usage_snapshot_delta(current: dict[str, int], previous: dict[str, int]) -> dict[str, int]:
-    return {key: max(0, current.get(key, 0) - previous.get(key, 0)) for key in _empty_usage_snapshot()}
+def _usage_snapshot_delta(current: Mapping[str, int], previous: Mapping[str, int]) -> Mapping[str, int]:
+    return MappingProxyType({key: max(0, current.get(key, 0) - previous.get(key, 0)) for key in _USAGE_SNAPSHOT_KEYS})
 
 
-def _openai_usage_from_snapshot(snapshot: dict[str, int]) -> dict[str, Any]:
+def _openai_usage_from_snapshot(snapshot: Mapping[str, int]) -> dict[str, object]:  # mutable-ok: OpenAI usage wire dict
     input_tokens: Final = snapshot.get("total_input", 0) or (
         snapshot.get("input_speech", 0) + snapshot.get("input_text", 0)
     )
     output_tokens: Final = snapshot.get("total_output", 0) or (
         snapshot.get("output_speech", 0) + snapshot.get("output_text", 0)
     )
-    return {
+    return {  # mutable-ok: OpenAI response.done usage is a JSON-serializable dict
         "total_tokens": snapshot.get("total", 0) or (input_tokens + output_tokens),
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
-        "input_token_details": {
+        "input_token_details": {  # mutable-ok: nested OpenAI usage wire shape
             "text_tokens": snapshot.get("input_text", 0),
             "audio_tokens": snapshot.get("input_speech", 0),
             "cached_tokens": 0,
         },
-        "output_token_details": {
+        "output_token_details": {  # mutable-ok: nested OpenAI usage wire shape
             "text_tokens": snapshot.get("output_text", 0),
             "audio_tokens": snapshot.get("output_speech", 0),
         },
@@ -167,31 +188,31 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         # Text configuration
         self.text_media_type = "text/plain"
 
-    def record_usage_event(self, usage_event: dict) -> None:
+    def record_usage_event(self, usage_event: Mapping[str, object]) -> None:
         self._usage_totals = _usage_snapshot_from_event(usage_event)
 
     def has_unbilled_usage(self) -> bool:
         delta: Final = _usage_snapshot_delta(self._usage_totals, self._usage_at_last_response_done)
         return any(value > 0 for value in delta.values())
 
-    def consume_usage_for_response_done(self) -> dict[str, Any]:
+    def consume_usage_for_response_done(self) -> dict[str, object]:  # mutable-ok: OpenAI usage wire dict
         delta: Final = _usage_snapshot_delta(self._usage_totals, self._usage_at_last_response_done)
-        self._usage_at_last_response_done = dict(self._usage_totals)
+        self._usage_at_last_response_done = self._usage_totals
         return _openai_usage_from_snapshot(delta)
 
     def flush_pending_usage_as_response_done(
         self,
         current_response_id: str | None = None,
         current_conversation_id: str | None = None,
-    ) -> list[OpenAIRealtimeEvents]:
+    ) -> list[OpenAIRealtimeEvents]:  # mutable-ok: callers store into mutable message lists
         if not self.has_unbilled_usage():
-            return []
+            return []  # mutable-ok: empty OpenAI event list for callers that append/extend
         events, _, _, _ = self._response_done_events(
             current_response_id,
             current_conversation_id,
             mint_ids_if_missing=True,
         )
-        return events
+        return list(events)  # mutable-ok: session-close flush is stored into mutable message lists
 
     def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
         """Validate environment - no special validation needed for Bedrock."""
@@ -1257,13 +1278,25 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 "session_configuration_request": realtime_response_transform_input.get("session_configuration_request"),
             }
 
-        # Extract state
-        current_output_item_id = realtime_response_transform_input.get("current_output_item_id")
-        current_response_id = realtime_response_transform_input.get("current_response_id")
-        current_conversation_id = realtime_response_transform_input.get("current_conversation_id")
-        current_delta_chunks = realtime_response_transform_input.get("current_delta_chunks")
-        current_delta_type = realtime_response_transform_input.get("current_delta_type")
-        session_configuration_request = realtime_response_transform_input.get("session_configuration_request")
+        # Extract state. Session state is intentionally re-bound as each Bedrock event is folded in.
+        current_output_item_id = realtime_response_transform_input.get(
+            "current_output_item_id"
+        )  # rebind-ok: session state machine
+        current_response_id = realtime_response_transform_input.get(
+            "current_response_id"
+        )  # rebind-ok: session state machine
+        current_conversation_id = realtime_response_transform_input.get(
+            "current_conversation_id"
+        )  # rebind-ok: session state machine
+        current_delta_chunks = realtime_response_transform_input.get(
+            "current_delta_chunks"
+        )  # rebind-ok: session state machine
+        current_delta_type = realtime_response_transform_input.get(
+            "current_delta_type"
+        )  # rebind-ok: session state machine
+        session_configuration_request = realtime_response_transform_input.get(
+            "session_configuration_request"
+        )  # rebind-ok: session state machine
 
         returned_messages: Final[list[OpenAIRealtimeEvents]] = []
 
@@ -1272,7 +1305,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         # Route to appropriate transformation method
         if "sessionStart" in event:
-            session_configuration_request = json.dumps({"configured": True})
+            session_configuration_request = json.dumps({"configured": True})  # rebind-ok: session state machine
 
         elif "usageEvent" in event:
             usage_event: Final = event["usageEvent"]
@@ -1281,24 +1314,24 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 if current_response_id is None and self.has_unbilled_usage():
                     (
                         done_events,
-                        current_output_item_id,
-                        current_response_id,
-                        current_delta_type,
+                        current_output_item_id,  # rebind-ok: session state machine
+                        current_response_id,  # rebind-ok: session state machine
+                        current_delta_type,  # rebind-ok: session state machine
                     ) = self._response_done_events(
                         None,
                         current_conversation_id,
                         mint_ids_if_missing=True,
                     )
                     returned_messages.extend(done_events)
-                    current_delta_chunks = None
+                    current_delta_chunks = None  # rebind-ok: session state machine
 
         elif "contentStart" in event:
             (
                 events,
-                current_response_id,
-                current_output_item_id,
-                current_conversation_id,
-                current_delta_type,
+                current_response_id,  # rebind-ok: session state machine
+                current_output_item_id,  # rebind-ok: session state machine
+                current_conversation_id,  # rebind-ok: session state machine
+                current_delta_type,  # rebind-ok: session state machine
             ) = self.transform_content_start_event(
                 event,
                 current_response_id,
@@ -1308,10 +1341,10 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             )
             returned_messages.extend(events)
             if events:
-                current_delta_chunks = None
+                current_delta_chunks = None  # rebind-ok: session state machine
 
         elif "textOutput" in event:
-            events, current_delta_chunks = self.transform_text_output_event(
+            events, current_delta_chunks = self.transform_text_output_event(  # rebind-ok: session state machine
                 event,
                 current_output_item_id,
                 current_response_id,
@@ -1320,12 +1353,14 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             returned_messages.extend(events)
 
         elif "audioOutput" in event:
-            events = self.transform_audio_output_event(event, current_output_item_id, current_response_id)
+            events = self.transform_audio_output_event(
+                event, current_output_item_id, current_response_id
+            )  # rebind-ok: session state machine
             returned_messages.extend(events)
 
         elif "contentEnd" in event:
             content_end: Final = event["contentEnd"]
-            events, current_delta_chunks = self.transform_content_end_event(
+            events, current_delta_chunks = self.transform_content_end_event(  # rebind-ok: session state machine
                 event,
                 current_output_item_id,
                 current_response_id,
@@ -1333,21 +1368,21 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 current_delta_chunks,
             )
             returned_messages.extend(events)
-            current_delta_chunks = None
-            current_delta_type = None
-            current_output_item_id = None
+            current_delta_chunks = None  # rebind-ok: session state machine
+            current_delta_type = None  # rebind-ok: session state machine
+            current_output_item_id = None  # rebind-ok: session state machine
             is_end_turn: Final = BedrockContentEnd.model_validate(content_end).stopReason == "END_TURN"
             if is_end_turn:
                 (
                     done_events,
-                    current_output_item_id,
-                    current_response_id,
-                    current_delta_type,
+                    current_output_item_id,  # rebind-ok: session state machine
+                    current_response_id,  # rebind-ok: session state machine
+                    current_delta_type,  # rebind-ok: session state machine
                 ) = self._response_done_events(current_response_id, current_conversation_id)
                 returned_messages.extend(done_events)
-                current_delta_chunks = None
+                current_delta_chunks = None  # rebind-ok: session state machine
             elif content_end.get("type") == "TOOL":
-                current_response_id = None
+                current_response_id = None  # rebind-ok: session state machine
 
         elif "toolUse" in event:
             (
@@ -1358,21 +1393,21 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 tool_response_id,
             ) = self.transform_tool_use_event(event, current_output_item_id, current_response_id)
             returned_messages.extend(events)
-            current_output_item_id = tool_output_item_id
-            current_response_id = tool_response_id
-            current_delta_chunks = None
-            current_delta_type = None
+            current_output_item_id = tool_output_item_id  # rebind-ok: session state machine
+            current_response_id = tool_response_id  # rebind-ok: session state machine
+            current_delta_chunks = None  # rebind-ok: session state machine
+            current_delta_type = None  # rebind-ok: session state machine
             verbose_logger.debug("Tool use event: %s (ID: %s)", tool_name, tool_call_id)
 
         elif "promptEnd" in event or "completionEnd" in event:
             (
                 events,
-                current_output_item_id,
-                current_response_id,
-                current_delta_type,
+                current_output_item_id,  # rebind-ok: session state machine
+                current_response_id,  # rebind-ok: session state machine
+                current_delta_type,  # rebind-ok: session state machine
             ) = self.transform_prompt_end_event(event, current_response_id, current_conversation_id)
             returned_messages.extend(events)
-            current_delta_chunks = None
+            current_delta_chunks = None  # rebind-ok: session state machine
 
         return {
             "response": returned_messages,
