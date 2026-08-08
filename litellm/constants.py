@@ -750,6 +750,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
     "https://api.libertai.io/v1",
+    "https://ai.salad.cloud/v1",
     "https://pinstripes.io/v1",
     "https://api.meta.ai/v1",
 ]
@@ -797,6 +798,7 @@ openai_compatible_providers: Final[list] = [
     "chutes",  # Chutes - JSON-configured provider
     "parasail",  # Parasail - JSON-configured provider
     "libertai",  # LibertAI - JSON-configured provider
+    "salad_cloud",
     "featherless_ai",
     "nscale",
     "nebius",

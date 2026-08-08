@@ -44362,6 +44362,23 @@
         "supports_reasoning": true,
         "source": "https://docs.libertai.io/apis/text/"
     },
+    "salad_cloud/qwen3.6-35b-a3b": {
+        "max_tokens": 262144,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "input_cost_per_token": 9e-08,
+        "output_cost_per_token": 6e-07,
+        "litellm_provider": "salad_cloud",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_native_streaming": true,
+        "source": "https://docs.salad.com/ai-gateway/reference/models"
+    },
     "libertai/qwen3.5-122b-a10b": {
         "max_tokens": 262144,
         "max_input_tokens": 262144,
