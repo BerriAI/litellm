@@ -86,6 +86,7 @@ def build_code_interpreter_log_outputs(
 
 
 class CompactionResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
+    type: Literal["compaction"]
     encrypted_content: str
 
 class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
