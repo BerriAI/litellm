@@ -2,6 +2,7 @@ import os
 from typing import Final, Literal
 
 from . import *
+from .active_request_registry import ActiveRequestRegistry
 from .cache_control_check import _PROXY_CacheControlCheck
 from .litellm_skills import SkillsInjectionHook
 from .max_budget_limiter import _PROXY_MaxBudgetLimiter
@@ -17,6 +18,7 @@ from .sensitive_data_routing import _PROXY_SensitiveDataRoutingHandler
 # transitively through `enterprise.enterprise_hooks` can resolve `PROXY_HOOKS`
 # and `get_proxy_hook` from this partially-initialized module without circling.
 PROXY_HOOKS: Final = {
+    "active_request_registry": ActiveRequestRegistry,
     "max_budget_limiter": _PROXY_MaxBudgetLimiter,
     "parallel_request_limiter": _PROXY_MaxParallelRequestsHandler_v3,
     "cache_control_check": _PROXY_CacheControlCheck,

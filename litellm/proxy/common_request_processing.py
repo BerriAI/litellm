@@ -73,6 +73,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     reject_url_valued_destination,
 )
 from litellm.types.utils import (
+    CallTypesLiteral,
     ModelResponse,
     ModelResponseStream,
     StandardLoggingPayloadErrorInformation,
@@ -1008,6 +1009,10 @@ async def _await_llm_call_cancelling_on_disconnect(
         monitor.cancel()
 
 
+WEBSOCKET_ROUTE_TYPES: Final = frozenset(("_arealtime", "_aresponses_websocket"))
+"""These routes build a synthetic http Request, so InFlightRequestsMiddleware never sees them close."""
+
+
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
@@ -1168,6 +1173,35 @@ class ProxyBaseLLMRequestProcessing:
             custom_headers.update(callback_headers)
 
         return custom_headers
+
+    async def _register_active_request(
+        self,
+        request: Request,
+        user_api_key_dict: UserAPIKeyAuth,
+        proxy_logging_obj: ProxyLogging,
+        route_type: CallTypesLiteral,
+    ) -> None:
+        from litellm.proxy.hooks.active_request_registry import ActiveRequestRegistry
+
+        if route_type in WEBSOCKET_ROUTE_TYPES:
+            return
+
+        hook: Final = proxy_logging_obj.get_proxy_hook("active_request_registry")
+        if not isinstance(hook, ActiveRequestRegistry):
+            return
+
+        request.state.active_request_registry = hook
+        started_at: Final = getattr(request.state, "active_request_started_at", time.time())
+        request.state.active_request_started_at = started_at
+        registry_id: Final = await hook.register(
+            user_api_key_dict=user_api_key_dict,
+            data=self.data,
+            call_type=route_type,
+            registry_id=getattr(request.state, "active_request_registry_id", None),
+            started_at=started_at,
+        )
+        if registry_id is not None:
+            request.state.active_request_registry_id = registry_id
 
     async def common_processing_pre_call_logic(
         self,
@@ -1379,6 +1413,12 @@ class ProxyBaseLLMRequestProcessing:
                     self.data["model"] = alias_target
 
         self.data["litellm_call_id"] = request.headers.get("x-litellm-call-id", str(uuid.uuid4()))
+        await self._register_active_request(
+            request=request,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            route_type=route_type,
+        )
         DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
         DDSpanTagger.tag_request(
             user_api_key_dict=user_api_key_dict,

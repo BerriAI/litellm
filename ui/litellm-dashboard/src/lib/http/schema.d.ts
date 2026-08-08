@@ -4542,6 +4542,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/global/active_requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Active Requests */
+        get: operations["get_active_requests_global_active_requests_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/global/active_requests/{registry_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Active Request */
+        post: operations["cancel_active_request_global_active_requests__registry_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/global/activity": {
         parameters: {
             query?: never;
@@ -20924,6 +20958,75 @@ export interface components {
             /** Description */
             description?: string | null;
         };
+        /** ActiveRequestRecord */
+        ActiveRequestRecord: {
+            /** Call Type */
+            call_type?: string | null;
+            /** End User Id */
+            end_user_id?: string | null;
+            /** Key Alias */
+            key_alias?: string | null;
+            /** Key Fingerprint */
+            key_fingerprint?: string | null;
+            /** Model */
+            model?: string | null;
+            /** Organization Alias */
+            organization_alias?: string | null;
+            /** Organization Id */
+            organization_id?: string | null;
+            /** Pod */
+            pod?: string | null;
+            /** Project Alias */
+            project_alias?: string | null;
+            /** Project Id */
+            project_id?: string | null;
+            /** Registry Id */
+            registry_id: string;
+            /** Request Id */
+            request_id: string;
+            /** Route */
+            route?: string | null;
+            /** Started At */
+            started_at: number;
+            /**
+             * Streaming
+             * @default false
+             */
+            streaming: boolean;
+            /** Team Alias */
+            team_alias?: string | null;
+            /** Team Id */
+            team_id?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+        };
+        /** ActiveRequestsResponse */
+        ActiveRequestsResponse: {
+            /** Available */
+            available: boolean;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Items */
+            items: components["schemas"]["ActiveRequestRecord"][];
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /** Reason */
+            reason?: string | null;
+            /** Total */
+            total: number;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+        };
         /**
          * ActiveUsersAnalyticsResponse
          * @description Response for active users analytics
@@ -22679,6 +22782,13 @@ export interface components {
             success: string[];
             /** Success And Failure */
             success_and_failure: string[];
+        };
+        /** CancelActiveRequestResponse */
+        CancelActiveRequestResponse: {
+            /** Cancelled */
+            cancelled: boolean;
+            /** Detail */
+            detail: string;
         };
         /**
          * CancelEvalResponse
@@ -42300,6 +42410,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_active_requests_global_active_requests_get: {
+        parameters: {
+            query?: {
+                model?: string | null;
+                user_id?: string | null;
+                end_user_id?: string | null;
+                organization_id?: string | null;
+                project_id?: string | null;
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActiveRequestsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_active_request_global_active_requests__registry_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                registry_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CancelActiveRequestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
