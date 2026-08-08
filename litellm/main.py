@@ -1712,11 +1712,15 @@ def _complete_fireworks_ai(
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
     provider_config: Final = ctx.provider_config
     shared_session: Final = ctx.shared_session
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
+    optional_params: Final = (
+        provider_config.map_extra_body_params(optional_params=ctx.optional_params, model=model)
+        if isinstance(provider_config, litellm.FireworksAIConfig)
+        else ctx.optional_params
+    )
 
     try:
         response: Final = base_llm_http_handler.completion(
