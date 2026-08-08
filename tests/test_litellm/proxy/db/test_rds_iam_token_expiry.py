@@ -15,11 +15,93 @@ Run these tests:
 
 import asyncio
 import os
+import sys
+import types
 import urllib.parse
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+
+def test_init_rds_client_resolves_region_and_oidc_with_get_secret(monkeypatch):
+    import litellm.secret_managers.main
+    from litellm.proxy.auth.rds_iam_token import init_rds_client
+
+    fake_sts = MagicMock()
+    fake_sts.assume_role_with_web_identity.return_value = {
+        "Credentials": {
+            "AccessKeyId": "access-key",
+            "SecretAccessKey": "secret-key",
+            "SessionToken": "session-token",
+        }
+    }
+    rds_client = object()
+
+    def fake_boto_client(service_name, **kwargs):
+        if service_name == "sts":
+            return fake_sts
+        if service_name == "rds":
+            fake_boto_client.rds_kwargs = kwargs
+            return rds_client
+        raise AssertionError(service_name)
+
+    fake_boto_client.rds_kwargs = {}
+    fake_boto3 = types.SimpleNamespace(
+        session=types.SimpleNamespace(Config=MagicMock()),
+        client=MagicMock(side_effect=fake_boto_client),
+    )
+
+    def fake_get_secret(secret_name, default_value=None):
+        return {
+            "AWS_REGION_NAME": "us-east-1",
+            "AWS_REGION": None,
+            "oidc/google/audience": "oidc-token",
+        }.get(secret_name, default_value)
+
+    monkeypatch.delenv("AWS_REGION_NAME", raising=False)
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.setattr(litellm.secret_managers.main, "get_secret", fake_get_secret)
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+
+    assert (
+        init_rds_client(
+            aws_role_name="arn:aws:iam::123:role/rds",
+            aws_session_name="litellm",
+            aws_web_identity_token="oidc/google/audience",
+        )
+        is rds_client
+    )
+    fake_sts.assume_role_with_web_identity.assert_called_once_with(
+        RoleArn="arn:aws:iam::123:role/rds",
+        RoleSessionName="litellm",
+        WebIdentityToken="oidc-token",
+        DurationSeconds=3600,
+    )
+    assert fake_boto_client.rds_kwargs["region_name"] == "us-east-1"
+
+
+def test_init_rds_client_resolves_os_environ_parameter(monkeypatch):
+    from litellm.proxy.auth.rds_iam_token import init_rds_client
+
+    rds_client = object()
+    fake_boto3 = types.SimpleNamespace(
+        session=types.SimpleNamespace(Config=MagicMock()),
+        client=MagicMock(return_value=rds_client),
+    )
+
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "env-access-key")
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+
+    assert init_rds_client(aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID") is rds_client
+    fake_boto3.client.assert_called_once_with(
+        service_name="rds",
+        region_name="us-east-1",
+        aws_access_key_id="env-access-key",
+        aws_secret_access_key=None,
+        config=fake_boto3.session.Config.return_value,
+    )
 
 
 class TestPrismaWrapperTokenRefresh:
@@ -45,9 +127,7 @@ class TestPrismaWrapperTokenRefresh:
     def _set_database_url_with_token(self, expires_in_seconds: int = 900):
         """Set DATABASE_URL with a mock token."""
         token = self._generate_mock_token(expires_in_seconds)
-        os.environ["DATABASE_URL"] = (
-            f"postgresql://test_user:{token}@test-host:5432/test_db"
-        )
+        os.environ["DATABASE_URL"] = f"postgresql://test_user:{token}@test-host:5432/test_db"
 
     @pytest.mark.asyncio
     async def test_is_token_expired_fresh(self, setup_env):
@@ -73,9 +153,7 @@ class TestPrismaWrapperTokenRefresh:
         # Create an expired token
         old_date = datetime.utcnow() - timedelta(seconds=901)
         date_str = old_date.strftime("%Y%m%dT%H%M%SZ")
-        token = (
-            f"mock-token?X-Amz-Date={date_str}&X-Amz-Expires=900&X-Amz-Signature=abc"
-        )
+        token = f"mock-token?X-Amz-Date={date_str}&X-Amz-Expires=900&X-Amz-Signature=abc"
         encoded_token = urllib.parse.quote(token, safe="")
         db_url = f"postgresql://test_user:{encoded_token}@test-host:5432/test_db"
 
@@ -210,9 +288,7 @@ async def demonstrate_fix():
     date_str = now.strftime("%Y%m%dT%H%M%SZ")
     token = f"mock-token?X-Amz-Date={date_str}&X-Amz-Expires=10&X-Amz-Signature=abc123"
     encoded_token = urllib.parse.quote(token, safe="")
-    os.environ["DATABASE_URL"] = (
-        f"postgresql://iam_user:{encoded_token}@mock-rds:5432/litellm"
-    )
+    os.environ["DATABASE_URL"] = f"postgresql://iam_user:{encoded_token}@mock-rds:5432/litellm"
 
     # Create mock prisma client
     mock_prisma = MagicMock()
