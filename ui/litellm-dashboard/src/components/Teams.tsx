@@ -42,6 +42,7 @@ interface TeamProps {
 
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { teamCreateCall } from "./networking";
+import { normalizeTeamModelSelection } from "./team/teamModelAccess";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
 
 const canCreateOrManageTeams = (
@@ -351,6 +352,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           }
         }
 
+        formValues.models = normalizeTeamModelSelection(formValues.models);
         await teamCreateCall(accessToken, formValues);
         NotificationsManager.success("Team created");
         await refreshTeams();
@@ -618,17 +620,11 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                 label={
                   <span>
                     Models{" "}
-                    <Tooltip title="These are the models that your selected team has access to">
+                    <Tooltip title="These are the models that your selected team has access to. Leave empty to grant no models directly, e.g. when the team gets its models from access groups">
                       <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                     </Tooltip>
                   </span>
                 }
-                rules={[
-                  {
-                    required: true,
-                    message: "Please select at least one model",
-                  },
-                ]}
                 name="models"
               >
                 <ModelSelect
