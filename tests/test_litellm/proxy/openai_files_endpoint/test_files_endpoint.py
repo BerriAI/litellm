@@ -3107,24 +3107,52 @@ def _unified_managed_file_id() -> str:
     return base64.urlsafe_b64encode(unified_id.encode()).decode().rstrip("=")
 
 
-def test_require_managed_files_allows_unified_managed_file_id(monkeypatch):
+class _ManagedResourceAccessCheckerStub:
+    async def can_user_call_unified_file_id(
+        self,
+        unified_file_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> bool:
+        return True
+
+    async def can_user_call_unified_object_id(
+        self,
+        unified_object_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> bool:
+        return True
+
+
+@pytest.mark.asyncio
+async def test_require_managed_files_allows_owned_unified_managed_file_id(monkeypatch):
     from litellm.proxy.openai_files_endpoints.common_utils import (
         validate_managed_id_requirement,
     )
 
     monkeypatch.setattr("litellm.require_managed_files", True)
 
-    validate_managed_id_requirement(resource_id=_unified_managed_file_id(), resource_kind="file")
+    await validate_managed_id_requirement(
+        resource_id=_unified_managed_file_id(),
+        resource_kind="file",
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="owner-user"),
+        managed_files_obj=_ManagedResourceAccessCheckerStub(),
+    )
 
 
-def test_managed_file_id_requirement_is_opt_in(monkeypatch):
+@pytest.mark.asyncio
+async def test_managed_file_id_requirement_is_opt_in(monkeypatch):
     from litellm.proxy.openai_files_endpoints.common_utils import (
         validate_managed_id_requirement,
     )
 
     monkeypatch.setattr("litellm.require_managed_files", False)
 
-    validate_managed_id_requirement(resource_id="file-victim-abc123", resource_kind="file")
+    await validate_managed_id_requirement(
+        resource_id="file-victim-abc123",
+        resource_kind="file",
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        managed_files_obj=None,
+    )
 
 
 def test_raw_provider_file_id_retrieve_allowed_when_managed_files_not_required(

@@ -177,7 +177,12 @@ async def create_batch(
             }
 
         input_file_id: Final = _create_batch_data.get("input_file_id", None)
-        validate_managed_id_requirement(resource_id=input_file_id, resource_kind="file")
+        await validate_managed_id_requirement(
+            resource_id=input_file_id,
+            resource_kind="file",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
         unified_file_id: str | Literal[False] = False
 
         model_from_file_id = None
@@ -394,7 +399,12 @@ async def retrieve_batch(
 
     data: dict = {}
     try:
-        validate_managed_id_requirement(resource_id=batch_id, resource_kind="batch")
+        await validate_managed_id_requirement(
+            resource_id=batch_id,
+            resource_kind="batch",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
         model_from_id: Final = decode_model_from_file_id(batch_id)
         _retrieve_batch_request: Final = RetrieveBatchRequest(
             batch_id=batch_id,
@@ -843,7 +853,12 @@ async def cancel_batch(
 
     data: dict = {}
     try:
-        validate_managed_id_requirement(resource_id=batch_id, resource_kind="batch")
+        await validate_managed_id_requirement(
+            resource_id=batch_id,
+            resource_kind="batch",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
 
         # Check for encoded batch ID with model info
         model_from_id: Final = decode_model_from_file_id(batch_id)

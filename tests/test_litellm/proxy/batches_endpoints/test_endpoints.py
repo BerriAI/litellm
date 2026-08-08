@@ -2275,6 +2275,37 @@ def _unified_batch_id(model_id: str = "azure/gpt-4o", batch_id: str = "batch-pro
     return base64.urlsafe_b64encode(unified.encode()).decode().rstrip("=")
 
 
+def _unified_file_id() -> str:
+    import base64
+
+    from litellm.types.utils import SpecialEnums
+
+    unified = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+        "application/json", "managed-id", "gpt-4o-mini", "file-provider-id", "gpt-4o-mini-id"
+    )
+    return base64.urlsafe_b64encode(unified.encode()).decode().rstrip("=")
+
+
+@dataclass(frozen=True)
+class ManagedResourceAccessCheckerStub:
+    file_access: bool = True
+    object_access: bool = True
+
+    async def can_user_call_unified_file_id(
+        self,
+        unified_file_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> bool:
+        return self.file_access
+
+    async def can_user_call_unified_object_id(
+        self,
+        unified_object_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> bool:
+        return self.object_access
+
+
 @pytest.mark.asyncio
 async def test_create__raw_input_file_id_rejected_when_managed_files_required(harness):
     set_body(
@@ -2335,6 +2366,27 @@ async def test_create__raw_input_file_id_allowed_when_managed_files_not_required
 
 
 @pytest.mark.asyncio
+async def test_create__other_teams_unified_input_file_id_rejected(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": _unified_file_id(),
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    harness.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub(file_access=False)
+
+    with patch.object(litellm, "require_managed_files", True):
+        with pytest.raises(ProxyException) as exc:
+            await call_create(harness)
+
+    assert exc.value.code == "403"
+    harness.litellm_acreate.assert_not_called()
+    harness.router_acreate.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_retrieve__raw_batch_id_rejected_when_managed_files_required(retrieve_harness):
     with patch.object(litellm, "require_managed_files", True):
         with pytest.raises(ProxyException) as exc:
@@ -2347,6 +2399,8 @@ async def test_retrieve__raw_batch_id_rejected_when_managed_files_required(retri
 
 @pytest.mark.asyncio
 async def test_retrieve__unified_batch_id_allowed_when_managed_files_required(retrieve_harness):
+    retrieve_harness.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub()
+
     with patch.object(litellm, "require_managed_files", True):
         await call_retrieve(retrieve_harness, _unified_batch_id())
 
@@ -2366,6 +2420,8 @@ async def test_cancel__raw_batch_id_rejected_when_managed_files_required(cancel_
 
 @pytest.mark.asyncio
 async def test_cancel__unified_batch_id_allowed_when_managed_files_required(cancel_harness):
+    cancel_harness.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub()
+
     with patch.object(litellm, "require_managed_files", True):
         await call_cancel(cancel_harness, _unified_batch_id())
 

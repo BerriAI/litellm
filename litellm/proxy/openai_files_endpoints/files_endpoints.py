@@ -613,7 +613,12 @@ async def get_file_content(
 
     data: dict = {"file_id": file_id}
     try:
-        validate_managed_id_requirement(resource_id=file_id, resource_kind="file")
+        await validate_managed_id_requirement(
+            resource_id=file_id,
+            resource_kind="file",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
 
         # Include original request and headers in the data
         base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -911,7 +916,12 @@ async def get_file(
 
     data: dict = {"file_id": file_id}
     try:
-        validate_managed_id_requirement(resource_id=file_id, resource_kind="file")
+        await validate_managed_id_requirement(
+            resource_id=file_id,
+            resource_kind="file",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
 
         custom_llm_provider: Final = (
             provider
@@ -1103,7 +1113,12 @@ async def delete_file(
 
     data: dict = {"file_id": file_id}
     try:
-        validate_managed_id_requirement(resource_id=file_id, resource_kind="file")
+        await validate_managed_id_requirement(
+            resource_id=file_id,
+            resource_kind="file",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
 
         custom_llm_provider: Final = (
             provider

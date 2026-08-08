@@ -135,10 +135,17 @@ async def create_fine_tuning_job(
         ## CHECK IF MANAGED FILE ID
         unified_file_id: str | Literal[False] = False
         training_file: Final = fine_tuning_request.training_file
-        validate_managed_id_requirement(resource_id=training_file, resource_kind="file")
-        validate_managed_id_requirement(
+        await validate_managed_id_requirement(
+            resource_id=training_file,
+            resource_kind="file",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
+        await validate_managed_id_requirement(
             resource_id=fine_tuning_request.validation_file,
             resource_kind="file",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
         )
         response: LiteLLMFineTuningJob | None = None
         if training_file:
@@ -252,7 +259,12 @@ async def retrieve_fine_tuning_job(
     try:
         if premium_user is not True:
             raise ValueError(f"Only premium users can use this endpoint + {CommonProxyErrors.not_premium_user.value}")
-        validate_managed_id_requirement(resource_id=fine_tuning_job_id, resource_kind="fine-tuning job")
+        await validate_managed_id_requirement(
+            resource_id=fine_tuning_job_id,
+            resource_kind="fine-tuning job",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
         # Include original request and headers in the data
         base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
@@ -520,7 +532,12 @@ async def cancel_fine_tuning_job(
     try:
         if premium_user is not True:
             raise ValueError(f"Only premium users can use this endpoint + {CommonProxyErrors.not_premium_user.value}")
-        validate_managed_id_requirement(resource_id=fine_tuning_job_id, resource_kind="fine-tuning job")
+        await validate_managed_id_requirement(
+            resource_id=fine_tuning_job_id,
+            resource_kind="fine-tuning job",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
         # Include original request and headers in the data
         base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
