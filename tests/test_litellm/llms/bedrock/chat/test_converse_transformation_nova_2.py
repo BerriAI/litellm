@@ -687,3 +687,37 @@ class TestNova2MultiTurnMessageTranslation:
         ]
         assert len(rc_blocks) >= 1
         assert any("Hello!" in b["text"] for b in text_blocks)
+
+    def test_nova_2_regional_variant_jp(self):
+        """Test that JP geo inference variant of Nova 2 works correctly."""
+        config = AmazonConverseConfig()
+
+        model = "jp.amazon.nova-2-lite-v1:0"
+        non_default_params = {"reasoning_effort": "high"}
+        optional_params = {}
+
+        result = config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=False,
+        )
+
+        # Verify reasoningConfig is in result
+        assert "reasoningConfig" in result
+        assert result["reasoningConfig"]["type"] == "enabled"
+        assert result["reasoningConfig"]["maxReasoningEffort"] == "high"
+
+    def test_nova_2_regional_variant_jp_supported_params(self):
+        """Test that JP geo inference variant returns same supported params."""
+        config = AmazonConverseConfig()
+
+        model = "jp.amazon.nova-2-lite-v1:0"
+        supported_params = config.get_supported_openai_params(model)
+
+        # Verify reasoning_effort is in supported params
+        assert "reasoning_effort" in supported_params
+
+        # Verify thinking is NOT in supported params
+        assert "thinking" not in supported_params
+
