@@ -53,9 +53,8 @@ def _parse_data_url(data_url: str) -> tuple[bytes, str, str] | None:
 
 
 def _download_image_sync(url: str) -> tuple[bytes, str, str]:
-    """Download image from URL synchronously with SSRF guards."""
-    client: Final = _get_httpx_client(params={"ssl_verify": False})
-    # Chat image_url is user/LLM controlled; use the shared redirect-aware guard.
+    """Download image from URL synchronously."""
+    client: Final = _get_httpx_client()
     response: Final = safe_get(client, url)
     response.raise_for_status()
 
@@ -66,11 +65,8 @@ def _download_image_sync(url: str) -> tuple[bytes, str, str]:
 
 
 async def _download_image_async(url: str) -> tuple[bytes, str, str]:
-    """Download image from URL asynchronously with SSRF guards."""
-    client: Final = get_async_httpx_client(
-        llm_provider=LlmProviders.GIGACHAT,
-        params={"ssl_verify": False},
-    )
+    """Download image from URL asynchronously."""
+    client: Final = get_async_httpx_client(llm_provider=LlmProviders.GIGACHAT)
     response: Final = await async_safe_get(client, url)
     response.raise_for_status()
 
@@ -141,7 +137,6 @@ def upload_file_sync(
         return file_id
 
     except SSRFError:
-        # Fail closed: do not treat blocked URLs as a soft upload miss.
         raise
     except Exception as e:
         verbose_logger.error("Error uploading file to GigaChat: %s", e)
@@ -212,7 +207,6 @@ async def upload_file_async(
         return file_id
 
     except SSRFError:
-        # Fail closed: do not treat blocked URLs as a soft upload miss.
         raise
     except Exception as e:
         verbose_logger.error("Error uploading file to GigaChat: %s", e)
