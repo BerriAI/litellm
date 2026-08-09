@@ -2638,4 +2638,4 @@ async def test_ProxyConfig__init_non_llm_configs_empty_agents_key_clears_remembe
 
     assert clean_agent_registry.config_agents == ()
     clean_agent_registry.load_agents_from_db_and_config(db_agents=None)
-    assert clean_agent_registry.get_agent_list() == []
+    assert clean_agent_registry.get_agent_list() == ()

@@ -421,6 +421,134 @@ class TestCheckBatchCost:
         assert update_data["status"] == "complete"
 
     @pytest.mark.asyncio
+    async def test_completed_batch_with_no_attributable_owner_still_writes_spend_log(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """Regression: a batch created with the master key or a team-less key has
+        created_by=None and team_id=None on LiteLLM_ManagedObjectTable (the table
+        never stores the raw key hash). CheckBatchCost's synthetic logging_obj for
+        such a batch then carries no attributable key/user/team/end-user, and
+        before the fix _should_track_cost_callback silently skipped the DB write
+        with no error or warning: batch_processed still became True, but no
+        LiteLLM_SpendLogs row was ever written.
+
+        Unlike the other tests in this file, this one does NOT mock
+        litellm_logging.Logging or async_success_handler -- it runs the real
+        logging pipeline through to _ProxyDBLogger, which is the exact gap that
+        let the original bug ship undetected.
+        """
+        import litellm
+        from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=0)
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+
+        mock_job = MagicMock()
+        mock_job.id = "job-unattributed-1"
+        mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
+        mock_job.created_by = None
+        mock_job.team_id = None
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
+
+        # A real LiteLLMBatch (not a bare MagicMock): this test runs the real
+        # litellm_logging.Logging pipeline, which type-checks the result via
+        # isinstance(..., LiteLLMBatch) before it will compute/attach a cost.
+        from litellm.types.utils import LiteLLMBatch
+
+        mock_response = LiteLLMBatch(
+            id="batch-1",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-input-123",
+            object="batch",
+            status="completed",
+            output_file_id="file-output-123",
+        )
+
+        mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
+        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+
+        mock_deployment = MagicMock()
+        mock_deployment.litellm_params.custom_llm_provider = "openai"
+        mock_deployment.litellm_params.model = "gpt-4"
+        mock_deployment.model_info.model_dump.return_value = {}
+        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+
+        mock_file_content = MagicMock()
+        mock_file_content.content = b'{"id":"req-1"}'
+
+        decoded_id = "llm_model_id,model-123;llm_batch_id,batch-456;"
+
+        db_logger = _ProxyDBLogger()
+        mock_update_database = AsyncMock()
+
+        # Unlike the other tests in this file, this one runs the real
+        # litellm_logging.Logging pipeline, which calls
+        # _is_base64_encoded_unified_file_id an extra time (checking result.id
+        # after it's reset to job.unified_object_id). Key off the argument
+        # instead of a fixed-length side_effect list so the exact call count
+        # doesn't matter.
+        def _fake_is_base64_encoded(file_id):
+            return decoded_id if file_id == mock_job.unified_object_id else None
+
+        with (
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
+                side_effect=_fake_is_base64_encoded,
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_model_id_from_unified_batch_id",
+                return_value="model-123",
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_batch_id_from_unified_batch_id",
+                return_value="batch-456",
+            ),
+            patch(
+                "litellm.files.main.afile_content",
+                new_callable=AsyncMock,
+                return_value=mock_file_content,
+            ),
+            patch(
+                "litellm.batches.batch_utils._get_file_content_as_dictionary",
+                return_value=[{"id": "req-1"}],
+            ),
+            patch(
+                "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
+                new_callable=AsyncMock,
+                return_value=(
+                    0.01,
+                    {"prompt_tokens": 10, "completion_tokens": 5},
+                    ["gpt-4"],
+                ),
+            ),
+            patch(
+                "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+                return_value=("gpt-4", "openai", None, None),
+            ),
+            patch.object(litellm, "_async_success_callback", [db_logger]),
+            patch(
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                MagicMock(
+                    db_spend_update_writer=MagicMock(update_database=mock_update_database),
+                    slack_alerting_instance=MagicMock(customer_spend_alert=AsyncMock()),
+                ),
+            ),
+            patch("litellm.proxy.proxy_server.increment_spend_counters", AsyncMock()),
+            patch("litellm.proxy.proxy_server.update_cache", AsyncMock()),
+        ):
+            await check_batch_cost_instance.check_batch_cost()
+
+        mock_update_database.assert_awaited_once()
+        assert mock_update_database.call_args.kwargs["response_cost"] == 0.01
+        assert mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1, (
+            "the job must still be marked processed once cost tracking succeeds"
+        )
+
+    @pytest.mark.asyncio
     async def test_cost_tracking_failure_leaves_job_unprocessed(
         self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
     ):
@@ -499,7 +627,7 @@ class TestCheckBatchCost:
         must be written back with that status and batch_processed=True so it stops being
         polled forever.
         """
-        from unittest.mock import patch
+        import base64
 
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
             return_value=0
@@ -511,7 +639,9 @@ class TestCheckBatchCost:
 
         mock_job = MagicMock()
         mock_job.id = "job-terminal-1"
-        mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
+        mock_job.unified_object_id = base64.urlsafe_b64encode(
+            b"litellm_proxy;model_id:model-123;llm_batch_id:batch-456"
+        ).decode()
         mock_job.created_by = "user-1"
 
         assert check_batch_cost_instance._has_batch_processed_column is True
@@ -527,23 +657,7 @@ class TestCheckBatchCost:
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
 
-        decoded_id = "llm_model_id,model-123;llm_batch_id,batch-456;"
-
-        with (
-            patch(
-                "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
-                side_effect=[decoded_id, None],
-            ),
-            patch(
-                "litellm.proxy.openai_files_endpoints.common_utils.get_model_id_from_unified_batch_id",
-                return_value="model-123",
-            ),
-            patch(
-                "litellm.proxy.openai_files_endpoints.common_utils.get_batch_id_from_unified_batch_id",
-                return_value="batch-456",
-            ),
-        ):
-            await check_batch_cost_instance.check_batch_cost()
+        await check_batch_cost_instance.check_batch_cost()
 
         assert (
             mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1
@@ -555,6 +669,133 @@ class TestCheckBatchCost:
         assert (
             update_data["batch_processed"] is True
         ), "terminal-status update() must set batch_processed=True so polling stops"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("terminal_status", ["failed", "expired", "cancelled"])
+    async def test_terminal_status_persists_managed_output_file_ids(
+        self,
+        check_batch_cost_instance,
+        mock_prisma_client,
+        mock_llm_router,
+        terminal_status,
+    ):
+        """A cancelled/failed/expired batch with provider output files must be persisted
+        with unified managed file IDs, never raw provider IDs. Raw IDs written here leak
+        to every later GET /batches/{id} and GET /batches because the terminal row is
+        final (batch_processed=True) and read paths only resolve, never mint.
+        """
+        import base64
+        import json
+
+        from litellm.types.utils import LiteLLMBatch
+
+        unified_batch_uid = base64.urlsafe_b64encode(
+            b"litellm_proxy;model_id:model-123;llm_batch_id:batch-456"
+        ).decode()
+        raw_output_file_id = "file-terminal-out-abc"
+        raw_error_file_id = "file-terminal-err-xyz"
+        raw_input_file_id = "file-terminal-in-123"
+        unified_input_file_id = base64.urlsafe_b64encode(
+            b"litellm_proxy:application/octet-stream;unified_id,in-1;target_model_names,gpt-5-batch"
+        ).decode()
+        unified_output_file_id = base64.urlsafe_b64encode(
+            f"litellm_proxy:application/octet-stream;unified_id,u-1;llm_output_file_id,{raw_output_file_id}".encode()
+        ).decode()
+        unified_error_file_id = base64.urlsafe_b64encode(
+            f"litellm_proxy:application/octet-stream;unified_id,u-2;llm_output_file_id,{raw_error_file_id}".encode()
+        ).decode()
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=None
+        )
+
+        input_file_row = MagicMock()
+        input_file_row.unified_file_id = unified_input_file_id
+
+        def find_managed_file(where):
+            if where["flat_model_file_ids"]["has"] == raw_input_file_id:
+                return input_file_row
+            return None
+
+        mock_prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(
+            side_effect=find_managed_file
+        )
+
+        mock_job = MagicMock()
+        mock_job.id = "job-terminal-mint-1"
+        mock_job.unified_object_id = unified_batch_uid
+        mock_job.created_by = "user-1"
+        mock_job.team_id = "team-1"
+
+        check_batch_cost_instance._has_batch_processed_column = True
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+
+        response = LiteLLMBatch(
+            id="batch-456",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id=raw_input_file_id,
+            object="batch",
+            status=terminal_status,
+            output_file_id=raw_output_file_id,
+            error_file_id=raw_error_file_id,
+        )
+        mock_llm_router.aretrieve_batch = AsyncMock(return_value=response)
+
+        mock_hook = MagicMock()
+        mock_hook.get_unified_output_file_id.side_effect = [
+            unified_output_file_id,
+            unified_error_file_id,
+        ]
+        mock_hook.store_unified_file_id = AsyncMock()
+        check_batch_cost_instance.proxy_logging_obj.get_proxy_hook.return_value = (
+            mock_hook
+        )
+
+        await check_batch_cost_instance.check_batch_cost()
+
+        mock_hook.get_unified_output_file_id.assert_any_call(
+            output_file_id=raw_output_file_id,
+            model_id="model-123",
+            model_name="gpt-5-batch",
+        )
+        mock_hook.get_unified_output_file_id.assert_any_call(
+            output_file_id=raw_error_file_id,
+            model_id="model-123",
+            model_name="gpt-5-batch",
+        )
+        stored = {
+            next(iter(c.kwargs["model_mappings"].values())): c.kwargs["file_id"]
+            for c in mock_hook.store_unified_file_id.call_args_list
+        }
+        assert stored == {
+            raw_output_file_id: unified_output_file_id,
+            raw_error_file_id: unified_error_file_id,
+        }
+        for store_call in mock_hook.store_unified_file_id.call_args_list:
+            assert store_call.kwargs["user_api_key_dict"].user_id == "user-1"
+            assert store_call.kwargs["user_api_key_dict"].team_id == "team-1"
+
+        assert mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1
+        update_call = mock_prisma_client.db.litellm_managedobjecttable.update.call_args
+        assert update_call.kwargs["where"] == {"id": "job-terminal-mint-1"}
+        update_data = update_call.kwargs["data"]
+        assert update_data["status"] == terminal_status
+        assert update_data["batch_processed"] is True
+        persisted = json.loads(update_data["file_object"])
+        assert persisted["id"] == unified_batch_uid
+        assert persisted["input_file_id"] == unified_input_file_id
+        assert persisted["output_file_id"] == unified_output_file_id
+        assert persisted["error_file_id"] == unified_error_file_id
+        assert raw_output_file_id not in update_data["file_object"]
+        assert raw_error_file_id not in update_data["file_object"]
 
     @pytest.mark.asyncio
     async def test_raw_output_file_id_converted_to_managed_id(
@@ -1400,3 +1641,153 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
 
         decoded = _is_base64_encoded_unified_file_id(output_file_id)
         assert get_models_from_unified_file_id(decoded) == [self._PUBLIC_MODEL_GROUP]
+class TestBatchCostAttribution:
+    """CheckBatchCost rebuilds the creator's spend metadata from the managed-object row so
+    the batch-cost log is attributed like a non-batch request."""
+
+    def _instance(self, key_row=None, team_row=None, user_row=None):
+        from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+        prisma = MagicMock()
+        prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=key_row)
+        prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+        prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+        return CheckBatchCost(
+            proxy_logging_obj=MagicMock(),
+            prisma_client=prisma,
+            llm_router=MagicMock(),
+        )
+
+    def _job(self, **overrides):
+        from types import SimpleNamespace
+
+        fields = {
+            "created_by": "alice",
+            "team_id": "team-alpha",
+            "api_key": "hash-alice",
+            "request_tags": ["env:prod"],
+        }
+        fields.update(overrides)
+        return SimpleNamespace(unified_object_id="uoi", **fields)
+
+    @pytest.mark.asyncio
+    async def test_metadata_carries_key_team_and_tags(self):
+        """The spend row names the creating key, its team, both aliases, and the tags."""
+        from types import SimpleNamespace
+
+        instance = self._instance(
+            key_row=SimpleNamespace(key_alias="prod-key"),
+            team_row=SimpleNamespace(team_alias="Team Alpha"),
+            user_row=SimpleNamespace(user_email="alice@example.com", user_alias=None),
+        )
+
+        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+
+        assert metadata["user_api_key"] == "hash-alice"
+        assert metadata["user_api_key_user_id"] == "alice"
+        assert metadata["user_api_key_team_id"] == "team-alpha"
+        assert metadata["user_api_key_alias"] == "prod-key"
+        assert metadata["user_api_key_team_alias"] == "Team Alpha"
+        assert metadata["tags"] == ["env:prod"]
+
+    @pytest.mark.asyncio
+    async def test_metadata_tolerates_legacy_row_without_columns(self):
+        """Rows created before the columns existed carry only created_by/team_id and must
+        still produce an attributed row rather than raising."""
+        instance = self._instance()
+        job = self._job(api_key=None, request_tags=None)
+
+        metadata = await instance._build_creator_attribution_metadata(job, "batch-1")
+
+        assert metadata["user_api_key"] is None
+        assert metadata["user_api_key_user_id"] == "alice"
+        assert metadata["user_api_key_team_id"] == "team-alpha"
+        assert "tags" not in metadata
+
+    @pytest.mark.asyncio
+    async def test_metadata_keeps_key_when_team_key_has_no_user(self):
+        """A team-scoped key carries no user id. The user lookup is skipped (prisma rejects
+        a None user_id) and the key hash still drives key-level attribution."""
+        from types import SimpleNamespace
+
+        instance = self._instance(key_row=SimpleNamespace(key_alias="svc-key"))
+        job = self._job(created_by=None)
+
+        metadata = await instance._build_creator_attribution_metadata(job, "batch-1")
+
+        assert metadata["user_api_key"] == "hash-alice"
+        assert metadata["user_api_key_user_id"] is None
+        assert metadata["user_api_key_alias"] == "svc-key"
+        instance.prisma_client.db.litellm_usertable.find_unique.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_metadata_drops_non_string_tags(self):
+        """Non-string tags are dropped so a malformed stored value cannot slip past the
+        tag-budget checks that consume this metadata."""
+        instance = self._instance()
+        job = self._job(request_tags=["env:prod", 7, None, "team:ml"])
+
+        metadata = await instance._build_creator_attribution_metadata(job, "batch-1")
+
+        assert metadata["tags"] == ["env:prod", "team:ml"]
+
+    @pytest.mark.asyncio
+    async def test_key_alias_lookup_failure_does_not_break_attribution(self):
+        """An alias lookup failure must not lose the spend row; the key hash and team still
+        attribute it."""
+        instance = self._instance()
+        instance.prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+            side_effect=Exception("db down")
+        )
+
+        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+
+        assert metadata["user_api_key"] == "hash-alice"
+        assert metadata.get("user_api_key_alias") is None
+
+    @pytest.mark.asyncio
+    async def test_unnamed_key_keeps_the_creating_user_alias(self):
+        """Regression: a key generated without key_alias resolves to no alias, and the
+        overwrite must not null out the creating user's alias that _get_user_info supplied.
+        Most keys carry no alias, so this is the common batch, not an edge case."""
+        from types import SimpleNamespace
+
+        instance = self._instance(
+            key_row=SimpleNamespace(key_alias=None),
+            user_row=SimpleNamespace(user_email="alice@example.com", user_alias="Alice Chen"),
+        )
+
+        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+
+        assert metadata["user_api_key_alias"] == "Alice Chen"
+        assert metadata["user_api_key"] == "hash-alice"
+
+    @pytest.mark.asyncio
+    async def test_rotated_key_keeps_the_creating_user_alias(self):
+        """Batches outlive keys. When the creating key has been rotated or deleted the
+        lookup returns no row, and the spend log keeps a resolvable name instead of null."""
+        from types import SimpleNamespace
+
+        instance = self._instance(
+            key_row=None,
+            user_row=SimpleNamespace(user_email="alice@example.com", user_alias="Alice Chen"),
+        )
+
+        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+
+        assert metadata["user_api_key_alias"] == "Alice Chen"
+
+    @pytest.mark.asyncio
+    async def test_named_key_still_owns_the_alias(self):
+        """The fallback must not weaken the intended precedence: a key that has its own
+        alias still overrides the creating user's."""
+        from types import SimpleNamespace
+
+        instance = self._instance(
+            key_row=SimpleNamespace(key_alias="prod-key"),
+            user_row=SimpleNamespace(user_email="alice@example.com", user_alias="Alice Chen"),
+        )
+
+        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+
+        assert metadata["user_api_key_alias"] == "prod-key"

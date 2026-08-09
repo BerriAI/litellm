@@ -486,6 +486,38 @@ class PrismaWrapper:
         os.environ[self._db_url_env_var] = _db_url
         return _db_url
 
+    @property
+    def engine_generation(self) -> int:
+        """How many query-engine replacements have completed on this wrapper.
+
+        Bumped under `_reconnection_lock` only after a replacement engine has
+        connected, so a change across an await proves a *successful* planned
+        replacement happened in between — a replacement that failed (a real
+        outage) leaves it untouched.
+        """
+        return self._engine_generation
+
+    async def _reconnection_settled(self) -> None:
+        async with self._reconnection_lock:
+            pass
+
+    async def wait_for_planned_engine_replacement(self, timeout_seconds: float) -> None:
+        """Wait, bounded, for an in-flight planned engine replacement to finish.
+
+        Both replacement paths (`recreate_prisma_client` and
+        `_safe_refresh_token`) hold `_reconnection_lock` across their whole
+        kill/connect window, so re-acquiring it means the replacement has
+        settled one way or the other. Gives up silently on timeout: a caller
+        that stopped waiting must treat the replacement as not completed and
+        consult `engine_generation` rather than assume success.
+        """
+        if timeout_seconds <= 0 or not self._reconnection_lock.locked():
+            return
+        try:
+            await asyncio.wait_for(self._reconnection_settled(), timeout=timeout_seconds)
+        except asyncio.TimeoutError:
+            return
+
     async def recreate_prisma_client(
         self,
         new_db_url: str,
@@ -537,7 +569,7 @@ class PrismaWrapper:
         `_safe_refresh_token`, which double-checks token freshness under the
         lock) don't re-acquire it — `asyncio.Lock` is not reentrant.
         """
-        from prisma import Prisma  # type: ignore
+        from prisma import Prisma
 
         if expected_generation is not None and expected_generation != self._engine_generation:
             verbose_proxy_logger.info(

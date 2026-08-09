@@ -66,7 +66,7 @@ def _resolve_audit_log_callback(name: str) -> CustomLogger | None:
         )
 
         instance = _init_custom_logger_compatible_class(
-            logging_integration=name,  # type: ignore
+            logging_integration=name,
             internal_usage_cache=None,
             llm_router=None,
         )
@@ -227,7 +227,7 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
     try:
         await AuditLogRepository(prisma_client).table.create(
             data={
-                **_request_data,  # type: ignore
+                **_request_data,
             }
         )
     except Exception as e:

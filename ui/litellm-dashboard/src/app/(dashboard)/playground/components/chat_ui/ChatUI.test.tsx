@@ -60,7 +60,7 @@ describe("ChatUI", () => {
   });
 
   it("should show the voice selector when the endpoint type is audio_speech", async () => {
-    const { getByText, container } = render(
+    const { getByText } = render(
       <ChatUI
         accessToken="1234567890"
         token="1234567890"
@@ -110,7 +110,7 @@ describe("ChatUI", () => {
   });
 
   it("should allow the user to select a model", async () => {
-    const { getByText, container } = render(
+    const { getByText } = render(
       <ChatUI
         accessToken="1234567890"
         token="1234567890"
@@ -148,7 +148,7 @@ describe("ChatUI", () => {
       { model_group: "ResponsesModel", mode: "responses" },
     ]);
 
-    const { getByText, baseElement } = render(
+    const { getByText } = render(
       <ChatUI
         accessToken="1234567890"
         token="1234567890"

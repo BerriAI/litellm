@@ -16,8 +16,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from pydantic import BaseModel
-
 from e2e_config import unique_marker
 from e2e_http import (
     NoBody,
@@ -35,6 +33,7 @@ from models import (
     ChatMessage,
     ChatMetadata,
     ChatResponse,
+    DateRangeParams,
     EmbedBody,
     EmbedResponse,
     OpenAPISchema,
@@ -201,7 +200,7 @@ class SpendClient:
             )
         )
 
-    def probe(self, path: str, *, params: BaseModel) -> ProbeResult:
+    def probe(self, path: str, *, params: DateRangeParams) -> ProbeResult:
         return self.proxy.transport.probe(path, params=params)
 
     def openapi(self) -> OpenAPISchema:

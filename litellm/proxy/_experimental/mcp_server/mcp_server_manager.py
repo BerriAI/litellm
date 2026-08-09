@@ -177,7 +177,7 @@ except ImportError:
         is_valid: bool = True
         warnings: list = []
 
-    def validate_tool_name(name: str) -> _ToolNameValidationResult:  # type: ignore[misc]
+    def validate_tool_name(name: str) -> _ToolNameValidationResult:
         return _ToolNameValidationResult()
 
 
@@ -2045,7 +2045,7 @@ class MCPServerManager:
             mcp_oauth_metadata = await self._fetch_issuer_anchored_oauth_metadata(manual_issuer, server_url)
         else:
             mcp_oauth_metadata = await self._descovery_metadata(
-                server_url=server_url,  # type: ignore[arg-type]
+                server_url=server_url,
                 allow_origin_fallback=is_discovery_auth_type,
                 warn_when_no_metadata=warn_on_empty_discovery,
             )
@@ -3375,10 +3375,10 @@ class MCPServerManager:
 
                 static_headers: Final = server.static_headers or {}
                 has_static_authorization: Final = any(
-                    isinstance(k, str) and k.lower() == "authorization" for k in static_headers.keys()
+                    isinstance(k, str) and k.lower() == "authorization" for k in static_headers
                 )
                 has_extra_authorization: Final = bool(extra_headers) and any(
-                    isinstance(k, str) and k.lower() == "authorization" for k in (extra_headers or {}).keys()
+                    isinstance(k, str) and k.lower() == "authorization" for k in (extra_headers or {})
                 )
 
                 if (
@@ -4419,7 +4419,7 @@ class MCPServerManager:
         allowed_params_list: Final = allowed_params[matched]
 
         # Filter arguments to only include allowed parameters
-        disallowed_params: Final = [param for param in arguments.keys() if param not in allowed_params_list]
+        disallowed_params: Final = [param for param in arguments if param not in allowed_params_list]
 
         if disallowed_params:
             raise HTTPException(
@@ -4614,7 +4614,7 @@ class MCPServerManager:
         try:
             # Use standard pre_call_hook
             modified_data: Final = await proxy_logging_obj.pre_call_hook(
-                user_api_key_dict=user_api_key_auth,  # type: ignore
+                user_api_key_dict=user_api_key_auth,
                 data=synthetic_llm_data,
                 call_type=CallTypes.call_mcp_tool.value,
             )

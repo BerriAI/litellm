@@ -249,7 +249,7 @@ def _redact_settings(settings: Mapping[str, object] | None) -> dict[str, object]
     """
     if not settings:
         return {}
-    return {k: _REDACTED_VALUE for k in settings.keys()}
+    return {k: _REDACTED_VALUE for k in settings}
 
 
 def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:

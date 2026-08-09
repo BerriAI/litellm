@@ -6,7 +6,7 @@ import io
 import json
 import mimetypes
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from os import PathLike
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
@@ -99,7 +99,7 @@ def strip_name_from_message(message: AllMessageValues, allowed_name_roles: list[
     """
     msg_copy: Final = message.copy()
     if msg_copy.get("role") not in allowed_name_roles:
-        msg_copy.pop("name", None)  # type: ignore
+        msg_copy.pop("name", None)
     return msg_copy
 
 
@@ -114,7 +114,7 @@ def strip_name_from_messages(
         msg_role = message.get("role")
         msg_copy = message.copy()
         if msg_role not in allowed_name_roles:
-            msg_copy.pop("name", None)  # type: ignore
+            msg_copy.pop("name", None)
         new_messages.append(msg_copy)
     return new_messages
 
@@ -1511,9 +1511,7 @@ def convert_prefix_message_to_non_prefix_messages(
                     "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
                 }
             )
-            new_messages.append(
-                {**{k: v for k, v in message.items() if k != "prefix"}}  # type: ignore
-            )
+            new_messages.append({**{k: v for k, v in message.items() if k != "prefix"}})
         else:
             new_messages.append(message)
     return new_messages
@@ -1777,3 +1775,24 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, Any]]:
         idx = end_idx
 
     return results
+
+
+def text_completion_prompt_to_messages(prompt: object) -> tuple[AllMessageValues, ...]:
+    """
+    Wrap an OpenAI ``/v1/completions`` ``prompt`` into Chat Completion messages.
+
+    Mirrors what ``litellm.text_completion`` does on the real-time path: a
+    string becomes a single user message, and a list of strings becomes one
+    user message per element. Pre-tokenized prompts (``list[int]`` /
+    ``list[list[int]]``) are only meaningful for the OpenAI-family text
+    endpoints, so they are rejected here rather than silently forwarded, as is
+    an empty prompt, which every chat-shaped provider rejects downstream.
+    """
+    prompt_type_name: Final = type(prompt).__name__
+    if isinstance(prompt, str) and prompt:
+        return (ChatCompletionUserMessage(role="user", content=prompt),)
+    entries: Final = cast("Sequence[object]", prompt) if isinstance(prompt, Sequence) else ()
+    string_entries: Final = tuple(entry for entry in entries if isinstance(entry, str) and entry)
+    if string_entries and len(string_entries) == len(entries):
+        return tuple(ChatCompletionUserMessage(role="user", content=entry) for entry in string_entries)
+    raise ValueError(f"`prompt` must be a non-empty string or a non-empty list of strings. Got: {prompt_type_name}.")

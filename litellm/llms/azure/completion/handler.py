@@ -75,7 +75,7 @@ class AzureTextCompletion(BaseAzureLLM):
                 data = {"model": None, "prompt": prompt, **optional_params}
             else:
                 data = {
-                    "model": model,  # type: ignore
+                    "model": model,
                     "prompt": prompt,
                     **optional_params,
                 }

@@ -1,8 +1,8 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Final, Protocol, Union
+from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import HTTPException, status
 from typing_extensions import TypedDict
@@ -109,7 +109,7 @@ class _KeyMetadataDict(TypedDict, total=False):
     team_id: str | None
 
 
-_WhereValue = Union[str, dict[str, object]]
+_WhereValue = str | dict[str, object]
 
 
 class _AggregatedSpendData(TypedDict):
@@ -422,26 +422,46 @@ def _adjust_dates_for_timezone(
     start_date: str,
     end_date: str,
     timezone_offset_minutes: int | None,
+    include_current_utc_day: bool = False,
+    utc_now: datetime | None = None,
 ) -> tuple[str, str]:
     """
-    Pass-through for the local date range; the timezone offset is intentionally ignored here.
+    Map a caller-local date range onto UTC bucket keys, extending only the live end.
 
     The aggregation table (e.g. LiteLLM_DailyUserSpend) stores spend in whole-UTC-day
-    buckets keyed on date as YYYY-MM-DD. Any conversion from a local date range to a
-    UTC date range using only date arithmetic must round to whole UTC days, allowing up
-    to 24h of slop at each boundary. The previous implementation expanded the SQL range
-    by an extra full UTC day on whichever side the offset pointed, which pulled in 24h
-    of unrelated bucket data per boundary and produced approximately 100% over-counting
-    on single-day queries (e.g. IST May 29 returning UTC May 28 + UTC May 29 in full).
+    buckets keyed on date as YYYY-MM-DD. Any conversion of an interior local-day
+    boundary using only date arithmetic must round to whole UTC days, allowing up to
+    24h of slop at each boundary. A previous implementation expanded the SQL range by
+    an extra full UTC day on whichever side the offset pointed, which pulled in 24h of
+    unrelated bucket data per boundary and produced approximately 100% over-counting on
+    single-day queries (e.g. IST May 29 returning UTC May 28 + UTC May 29 in full).
     Sums of single-day queries then exceeded the equivalent multi-day aggregate, which
-    is mathematically impossible.
+    is mathematically impossible. Historical dates therefore stay a pass-through: the
+    local date is the UTC bucket key, trading boundary slop for monotonic, additive
+    results. Hour-level buckets or pro-rata weighting would fix that properly; both
+    require data the current schema does not store.
 
-    Treating the local date as the UTC date trades a small one-time boundary slop for
-    correct, monotonic, additive results across single-day and multi-day queries. A
-    later fix can introduce hour-level buckets or pro-rata weighting on adjacent UTC
-    days; both require data the current schema does not store.
+    The end boundary is different when the range reaches the caller's current day. A
+    caller west of UTC asking for a range ending "today" is asking for data up to now,
+    but once UTC has rolled past their local midnight, everything they sent since then
+    sits in the next UTC bucket, which the pass-through excludes: a PT dashboard goes
+    stale every evening from 5pm until local midnight, showing $0 for anything that
+    only started accruing that evening. Extending such a range to today's UTC bucket
+    cannot over-count, because the only part of that bucket outside the caller's range
+    is the future, and the future is empty. ``timezone_offset_minutes`` follows the
+    JS ``Date.getTimezoneOffset`` convention: UTC minus local, positive west of UTC.
+
+    The extension is strictly opt-in via ``include_current_utc_day`` so a consumer
+    whose axis or reconciliation expects the range to stop at the requested end date
+    keeps today's byte-for-byte behaviour; the cost optimization dashboard opts in.
     """
-    return start_date, end_date
+    if not include_current_utc_day or timezone_offset_minutes is None:
+        return start_date, end_date
+    now: Final = utc_now if utc_now is not None else datetime.now(timezone.utc)
+    caller_local_today: Final = (now - timedelta(minutes=timezone_offset_minutes)).date().isoformat()
+    if end_date < caller_local_today:
+        return start_date, end_date
+    return start_date, max(end_date, now.date().isoformat())
 
 
 def _build_where_conditions(
@@ -454,10 +474,13 @@ def _build_where_conditions(
     api_key: str | list[str] | None,
     exclude_entity_ids: list[str] | None = None,
     timezone_offset_minutes: int | None = None,
+    include_current_utc_day: bool = False,
 ) -> dict[str, "_WhereValue"]:
     """Build prisma where clause for daily activity queries."""
     # Adjust dates for timezone if provided
-    adjusted_start, adjusted_end = _adjust_dates_for_timezone(start_date, end_date, timezone_offset_minutes)
+    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+        start_date, end_date, timezone_offset_minutes, include_current_utc_day
+    )
 
     where_conditions: Final[dict[str, _WhereValue]] = {
         "date": {
@@ -571,6 +594,11 @@ def _build_aggregated_sql_query(
     # straight into their buckets without re-summing. The leaf grouping
     # is omitted on purpose: nothing in the response shape needs it once
     # all the rollups are present.
+    #
+    # TODO: drop the successful_requests/failed_requests aggregates (and the
+    # total_successful_requests metadata they feed) once the admin UI reads SGR
+    # only from LiteLLM_DailyGatewayRequests. The remaining spend, token and
+    # api_requests rollups are still served from here.
     sql_query: Final = f"""
         SELECT
             date,
@@ -898,6 +926,7 @@ async def get_daily_activity(
     exclude_entity_ids: list[str] | None = None,
     metadata_metrics_func: Callable[[Sequence[DailySpendRecord]], SpendMetrics] | None = None,
     timezone_offset_minutes: int | None = None,
+    include_current_utc_day: bool = False,
     resolve_entity_metadata: Callable[[Sequence[DailySpendRecord]], Awaitable[dict[str, dict[str, object]]]]
     | None = None,
 ) -> SpendAnalyticsPaginatedResponse:
@@ -931,6 +960,7 @@ async def get_daily_activity(
             api_key=api_key,
             exclude_entity_ids=exclude_entity_ids,
             timezone_offset_minutes=timezone_offset_minutes,
+            include_current_utc_day=include_current_utc_day,
         )
 
         # Get total count for pagination

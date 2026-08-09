@@ -29,7 +29,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
     AnthropicUsage,
 )
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
@@ -37,6 +37,24 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     Converts Anthropic /v1/messages requests to OpenAI Responses API format and
     converts Responses API responses back to Anthropic format.
     """
+
+    @staticmethod
+    def translate_responses_api_usage_to_anthropic_usage(
+        raw_usage: ResponseAPIUsage | None,
+    ) -> AnthropicUsage:
+        """Map Responses API usage onto Anthropic usage, where ``input_tokens``
+        excludes the cache-read and cache-write tokens reported alongside it.
+        """
+        if raw_usage is None:
+            return AnthropicUsage(input_tokens=0, output_tokens=0)
+
+        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+            LiteLLMAnthropicMessagesAdapter,
+        )
+        from litellm.responses.utils import ResponseAPILoggingUtils
+
+        chat_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(raw_usage)
+        return LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage(chat_usage)
 
     # ------------------------------------------------------------------ #
     # Request translation: Anthropic -> Responses API                     #
@@ -342,7 +360,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         output_format: Any = anthropic_request.get("output_format")
         output_config = anthropic_request.get("output_config")
         if not isinstance(output_format, dict) and isinstance(output_config, dict):
-            output_format = output_config.get("format")  # type: ignore[assignment]
+            output_format = output_config.get("format")
         if isinstance(output_format, dict) and output_format.get("type") == "json_schema":
             schema: Final = output_format.get("schema")
             if schema:
@@ -385,8 +403,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             ResponseOutputMessage,
             ResponseReasoningItem,
         )
-
-        from litellm.types.llms.openai import ResponseAPIUsage
 
         content: Final[list[dict[str, Any]]] = []
         stop_reason: AnthropicFinishReason = "end_turn"
@@ -453,15 +469,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if response.status == "incomplete":
             stop_reason = "max_tokens"
 
-        # usage
-        raw_usage: Final[ResponseAPIUsage | None] = response.usage
-        input_tokens: Final = int(getattr(raw_usage, "input_tokens", 0) or 0)
-        output_tokens: Final = int(getattr(raw_usage, "output_tokens", 0) or 0)
-
-        anthropic_usage: Final = AnthropicUsage(
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-        )
+        anthropic_usage: Final = self.translate_responses_api_usage_to_anthropic_usage(response.usage)
 
         return AnthropicMessagesResponse(
             id=response.id,
@@ -469,7 +477,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             role="assistant",
             model=response.model or "unknown-model",
             stop_sequence=None,
-            usage=anthropic_usage,  # type: ignore
-            content=content,  # type: ignore
+            usage=anthropic_usage,
+            content=content,
             stop_reason=stop_reason,
         )

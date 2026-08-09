@@ -69,14 +69,6 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
     setEditFixedAmount("");
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent, provider: string) => {
-    if (e.key === "Enter") {
-      handleSaveEdit(provider);
-    } else if (e.key === "Escape") {
-      handleCancelEdit();
-    }
-  };
-
   const formatMargin = (margin: number | { percentage?: number; fixed_amount?: number }): string => {
     if (typeof margin === "number") {
       return `${(margin * 100).toFixed(1)}%`;

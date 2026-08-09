@@ -1,14 +1,13 @@
 import { screen, waitFor, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { vi, it, expect, beforeEach, describe, MockedFunction } from "vitest";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { vi, it, expect, beforeEach, describe, Mock, MockedFunction } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { VirtualKeysTable } from "./VirtualKeysTable";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
-
-vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams(window.location.search) }));
 
 // Resolve debounced values synchronously so an applied filter lands in the useKeys query within the test tick.
 vi.mock("@tanstack/react-pacer/debouncer", async () => {
@@ -169,10 +168,11 @@ const keysResult = (keys: KeyResponse[], data: Partial<KeysResponse> = {}, extra
 
 const openFilters = () => fireEvent.click(screen.getByRole("button", { name: "Filters" }));
 
+const lastKeyParam = (onUrlUpdate: Mock<OnUrlUpdateFunction>) =>
+  onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("key");
+
 beforeEach(() => {
   vi.clearAllMocks();
-
-  window.history.pushState(null, "", "/");
 
   mockUseKeys.mockReturnValue(keysResult([mockKey]));
   mockUseKeyInfo.mockReturnValue(keyInfoResult(undefined));
@@ -359,7 +359,8 @@ it("sorts by spend ascending when 'Spend ascending' is chosen from the Spend / B
 });
 
 it("clicking the key cell deep-links via ?key=", async () => {
-  renderWithProviders(<VirtualKeysTable />);
+  const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+  renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });
 
   await waitFor(() => {
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
@@ -367,13 +368,14 @@ it("clicking the key cell deep-links via ?key=", async () => {
 
   fireEvent.click(screen.getByText("Test Key Alias"));
 
-  expect(window.location.search).toContain(`key=${encodeURIComponent(mockKey.token)}`);
+  await waitFor(() => {
+    expect(lastKeyParam(onUrlUpdate)).toBe(mockKey.token);
+  });
 });
 
 it("renders KeyInfoView when the URL has ?key= for a key on the current page, without refetching it", async () => {
-  window.history.pushState(null, "", `/?key=${encodeURIComponent(mockKey.token)}`);
-
-  renderWithProviders(<VirtualKeysTable />);
+  const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+  renderWithProviders(<VirtualKeysTable />, { searchParams: { key: mockKey.token }, onUrlUpdate });
 
   await waitFor(() => {
     expect(screen.getByText("Back to Keys")).toBeInTheDocument();
@@ -383,16 +385,18 @@ it("renders KeyInfoView when the URL has ?key= for a key on the current page, wi
 
   fireEvent.click(screen.getByText("Back to Keys"));
 
-  expect(window.location.search).not.toContain("key=");
+  await waitFor(() => {
+    expect(lastKeyParam(onUrlUpdate)).toBeNull();
+  });
+  expect(screen.getByTestId("pagination-range")).toBeInTheDocument();
 });
 
 it("fetches the key by id when the URL has ?key= for a key not in the loaded page", async () => {
-  window.history.pushState(null, "", "/?key=other-key-hash");
   mockUseKeyInfo.mockReturnValue(
     keyInfoResult({ ...mockKey, token: "other-key-hash", key_alias: "Fetched Key Alias" }),
   );
 
-  renderWithProviders(<VirtualKeysTable />);
+  renderWithProviders(<VirtualKeysTable />, { searchParams: { key: "other-key-hash" } });
 
   await waitFor(() => {
     expect(screen.getByText("Back to Keys")).toBeInTheDocument();
@@ -402,19 +406,16 @@ it("fetches the key by id when the URL has ?key= for a key not in the loaded pag
 });
 
 it("shows a loading state while a deep-linked key is being fetched", () => {
-  window.history.pushState(null, "", "/?key=other-key-hash");
-
-  renderWithProviders(<VirtualKeysTable />);
+  renderWithProviders(<VirtualKeysTable />, { searchParams: { key: "other-key-hash" } });
 
   expect(screen.getByText("Loading key...")).toBeInTheDocument();
   expect(screen.queryByTestId("pagination-range")).not.toBeInTheDocument();
 });
 
 it("shows 'Key not found' when the deep-linked key fails to load", async () => {
-  window.history.pushState(null, "", "/?key=missing-key-hash");
   mockUseKeyInfo.mockReturnValue(keyInfoResult(undefined, true));
 
-  renderWithProviders(<VirtualKeysTable />);
+  renderWithProviders(<VirtualKeysTable />, { searchParams: { key: "missing-key-hash" } });
 
   await waitFor(() => {
     expect(screen.getByText("Key not found")).toBeInTheDocument();

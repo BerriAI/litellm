@@ -18,7 +18,12 @@ from fastapi import (
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (
+    CommonProxyErrors,
+    LitellmUserRoles,
+    UserAPIKeyAuth,
+    user_api_key_has_admin_view,
+)
 from litellm.proxy.auth.auth_utils import is_request_body_safe
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.path_utils import safe_filename
@@ -317,7 +322,6 @@ async def list_prompts(
     }
     ```
     """
-    from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
 
     # check key metadata for prompts
@@ -347,10 +351,7 @@ async def list_prompts(
                 prompt_list.append(prompt_copy)
             return ListPromptsResponse(prompts=prompt_list)
     # check if user is proxy admin - show all prompts
-    if user_api_key_dict.user_role is not None and (
-        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-    ):
+    if user_api_key_has_admin_view(user_api_key_dict):
         # Get all prompts and filter to show only the latest version of each
         all_prompts = list(IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.values())
         if environment:
@@ -422,10 +423,7 @@ async def get_prompt_versions(
     from litellm.proxy.proxy_server import prisma_client
 
     # Only allow proxy admins to view version history
-    if user_api_key_dict.user_role is None or (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-    ):
+    if not user_api_key_has_admin_view(user_api_key_dict):
         raise HTTPException(status_code=403, detail="Only proxy admins can view prompt versions")
 
     base_prompt_id: Final = get_base_prompt_id(prompt_id=prompt_id)
@@ -581,12 +579,7 @@ async def get_prompt_info(
         prompts = cast(list[str] | None, user_api_key_dict.metadata.get("prompts", None))
         if prompts is not None and prompt_id not in prompts:
             raise HTTPException(status_code=400, detail=f"Prompt {prompt_id} not found")
-    if user_api_key_dict.user_role is not None and (
-        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-    ):
-        pass
-    else:
+    if not user_api_key_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail=f"You are not authorized to access this prompt. Your role - {user_api_key_dict.user_role}, Your key's prompts - {prompts}",
@@ -1199,7 +1192,7 @@ async def test_prompt(
             # Use conversation history for user/assistant messages
             messages = system_messages + request.conversation_history
         else:
-            messages = rendered_messages  # type: ignore[assignment]
+            messages = rendered_messages
 
         # Use PromptTemplate's optional_params which already extracts all parameters
         optional_params: Final = template.optional_params.copy()

@@ -932,8 +932,11 @@ async def test_add_team_member_budget_table_success():
     )
 
     # Verify the result
-    assert result == team_info_response
     assert result.team_member_budget_table == mock_budget_record
+    assert result == team_info_response.model_copy(
+        update={"team_member_budget_table": mock_budget_record}
+    )
+    assert team_info_response.team_member_budget_table is None
 
     # Verify database call was made correctly
     mock_prisma_client.db.litellm_budgettable.find_unique.assert_called_once_with(
@@ -8637,9 +8640,9 @@ class TestBatchResolveAccessGroupResources:
         with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
             result = await _batch_resolve_access_group_resources(["ag-1"])
 
-        assert sorted(result["ag-1"]["models"]) == ["claude-3", "gpt-4"]
-        assert result["ag-1"]["mcp_server_ids"] == ["mcp-1"]
-        assert sorted(result["ag-1"]["agent_ids"]) == ["agent-1", "agent-2"]
+        assert sorted(result["ag-1"].access_model_names) == ["claude-3", "gpt-4"]
+        assert result["ag-1"].access_mcp_server_ids == ["mcp-1"]
+        assert sorted(result["ag-1"].access_agent_ids) == ["agent-1", "agent-2"]
 
     @pytest.mark.asyncio
     async def test_multiple_access_groups(self):
@@ -8668,8 +8671,8 @@ class TestBatchResolveAccessGroupResources:
         with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
             result = await _batch_resolve_access_group_resources(["ag-1", "ag-2"])
 
-        assert result["ag-1"]["models"] == ["gpt-4"]
-        assert result["ag-2"]["models"] == ["gemini"]
+        assert result["ag-1"].access_model_names == ["gpt-4"]
+        assert result["ag-2"].access_model_names == ["gemini"]
 
     @pytest.mark.asyncio
     async def test_missing_access_group_omitted(self):
@@ -8733,6 +8736,75 @@ class TestBatchResolveAccessGroupResources:
         call_args = fake_find_many.call_args
         assert len(call_args.kwargs["where"]["access_group_id"]["in"]) == 1
         assert "ag-1" in result
+
+
+class TestResolveTeamAccessGroupResources:
+    """Tests for the per-team access group resolution on /team/info."""
+
+    @pytest.mark.asyncio
+    async def test_populates_flat_lists_and_per_group_details(self):
+        """access_group_details must attribute each model to the group granting it,
+        so the UI can show provenance on hover; flat lists stay for back-compat.
+        Duplicated ids must collapse to one entry (response amplification), and the
+        input object must stay untouched (resolution returns a copy)."""
+        from litellm.proxy._types import TeamInfoResponseObjectTeamTable
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _resolve_team_access_group_resources,
+        )
+
+        row1 = MagicMock()
+        row1.access_group_id = "ag-1"
+        row1.access_group_name = "shared-models"
+        row1.access_model_names = ["gpt-4", "claude-3"]
+        row1.access_mcp_server_ids = ["mcp-1"]
+        row1.access_agent_ids = []
+
+        row2 = MagicMock()
+        row2.access_group_id = "ag-2"
+        row2.access_group_name = "extra-models"
+        row2.access_model_names = ["claude-3", "gemini"]
+        row2.access_mcp_server_ids = []
+        row2.access_agent_ids = ["agent-1"]
+
+        fake_prisma = MagicMock()
+        fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(
+            return_value=[row1, row2]
+        )
+
+        team_info = TeamInfoResponseObjectTeamTable(
+            team_id="team-1", access_group_ids=["ag-1", "ag-2", "ag-1", "ag-missing"]
+        )
+        with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
+            resolved = await _resolve_team_access_group_resources(team_info)
+
+        assert team_info.access_group_details is None
+        assert sorted(resolved.access_group_models or []) == [
+            "claude-3",
+            "gemini",
+            "gpt-4",
+        ]
+        assert resolved.access_group_mcp_server_ids == ["mcp-1"]
+        assert resolved.access_group_agent_ids == ["agent-1"]
+        assert [
+            (d.access_group_id, d.access_group_name, d.models)
+            for d in (resolved.access_group_details or [])
+        ] == [
+            ("ag-1", "shared-models", ("gpt-4", "claude-3")),
+            ("ag-2", "extra-models", ("claude-3", "gemini")),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_no_access_groups_leaves_details_unset(self):
+        from litellm.proxy._types import TeamInfoResponseObjectTeamTable
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _resolve_team_access_group_resources,
+        )
+
+        team_info = TeamInfoResponseObjectTeamTable(team_id="team-1", access_group_ids=[])
+        resolved = await _resolve_team_access_group_resources(team_info)
+
+        assert resolved.access_group_details is None
+        assert resolved.access_group_models is None
 
 
 @pytest.mark.asyncio

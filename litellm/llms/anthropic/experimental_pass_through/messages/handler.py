@@ -14,6 +14,7 @@ from typing import Any, Final, cast
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import (
+    flatten_unencrypted_web_search_results_in_anthropic_messages,
     sanitize_tool_use_ids_in_anthropic_messages,
     strip_empty_text_blocks_from_anthropic_messages,
 )
@@ -222,6 +223,7 @@ async def anthropic_messages(
     # Replay of cross-provider tool history (e.g. kimi -> Anthropic) may carry
     # ids like ``functions.Bash:0`` that violate Anthropic's id pattern.
     messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
+    messages = flatten_unencrypted_web_search_results_in_anthropic_messages(messages)
 
     from litellm.integrations.anthropic_cache_control_hook import (
         AnthropicCacheControlHook,
@@ -413,6 +415,7 @@ def anthropic_messages_handler(
     if not kwargs.pop("_litellm_messages_presanitized", False):
         messages = strip_empty_text_blocks_from_anthropic_messages(messages)
         messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
+        messages = flatten_unencrypted_web_search_results_in_anthropic_messages(messages)
 
     from litellm.integrations.anthropic_cache_control_hook import (
         AnthropicCacheControlHook,
@@ -427,7 +430,7 @@ def anthropic_messages_handler(
     local_vars: Final = locals()
     is_async: Final = kwargs.pop("is_async", False)
     # Use provided client or create a new one
-    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
 
     # Store original model name before get_llm_provider strips the provider prefix
     # This is needed by agentic hooks (e.g., websearch_interception) to make follow-up requests

@@ -681,6 +681,23 @@ def _get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str |
         return 1.0
 
 
+def _resolve_reasoning_token_cost(
+    model_info: ModelInfo,
+    service_tier: str | None,
+    completion_base_cost: float,
+) -> float:
+    tier_reasoning_key: Final = _get_service_tier_cost_key("output_cost_per_reasoning_token", service_tier)
+    if model_info.get(tier_reasoning_key) is not None:
+        tier_reasoning_cost: Final = _get_cost_per_unit(model_info, tier_reasoning_key, None)
+        if tier_reasoning_cost is not None:
+            return tier_reasoning_cost
+    tier_output_key: Final = _get_service_tier_cost_key("output_cost_per_token", service_tier)
+    if tier_output_key != "output_cost_per_token" and model_info.get(tier_output_key) is not None:
+        return completion_base_cost
+    standard_reasoning_cost: Final = _get_cost_per_unit(model_info, "output_cost_per_reasoning_token", None)
+    return standard_reasoning_cost if standard_reasoning_cost is not None else completion_base_cost
+
+
 def generic_cost_per_token(
     model: str,
     usage: Usage,
@@ -746,7 +763,7 @@ def generic_cost_per_token(
 
     # Check for double-counting: sum of details > prompt_tokens means overlap
     total_details: Final = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens + video_tokens
-    has_double_counting: Final = cache_hit > 0 and total_details > usage.prompt_tokens
+    has_double_counting: Final = (cache_hit > 0 or cache_creation > 0) and total_details > usage.prompt_tokens
 
     if (text_tokens == 0 and prompt_tokens_details["image_count"] == 0) or has_double_counting:
         text_tokens = usage.prompt_tokens - cache_hit - audio_tokens - cache_creation - image_tokens - video_tokens
@@ -817,9 +834,10 @@ def generic_cost_per_token(
 
     ## REASONING COST
     if not is_text_tokens_total and reasoning_tokens and reasoning_tokens > 0:
-        _output_cost_per_reasoning_token = _get_cost_per_unit(model_info, "output_cost_per_reasoning_token", None)
-        _output_cost_per_reasoning_token = (
-            _output_cost_per_reasoning_token if _output_cost_per_reasoning_token is not None else completion_base_cost
+        _output_cost_per_reasoning_token = _resolve_reasoning_token_cost(
+            model_info=model_info,
+            service_tier=service_tier,
+            completion_base_cost=completion_base_cost,
         )
         completion_cost += float(reasoning_tokens) * _output_cost_per_reasoning_token
 

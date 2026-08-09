@@ -35,6 +35,12 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
+import {
+  computeTeamModelBadges,
+  normalizeTeamModelSelection,
+  TeamAccessGroupModelGrant,
+  TeamModelBadgeKind,
+} from "./teamModelAccess";
 import MetadataKeyValueFields, {
   metadataObjectToPairs,
   metadataPairsToObject,
@@ -52,7 +58,6 @@ import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { ModelSelect } from "../ModelSelect/ModelSelect";
 import NotificationsManager from "../molecules/notifications_manager";
-import { fetchMCPAccessGroups } from "../networking";
 import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
@@ -82,6 +87,13 @@ const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "opted_out_global_guardrails",
   "disable_global_guardrails",
 ]);
+
+const TEAM_MODEL_BADGE_COLORS: Record<TeamModelBadgeKind, "red" | "gray" | "blue" | "green"> = {
+  "all-proxy": "red",
+  "no-default": "gray",
+  direct: "blue",
+  "access-group": "green",
+};
 
 export interface TeamMembership {
   user_id: string;
@@ -133,6 +145,7 @@ export interface TeamData {
     access_group_models?: string[];
     access_group_mcp_server_ids?: string[];
     access_group_agent_ids?: string[];
+    access_group_details?: TeamAccessGroupModelGrant[];
     router_settings?: Record<string, any>;
     guardrails?: string[];
     policies?: string[];
@@ -161,29 +174,6 @@ export interface TeamInfoProps {
   premiumUser?: boolean;
 }
 
-const getOrganizationModels = (organization: Organization | null, userModels: string[]) => {
-  let tempModelsToPick = [];
-
-  if (organization) {
-    // Check if organization has "all-proxy-models" in its models array
-    if (organization.models.includes("all-proxy-models")) {
-      // Treat as all-proxy-models (use userModels)
-      tempModelsToPick = userModels;
-    } else if (organization.models.length > 0) {
-      // Organization has specific models
-      tempModelsToPick = organization.models;
-    } else {
-      // Empty array [] is treated as all-proxy-models
-      tempModelsToPick = userModels;
-    }
-  } else {
-    // No organization, show all available models
-    tempModelsToPick = userModels;
-  }
-
-  return unfurlWildcardModelsInList(tempModelsToPick, userModels);
-};
-
 const TeamInfoView: React.FC<TeamInfoProps> = ({
   teamId,
   onClose,
@@ -203,8 +193,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
-  const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const { data: guardrailsData, isLoading: isGuardrailsLoading } = useGuardrails();
   const globalGuardrailNames = guardrailsData?.globalGuardrailNames ?? new Set<string>();
@@ -292,23 +280,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
     fetchOrganization();
   }, [accessToken, teamData?.team_info?.organization_id]);
-
-  // Compute modelsToPick based on organization and userModels
-  const modelsToPick = useMemo(() => {
-    return getOrganizationModels(organization, userModels);
-  }, [organization, userModels]);
-
-  const fetchMcpAccessGroups = async () => {
-    if (!accessToken) return;
-    if (mcpAccessGroupsLoaded) return;
-    try {
-      const groups = await fetchMCPAccessGroups(accessToken);
-      setMcpAccessGroups(groups);
-      setMcpAccessGroupsLoaded(true);
-    } catch (error) {
-      console.error("Failed to fetch MCP access groups:", error);
-    }
-  };
 
   useEffect(() => {
     const fetchPolicies = async () => {
@@ -526,7 +497,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       const updateData: any = {
         team_id: teamId,
         team_alias: values.team_alias,
-        models: values.models,
+        models: normalizeTeamModelSelection(values.models),
         tpm_limit: sanitizeNumeric(values.tpm_limit),
         rpm_limit: sanitizeNumeric(values.rpm_limit),
         model_tpm_limit: modelTpmLimit,
@@ -653,7 +624,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         }
       }
 
-      const response = await teamUpdateCall(accessToken, updateData);
+      await teamUpdateCall(accessToken, updateData);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
 
       NotificationsManager.success("Team settings updated successfully");
@@ -807,21 +778,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <Card>
                   <Text>Models</Text>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {info.models.length === 0 || info.models.includes("all-proxy-models") ? (
-                      <Badge color="red">All proxy models</Badge>
-                    ) : (
-                      <>
-                        {info.models.map((model: string, index: number) => (
-                          <Badge key={`direct-${index}`} color="blue">
-                            {model}
-                          </Badge>
-                        ))}
-                        {(info.access_group_models || []).map((model: string, index: number) => (
-                          <Badge key={`ag-${index}`} color="green" title="From access group">
-                            {model}
-                          </Badge>
-                        ))}
-                      </>
+                    {computeTeamModelBadges(info.models, info.access_group_models || [], info.access_group_details).map(
+                      (badge, index) => (
+                        <Tooltip key={`${badge.kind}-${badge.label}-${index}`} title={badge.tooltip}>
+                          <span>
+                            <Badge color={TEAM_MODEL_BADGE_COLORS[badge.kind]}>{badge.label}</Badge>
+                          </span>
+                        </Tooltip>
+                      ),
                     )}
                   </div>
                 </Card>
@@ -1025,7 +989,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Form.Item
                       label="Models"
                       name="models"
-                      rules={[{ required: true, message: "Please select at least one model" }]}
+                      extra="Leave empty to grant no models directly. The team keeps any models granted through its access groups"
                     >
                       <ModelSelect
                         value={form.getFieldValue("models") || []}
@@ -1251,6 +1215,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <RouterSettingsAccordion
                         ref={routerSettingsRef}
                         accessToken={accessToken || ""}
+                        teamId={teamId}
                         value={info.router_settings ? { router_settings: info.router_settings } : undefined}
                       />
                     </Form.Item>

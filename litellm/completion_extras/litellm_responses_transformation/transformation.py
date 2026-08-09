@@ -63,9 +63,9 @@ def _get_reasoning_items(
     msg: "AllMessageValues",
 ) -> list[ChatCompletionReasoningItem]:
     """Extract reasoning_items from a message dict with proper typing."""
-    items: Final = msg.get("reasoning_items")  # type: ignore[union-attr]
+    items: Final = msg.get("reasoning_items")
     if items:
-        return items  # type: ignore[return-value]
+        return items
     return []
 
 
@@ -261,8 +261,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             "type": "message",
                             "role": role,
                             "content": self._convert_content_to_responses_format(
-                                content,  # type: ignore[arg-type]
-                                role,  # type: ignore
+                                content,
+                                role,
                             ),
                         }
                     )
@@ -336,7 +336,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     {
                         "type": "message",
                         "role": role,
-                        "content": self._convert_content_to_responses_format(content, cast(str, role)),  # type: ignore[arg-type]
+                        "content": self._convert_content_to_responses_format(content, cast(str, role)),
                     }
                 )
 
@@ -360,17 +360,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif key == "response_format":
                 text_format = self._transform_response_format_to_text_format(value)
                 if text_format:
-                    responses_api_request["text"] = text_format  # type: ignore
+                    responses_api_request["text"] = text_format
             elif key == "tool_choice":
-                responses_api_request["tool_choice"] = (  # type: ignore[assignment]
-                    self._normalize_tool_choice_for_responses_api(value)
-                )
+                responses_api_request["tool_choice"] = self._normalize_tool_choice_for_responses_api(value)
             elif key == "stream_options":
                 stream_options = normalize_responses_api_stream_options(value)
                 if stream_options is not None:
                     responses_api_request["stream_options"] = stream_options
-            elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
-                responses_api_request[key] = value  # type: ignore
+            elif key in ResponsesAPIOptionalRequestParams.__annotations__:
+                responses_api_request[key] = value
             elif key == "previous_response_id":
                 responses_api_request["previous_response_id"] = value
             elif key == "reasoning_effort":
@@ -524,7 +522,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 ResponseApplyPatchToolCall,
             )
         except ImportError:
-            ResponseApplyPatchToolCall = None  # type: ignore[assignment,misc]
+            ResponseApplyPatchToolCall = None
 
         from litellm.types.utils import Choices, Message
 
@@ -942,7 +940,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     flat_custom["format"] = convert_custom_tool_format_to_responses_shape(custom_payload["format"])
                 responses_tools.append(flat_custom)
             else:
-                responses_tools.append(tool)  # type: ignore
+                responses_tools.append(tool)
 
         return cast(list["ALL_RESPONSES_API_TOOL_PARAMS"], responses_tools)
 
@@ -978,7 +976,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     def _map_reasoning_effort(self, reasoning_effort: str | dict[str, Any]) -> Reasoning | None:
         # If dict is passed, convert it directly to Reasoning object
         if isinstance(reasoning_effort, dict):
-            return Reasoning(**reasoning_effort)  # type: ignore[typeddict-item]
+            return Reasoning(**reasoning_effort)
 
         # Check if auto-summary is enabled via flag or environment variable
         # Priority: litellm.reasoning_auto_summary flag > LITELLM_REASONING_AUTO_SUMMARY env var
@@ -988,11 +986,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         # If string is passed, map with optional summary based on flag/env var
         if reasoning_effort == "none":
-            return Reasoning(effort="none", summary="detailed") if auto_summary_enabled else Reasoning(effort="none")  # type: ignore
+            return Reasoning(effort="none", summary="detailed") if auto_summary_enabled else Reasoning(effort="none")
         elif reasoning_effort == "high":
             return Reasoning(effort="high", summary="detailed") if auto_summary_enabled else Reasoning(effort="high")
         elif reasoning_effort == "xhigh":
-            return Reasoning(effort="xhigh", summary="detailed") if auto_summary_enabled else Reasoning(effort="xhigh")  # type: ignore[typeddict-item]
+            return Reasoning(effort="xhigh", summary="detailed") if auto_summary_enabled else Reasoning(effort="xhigh")
         elif reasoning_effort == "medium":
             return (
                 Reasoning(effort="medium", summary="detailed") if auto_summary_enabled else Reasoning(effort="medium")
@@ -1108,7 +1106,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     verbose_logger.debug("Skipping unsupported annotation type: %s", type(annotation))
                     continue
 
-                result.append(annotation_dict)  # type: ignore
+                result.append(annotation_dict)
             except Exception as e:
                 # Skip malformed annotations
                 verbose_logger.debug("Skipping malformed annotation: %s, error: %s", annotation, e)
@@ -1254,7 +1252,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     function=function_chunk,
                 )
                 if provider_specific_fields:
-                    tool_call_chunk.provider_specific_fields = provider_specific_fields  # type: ignore
+                    tool_call_chunk.provider_specific_fields = provider_specific_fields
 
                 return ModelResponseStream(
                     choices=[

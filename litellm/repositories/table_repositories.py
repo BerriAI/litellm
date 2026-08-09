@@ -27,7 +27,7 @@ class PrismaTableRepository:
         return self._prisma_client
 
     @property
-    def table(self) -> Any:
+    def table(self) -> Any:  # any-ok: Prisma table actions are reached through the untyped client wrapper
         return wrap_table_actions_for_config_sync(
             actions=getattr(self.prisma_client.db, self.table_name),
             table_name=self.table_name,
@@ -40,6 +40,10 @@ class PolicyRepository(PrismaTableRepository):
 
 class AgentsRepository(PrismaTableRepository):
     table_name = "litellm_agentstable"
+
+
+class ObjectPermissionRepository(PrismaTableRepository):
+    table_name = "litellm_objectpermissiontable"
 
 
 class GuardrailsRepository(PrismaTableRepository):

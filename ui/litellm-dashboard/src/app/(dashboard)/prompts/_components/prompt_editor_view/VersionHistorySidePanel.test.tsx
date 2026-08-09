@@ -182,7 +182,7 @@ describe("VersionHistorySidePanel", () => {
       render(<VersionHistorySidePanel {...defaultProps} />);
 
       await waitFor(() => {
-        const versionItems = screen.getAllByTestId("tag");
+        screen.getAllByTestId("tag");
         // Should have Active tag for the selected version
         expect(screen.getByText("Active")).toBeInTheDocument();
       });
@@ -464,7 +464,7 @@ describe("VersionHistorySidePanel", () => {
       render(<VersionHistorySidePanel {...defaultProps} />);
 
       await waitFor(() => {
-        const versionElements = screen.getAllByTestId("tag");
+        screen.getAllByTestId("tag");
         // Verify versions are displayed as they come from the API
         expect(screen.getByText("v2")).toBeInTheDocument();
       });

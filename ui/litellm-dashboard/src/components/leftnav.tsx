@@ -64,6 +64,7 @@ import {
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { cn } from "@/lib/cva.config";
+import { rolesWithCapability } from "../utils/capabilities";
 import {
   all_admin_roles,
   internalUserRoles,
@@ -167,7 +168,13 @@ const menuGroups: MenuGroup[] = [
         children: [
           { key: "search-tools", page: "search-tools", label: "Search Tools", icon: <Search {...ICON} /> },
           { key: "vector-stores", page: "vector-stores", label: "Vector Stores", icon: <Database {...ICON} /> },
-          { key: "tool-policies", page: "tool-policies", label: "Tool Policies", icon: <ShieldCheck {...ICON} /> },
+          {
+            key: "tool-policies",
+            page: "tool-policies",
+            label: "Tool Policies",
+            icon: <ShieldCheck {...ICON} />,
+            roles: rolesWithCapability("viewToolPolicies"),
+          },
         ],
       },
     ],
@@ -400,7 +407,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   disableVectorStoresForInternalUsers,
   allowVectorStoresForTeamAdmins,
 }) => {
-  const { userId, accessToken, userRole } = useAuthorized();
+  const { userId, accessToken, userRole, isViewOnly } = useAuthorized();
   const { data: organizations } = useOrganizations();
   const { data: teams } = useTeams();
   const { logoUrl } = useTheme();
@@ -442,6 +449,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
     return items
       .map((item) => ({ ...item, children: item.children ? filterItemsByRole(item.children) : undefined }))
       .filter((item) => {
+        if (item.key === "llm-playground" && isViewOnly) return false;
         if (item.key === "organizations" || item.key === "users") {
           const hasRoleAccess = !item.roles || item.roles.includes(userRole) || isOrgAdmin;
           if (!hasRoleAccess) return false;

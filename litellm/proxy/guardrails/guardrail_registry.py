@@ -14,6 +14,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_scan_only_tool_results_for_guardrail,
+    effective_skip_tool_message_for_guardrail,
+)
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrail,
 )
@@ -348,7 +352,7 @@ class GuardrailRegistry:
 
             guardrails: Final[list[Guardrail]] = []
             for guardrail in guardrails_from_db:
-                guardrails.append(Guardrail(**(dict(guardrail))))  # type: ignore
+                guardrails.append(Guardrail(**(dict(guardrail))))
 
             return guardrails
         except Exception as e:
@@ -366,7 +370,7 @@ class GuardrailRegistry:
             if not guardrail:
                 return None
 
-            return Guardrail(**(dict(guardrail)))  # type: ignore
+            return Guardrail(**(dict(guardrail)))
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {e}")
 
@@ -382,7 +386,7 @@ class GuardrailRegistry:
             if not guardrail:
                 return None
 
-            return Guardrail(**(dict(guardrail)))  # type: ignore
+            return Guardrail(**(dict(guardrail)))
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {e}")
 
@@ -472,7 +476,7 @@ class InMemoryGuardrailHandler:
                 custom_guardrail_callback = initializer(
                     litellm_params,
                     guardrail,
-                    llm_router,  # type: ignore
+                    llm_router,
                 )
             else:
                 custom_guardrail_callback = initializer(litellm_params, guardrail)
@@ -487,16 +491,27 @@ class InMemoryGuardrailHandler:
             raise ValueError(f"Unsupported guardrail: {guardrail_type}")
 
         if custom_guardrail_callback is not None:
-            setattr(
-                custom_guardrail_callback,
+            for scoping_param in (
                 "skip_system_message_in_guardrail",
-                getattr(litellm_params, "skip_system_message_in_guardrail", None),
-            )
-            setattr(
-                custom_guardrail_callback,
                 "skip_tool_message_in_guardrail",
-                getattr(litellm_params, "skip_tool_message_in_guardrail", None),
+                "scan_only_tool_results",
+            ):
+                setattr(custom_guardrail_callback, scoping_param, getattr(litellm_params, scoping_param, None))
+            scan_only_tool_results_enabled: Final = effective_scan_only_tool_results_for_guardrail(
+                custom_guardrail_callback
             )
+            if scan_only_tool_results_enabled and not custom_guardrail_callback.supports_scan_only_tool_results():
+                raise ValueError(
+                    f"Guardrail {guardrail['guardrail_name']}: scan_only_tool_results is enabled, but this "
+                    "guardrail's role filtering never scans tool results, so no request content would ever "
+                    "be scanned. Remove scan_only_tool_results or the guardrail's role-filtering option."
+                )
+            if scan_only_tool_results_enabled and effective_skip_tool_message_for_guardrail(custom_guardrail_callback):
+                raise ValueError(
+                    f"Guardrail {guardrail['guardrail_name']}: scan_only_tool_results and "
+                    "skip_tool_message_in_guardrail are enabled together, which excludes every message from "
+                    "scanning, so no request content would ever be scanned. Remove one of the two."
+                )
             configured_run_in_parallel: Final = getattr(litellm_params, "run_in_parallel", None)
             if configured_run_in_parallel is not None:
                 custom_guardrail_callback.run_in_parallel = bool(configured_run_in_parallel)
@@ -563,7 +578,7 @@ class InMemoryGuardrailHandler:
             default_on=default_on,
             **extra_params,
         )
-        litellm.logging_callback_manager.add_litellm_callback(_guardrail_callback)  # type: ignore
+        litellm.logging_callback_manager.add_litellm_callback(_guardrail_callback)
 
         return _guardrail_callback
 

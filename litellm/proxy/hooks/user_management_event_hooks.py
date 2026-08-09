@@ -113,12 +113,12 @@ class UserManagementEventHooks:
 
         if use_enterprise_email_hooks and (data.send_invite_email is True):
             initialized_email_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
-                callback_type=BaseEmailLogger  # type: ignore
+                callback_type=BaseEmailLogger
             )
             if len(initialized_email_loggers) > 0:
                 for email_logger in initialized_email_loggers:
-                    if isinstance(email_logger, BaseEmailLogger):  # type: ignore
-                        await email_logger.send_user_invitation_email(  # type: ignore
+                    if isinstance(email_logger, BaseEmailLogger):
+                        await email_logger.send_user_invitation_email(
                             event=event,
                         )
 
