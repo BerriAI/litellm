@@ -584,24 +584,24 @@ class LiteLLMCompletionResponsesConfig:
         reasoning message is preserved so the reasoning is still passed back.
         """
 
-        def _role(msg: Any) -> str:
+        def _role(msg: object) -> str:
             if isinstance(msg, dict):
                 return str(msg.get("role") or "")
             return str(getattr(msg, "role", "") or "")
 
-        def _reasoning_text(msg: Any) -> str | None:
+        def _reasoning_text(msg: object) -> str | None:
             if isinstance(msg, dict):
                 value = msg.get("reasoning_content")
             else:
                 value = getattr(msg, "reasoning_content", None)
             return value if isinstance(value, str) and value else None
 
-        def _content(msg: Any) -> Any:
+        def _content(msg: object) -> object | None:
             if isinstance(msg, dict):
                 return msg.get("content")
             return getattr(msg, "content", None)
 
-        def _tool_calls(msg: Any) -> Any:
+        def _tool_calls(msg: object) -> object | None:
             if isinstance(msg, dict):
                 return msg.get("tool_calls")
             return getattr(msg, "tool_calls", None)
@@ -632,31 +632,35 @@ class LiteLLMCompletionResponsesConfig:
                 if isinstance(msg, dict):
                     msg["reasoning_content"] = combined
                 else:
-                    setattr(msg, "reasoning_content", combined)
+                    setattr(msg, "reasoning_content", combined)  # noqa: B010
                 pending_reasoning = []
             elif pending_reasoning:
                 # Not followed by an assistant message — keep the reasoning
                 # standalone instead of dropping it.
-                for text in pending_reasoning:
-                    merged.append(
+                merged.extend(
+                    [
                         ChatCompletionResponseMessage(
                             role="assistant",
                             content=None,
                             reasoning_content=text,
                         )
-                    )
+                        for text in pending_reasoning
+                    ]
+                )
                 pending_reasoning = []
 
             merged.append(msg)
 
-        for text in pending_reasoning:
-            merged.append(
+        merged.extend(
+            [
                 ChatCompletionResponseMessage(
                     role="assistant",
                     content=None,
                     reasoning_content=text,
                 )
-            )
+                for text in pending_reasoning
+            ]
+        )
 
         return merged
 
