@@ -152,3 +152,50 @@ def test_get_model_by_id_not_found(client, auth_as, patched_models, path):
         response = client.get(path)
     assert response.status_code == 404
     assert "not found" in response.text.lower()
+
+
+@pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
+def test_anthropic_format_returns_public_team_model_name(
+    client, auth_as, patched_models, monkeypatch, params
+):
+    """Regression: the Anthropic-native listing must go through the same team
+    name translation as the OpenAI listing, so a caller never sees the internal
+    ``model_name_{team_id}_{uuid}`` routing key."""
+    from litellm.proxy import utils as proxy_utils
+    from litellm.proxy.auth import model_checks
+
+    internal_name = "model_name_team-1_c0ffee"
+
+    patched_models.get_model_list = MagicMock(
+        return_value=[
+            {
+                "model_name": internal_name,
+                "model_info": {
+                    "team_id": "team-1",
+                    "team_public_model_name": "gpt-4-team",
+                },
+            }
+        ]
+    )
+    patched_models.get_model_names = MagicMock(return_value=[internal_name])
+
+    async def _fake_get_available_models_for_user(**kwargs):
+        return [internal_name]
+
+    monkeypatch.setattr(
+        proxy_utils,
+        "get_available_models_for_user",
+        _fake_get_available_models_for_user,
+    )
+    monkeypatch.setattr(
+        model_checks, "get_complete_model_list", lambda **kwargs: [internal_name]
+    )
+
+    with auth_as():
+        response = client.get(
+            "/v1/models", params=params, headers={"anthropic-version": "2023-06-01"}
+        )
+
+    assert response.status_code == 200
+    assert [m["id"] for m in response.json()["data"]] == ["gpt-4-team"]
+    assert internal_name not in response.text

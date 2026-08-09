@@ -9106,7 +9106,9 @@ async def model_list(
             all_models = [m for m in all_models if m not in hidden_names]
 
         if wants_anthropic_format:
-            return create_anthropic_model_list_response(all_models)
+            return create_anthropic_model_list_response(
+                TeamModelNameTranslator.translate_listing(all_models, llm_router, settings)
+            )
 
         # Surface the public team name by default; legacy internal keys via flag.
         # The internal routing key drives the metadata/fallback lookup, while the
@@ -9149,7 +9151,9 @@ async def model_list(
         all_models = [m for m in all_models if m not in hidden_names]
 
     if wants_anthropic_format:
-        return create_anthropic_model_list_response(all_models)
+        return create_anthropic_model_list_response(
+            TeamModelNameTranslator.translate_listing(all_models, llm_router, settings)
+        )
 
     # Surface the public team name by default; legacy internal keys via flag.
     # The internal routing key drives the metadata/fallback lookup, while the
