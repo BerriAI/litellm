@@ -1,6 +1,6 @@
 import { test, expect, type Page as PlaywrightPage } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
-import { createMcpServer } from "../../helpers/mcp";
+import { createMcpServer, deleteMcpServerByName } from "../../helpers/mcp";
 import { captureRequestBody, readBack } from "../../helpers/roundTrip";
 
 /**
@@ -34,6 +34,14 @@ test.describe("MCP Servers - edit and delete", () => {
 
   test.beforeEach(async ({ page }) => {
     serverName = await createMcpServer(page, UNREACHABLE_URL);
+  });
+
+  // The rename test leaves its server behind, and this spec's servers are the
+  // unreachable ones -- exactly the kind that slow the MCP page down for every
+  // later test. The delete test's server is already gone; deleting by name is
+  // a no-op then.
+  test.afterEach(async ({ page }) => {
+    await deleteMcpServerByName(page, serverName);
   });
 
   test("Renaming a server's alias persists", async ({ page }) => {

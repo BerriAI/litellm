@@ -1,6 +1,6 @@
 import { test, expect, Locator } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
-import { createMcpServer, openMcpToolsTab } from "../../helpers/mcp";
+import { createMcpServer, deleteMcpServerByName, openMcpToolsTab } from "../../helpers/mcp";
 
 // Covers the two MCP manual-QA items that mcpServers.spec.ts cannot: listing a
 // server's tools, and actually calling one. Both need an MCP server that really
@@ -45,6 +45,12 @@ test.describe("MCP Tools", () => {
   test.beforeEach(async ({ page }) => {
     serverName = await createMcpServer(page, MCP_SERVER_URL);
     await openMcpToolsTab(page, serverName);
+  });
+
+  // Servers outlive the test that made them, and the MCP page contacts every
+  // one it lists, so leaked servers make later MCP tests slower run by run.
+  test.afterEach(async ({ page }) => {
+    await deleteMcpServerByName(page, serverName);
   });
 
   test("MCP Tools tab lists the tools the upstream server advertises", async ({ page }) => {

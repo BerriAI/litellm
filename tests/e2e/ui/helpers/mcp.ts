@@ -1,6 +1,7 @@
 import { expect, Page as PwPage } from "@playwright/test";
 import { navigateToPage } from "./navigation";
 import { Page } from "../fixtures/pages";
+import { masterKey } from "./traffic";
 
 /**
  * Creates an MCP server through the UI's discovery -> custom form flow and
@@ -50,6 +51,35 @@ export async function createMcpServer(page: PwPage, url: string): Promise<string
   const card = page.getByTestId("mcp-servers-grid").getByText(name).first();
   await expect(card).toBeVisible({ timeout: 10_000 });
   return name;
+}
+
+/**
+ * Deletes every server carrying `serverName`, through the API.
+ *
+ * Cleaning up is not housekeeping here, it is what keeps the MCP specs
+ * runnable. Servers persist for the life of the database, the MCP page reaches
+ * out to each one it lists, and a server whose URL does not answer holds that
+ * up. Measured on a local stack: with eleven leaked servers, eight of them
+ * pointing at an unreachable host, navigateToPage's networkidle wait stopped
+ * settling inside 30s and every MCP spec failed -- including the ones that
+ * leaked nothing. Deleting the leftovers made all five pass again.
+ *
+ * Failures here are swallowed on purpose: this runs from afterEach, and a
+ * cleanup error reported as a test failure hides whatever the test itself
+ * found.
+ */
+export async function deleteMcpServerByName(page: PwPage, serverName: string): Promise<void> {
+  const headers = { Authorization: `Bearer ${masterKey()}` };
+  try {
+    const res = await page.request.get("/v1/mcp/server", { headers });
+    if (!res.ok()) return;
+    const servers = (await res.json()) as { server_id: string; server_name?: string }[];
+    for (const server of servers.filter((candidate) => candidate.server_name === serverName)) {
+      await page.request.delete(`/v1/mcp/server/${server.server_id}`, { headers });
+    }
+  } catch {
+    // best effort -- see above
+  }
 }
 
 /** Opens a server from the grid and switches to its MCP Tools tab. */
