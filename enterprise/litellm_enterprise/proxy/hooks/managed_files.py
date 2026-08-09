@@ -1297,13 +1297,15 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """Rebuild ``first_id`` / ``last_id`` from the caller-scoped page.
 
         The upstream cursors point at rows that were just filtered out, so
-        leaving them in place discloses other callers' file ids.
+        leaving them in place discloses other callers' file ids. ``has_more``
+        is always cleared because ``after`` is never forwarded upstream, so
+        no further page is reachable through the proxy.
         """
         if hasattr(response, "first_id"):
             response.first_id = data[0].id if data else None
         if hasattr(response, "last_id"):
             response.last_id = data[-1].id if data else None
-        if not data and hasattr(response, "has_more"):
+        if hasattr(response, "has_more"):
             response.has_more = False
 
     async def afile_retrieve(
