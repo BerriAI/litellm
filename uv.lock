@@ -10,7 +10,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-08-06T01:57:45.877091Z"
+exclude-newer = "2026-08-06T01:58:33.7419Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -20,7 +20,7 @@ members = [
     "litellm-proxy-extras",
 ]
 constraints = [
-    { name = "aiohttp", specifier = ">=3.14.1,<4.0" },
+    { name = "aiohttp", specifier = ">=3.14.2,<4.0" },
     { name = "httplib2", specifier = ">=0.32.0" },
     { name = "packaging", specifier = ">=24.0" },
     { name = "setuptools", specifier = ">=83.0.0" },
@@ -4327,7 +4327,7 @@ proxy-dev = [
 [package.metadata]
 requires-dist = [
     { name = "a2a-sdk", marker = "extra == 'extra-proxy'", specifier = ">=1.1.0,<2.0" },
-    { name = "aiohttp", specifier = ">=3.10,<4.0" },
+    { name = "aiohttp", specifier = ">=3.14.2,<4.0" },
     { name = "anthropic", extras = ["vertex"], marker = "extra == 'proxy-runtime'", specifier = ">=0.84.0,<1.0" },
     { name = "apscheduler", marker = "extra == 'proxy'", specifier = ">=3.11.2,<4.0" },
     { name = "audioread", marker = "extra == 'stt-nvidia-riva'", specifier = ">=3.0.1" },
