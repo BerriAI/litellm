@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -14,6 +15,7 @@ from litellm.llms.xai.cost_calculator import (
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
+    ResponseAPIUsage,
     ResponseCompletedEvent,
     ResponseFailedEvent,
     ResponseIncompleteEvent,
@@ -107,18 +109,22 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return event
 
     @staticmethod
-    def _server_side_tool_usage_details_from_usage(usage: Any) -> Any:
+    def _server_side_tool_usage_details_from_usage(
+        usage: Usage | ResponseAPIUsage | Mapping[str, object] | None,
+    ) -> Mapping[str, object] | None:
         if usage is None:
             return None
-        if isinstance(usage, dict):
-            return usage.get("server_side_tool_usage_details")
-        details = getattr(usage, "server_side_tool_usage_details", None)
-        if details is not None:
-            return details
-        model_extra = getattr(usage, "model_extra", None) or getattr(usage, "__pydantic_extra__", None)
-        if isinstance(model_extra, dict):
-            return model_extra.get("server_side_tool_usage_details")
-        return None
+        if isinstance(usage, Mapping):
+            details = usage.get("server_side_tool_usage_details")
+        else:
+            details = getattr(usage, "server_side_tool_usage_details", None)
+            if details is None:
+                model_extra = getattr(usage, "model_extra", None) or getattr(usage, "__pydantic_extra__", None)
+                if isinstance(model_extra, Mapping):
+                    details = model_extra.get("server_side_tool_usage_details")
+        if not isinstance(details, Mapping):
+            return None
+        return details
 
     @staticmethod
     def _attach_server_side_tool_usage_details_to_usage(

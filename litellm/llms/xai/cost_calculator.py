@@ -5,7 +5,7 @@ Helper util for handling XAI-specific cost calculation
 """
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 _DEFAULT_WEB_SEARCH_COST_PER_CALL = 5.0 / 1000.0
 
 
-def apply_server_side_tool_usage_details_to_usage(usage: Usage, details: Mapping[str, Any] | None) -> None:
+def apply_server_side_tool_usage_details_to_usage(usage: Usage, details: Mapping[str, object] | None) -> None:
     """
     Attach server_side_tool_usage_details and mirror web_search_calls onto
     prompt_tokens_details.web_search_requests for built-in tool cost gating.
