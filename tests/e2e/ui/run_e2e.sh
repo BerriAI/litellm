@@ -12,6 +12,10 @@ set -euo pipefail
 #   ./run_e2e.sh --repeat-each=5    # Run each test 5 times
 #   ./run_e2e.sh --headed           # Run with browser visible
 #
+# Ports default to 4000 / 5432 / 8090 and can be moved when another checkout
+# already holds them:
+#   PROXY_PORT=4100 POSTGRES_PORT=5532 MOCK_LLM_PORT=8190 ./run_e2e.sh
+#
 # In CI (CI=true), expects:
 #   - PostgreSQL already running on 127.0.0.1:5432
 #   - DATABASE_URL already set
@@ -27,6 +31,16 @@ CONTAINER_NAME="litellm-e2e-postgres-$$"
 MOCK_PID=""
 PROXY_PID=""
 PROXY_LOG=""
+
+# Ports, overridable so two checkouts can run this harness at the same time --
+# otherwise a second run aborts on "port 4000 is in use" and the only way out is
+# to stop someone else's stack. Defaults are the historical values, so an unset
+# environment behaves exactly as before (CI, the CircleCI job and the docs all
+# assume 4000/5432/8090).
+PROXY_PORT="${PROXY_PORT:-4000}"
+POSTGRES_PORT="${POSTGRES_PORT:-5432}"
+MOCK_LLM_PORT="${MOCK_LLM_PORT:-8090}"
+export MOCK_LLM_PORT
 
 # --- Ensure common tool paths are available (local dev only) ---
 if [ "$IS_CI" = "false" ]; then
@@ -92,9 +106,9 @@ if [ "$IS_CI" = "false" ]; then
   # to someone else's :5432 (a psql session, a running app, a Prisma engine
   # talking to a remote database) aborts the run with "port 5432 is in use"
   # while nothing is actually bound locally.
-  for port in 4000 5432 8090; do
+  for port in "$PROXY_PORT" "$POSTGRES_PORT" "$MOCK_LLM_PORT"; do
     if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
-      echo "Error: port $port is in use"
+      echo "Error: port $port is in use (override with PROXY_PORT / POSTGRES_PORT / MOCK_LLM_PORT)"
       exit 1
     fi
   done
@@ -102,12 +116,12 @@ if [ "$IS_CI" = "false" ]; then
   export POSTGRES_USER="e2euser"
   export POSTGRES_PASSWORD="$(openssl rand -hex 32)"
   export POSTGRES_DB="litellm_e2e"
-  export DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB}"
+  export DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:${POSTGRES_PORT}/${POSTGRES_DB}"
 
   echo "=== Starting PostgreSQL ==="
   docker run -d --rm --name "$CONTAINER_NAME" \
     -e POSTGRES_USER -e POSTGRES_PASSWORD -e POSTGRES_DB \
-    -p 127.0.0.1:5432:5432 \
+    -p "127.0.0.1:${POSTGRES_PORT}:5432" \
     postgres:16
 
   echo "Waiting for PostgreSQL..."
@@ -124,8 +138,13 @@ fi
 
 # --- Credentials ---
 export LITELLM_MASTER_KEY="sk-1234"
-export MOCK_LLM_URL="http://127.0.0.1:8090/v1"
+export MOCK_LLM_URL="http://127.0.0.1:${MOCK_LLM_PORT}/v1"
 export DISABLE_SCHEMA_UPDATE="true"
+# The suite resolves its target from E2E_UI_BASE_URL (constants.ts), which
+# otherwise defaults to :4000 -- so without this a relocated stack would be
+# built and booted correctly and then tested against whatever happens to be
+# listening on the default port.
+export E2E_UI_BASE_URL="${E2E_UI_BASE_URL:-http://127.0.0.1:${PROXY_PORT}}"
 # Ensure the proxy serves UI at /ui (not behind a subpath)
 export SERVER_ROOT_PATH=""
 # Boot with an external logout URL so proxyLogoutUrl.spec.ts can assert the
@@ -176,7 +195,7 @@ uv run --no-sync python "$SCRIPT_DIR/fixtures/mock_llm_server/server.py" &
 MOCK_PID=$!
 
 for i in $(seq 1 15); do
-  if curl -sf http://127.0.0.1:8090/health >/dev/null 2>&1; then break; fi
+  if curl -sf http://127.0.0.1:${MOCK_LLM_PORT}/health >/dev/null 2>&1; then break; fi
   sleep 1
 done
 
@@ -186,7 +205,7 @@ cd "$REPO_ROOT"
 PROXY_LOG="${TMPDIR:-/tmp}/litellm-e2e-proxy-$$.log"
 uv run --no-sync python -m litellm.proxy.proxy_cli \
   --config "$SCRIPT_DIR/fixtures/config.yml" \
-  --port 4000 >"$PROXY_LOG" 2>&1 &
+  --port "$PROXY_PORT" >"$PROXY_LOG" 2>&1 &
 PROXY_PID=$!
 
 echo "Waiting for proxy (logs: $PROXY_LOG)..."
@@ -197,7 +216,7 @@ for i in $(seq 1 180); do
     tail -n 100 "$PROXY_LOG"
     exit 1
   fi
-  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4000/health -H "Authorization: Bearer $LITELLM_MASTER_KEY" 2>/dev/null || true)
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:${PROXY_PORT}/health -H "Authorization: Bearer $LITELLM_MASTER_KEY" 2>/dev/null || true)
   if [ "$HTTP_CODE" = "200" ]; then
     PROXY_READY=1
     break
@@ -239,8 +258,8 @@ if [ "${E2E_KEEP_ALIVE:-0}" = "1" ]; then
   cat <<EOF
 
 === Stack is up (E2E_KEEP_ALIVE=1); not running tests ===
-  UI / API : http://127.0.0.1:4000
-  Mock LLM : http://127.0.0.1:8090/v1
+  UI / API : http://127.0.0.1:${PROXY_PORT}
+  Mock LLM : http://127.0.0.1:${MOCK_LLM_PORT}/v1
   Database : $DATABASE_URL
   Proxy log: $PROXY_LOG
 
