@@ -233,24 +233,13 @@ const JobResults: React.FC<{
 
       {results && results.groups.length > 0 ? (
         <>
-          <div className="grid gap-0 border-b sm:grid-cols-2">
-            <div className="flex flex-col justify-center gap-1 px-6 py-4">
-              <MetricLabel
-                label="Router matched or beat your current model"
-                tooltip="Router wins plus ties. A tie counts in the router's favor: the judge saw the same quality, and the router usually picked a cheaper model."
-              />
-              <p className="text-3xl font-semibold text-foreground">{okOrBetter != null ? pct(okOrBetter) : "—"}</p>
-              <p className="text-xs text-muted-foreground">
-                of {job.completed_count.toLocaleString()} judged responses
-              </p>
-            </div>
-            <div className="flex flex-col justify-center gap-1 border-t px-6 py-4 sm:border-l sm:border-t-0">
-              <MetricLabel
-                label="Router strictly won"
-                tooltip="The judge preferred the router's answer outright, ties excluded."
-              />
-              <p className="text-3xl font-semibold text-foreground">{pct(results.overall_shadow_win_rate_pct)}</p>
-            </div>
+          <div className="flex flex-col justify-center gap-1 border-b px-6 py-4">
+            <MetricLabel
+              label="Router matched or beat your current model"
+              tooltip="Router wins plus ties. A tie counts in the router's favor: the judge saw the same quality, and the router usually picked a cheaper model."
+            />
+            <p className="text-3xl font-semibold text-foreground">{okOrBetter != null ? pct(okOrBetter) : "—"}</p>
+            <p className="text-xs text-muted-foreground">of {job.completed_count.toLocaleString()} judged responses</p>
           </div>
           <VerdictBar results={results} />
           <TierResultsTable groups={results.groups} />
