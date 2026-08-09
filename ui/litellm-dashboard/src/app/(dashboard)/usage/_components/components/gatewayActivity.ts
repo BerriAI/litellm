@@ -64,6 +64,16 @@ export const selectGatewayActivity = (
   currentRangeKey: string,
 ): GatewayActivity | null => (isAdmin ? selectForRange(fetched, currentRangeKey) : null);
 
+export const hasGatewayCoverageForDates = (activity: GatewayActivity | null, dates: Iterable<string>): boolean => {
+  if (activity == null) return false;
+
+  const gatewayDates = new Set(activity.by_date.map(({ date }) => date));
+  for (const date of dates) {
+    if (!gatewayDates.has(date)) return false;
+  }
+  return true;
+};
+
 /**
  * Bars for the endpoint breakdown chart, capped so a deployment exercising many
  * endpoints does not render an unreadable axis. `by_route` arrives sorted by
