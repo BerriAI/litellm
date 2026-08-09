@@ -11556,6 +11556,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 1024
     },
     "claude-4-sonnet-20250514": {
@@ -11620,6 +11621,7 @@
         "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 1024
     },
     "claude-sonnet-4-5-20250929": {
@@ -11683,6 +11685,7 @@
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
         "provider_specific_entry": {
@@ -11719,6 +11722,7 @@
         "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "supports_output_config": true,
         "prompt_cache_min_tokens": 1024
     },
@@ -11776,6 +11780,7 @@
         "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 1024
     },
     "claude-opus-4-1-20250805": {
@@ -11805,6 +11810,7 @@
         "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 1024
     },
     "claude-opus-4-20250514": {
@@ -11833,6 +11839,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 1024
     },
     "claude-opus-4-5-20251101": {
@@ -11861,6 +11868,7 @@
         "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "supports_output_config": true,
         "prompt_cache_min_tokens": 4096
     },
@@ -11890,6 +11898,7 @@
         "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "supports_output_config": true,
         "prompt_cache_min_tokens": 4096
     },
@@ -11920,6 +11929,7 @@
         "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "provider_specific_entry": {
             "us": 1.1,
             "fast": 6.0
@@ -11956,6 +11966,7 @@
         "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "provider_specific_entry": {
             "us": 1.1,
             "fast": 6.0
@@ -11993,6 +12004,7 @@
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
         "provider_specific_entry": {
@@ -12031,6 +12043,7 @@
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
         "provider_specific_entry": {
@@ -12068,6 +12081,7 @@
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
         "provider_specific_entry": {
@@ -12142,6 +12156,7 @@
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
         "provider_specific_entry": {
@@ -12182,6 +12197,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 1024
     },
     "cloudflare/@cf/meta/llama-2-7b-chat-fp16": {
