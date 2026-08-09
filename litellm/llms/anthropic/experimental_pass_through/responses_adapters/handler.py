@@ -70,7 +70,7 @@ def _build_responses_kwargs(
     if output_format:
         request_data["output_format"] = output_format
 
-    anthropic_request: Final = AnthropicMessagesRequest(**request_data)  # type: ignore[typeddict-item]
+    anthropic_request: Final = AnthropicMessagesRequest(**request_data)
     responses_kwargs: Final = _ADAPTER.translate_request(anthropic_request)
 
     # Normalize reasoning effort based on model capabilities

@@ -273,8 +273,42 @@ def _suppress_loggers():
     apscheduler_scheduler_logger.setLevel(logging.WARNING)
 
 
+_REDACTED_THIRD_PARTY_LOGGERS: Final[tuple[str, ...]] = (
+    "apscheduler.executors.default",
+    "apscheduler.scheduler",
+    "asyncio",
+    "backoff",
+    "httpx",
+    "uvicorn.error",
+)
+
+
+def _redact_third_party_loggers() -> None:
+    """Extend secret redaction to records litellm does not emit directly.
+
+    litellm's own loggers are covered by the filter on their shared handler, but a
+    litellm value can also reach a log record through a dependency that logs on its
+    own logger. Those records never pass through a litellm handler.
+
+    The filter is attached to each emitting logger rather than to the root logger or
+    to root's handlers. `Logger.handle` applies the emitting logger's filters before
+    any handler runs, so redaction happens once, at the earliest point in the
+    record's life, and covers every downstream handler regardless of who owns it.
+    The alternatives do not hold: `callHandlers` consults ancestors for handlers but
+    never for filters, so a filter on the root logger never sees these records at
+    all, and a filter on a root handler only covers that one handler, leaving
+    handlers registered earlier or on the emitting logger itself untouched.
+
+    Each name is the exact logger a dependency emits on; a parent name would not
+    cover its children, for the same reason the root logger does not.
+    """
+    for name in _REDACTED_THIRD_PARTY_LOGGERS:
+        logging.getLogger(name).addFilter(_secret_filter)
+
+
 # Call the suppression function
 _suppress_loggers()
+_redact_third_party_loggers()
 
 ALL_LOGGERS: Final = [
     logging.getLogger(),

@@ -723,6 +723,49 @@ class TestUnpackLegacyDefs:
         assert out["properties"]["r0"]["properties"]["p0"] == {"type": "string"}
 
 
+class TestTextCompletionPromptToMessages:
+    """`/v1/completions` prompt wrapping, shared by the real-time and batch paths."""
+
+    def test_string_prompt_becomes_single_user_message(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            text_completion_prompt_to_messages,
+        )
+
+        assert text_completion_prompt_to_messages("summarize this") == (
+            {"role": "user", "content": "summarize this"},
+        )
+
+    def test_list_of_strings_becomes_one_message_each(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            text_completion_prompt_to_messages,
+        )
+
+        assert text_completion_prompt_to_messages(["first", "second"]) == (
+            {"role": "user", "content": "first"},
+            {"role": "user", "content": "second"},
+        )
+
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            [1, 2, 3],
+            [[1, 2], [3, 4]],
+            ["ok", 7],
+            [],
+            "",
+            None,
+            {"role": "user"},
+        ],
+    )
+    def test_unsupported_prompt_shapes_raise(self, prompt):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            text_completion_prompt_to_messages,
+        )
+
+        with pytest.raises(ValueError, match="non-empty string or a non-empty list of strings"):
+            text_completion_prompt_to_messages(prompt)
+
+
 class TestCustomToolFormatShapeConversion:
     def test_flat_grammar_to_chat_shape(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (

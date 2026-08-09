@@ -22,8 +22,8 @@ try:
 
     _HAS_RAW_TERMINAL: bool = True
 except ImportError:
-    termios = None  # type: ignore[assignment]
-    tty = None  # type: ignore[assignment]
+    termios = None
+    tty = None
     _HAS_RAW_TERMINAL = False
 
 from typing import Final

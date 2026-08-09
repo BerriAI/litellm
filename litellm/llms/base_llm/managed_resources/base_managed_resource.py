@@ -5,7 +5,7 @@
 import base64
 import json
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
 from litellm import verbose_logger
 from litellm.llms.base_llm.managed_resources.isolation import (
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient as _PrismaClient
     from litellm.router import Router as _Router
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
     InternalUsageCache = _InternalUsageCache
     PrismaClient = _PrismaClient
     Router = _Router
@@ -188,7 +188,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         if resource_object is not None:
             # Handle both dict and Pydantic models
             if hasattr(resource_object, "model_dump_json"):
-                db_data["resource_object"] = resource_object.model_dump_json()  # type: ignore
+                db_data["resource_object"] = resource_object.model_dump_json()
             elif isinstance(resource_object, dict):
                 db_data["resource_object"] = json.dumps(resource_object)
 

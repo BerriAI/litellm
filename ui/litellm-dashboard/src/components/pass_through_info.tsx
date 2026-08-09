@@ -72,7 +72,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
   onEndpointUpdated,
 }) => {
   const [endpointData, setEndpointData] = useState<PassThroughEndpoint | null>(initialEndpointData);
-  const [loading, setLoading] = useState(false);
+  const [loading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [authEnabled, setAuthEnabled] = useState(initialEndpointData?.auth || false);
   const [selectedMethods, setSelectedMethods] = useState<string[]>(initialEndpointData?.methods || []);

@@ -6,7 +6,7 @@ from collections.abc import Callable
 from functools import partial
 from typing import Final
 
-import httpx  # type: ignore
+import httpx
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -268,7 +268,7 @@ class CodestralTextCompletion:
                     logger_fn=logger_fn,
                     headers=headers,
                     timeout=timeout,
-                )  # type: ignore
+                )
             else:
                 ### ASYNC COMPLETION
                 return self.async_completion(
@@ -287,7 +287,7 @@ class CodestralTextCompletion:
                     logger_fn=logger_fn,
                     headers=headers,
                     timeout=timeout,
-                )  # type: ignore
+                )
 
         ### SYNC STREAMING
         if stream is True:
@@ -316,7 +316,7 @@ class CodestralTextCompletion:
             response=response,
             model_response=model_response,
             stream=optional_params.get("stream", False),
-            logging_obj=logging_obj,  # type: ignore
+            logging_obj=logging_obj,
             optional_params=optional_params,
             api_key=api_key,
             data=data,

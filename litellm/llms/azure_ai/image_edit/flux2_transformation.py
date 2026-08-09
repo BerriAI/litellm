@@ -136,7 +136,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         elif isinstance(image, bytes):
             image_bytes = image
         elif hasattr(image, "read"):
-            image_bytes = image.read()  # type: ignore
+            image_bytes = image.read()
         else:
             raise ValueError(f"Unsupported image type: {type(image)}")
 

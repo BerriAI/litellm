@@ -74,6 +74,9 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         super().__init__(**kwargs)
 
+    def supports_scan_only_tool_results(self) -> bool:
+        return self.check_tool_results
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
