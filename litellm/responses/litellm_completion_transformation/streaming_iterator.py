@@ -1,5 +1,6 @@
 import time
 import uuid
+from types import MappingProxyType
 from typing import Any, Final, cast
 
 import litellm
@@ -152,14 +153,25 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
         choice: Final = chunk.choices[0]
         reasoning_choice: Final = choice.model_copy(
-            update={"delta": delta.model_copy(update={"content": None}), "finish_reason": None}
+            update=MappingProxyType(
+                {
+                    "delta": delta.model_copy(update=MappingProxyType({"content": None})),
+                    "finish_reason": None,
+                }
+            )
         )
         content_choice: Final = choice.model_copy(
-            update={"delta": delta.model_copy(update={"reasoning_content": None, "thinking_blocks": None})}
+            update=MappingProxyType(
+                {
+                    "delta": delta.model_copy(
+                        update=MappingProxyType({"reasoning_content": None, "thinking_blocks": None})
+                    )
+                }
+            )
         )
         return (
-            chunk.model_copy(update={"choices": [reasoning_choice]}),
-            chunk.model_copy(update={"choices": [content_choice]}),
+            chunk.model_copy(update=MappingProxyType({"choices": (reasoning_choice,)})),
+            chunk.model_copy(update=MappingProxyType({"choices": (content_choice,)})),
         )
 
     def _queue_reasoning_lifecycle_events(self, chunk: ModelResponseStream) -> None:
@@ -192,7 +204,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             reasoning_content=reasoning_content,
             sequence_number=self._sequence_number,
         )
-        self._pending_response_events.extend([text_done_event, part_done_event, output_item_done_event])
+        self._pending_response_events.extend((text_done_event, part_done_event, output_item_done_event))
         self._reasoning_done_emitted = True
         self._reasoning_active = False
 
