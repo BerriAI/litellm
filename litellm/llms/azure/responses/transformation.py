@@ -98,15 +98,39 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if isinstance(validated_input, list):
             filtered_input: Final[list[Any]] = []
             for item in validated_input:
-                if isinstance(item, dict) and item.get("type") == "message":
-                    # Filter out status field from message items
-                    filtered_item = {k: v for k, v in item.items() if k != "status"}
-                    filtered_input.append(filtered_item)
-                else:
-                    filtered_input.append(item)
+                filtered_item = (
+                    {k: v for k, v in item.items() if k != "status"}
+                    if isinstance(item, dict) and item.get("type") == "message"
+                    else item
+                )
+                filtered_input.append(self._normalize_additional_tools_item(filtered_item))
             return cast(ResponseInputParam, filtered_input)
 
         return validated_input
+
+    @staticmethod
+    def _normalize_namespace_tool_description(tool: Any) -> Any:
+        if not isinstance(tool, dict) or tool.get("type") != "namespace":
+            return tool
+
+        description: Final = tool.get("description")
+        if not isinstance(description, str) or description.strip():
+            return tool
+
+        name: Final = tool.get("name")
+        fallback_description: Final = name.strip() if isinstance(name, str) and name.strip() else "namespace"
+        return {**tool, "description": fallback_description}
+
+    @classmethod
+    def _normalize_additional_tools_item(cls, item: Any) -> Any:
+        if not isinstance(item, dict) or item.get("type") != "additional_tools":
+            return item
+
+        tools: Final = item.get("tools")
+        if not isinstance(tools, list):
+            return item
+
+        return {**item, "tools": [cls._normalize_namespace_tool_description(tool) for tool in tools]}
 
     def transform_responses_api_request(
         self,

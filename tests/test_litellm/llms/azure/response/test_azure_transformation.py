@@ -534,6 +534,61 @@ class TestAzureResponsesAPIConfig:
 
         assert "tools" not in response_api_params
 
+    @pytest.mark.parametrize(
+        ("description", "expected_description"),
+        [
+            ("", "functions"),
+            (" \t ", "functions"),
+            ("Existing description", "Existing description"),
+        ],
+    )
+    def test_azure_responses_api_normalizes_additional_tools_namespace_description(
+        self, description, expected_description
+    ):
+        namespace_tool = {
+            "type": "namespace",
+            "name": "functions",
+            "description": description,
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "ping",
+                    "description": "Return pong.",
+                    "parameters": {"type": "object", "properties": {}},
+                    "strict": False,
+                }
+            ],
+        }
+        function_tool = {
+            "type": "function",
+            "name": "empty_description_is_allowed_here",
+            "description": "",
+            "parameters": {"type": "object", "properties": {}},
+        }
+        input_items = [
+            {
+                "type": "additional_tools",
+                "role": "developer",
+                "tools": [namespace_tool, function_tool],
+            }
+        ]
+        original_input_items = deepcopy(input_items)
+
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input=input_items,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert result["input"][0]["tools"][0] == {
+            **namespace_tool,
+            "description": expected_description,
+        }
+        assert result["input"][0]["tools"][1] == function_tool
+        assert input_items == original_input_items
+
     def test_azure_responses_api_context_management_unsupported(self):
         """Test that context_management is not in Azure supported params.
 
