@@ -1642,6 +1642,111 @@ class TestToolTransformation:
 
         assert "web_search_options" not in result
 
+    # SAGE:BEGIN responses-bridge-reasoning-effort -- upstream v1.95.0 (72a4a55f43)
+    @pytest.mark.parametrize(
+        "model, custom_llm_provider",
+        [
+            ("bedrock/converse/global.anthropic.claude-sonnet-5", "bedrock_converse"),
+            ("anthropic.claude-sonnet-4-5-20250929-v1:0", "bedrock"),
+            ("claude-sonnet-5", "vertex_ai"),
+            ("gemini-3.1-pro-preview", "vertex_ai"),
+            ("moonshotai.kimi-k2-thinking", "bedrock_mantle"),
+        ],
+    )
+    def test_reasoning_summary_still_yields_a_string_reasoning_effort(self, model, custom_llm_provider):
+        """
+        A Responses request carrying ``reasoning.summary`` must still reach a chat provider as a
+        plain ``reasoning_effort`` string. ``summary`` is Responses-only, and forwarding the whole
+        object turns reasoning off: Bedrock Converse and Vertex silently discard a non-string
+        ``reasoning_effort``, and Bedrock Mantle rejects the request outright.
+        """
+        responses_api_request = {"reasoning": {"effort": "medium", "summary": "auto"}}
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request=responses_api_request,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        assert result["reasoning_effort"] == "medium"
+
+    def test_responses_mode_model_keeps_the_whole_reasoning_object(self):
+        """
+        The one consumer of the object form is ``litellm.completion`` bridging a ``mode: responses``
+        model back onto the Responses API, which has no native Responses config of its own. That
+        path reassembles ``{effort, summary}``, so the object must survive for it.
+        """
+        responses_api_request = {"reasoning": {"effort": "medium", "summary": "auto"}}
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="gpt-5.4-pro",
+            input="hi",
+            responses_api_request=responses_api_request,
+            custom_llm_provider="azure_ai",
+        )
+
+        assert result["reasoning_effort"] == {"effort": "medium", "summary": "auto"}
+
+    @pytest.mark.parametrize(
+        "reasoning, expected",
+        [
+            ({"effort": "high"}, "high"),
+            ("low", "low"),
+            ({"summary": "auto"}, None),
+            ({}, None),
+            (None, None),
+        ],
+    )
+    def test_reasoning_param_shapes_map_to_reasoning_effort(self, reasoning, expected):
+        """
+        An object without ``effort`` carries nothing Chat Completions can use, so no
+        ``reasoning_effort`` is sent at all (the bridge drops None-valued params).
+        """
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            input="hi",
+            responses_api_request={"reasoning": reasoning},
+            custom_llm_provider="bedrock",
+        )
+
+        assert result.get("reasoning_effort") == expected
+        assert ("reasoning_effort" in result) is (expected is not None)
+
+    @pytest.mark.parametrize(
+        "model, expected_thinking",
+        [
+            ("global.anthropic.claude-sonnet-5", {"type": "adaptive"}),
+            (
+                "anthropic.claude-sonnet-4-5-20250929-v1:0",
+                {"type": "enabled", "budget_tokens": 2048},
+            ),
+        ],
+    )
+    def test_reasoning_summary_still_enables_thinking_on_bedrock(self, model, expected_thinking):
+        """
+        End to end through Bedrock Converse's own param mapping: the effort a Responses request asks
+        for must survive into ``thinking``, whether the model takes an adaptive effort or a legacy
+        token budget. Forwarding the object instead leaves ``thinking`` unset and the model never
+        reasons, which is the failure this guards.
+        """
+        from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+        bridged = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request={"reasoning": {"effort": "medium", "summary": "auto"}},
+            custom_llm_provider="bedrock",
+        )
+
+        mapped = AmazonConverseConfig().map_openai_params(
+            {"reasoning_effort": bridged["reasoning_effort"]}, {}, model, True
+        )
+
+        assert mapped["thinking"] == expected_thinking
+
+    # SAGE:END responses-bridge-reasoning-effort
+
     def test_bedrock_anthropic_responses_tools_yield_only_function_toolspec(self):
         """
         End-to-end (no network) of the LIT-3858 acceptance criterion: the mixed tools array
