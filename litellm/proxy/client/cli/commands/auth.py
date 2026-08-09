@@ -3,8 +3,9 @@ import os
 import sys
 import time
 import webbrowser
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, TypedDict
 from urllib.parse import urlencode
 
 import click
@@ -18,6 +19,42 @@ from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
 from .private_json import write_private_json
 
 
+class CliContext(TypedDict):
+    base_url: str
+    api_key: str | None
+    base_url_explicit: bool
+
+
+class TeamRecord(TypedDict, total=False):
+    team_id: str | None
+    team_alias: str | None
+    models: list[str]
+    max_budget: float | None
+
+
+class CliSsoStartResponse(TypedDict):
+    login_id: str
+    poll_secret: str
+    user_code: str
+
+
+class PollResponse(TypedDict, total=False):
+    status: str
+    key: str
+    user_id: str
+    team_id: str
+    teams: list[str]
+    team_details: list[dict[str, str]]
+    requires_team_selection: bool
+
+
+class AuthResult(TypedDict):
+    api_key: str
+    user_id: str | None
+    teams: list[str]
+    team_id: str | None
+
+
 # Token storage utilities
 def get_token_file_path() -> str:
     """Get the path to store the authentication token"""
@@ -27,7 +64,7 @@ def get_token_file_path() -> str:
     return str(config_dir / "token.json")
 
 
-def save_token(token_data: dict[str, Any]) -> None:
+def save_token(token_data: Mapping[str, object]) -> None:
     """Save token data to file"""
     write_private_json(get_token_file_path(), token_data)
 
@@ -65,7 +102,7 @@ def get_stored_api_key(expected_base_url: str | None = None) -> str | None:
 
 
 # Team selection utilities
-def display_teams_table(teams: list[dict[str, Any]]) -> None:
+def display_teams_table(teams: Sequence[TeamRecord]) -> None:
     """Display teams in a formatted table"""
     console: Final = Console()
 
@@ -249,10 +286,11 @@ def prompt_team_selection_fallback(
 
     while True:
         try:
-            choice = click.prompt(
+            raw_choice: str = click.prompt(
                 "\nSelect a team by entering the index number (or 'skip' to continue without a team)",
                 type=str,
-            ).strip()
+            )
+            choice = raw_choice.strip()
 
             if choice.lower() == "skip":
                 return None
@@ -275,7 +313,7 @@ def prompt_team_selection_fallback(
 
 def _response_error_detail(response: requests.Response) -> str | None:
     try:
-        body: Final = response.json()
+        body: Final[Mapping[str, object]] = response.json()
     except ValueError:
         return None
     detail: Final = body.get("detail") if isinstance(body, dict) else None
@@ -309,15 +347,16 @@ def _poll_for_ready_data(
     other_status_log_every: int = 10,
     http_error_log_every: int = 10,
     connection_error_log_every: int = 10,
-) -> dict[str, Any] | None:
+) -> PollResponse | None:
     for attempt in range(total_timeout // poll_interval):
         try:
-            request_kwargs: dict[str, Any] = {"timeout": request_timeout}
-            if headers is not None:
-                request_kwargs["headers"] = headers
-            response = requests.get(url, **request_kwargs)
+            response = (
+                requests.get(url, timeout=request_timeout)
+                if headers is None
+                else requests.get(url, timeout=request_timeout, headers=headers)
+            )
             if response.status_code == 200:
-                data = response.json()
+                data: PollResponse = response.json()
                 status = data.get("status")
                 if status == "ready":
                     return data
@@ -341,7 +380,7 @@ def _poll_for_ready_data(
     return None
 
 
-def _normalize_teams(teams, team_details):
+def _normalize_teams(teams: Sequence[str], team_details: Sequence[Mapping[str, str]] | None) -> list[TeamRecord]:
     """If team_details are a
 
     Args:
@@ -365,7 +404,7 @@ def _normalize_teams(teams, team_details):
     return []
 
 
-def _start_cli_sso_flow(base_url: str) -> dict[str, Any]:
+def _start_cli_sso_flow(base_url: str) -> CliSsoStartResponse:
     start_url: Final = f"{base_url}/sso/cli/start"
     try:
         response: Final = requests.post(start_url, timeout=10)
@@ -389,7 +428,7 @@ def _start_cli_sso_flow(base_url: str) -> dict[str, Any]:
         )
 
     try:
-        data: Final = response.json()
+        data: Final[CliSsoStartResponse] = response.json()
     except ValueError:
         content_type: Final = response.headers.get("content-type", "unknown")
         raise ValueError(
@@ -398,8 +437,10 @@ def _start_cli_sso_flow(base_url: str) -> dict[str, Any]:
             f"Response starts with: {response.text[:200]!r}"
         )
 
-    required_fields: Final = ("login_id", "poll_secret", "user_code")
-    missing_fields: Final = tuple(field for field in required_fields if not isinstance(data.get(field), str))
+    string_fields: Final = frozenset(name for name, value in data.items() if isinstance(value, str))
+    missing_fields: Final = tuple(
+        field for field in ("login_id", "poll_secret", "user_code") if field not in string_fields
+    )
     if missing_fields:
         raise ValueError(
             f"The response from {start_url} is missing required field(s): {', '.join(missing_fields)}. "
@@ -412,7 +453,7 @@ def _get_cli_sso_poll_headers(poll_secret: str) -> dict[str, str]:
     return {"x-litellm-cli-poll-secret": poll_secret}
 
 
-def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> dict | None:
+def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> AuthResult | None:
     """
     Poll the server for authentication completion and handle team selection.
 
@@ -431,7 +472,7 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> di
         teams = data.get("teams", [])
         team_details: Final = data.get("team_details")
         user_id = data.get("user_id")
-        normalized_teams: Final[list[dict[str, Any]]] = _normalize_teams(teams, team_details)
+        normalized_teams: Final = _normalize_teams(teams, team_details)
         if not normalized_teams:
             click.echo("Warning: No teams available for selection.")
             return None
@@ -478,7 +519,7 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> di
 
 
 def _handle_team_selection_during_polling(
-    base_url: str, key_id: str, poll_secret: str, teams: list[dict[str, Any]]
+    base_url: str, key_id: str, poll_secret: str, teams: Sequence[TeamRecord]
 ) -> str | None:
     """
     Handle team selection and re-poll with selected team_id.
@@ -522,7 +563,7 @@ def _handle_team_selection_during_polling(
     return None
 
 
-def _render_and_prompt_for_team_selection(teams: list[dict[str, Any]]) -> str | None:
+def _render_and_prompt_for_team_selection(teams: Sequence[TeamRecord]) -> str | None:
     """Render teams table and prompt user for a team selection.
 
     Returns the selected team_id as a string, or None if selection was
@@ -546,10 +587,11 @@ def _render_and_prompt_for_team_selection(teams: list[dict[str, Any]]) -> str | 
     # Simple selection
     while True:
         try:
-            choice = click.prompt(
+            raw_choice: str = click.prompt(
                 "\nSelect a team by entering the index number (or 'skip' to use first team)",
                 type=str,
-            ).strip()
+            )
+            choice = raw_choice.strip()
 
             if choice.lower() == "skip":
                 # Default to the first team's ID if the user skips an
@@ -582,7 +624,8 @@ def login(ctx: click.Context):
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
     from litellm.proxy.client.cli.interface import show_commands
 
-    base_url: Final = ctx.obj["base_url"]
+    cli_obj: Final[CliContext] = ctx.obj
+    base_url: Final = cli_obj["base_url"]
 
     try:
         cli_sso_flow: Final = _start_cli_sso_flow(base_url=base_url)
@@ -666,6 +709,7 @@ def print_token(ctx: click.Context):
     expires after `LITELLM_CLI_JWT_EXPIRATION_HOURS` (default 24h); once
     expired, run `lite login` again.
     """
+    cli_obj: Final[CliContext] = ctx.obj
     token_data: Final = load_token()
     if not token_data:
         click.echo("Not authenticated. Run 'lite login'.", err=True)
@@ -675,8 +719,8 @@ def print_token(ctx: click.Context):
     # explicitly pointed us at a server, trust whichever one `lite login`
     # actually issued this token for -- that's the whole point of not
     # needing a wrapper command.
-    if ctx.obj.get("base_url_explicit"):
-        base_url: Final = ctx.obj["base_url"]
+    if cli_obj.get("base_url_explicit"):
+        base_url: Final = cli_obj["base_url"]
         if token_data.get("base_url") != base_url.rstrip("/"):
             click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
             sys.exit(1)

@@ -10,9 +10,9 @@ POST /cache/settings - Save cache settings to database
 
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import Coroutine, Mapping
 from datetime import datetime, timezone
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
@@ -61,6 +61,35 @@ _REDACTED_VALUE: Final = "***REDACTED***"
 
 
 _URL_OVERRIDDEN_CONNECTION_FIELDS: Final[frozenset] = frozenset({"host", "port", "db", "password", "username"})
+
+
+class _CacheConfigRow(Protocol):
+    """The single LiteLLM_CacheConfig row, narrowed to the column this module reads."""
+
+    cache_settings: object
+
+
+class _CacheConfigTable(Protocol):
+    """The prisma actions this module calls on the LiteLLM_CacheConfig table."""
+
+    def find_unique(self, *, where: Mapping[str, str]) -> Coroutine[None, None, _CacheConfigRow | None]: ...
+
+    def upsert(
+        self, *, where: Mapping[str, str], data: Mapping[str, Mapping[str, str]]
+    ) -> Coroutine[None, None, _CacheConfigRow]: ...
+
+
+class _CacheConfigTableProvider(Protocol):
+    @property
+    def table(self) -> _CacheConfigTable: ...
+
+
+def _repository_table(repository: _CacheConfigTableProvider) -> _CacheConfigTable:
+    return repository.table
+
+
+def _cache_config_table(prisma_client: object) -> _CacheConfigTable:
+    return _repository_table(CacheConfigRepository(prisma_client))
 
 
 def _resolve_cache_url_precedence(settings: Mapping[str, object]) -> dict[str, Any]:
@@ -197,7 +226,7 @@ def _saved_secret_is_reusable(incoming: Mapping[str, object], saved: Mapping[str
     return True
 
 
-def _merge_over_saved(incoming: Mapping[str, object], saved: Mapping[str, object]) -> dict[str, Any]:
+def _merge_over_saved(incoming: Mapping[str, object], saved: Mapping[str, object]) -> dict[str, object]:
     """Keep the stored secret behind any credential the caller echoed back redacted or omitted.
 
     GET returns credentials as the marker and the form never re-prefills a
@@ -339,7 +368,7 @@ class CacheSettingsManager:
         return normalized1 == normalized2
 
     @staticmethod
-    async def init_cache_settings_in_db(prisma_client, proxy_config):
+    async def init_cache_settings_in_db(prisma_client: object, proxy_config):
         """
         Initialize cache settings from database into the router on startup.
         Only reinitializes if cache params have changed.
@@ -347,18 +376,17 @@ class CacheSettingsManager:
         import json
 
         try:
-            cache_config: Final = await call_with_db_reconnect_retry(
+            cache_config: Final[_CacheConfigRow | None] = await call_with_db_reconnect_retry(
                 prisma_client,
-                lambda: CacheConfigRepository(prisma_client).table.find_unique(where={"id": "cache_config"}),
+                lambda: _cache_config_table(prisma_client).find_unique(where={"id": "cache_config"}),
                 reason="init_cache_settings_in_db_lookup_failure",
             )
             if cache_config is not None and cache_config.cache_settings:
                 # Parse cache settings JSON
-                cache_settings_json: Final = cache_config.cache_settings
-                if isinstance(cache_settings_json, str):
-                    cache_settings_dict = json.loads(cache_settings_json)
-                else:
-                    cache_settings_dict = cache_settings_json
+                cache_settings_json: Final[object] = cache_config.cache_settings
+                cache_settings_dict: Final[object] = (
+                    json.loads(cache_settings_json) if isinstance(cache_settings_json, str) else cache_settings_json
+                )
 
                 # Decrypt cache settings
                 decrypted_settings: Final = proxy_config._decrypt_db_variables(variables_dict=cache_settings_dict)
@@ -444,7 +472,9 @@ async def get_cache_settings(
         # Read the stored settings (decrypted); an env-only cache has none.
         stored: dict[str, object] = {}
         if prisma_client is not None:
-            cache_config = await CacheConfigRepository(prisma_client).table.find_unique(where={"id": "cache_config"})
+            cache_config: Final[_CacheConfigRow | None] = await _cache_config_table(prisma_client).find_unique(
+                where={"id": "cache_config"}
+            )
             if cache_config is not None and cache_config.cache_settings:
                 stored = proxy_config._decrypt_db_variables(
                     variables_dict=_parse_stored_settings(cache_config.cache_settings)
@@ -511,7 +541,7 @@ async def test_cache_connection(
         saved_settings: dict[str, object] = {}
         if prisma_client is not None:
             try:
-                existing_row: Final = await CacheConfigRepository(prisma_client).table.find_unique(
+                existing_row: Final[_CacheConfigRow | None] = await _cache_config_table(prisma_client).find_unique(
                     where={"id": "cache_config"}
                 )
                 if existing_row is not None and existing_row.cache_settings:
@@ -590,7 +620,9 @@ async def update_cache_settings(
     try:
         # Read the stored row first: its decrypted values back any credential the
         # caller echoed back redacted, and its key set drives the audit diff.
-        existing_row: Final = await CacheConfigRepository(prisma_client).table.find_unique(where={"id": "cache_config"})
+        existing_row: Final[_CacheConfigRow | None] = await _cache_config_table(prisma_client).find_unique(
+            where={"id": "cache_config"}
+        )
         before_settings: dict[str, object] | None = None
         saved_settings: dict[str, object] = {}
         if existing_row is not None and existing_row.cache_settings:
@@ -606,7 +638,7 @@ async def update_cache_settings(
         encrypted_settings: Final = proxy_config._encrypt_env_variables(environment_variables=cache_settings)
 
         # Save to database
-        await CacheConfigRepository(prisma_client).table.upsert(
+        await _cache_config_table(prisma_client).upsert(
             where={"id": "cache_config"},
             data={
                 "create": {

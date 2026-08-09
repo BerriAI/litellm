@@ -248,7 +248,38 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
         return response
 
-    async def async_pre_call_deployment_hook(self, kwargs: dict[str, Any], call_type: CallTypes | None) -> dict | None:
+    @staticmethod
+    def _str_field(source: Mapping[str, object], key: str) -> str:
+        value: Final = source.get(key)
+        return value if isinstance(value, str) else ""
+
+    @staticmethod
+    def _tools_field(kwargs: Mapping[str, object]) -> Sequence[dict[str, object]] | None:
+        tools: Final = kwargs.get("tools")
+        return tools if isinstance(tools, list) else None
+
+    @classmethod
+    def _resolve_deployment_provider(cls, kwargs: Mapping[str, object]) -> str:
+        """Provider from top-level kwargs, then nested litellm_params, then the model name."""
+        top_level: Final = cls._str_field(kwargs, "custom_llm_provider")
+        if top_level:
+            return top_level
+
+        litellm_params: Final = kwargs.get("litellm_params")
+        if isinstance(litellm_params, dict):
+            nested: Final = cls._str_field(litellm_params, "custom_llm_provider")
+            if nested:
+                return nested
+
+        try:
+            _, derived_provider, _, _ = litellm.get_llm_provider(model=cls._str_field(kwargs, "model"))
+        except Exception:
+            return ""
+        return derived_provider
+
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: CallTypes | None
+    ) -> dict | None:
         """
         Pre-call hook to convert native Anthropic web_search tools to regular tools.
 
@@ -256,21 +287,12 @@ class WebSearchInterceptionLogger(CustomLogger):
         Instead, we convert it to a regular tool so the model returns tool_use blocks
         that we can intercept and execute ourselves.
         """
-        # Check if this is for an enabled provider
-        # Try top-level kwargs first, then nested litellm_params, then derive from model name
-        custom_llm_provider = kwargs.get("custom_llm_provider", "") or kwargs.get("litellm_params", {}).get(
-            "custom_llm_provider", ""
-        )
-        if not custom_llm_provider:
-            try:
-                _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=kwargs.get("model", ""))
-            except Exception:
-                custom_llm_provider = ""
+        custom_llm_provider: Final = self._resolve_deployment_provider(kwargs)
         if custom_llm_provider not in self.enabled_providers:
             return None
 
         # Check if request has tools with native web_search
-        tools: Final[Sequence[dict[str, object]] | None] = kwargs.get("tools")
+        tools: Final = self._tools_field(kwargs)
         if not tools:
             return None
 
@@ -394,7 +416,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         return tool.get("name")
 
     @classmethod
-    def _sync_forced_tool_choice(cls, tool_choice: Any, converted_tools: list[dict[str, object]]) -> object:
+    def _sync_forced_tool_choice(cls, tool_choice: object, converted_tools: list[dict[str, object]]) -> object:
         """Repoint a forced ``tool_choice`` at ``litellm_web_search`` when it
         names a web-search tool that was just converted away.
 
@@ -462,7 +484,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             kwargs[WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY] = True
 
         # Convert native web search tools to LiteLLM standard
-        converted_tools: Final = []
+        converted_tools: Final[list[dict[str, object]]] = []
         for tool in tools:
             if is_web_search_tool(tool):
                 standard_tool = get_litellm_web_search_tool()
@@ -482,7 +504,8 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
 
         if "tool_choice" in kwargs:
-            kwargs["tool_choice"] = self._sync_forced_tool_choice(kwargs.get("tool_choice"), converted_tools)
+            forced_tool_choice: Final[object] = kwargs.get("tool_choice")
+            kwargs["tool_choice"] = self._sync_forced_tool_choice(forced_tool_choice, converted_tools)
 
         # Also convert here for direct callers that bypass the deployment hook.
         if kwargs.get("stream"):
@@ -836,7 +859,8 @@ class WebSearchInterceptionLogger(CustomLogger):
         native_blocks: Final = plan.metadata.get(WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY)
         if not native_blocks:
             return response
-        return self._inject_native_blocks(response, native_blocks)
+        self._inject_native_blocks(response, native_blocks)
+        return response
 
     @staticmethod
     def _build_native_result_blocks(
@@ -883,17 +907,17 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
 
     @staticmethod
-    def _inject_native_blocks(response: Any, native_blocks: Sequence[Mapping[str, object]]) -> Any:
-        """Prepend native blocks to response content, dict or object form."""
+    def _inject_native_blocks(response: object, native_blocks: Sequence[Mapping[str, object]]) -> None:
+        """Prepend native blocks to response content in place, dict or object form."""
         if not native_blocks:
-            return response
+            return
         if isinstance(response, dict):
-            existing = response.get("content") or []
-            response["content"] = list(native_blocks) + list(existing)
-            return response
-        existing = getattr(response, "content", None) or []
+            existing_items: Final = response.get("content") or []
+            response["content"] = list(native_blocks) + list(existing_items)
+            return
+        existing_attr: Final = getattr(response, "content", None) or []
         try:
-            response.content = list(native_blocks) + list(existing)
+            response.__setattr__("content", list(native_blocks) + list(existing_attr))
         except (AttributeError, TypeError):
             # Object refused write — fall through and leave the response
             # untouched rather than crash the request.
@@ -901,7 +925,6 @@ class WebSearchInterceptionLogger(CustomLogger):
                 "WebSearchInterception: could not inject native blocks into response of type %s",
                 type(response).__name__,
             )
-        return response
 
     async def async_run_chat_completion_agentic_loop(
         self,
@@ -1177,7 +1200,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         if max_tokens is None:
             max_tokens = cast(int, kwargs.get("max_tokens", 1024))
 
-        response: AnthropicMessagesResponse | AsyncIterator[object] = await anthropic_messages.acreate(
+        response: Final[AnthropicMessagesResponse | AsyncIterator[object]] = await anthropic_messages.acreate(
             max_tokens=max_tokens,
             messages=request_patch.messages,
             model=request_patch.model or model,
@@ -1193,7 +1216,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                 tool_calls=tool_calls,
                 structured_results=structured_results,
             )
-            response = self._inject_native_blocks(response, native_blocks)
+            self._inject_native_blocks(response, native_blocks)
 
         return response
 
@@ -1400,7 +1423,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             valid_token=user_api_key_auth,
         )
 
-        team_id: Final = getattr(user_api_key_auth, "team_id", None)
+        team_id: Final = user_api_key_auth.team_id
         if team_id:
             from litellm.proxy.proxy_server import (
                 prisma_client,

@@ -17,7 +17,12 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final
+
+import httpx
+from typing_extensions import NotRequired, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -39,6 +44,44 @@ if TYPE_CHECKING:
     from litellm.types.rag import RAGIngestOptions
 
 
+_NO_FILENAME_METADATA: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+class S3VectorsVectorData(TypedDict):
+    float32: Sequence[float]
+
+
+class S3VectorsRecord(TypedDict):
+    key: str
+    data: S3VectorsVectorData
+    metadata: Mapping[str, str]
+
+
+class S3VectorsMetadataConfiguration(TypedDict):
+    nonFilterableMetadataKeys: Sequence[str]
+
+
+class S3VectorsCreateIndexRequest(TypedDict):
+    vectorBucketName: str
+    indexName: str | None
+    dataType: str
+    dimension: int | None
+    distanceMetric: str
+    metadataConfiguration: NotRequired[S3VectorsMetadataConfiguration]
+
+
+class S3VectorsQueryResultMetadata(TypedDict, total=False):
+    source_text: str
+
+
+class S3VectorsQueryResult(TypedDict, total=False):
+    metadata: S3VectorsQueryResultMetadata
+
+
+class S3VectorsQueryResponse(TypedDict, total=False):
+    vectors: Sequence[S3VectorsQueryResult]
+
+
 class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
     """
     S3 Vectors RAG ingestion using httpx + AWS SigV4 signing.
@@ -56,6 +99,12 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
     - distance_metric: "cosine" or "euclidean" (default: S3_VECTORS_DEFAULT_DISTANCE_METRIC)
     - non_filterable_metadata_keys: List of metadata keys to exclude from filtering
     """
+
+    vector_bucket_name: str
+    index_name: str | None
+    distance_metric: str
+    non_filterable_metadata_keys: Sequence[str]
+    dimension: int | None
 
     def __init__(
         self,
@@ -78,7 +127,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         self.dimension = self._get_dimension_from_config()
 
         # Get AWS region using BaseAWSLLM method
-        _aws_region: Final = self.vector_store_config.get("aws_region_name")
+        _aws_region: Final[str | None] = self.vector_store_config.get("aws_region_name")
         self.aws_region_name = self.get_aws_region_name_for_non_llm_api_calls(
             aws_region_name=str(_aws_region) if _aws_region else None
         )
@@ -166,7 +215,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         url: str,
         data: str | None = None,
         headers: dict[str, str] | None = None,
-    ) -> Any:
+    ) -> httpx.Response:
         """
         Helper to sign and execute AWS API requests using httpx + SigV4.
 
@@ -223,17 +272,23 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         signed_headers: Final = dict(aws_request.headers.items())
 
         # Make the request using specific method (pattern from s3_v2.py)
-        method_upper: Final = method.upper()
-        if method_upper == "PUT":
-            response = await self.async_httpx_client.put(url, data=data, headers=signed_headers)
-        elif method_upper == "POST":
-            response = await self.async_httpx_client.post(url, data=data, headers=signed_headers)
-        elif method_upper == "GET":
-            response = await self.async_httpx_client.get(url, headers=signed_headers)
-        else:
-            raise ValueError(f"Unsupported HTTP method: {method}")
+        response: Final = await self._execute_signed_request(method, url, data, signed_headers)
+        if response is None:
+            raise ValueError(f"No response from S3 Vectors for {method} {url}")
 
         return response
+
+    async def _execute_signed_request(
+        self, method: str, url: str, data: str | None, headers: dict[str, str]
+    ) -> httpx.Response | None:
+        method_upper: Final = method.upper()
+        if method_upper == "PUT":
+            return await self.async_httpx_client.put(url, data=data, headers=headers)
+        if method_upper == "POST":
+            return await self.async_httpx_client.post(url, data=data, headers=headers)
+        if method_upper == "GET":
+            return await self.async_httpx_client.get(url, headers=headers)
+        raise ValueError(f"Unsupported HTTP method: {method}")
 
     async def _ensure_vector_bucket_exists(self):
         """Create vector bucket if it doesn't exist using GetVectorBucket and CreateVectorBucket APIs."""
@@ -311,16 +366,24 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             )
 
             # Prepare index configuration per AWS API docs
-            index_config: Final = {
-                "vectorBucketName": self.vector_bucket_name,
-                "indexName": self.index_name,
-                "dataType": "float32",
-                "dimension": self.dimension,
-                "distanceMetric": self.distance_metric,
-            }
+            base_index_config: Final = S3VectorsCreateIndexRequest(
+                vectorBucketName=self.vector_bucket_name,
+                indexName=self.index_name,
+                dataType="float32",
+                dimension=self.dimension,
+                distanceMetric=self.distance_metric,
+            )
 
-            if self.non_filterable_metadata_keys:
-                index_config["metadataConfiguration"] = {"nonFilterableMetadataKeys": self.non_filterable_metadata_keys}
+            index_config: Final[S3VectorsCreateIndexRequest] = (
+                {
+                    **base_index_config,
+                    "metadataConfiguration": S3VectorsMetadataConfiguration(
+                        nonFilterableMetadataKeys=self.non_filterable_metadata_keys
+                    ),
+                }
+                if self.non_filterable_metadata_keys
+                else base_index_config
+            )
 
             create_url: Final = f"https://s3vectors.{self.aws_region_name}.api.aws/CreateIndex"
             response = await self._sign_and_execute_request("POST", create_url, data=safe_dumps(index_config))
@@ -336,7 +399,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             verbose_logger.exception("Error creating vector index: %s", e)
             raise
 
-    async def _put_vectors(self, vectors: list[dict[str, Any]]):
+    async def _put_vectors(self, vectors: Sequence[S3VectorsRecord]):
         """
         Call PutVectors API to store vectors in S3 Vectors.
 
@@ -442,24 +505,19 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             raise ValueError(error_msg)
 
         # Prepare vectors for PutVectors API
-        vectors: Final = []
-        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-            # Build metadata dict
-            metadata: dict[str, str] = {
-                "source_text": chunk,  # Non-filterable (for reference)
-                "chunk_index": str(i),  # Filterable
-            }
-
-            if filename:
-                metadata["filename"] = filename  # Filterable
-
-            vector_obj = {
-                "key": f"{filename}_{i}" if filename else f"chunk_{i}",
-                "data": {"float32": embedding},
-                "metadata": metadata,
-            }
-
-            vectors.append(vector_obj)
+        filename_metadata: Final[Mapping[str, str]] = {"filename": filename} if filename else _NO_FILENAME_METADATA
+        vectors: Final = tuple(
+            S3VectorsRecord(
+                key=f"{filename}_{i}" if filename else f"chunk_{i}",
+                data=S3VectorsVectorData(float32=embedding),
+                metadata={
+                    "source_text": chunk,  # Non-filterable (for reference)
+                    "chunk_index": str(i),  # Filterable
+                    **filename_metadata,  # Filterable
+                },
+            )
+            for i, (chunk, embedding) in enumerate(zip(chunks, embeddings))
+        )
 
         # Call PutVectors API
         await self._put_vectors(vectors)
@@ -468,7 +526,9 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         vector_store_id: Final = f"{self.vector_bucket_name}:{self.index_name}"
         return vector_store_id, filename
 
-    async def query_vector_store(self, vector_store_id: str, query: str, top_k: int = 5) -> dict[str, Any] | None:
+    async def query_vector_store(
+        self, vector_store_id: str, query: str, top_k: int = 5
+    ) -> S3VectorsQueryResponse | None:
         """
         Query S3 Vectors using QueryVectors API.
 
@@ -507,12 +567,13 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             response = await self._sign_and_execute_request("POST", url, data=safe_dumps(request_body))
 
             if response.status_code == 200:
-                results: Final = response.json()
+                results: Final[S3VectorsQueryResponse] = response.json()
                 verbose_logger.debug("Query returned %s results", len(results.get("vectors", [])))
 
                 # Check if query terms appear in results
-                if results.get("vectors"):
-                    for result in results["vectors"]:
+                matched_vectors: Final = results.get("vectors")
+                if matched_vectors:
+                    for result in matched_vectors:
                         metadata = result.get("metadata", {})
                         source_text = metadata.get("source_text", "")
                         if query.lower() in source_text.lower():
