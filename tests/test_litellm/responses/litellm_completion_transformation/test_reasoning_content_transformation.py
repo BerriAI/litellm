@@ -270,7 +270,7 @@ class TestReasoningContentFinalResponse:
 class _FakeChatCompletionStream:
     """Minimal CustomStreamWrapper stand-in that replays pre-built chunks."""
 
-    def __init__(self, chunks):
+    def __init__(self, chunks: list[ModelResponseStream]):
         self._chunks = list(chunks)
         self.logging_obj = SimpleNamespace(
             _response_cost_calculator=lambda result: 0.0,
@@ -294,8 +294,12 @@ class _FakeChatCompletionStream:
         return self._chunks.pop(0)
 
 
-def _reasoning_and_text_chunks():
-    def make(content=None, reasoning=None, finish_reason=None):
+def _reasoning_and_text_chunks() -> list[ModelResponseStream]:
+    def make(
+        content: str | None = None,
+        reasoning: str | None = None,
+        finish_reason: str | None = None,
+    ) -> ModelResponseStream:
         return ModelResponseStream(
             id="chatcmpl-combined",
             created=1234567890,
@@ -320,7 +324,7 @@ def _reasoning_and_text_chunks():
     ]
 
 
-def _new_iterator(chunks):
+def _new_iterator(chunks: list[ModelResponseStream]) -> LiteLLMCompletionStreamingIterator:
     return LiteLLMCompletionStreamingIterator(
         model="test-model",
         litellm_custom_stream_wrapper=_FakeChatCompletionStream(chunks),

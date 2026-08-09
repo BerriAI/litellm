@@ -150,14 +150,17 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if not (getattr(delta, "reasoning_content", None) and delta.content):
             return (chunk,)
 
-        reasoning_part: Final = chunk.model_copy(deep=True)
-        reasoning_part.choices[0].delta.content = None
-        reasoning_part.choices[0].finish_reason = None
-
-        content_part: Final = chunk.model_copy(deep=True)
-        content_part.choices[0].delta.reasoning_content = None
-        content_part.choices[0].delta.thinking_blocks = None
-        return (reasoning_part, content_part)
+        choice: Final = chunk.choices[0]
+        reasoning_choice: Final = choice.model_copy(
+            update={"delta": delta.model_copy(update={"content": None}), "finish_reason": None}
+        )
+        content_choice: Final = choice.model_copy(
+            update={"delta": delta.model_copy(update={"reasoning_content": None, "thinking_blocks": None})}
+        )
+        return (
+            chunk.model_copy(update={"choices": [reasoning_choice]}),
+            chunk.model_copy(update={"choices": [content_choice]}),
+        )
 
     def _queue_reasoning_lifecycle_events(self, chunk: ModelResponseStream) -> None:
         if not self._reasoning_active or self._reasoning_done_emitted:
