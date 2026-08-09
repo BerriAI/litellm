@@ -322,7 +322,7 @@ async def add_team_callbacks(
 
         new_team_row: Final = await TeamRepository(prisma_client).table.update(
             where={"team_id": team_id},
-            data={"metadata": team_metadata_json},  # type: ignore
+            data={"metadata": team_metadata_json},
             # `object_permission` is included so `_refresh_cached_team` doesn't
             # write a cached team with the relation nulled out — see
             # team_model_add for the full rationale.
@@ -442,7 +442,7 @@ async def disable_team_logging(
         # Update team in database
         updated_team: Final = await TeamRepository(prisma_client).table.update(
             where={"team_id": team_id},
-            data={"metadata": team_metadata_json},  # type: ignore
+            data={"metadata": team_metadata_json},
             # `object_permission` is included so `_refresh_cached_team` doesn't
             # write a cached team with the relation nulled out — see
             # team_model_add for the full rationale.

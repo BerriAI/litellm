@@ -69,7 +69,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         user_id: values.user_id,
         role: values.role,
       };
-      const response = await organizationMemberAddCall(accessToken, organizationId, member);
+      await organizationMemberAddCall(accessToken, organizationId, member);
 
       NotificationsManager.success("Organization member added successfully");
       setIsAddMemberModalVisible(false);
@@ -90,7 +90,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         role: values.role,
       };
 
-      const response = await organizationMemberUpdateCall(accessToken, organizationId, member);
+      await organizationMemberUpdateCall(accessToken, organizationId, member);
       NotificationsManager.success("Organization member updated successfully");
       setIsEditMemberModalVisible(false);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });

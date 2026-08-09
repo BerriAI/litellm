@@ -5,9 +5,9 @@ import os
 import secrets
 import time
 import traceback
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
-from typing import Any, Final, Literal, TypedDict, Union, cast
+from typing import Any, Final, Literal, TypedDict, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -29,6 +29,9 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     WebhookEvent,
 )
+from litellm.proxy.auth.auth_utils import (
+    _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.health_check import (
@@ -43,6 +46,10 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+from litellm.router_utils.clientside_credential_handler import (
+    _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the router path
+    clientside_credential_keys,
+)
 
 #### Health ENDPOINTS ####
 
@@ -80,6 +87,45 @@ def _reject_os_environ_references(params: dict) -> None:
                 stack.append(value)
 
 
+_CONFIG_CONNECTION_FIELDS: Final[frozenset[str]] = frozenset(
+    (
+        *_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,
+        *clientside_credential_keys,
+        "litellm_credential_name",
+    )
+)
+
+
+def _config_base_for_health_check(
+    config_params: Mapping[str, object],
+    request_params: Mapping[str, object],
+    allow_client_side_credentials: bool = False,
+) -> dict[str, object]:
+    """Return the configured parameters to merge under a connection-test request.
+
+    A request that sets its own connection fields describes a connection of its
+    own, so the configuration's credentials are not carried into it: they belong
+    to the endpoint the configuration names. Anything the request does not set
+    still comes from the configuration, which is what lets a request name a
+    configured model and test it as configured.
+
+    ``litellm_credential_name`` is dropped alongside the literal credential
+    fields: it names a stored credential that ``load_credentials_from_list``
+    resolves into the same secrets further down the call, so leaving it in place
+    would reintroduce them by reference.
+
+    ``general_settings.allow_client_side_credentials`` is the existing proxy-wide
+    opt-in for callers supplying their own connection parameters. Where an admin
+    has enabled it, a request may pair its own endpoint with the configured
+    credentials, as it could before.
+    """
+    if allow_client_side_credentials:
+        return dict(config_params)
+    if not any(param in request_params for param in _BANNED_REQUEST_BODY_PARAMS):
+        return dict(config_params)
+    return {key: value for key, value in config_params.items() if key not in _CONFIG_CONNECTION_FIELDS}
+
+
 def get_callback_identifier(callback):
     """
     Get the callback identifier string, handling both strings and objects.
@@ -110,7 +156,7 @@ def get_callback_identifier(callback):
 
 
 router: Final = APIRouter()
-services = Union[
+services = (
     Literal[
         "slack_budget_alerts",
         "langfuse",
@@ -127,9 +173,9 @@ services = Union[
         "galileo",
         "newrelic",
         "sqs",
-    ],
-    str,
-]
+    ]
+    | str
+)
 
 
 @router.get(
@@ -1435,8 +1481,8 @@ async def _get_health_readiness_details(
                 try:
                     index_info = await litellm.cache.cache._index_info()
                 except Exception as e:
-                    index_info = "index does not exist - error: " + str(e)  # type: ignore[assignment]
-                cache_type = {"type": cache_type, "index_info": index_info}  # type: ignore[assignment]
+                    index_info = "index does not exist - error: " + str(e)
+                cache_type = {"type": cache_type, "index_info": index_info}
 
         # check log level
         log_level_name: Final = logging.getLevelName(verbose_logger.getEffectiveLevel())
@@ -1785,7 +1831,12 @@ async def test_model_connection(
     from litellm.proxy.management_endpoints.model_management_endpoints import (
         ModelManagementAuthChecks,
     )
-    from litellm.proxy.proxy_server import llm_router, premium_user, prisma_client
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        premium_user,
+        prisma_client,
+    )
     from litellm.types.router import Deployment, LiteLLM_Params
 
     try:
@@ -1854,8 +1905,14 @@ async def test_model_connection(
                 )
 
         # Merge: config params (from proxy config) as base, request params override
-        # This allows users to override specific params while using config for credentials
-        litellm_params = {**config_litellm_params, **request_litellm_params}
+        litellm_params = {
+            **_config_base_for_health_check(
+                config_litellm_params,
+                request_litellm_params,
+                allow_client_side_credentials=general_settings.get("allow_client_side_credentials") is True,
+            ),
+            **request_litellm_params,
+        }
 
         ## Auth check
         auth_model_info: Final = loaded_model_info if loaded_model_info is not None else model_info

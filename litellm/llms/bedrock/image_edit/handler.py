@@ -110,7 +110,7 @@ class BedrockImageEdit(BaseAWSLLM):
                 url=prepared_request.endpoint_url,
                 headers=prepared_request.prepped.headers,
                 data=prepared_request.body,
-            )  # type: ignore
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
@@ -152,7 +152,7 @@ class BedrockImageEdit(BaseAWSLLM):
                 url=prepared_request.endpoint_url,
                 headers=prepared_request.prepped.headers,
                 data=prepared_request.body,
-            )  # type: ignore
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code

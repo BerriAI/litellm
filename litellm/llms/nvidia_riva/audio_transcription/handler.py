@@ -263,7 +263,7 @@ class NvidiaRivaAudioTranscription:
             "audio_transcription_duration": resampled.duration_seconds,
         }
 
-        final_response: Final[TranscriptionResponse] = convert_to_model_response_object(  # type: ignore
+        final_response: Final[TranscriptionResponse] = convert_to_model_response_object(
             response_object=stringified_response,
             model_response_object=model_response,
             hidden_params=hidden_params,
@@ -399,14 +399,14 @@ def _import_riva():
     module separately when the SDK packaging changes between versions.
     """
     try:
-        import riva.client as riva_client  # type: ignore
+        import riva.client as riva_client
     except ImportError as e:
         raise NvidiaRivaException(status_code=500, message=_RIVA_INSTALL_HINT) from e
 
     riva_asr_module = riva_client
     if not hasattr(riva_asr_module, "RecognitionConfig"):
         try:
-            from riva.client.proto import riva_asr_pb2  # type: ignore
+            from riva.client.proto import riva_asr_pb2
 
             riva_asr_module = riva_asr_pb2
         except ImportError as e:

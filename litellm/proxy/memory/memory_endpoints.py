@@ -27,6 +27,7 @@ from litellm.proxy._types import (
     CommonProxyErrors,
     LitellmUserRoles,
     UserAPIKeyAuth,
+    user_api_key_has_admin_view,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.table_repositories import MemoryRepository
@@ -66,7 +67,7 @@ def _visibility_filter(user_api_key_dict: UserAPIKeyAuth) -> dict | None:
     Prisma `where` fragment restricting rows to those the caller can see.
     Returns None for admins (no restriction).
     """
-    if _is_admin(user_api_key_dict):
+    if user_api_key_has_admin_view(user_api_key_dict):
         return None
     ors: Final[list[dict]] = []
     if user_api_key_dict.user_id:

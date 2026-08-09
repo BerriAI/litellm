@@ -131,7 +131,7 @@ async def acreate_file(
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
-            response = init_response  # type: ignore
+            response = init_response
 
         return response
     except Exception as e:
@@ -176,7 +176,7 @@ def create_file(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)  # type: ignore
+            timeout = float(timeout)
         elif timeout is None:
             timeout = 600.0
 
@@ -252,7 +252,7 @@ def create_file(
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(method="create_file", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(method="create_file", url="https://github.com/BerriAI/litellm"),
                 ),
             )
         return response
@@ -328,7 +328,7 @@ def file_retrieve(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)  # type: ignore
+            timeout = float(timeout)
         elif timeout is None:
             timeout = 600.0
 
@@ -419,7 +419,7 @@ def file_retrieve(
                         request=httpx.Request(
                             method="create_thread",
                             url="https://github.com/BerriAI/litellm",
-                        ),  # type: ignore
+                        ),
                     ),
                 )
 
@@ -465,9 +465,9 @@ async def afile_delete(
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
-            response = init_response  # type: ignore
+            response = init_response
 
-        return cast(FileDeleted, response)  # type: ignore
+        return cast(FileDeleted, response)
     except Exception as e:
         raise e
 
@@ -511,7 +511,7 @@ def file_delete(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)  # type: ignore
+            timeout = float(timeout)
         elif timeout is None:
             timeout = 600.0
         _is_async: Final = kwargs.pop("is_async", False) is True
@@ -596,7 +596,7 @@ def file_delete(
                         request=httpx.Request(
                             method="create_thread",
                             url="https://github.com/BerriAI/litellm",
-                        ),  # type: ignore
+                        ),
                     ),
                 )
         return cast(FileDeleted, response)
@@ -639,7 +639,7 @@ async def afile_list(
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
-            response = init_response  # type: ignore
+            response = init_response
 
         return response
     except Exception as e:
@@ -673,7 +673,7 @@ def file_list(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)  # type: ignore
+            timeout = float(timeout)
         elif timeout is None:
             timeout = 600.0
 
@@ -755,7 +755,7 @@ def file_list(
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(method="file_list", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(method="file_list", url="https://github.com/BerriAI/litellm"),
                 ),
             )
         return response
@@ -803,7 +803,7 @@ async def afile_content(
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
-            response = init_response  # type: ignore
+            response = init_response
 
         return response
     except Exception as e:
@@ -857,7 +857,7 @@ def file_content(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)  # type: ignore
+            timeout = float(timeout)
         elif timeout is None:
             timeout = 600.0
 
@@ -987,7 +987,7 @@ def file_content(
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),
                 ),
             )
         return response
@@ -1065,7 +1065,7 @@ def file_content_streaming(
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),
             ),
         )
 

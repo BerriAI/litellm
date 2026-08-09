@@ -80,7 +80,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
             if k in param_mapping:
                 # Map param if mapping exists and value is valid
                 if k == "size" and v in OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO:
-                    mapped_params[param_mapping[k]] = OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO[v]  # type: ignore
+                    mapped_params[param_mapping[k]] = OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO[v]
                 # Don't copy "size" itself to final dict
             elif k == "n":
                 # Store for logic but do not add to outgoing params
@@ -190,14 +190,14 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         if prompt is not None and prompt != "":
             data["prompt"] = prompt
         # Handle image parameter - could be a single file or list
-        image_file = image[0] if isinstance(image, list) else image  # type: ignore
+        image_file = image[0] if isinstance(image, list) else image
         files: Final[dict[str, Any]] = {}
         if image is not None:
-            image_file = image[0] if isinstance(image, list) else image  # type: ignore
+            image_file = image[0] if isinstance(image, list) else image
             files["image"] = image_file
 
         # Add optional params (already mapped in map_openai_params)
-        for key, value in image_edit_optional_request_params.items():  # type: ignore
+        for key, value in image_edit_optional_request_params.items():
             # Skip internal params (prefixed with _)
             if key.startswith("_") or value is None:
                 continue
@@ -208,7 +208,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
                 mask_value = value
                 if isinstance(value, list) and len(value) > 0:
                     mask_value = value[0]
-                files["mask"] = mask_value  # type: ignore
+                files["mask"] = mask_value
                 continue
 
             # File-like optional params (init_image, style_image, etc.)
@@ -217,7 +217,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
                 file_value = value
                 if isinstance(value, list) and len(value) > 0:
                     file_value = value[0]
-                files[key] = file_value  # type: ignore
+                files[key] = file_value
                 continue
 
             # Supported text fields
@@ -240,7 +240,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
                 "composition_fidelity",
                 "change_strength",
             ]:
-                data[key] = value  # type: ignore
+                data[key] = value
 
         return data, files
 
