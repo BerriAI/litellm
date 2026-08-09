@@ -3330,6 +3330,37 @@ def test_pre_call_checks_no_messages_or_input_does_not_crash(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_pre_call_checks_async_filters_like_sync():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test",
+                "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-test"},
+                "model_info": {"id": "small", "max_input_tokens": 50},
+            },
+            {
+                "model_name": "test",
+                "litellm_params": {"model": "gpt-5.5", "api_key": "sk-test"},
+                "model_info": {"id": "large", "max_input_tokens": 10000},
+            },
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    deployments = router.get_model_list(model_name="test")
+    assert deployments is not None
+
+    filtered = await router._pre_call_checks_async(
+        model="test",
+        healthy_deployments=deployments,
+        messages=[{"role": "user", "content": " ".join(["word"] * 100)}],
+    )
+
+    assert len(filtered) == 1
+    assert filtered[0]["model_info"]["id"] == "large"
+
+
+@pytest.mark.asyncio
 async def test_aresponses_enforces_context_window_pre_call_check():
     """
     End-to-end router regression: a Responses API call whose `input` exceeds the
