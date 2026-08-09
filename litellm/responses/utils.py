@@ -615,7 +615,7 @@ class ResponsesAPIRequestUtils:
                 decrypted_id, _, _ = responses_id_security._decrypt_response_id(previous_response_id)
                 if decrypted_id:
                     return decrypted_id
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             verbose_logger.debug(
                 "Failed to decrypt previous_response_id=%s for session lookup: %s",
                 previous_response_id,

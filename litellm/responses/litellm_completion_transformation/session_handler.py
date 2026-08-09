@@ -15,6 +15,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ChatCompletionMessageToolCall, Message, ModelResponse
 
 if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
     from litellm.responses.litellm_completion_transformation.transformation import (
         ChatCompletionSession,
     )
@@ -244,7 +245,7 @@ class ResponsesSessionHandler:
         return False
 
     @staticmethod
-    def _get_prisma_client() -> Any:
+    def _get_prisma_client() -> "PrismaClient | None":
         """Return the proxy Prisma client used for spend-log lookups."""
         from litellm.proxy.proxy_server import prisma_client
 
