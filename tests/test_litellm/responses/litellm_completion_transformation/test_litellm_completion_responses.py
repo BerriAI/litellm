@@ -11,10 +11,6 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALLS_CACHE,
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.types.llms.openai import (
-    ChatCompletionResponseMessage,
-    ChatCompletionToolMessage,
-)
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
@@ -2185,7 +2181,7 @@ class TestStreamingIDConsistency:
         # Transform chunks to response API events
         event1 = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk1)
         event2 = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk2)
-        event3 = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk3)
+        iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk3)
 
         # Assert: All events should use the same item_id (from the first chunk)
         assert event1 is not None, "First event should not be None"
@@ -2612,7 +2608,6 @@ class TestEnsureOutputItemContentPartAdded:
 
     def _make_iterator(self):
         """Create a minimal LiteLLMCompletionStreamingIterator for testing."""
-        from unittest.mock import MagicMock
 
         from litellm.responses.litellm_completion_transformation.streaming_iterator import (
             LiteLLMCompletionStreamingIterator,
@@ -2627,6 +2622,13 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._cached_item_id = None
         iterator._cached_reasoning_item_id = None
         iterator._reasoning_active = False
+        iterator._reasoning_done_emitted = False
+        iterator._reasoning_item_id = None
+        iterator._reasoning_output_index = None
+        iterator._message_output_index = None
+        iterator._next_output_index = 0
+        iterator._allocated_output_indexes = ()
+        iterator._sent_reasoning_output_item_added_event = False
         iterator._pending_response_events = []
         return iterator
 
