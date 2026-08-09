@@ -171,6 +171,39 @@ class TestResponsesAPIRequestUtils:
 
         assert result == original_response_id
 
+    def test_decrypt_proxy_encrypted_previous_response_id_uses_security_hook(self):
+        """The proxy security hook result is returned when the ID is encrypted."""
+        managed_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai",
+            model_id="gpt-4o",
+            response_id="resp_abc123",
+        )
+        encrypted_id = f"resp_{'encrypted' * 20}"
+
+        mock_security = MagicMock()
+        mock_security._is_encrypted_response_id.return_value = True
+        mock_security._decrypt_response_id.return_value = (managed_id, "user-1", "team-1")
+
+        result = ResponsesAPIRequestUtils._decrypt_proxy_encrypted_previous_response_id(
+            encrypted_id,
+            responses_id_security=mock_security,
+        )
+
+        assert result == managed_id
+
+    def test_decrypt_proxy_encrypted_previous_response_id_falls_back(self):
+        """A non-encrypted ID is returned unchanged."""
+        plain_id = "resp_plain"
+        mock_security = MagicMock()
+        mock_security._is_encrypted_response_id.return_value = False
+
+        result = ResponsesAPIRequestUtils._decrypt_proxy_encrypted_previous_response_id(
+            plain_id,
+            responses_id_security=mock_security,
+        )
+
+        assert result == plain_id
+
     def test_update_responses_api_response_id_with_model_id_handles_dict(self):
         """Ensure _update_responses_api_response_id_with_model_id works with dict input"""
         responses_api_response = {"id": "resp_abc123"}

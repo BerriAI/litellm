@@ -597,7 +597,10 @@ class ResponsesAPIRequestUtils:
         return decoded_response_id.get("response_id", previous_response_id)
 
     @staticmethod
-    def _decrypt_proxy_encrypted_previous_response_id(previous_response_id: str) -> str:
+    def _decrypt_proxy_encrypted_previous_response_id(
+        previous_response_id: str,
+        responses_id_security: object | None = None,
+    ) -> str:
         """
         Resolve a proxy-encrypted Responses API ID to the wrapped managed ID.
 
@@ -608,11 +611,14 @@ class ResponsesAPIRequestUtils:
         the original value is returned unchanged.
         """
         try:
-            from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity
+            if responses_id_security is None:
+                from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity
 
-            responses_id_security = ResponsesIDSecurity()
-            if responses_id_security._is_encrypted_response_id(previous_response_id):
-                decrypted_id, _, _ = responses_id_security._decrypt_response_id(previous_response_id)
+                responses_id_security = ResponsesIDSecurity()
+            if responses_id_security._is_encrypted_response_id(previous_response_id):  # type: ignore[attr-defined]
+                decrypted_id, _, _ = responses_id_security._decrypt_response_id(  # type: ignore[attr-defined]
+                    previous_response_id
+                )
                 if decrypted_id:
                     return decrypted_id
         except Exception as e:  # noqa: BLE001
