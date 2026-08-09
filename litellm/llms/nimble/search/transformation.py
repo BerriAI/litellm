@@ -144,9 +144,8 @@ class NimbleSearchConfig(BaseSearchConfig):
         - search_domain_filter -> include_domains, with `-`-prefixed entries going to exclude_domains
         - max_tokens_per_page -> dropped (no Nimble equivalent)
 
-        Everything else is forwarded as-is, so the rest of Nimble's surface (`focus`,
-        `search_depth`, `time_range`, `start_date`/`end_date`, `locale`, `output_format`,
-        `content_type`, `max_subagents`) stays reachable without LiteLLM tracking it.
+        Everything else is forwarded as-is, so the rest of Nimble's surface stays reachable
+        without LiteLLM tracking it.
         """
         unified_params: Final = self.get_supported_perplexity_optional_params()
         country: Final = optional_params.get("country")
