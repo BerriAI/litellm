@@ -129,6 +129,18 @@ class TestReasoningInputItemMerging:
         assert messages[0]["reasoning_content"] == "I should look this up"
         assert len(messages[0]["tool_calls"]) == 1
 
+    def test_reasoning_merged_into_assistant_with_existing_reasoning_content(self):
+        """Old reasoning precedes existing reasoning on the target assistant turn."""
+        messages = LiteLLMCompletionResponsesConfig._merge_reasoning_only_assistant_messages(
+            [
+                {"role": "assistant", "content": None, "reasoning_content": "old reasoning"},
+                {"role": "assistant", "content": "The answer.", "reasoning_content": "new reasoning"},
+            ]
+        )
+        assert len(messages) == 1
+        assert messages[0]["content"] == "The answer."
+        assert messages[0]["reasoning_content"] == "old reasoning\nnew reasoning"
+
 
 class TestNonReasoningInputItemUnchanged:
     """Non-reasoning items still flow through the existing branches."""
