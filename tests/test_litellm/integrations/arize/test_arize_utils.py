@@ -1267,3 +1267,120 @@ def test_arize_request_attributes_survive_uncoercible_response_obj():
     span.record_exception.assert_not_called()
     written = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
     assert written["llm.provider"] == "openai"
+
+
+def _mcp_kwargs(**overrides):
+    kwargs = {
+        "model": "MCP: get_weather",
+        "standard_logging_object": {
+            "model_parameters": {},
+            "metadata": {
+                "mcp_tool_call_metadata": {
+                    "name": "get_weather",
+                    "arguments": {"city": "Seoul"},
+                    "namespaced_tool_name": "weather-mcp/get_weather",
+                }
+            },
+            "call_type": "call_mcp_tool",
+        },
+        "optional_params": {},
+        "litellm_params": {"custom_llm_provider": "mcp"},
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_arize_mcp_tool_span_renders_name_input_and_output():
+    """`call_mcp_tool` spans have no messages/choices, so Input and Output came
+    out blank. Render them from mcp_tool_call_metadata + CallToolResult."""
+    from unittest.mock import MagicMock
+
+    from mcp.types import CallToolResult, TextContent
+
+    span = MagicMock()
+    response_obj = CallToolResult(
+        content=[TextContent(type="text", text="sunny, 21C")], isError=False
+    )
+
+    ArizeLogger.set_arize_attributes(span, _mcp_kwargs(), response_obj)
+
+    written = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+    assert written[SpanAttributes.TOOL_NAME] == "get_weather"
+    assert written[SpanAttributes.INPUT_VALUE] == '{"city": "Seoul"}'
+    assert written[SpanAttributes.INPUT_MIME_TYPE] == "application/json"
+    assert written[SpanAttributes.OUTPUT_VALUE] == "sunny, 21C"
+    assert written[SpanAttributes.OUTPUT_MIME_TYPE] == "text/plain"
+
+
+def test_arize_mcp_tool_span_serializes_non_text_content():
+    """Image/resource results have no text part, so fall back to JSON."""
+    from unittest.mock import MagicMock
+
+    from mcp.types import CallToolResult, ImageContent
+
+    span = MagicMock()
+    response_obj = CallToolResult(
+        content=[ImageContent(type="image", data="Zm9v", mimeType="image/png")],
+        isError=False,
+    )
+
+    ArizeLogger.set_arize_attributes(span, _mcp_kwargs(), response_obj)
+
+    written = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+    assert written[SpanAttributes.OUTPUT_MIME_TYPE] == "application/json"
+    assert "image/png" in written[SpanAttributes.OUTPUT_VALUE]
+
+
+def test_arize_mcp_tool_span_respects_message_redaction():
+    """Tool arguments and results are user content. With redaction on, only the
+    tool name may reach the span."""
+    from unittest.mock import MagicMock
+
+    from mcp.types import CallToolResult, TextContent
+
+    span = MagicMock()
+    response_obj = CallToolResult(
+        content=[TextContent(type="text", text="SSN 123-45-6789")], isError=False
+    )
+
+    ArizeLogger.set_arize_attributes(
+        span,
+        _mcp_kwargs(standard_callback_dynamic_params={"turn_off_message_logging": True}),
+        response_obj,
+    )
+
+    written = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+    assert written[SpanAttributes.TOOL_NAME] == "get_weather"
+    assert SpanAttributes.INPUT_VALUE not in written
+    assert SpanAttributes.OUTPUT_VALUE not in written
+
+
+def test_arize_non_mcp_span_gets_no_tool_name():
+    """The MCP emitter must not fire on ordinary completions."""
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import Choices, ModelResponse
+
+    span = MagicMock()
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        "standard_logging_object": {
+            "model_parameters": {},
+            "metadata": {"mcp_tool_call_metadata": {"name": "get_weather"}},
+            "call_type": "completion",
+        },
+        "optional_params": {},
+        "litellm_params": {"custom_llm_provider": "openai"},
+    }
+    response_obj = ModelResponse(
+        choices=[Choices(message={"role": "assistant", "content": "hello"})],
+        model="gpt-4o",
+        id="r-1",
+    )
+
+    ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
+
+    written = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+    assert SpanAttributes.TOOL_NAME not in written
+    assert written[SpanAttributes.OUTPUT_VALUE] == "hello"

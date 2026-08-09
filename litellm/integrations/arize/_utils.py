@@ -1,7 +1,6 @@
 import json
 from typing import TYPE_CHECKING, Any, Final
 
-from pydantic import BaseModel
 from typing_extensions import override
 
 from litellm._logging import verbose_logger
@@ -13,7 +12,7 @@ from litellm.litellm_core_utils.redact_messages import (
     should_redact_message_logging,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import CallTypes, StandardLoggingPayload
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -23,6 +22,7 @@ from litellm.integrations._types.open_inference import (
     ImageAttributes,
     MessageAttributes,
     MessageContentAttributes,
+    OpenInferenceMimeTypeValues,
     OpenInferenceSpanKindValues,
     SpanAttributes,
     ToolCallAttributes,
@@ -481,6 +481,7 @@ def set_attributes(span: "Span", kwargs, response_obj, attributes: type[BaseLLMO
         response_obj_for_attrs,
         slp,
     )
+    _safe_emit("mcp tool attrs", _maybe_set_mcp_tool_attrs, span, kwargs, slp, response_obj_for_attrs)
 
 
 def _sanitize_optional_params(optional_params: dict | None) -> dict:
@@ -601,11 +602,9 @@ def _coerce_response_obj_for_attrs(response_obj):
     """
     if response_obj is None or hasattr(response_obj, "get"):
         return response_obj
-    if isinstance(response_obj, BaseModel):
-        try:
-            return response_obj.model_dump()
-        except Exception:
-            return response_obj
+    dumped: Final = _to_plain_dict(response_obj)
+    if isinstance(dumped, dict):
+        return dumped
     text: Final = getattr(response_obj, "text", None)
     if isinstance(text, str) and text:
         try:
@@ -1069,3 +1068,57 @@ def _parse_passthrough_response(raw_response_obj, coerced_response_obj, kwargs):
         except Exception:
             return None
     return None
+
+
+def _maybe_set_mcp_tool_attrs(
+    span: "Span",
+    kwargs: dict,
+    standard_logging_payload,
+    coerced_response_obj,
+) -> None:
+    """Render `call_mcp_tool` spans as OpenInference TOOL spans.
+
+    MCP tool calls carry neither `messages` nor `choices`, so the generic
+    extraction paths leave Input/Output blank. The tool name and arguments live
+    in `metadata.mcp_tool_call_metadata`; the result is an MCP `CallToolResult`
+    whose `content` is a list of typed parts.
+    """
+    if not isinstance(standard_logging_payload, dict):
+        return
+    if standard_logging_payload.get("call_type") != CallTypes.call_mcp_tool.value:
+        return
+
+    metadata: Final = standard_logging_payload.get("metadata")
+    mcp_meta: Final = metadata.get("mcp_tool_call_metadata") if isinstance(metadata, dict) else None
+    if not isinstance(mcp_meta, dict):
+        return
+
+    tool_name: Final = mcp_meta.get("name") or mcp_meta.get("namespaced_tool_name")
+    if tool_name:
+        safe_set_attribute(span, SpanAttributes.TOOL_NAME, tool_name)
+
+    if should_redact_message_logging(kwargs):
+        return
+
+    arguments: Final = mcp_meta.get("arguments")
+    if arguments:
+        safe_set_attribute(span, SpanAttributes.INPUT_VALUE, safe_dumps(arguments))
+        safe_set_attribute(span, SpanAttributes.INPUT_MIME_TYPE, OpenInferenceMimeTypeValues.JSON.value)
+
+    _set_mcp_tool_output(span, coerced_response_obj)
+
+
+def _set_mcp_tool_output(span: "Span", coerced_response_obj) -> None:
+    if not isinstance(coerced_response_obj, dict):
+        return
+
+    content: Final = coerced_response_obj.get("content")
+    text: Final = _coerce_text(content)
+    if text:
+        safe_set_attribute(span, SpanAttributes.OUTPUT_VALUE, text)
+        safe_set_attribute(span, SpanAttributes.OUTPUT_MIME_TYPE, OpenInferenceMimeTypeValues.TEXT.value)
+        return
+
+    if content:
+        safe_set_attribute(span, SpanAttributes.OUTPUT_VALUE, safe_dumps(content))
+        safe_set_attribute(span, SpanAttributes.OUTPUT_MIME_TYPE, OpenInferenceMimeTypeValues.JSON.value)
