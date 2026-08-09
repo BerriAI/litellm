@@ -615,10 +615,8 @@ class ResponsesAPIRequestUtils:
                 from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity
 
                 responses_id_security = ResponsesIDSecurity()
-            if responses_id_security._is_encrypted_response_id(previous_response_id):  # type: ignore[attr-defined]
-                decrypted_id, _, _ = responses_id_security._decrypt_response_id(  # type: ignore[attr-defined]
-                    previous_response_id
-                )
+            if responses_id_security._is_encrypted_response_id(previous_response_id):
+                decrypted_id, _, _ = responses_id_security._decrypt_response_id(previous_response_id)
                 if decrypted_id:
                     return decrypted_id
         except Exception as e:  # noqa: BLE001
