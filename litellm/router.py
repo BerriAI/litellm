@@ -530,8 +530,10 @@ class Router:
         cache_config: Final[dict[str, Any]] = {}
         # FIX: Apply cache_kwargs regardless of whether Redis is used
         cache_config.update(cache_kwargs)
-        if "type" in cache_kwargs:
-            cache_type = cache_kwargs["type"]
+        if "type" in cache_config:
+            # Pop removes 'type' from cache_config and assigns it to cache_type.
+            # This prevents passing 'type' twice to litellm.Cache() later.
+            cache_type = cache_config.pop("type")
 
         self.client_ttl = client_ttl
         if redis_url is not None or (redis_host is not None and redis_port is not None):
