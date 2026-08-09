@@ -584,6 +584,24 @@ class TestShadowEvalJobsAreTimeBound:
         return prisma
 
     @pytest.mark.asyncio
+    async def test_losing_a_concurrent_start_race_is_a_409_not_a_500(self, monkeypatch: pytest.MonkeyPatch):
+        """Two admins can pass the advisory read simultaneously; the partial unique
+        index rejects the second create, which must read as the same conflict."""
+        from prisma.errors import UniqueViolationError
+
+        from litellm.proxy.management_endpoints.auto_router_endpoints import start_shadow_eval
+
+        prisma = self._proxy_mocks(monkeypatch, recent_requests=700)
+        prisma.db.litellm_shadowevaljob.create = AsyncMock(
+            side_effect=UniqueViolationError(data={"user_facing_error": {"meta": {"target": "api_key_id"}}})
+        )
+
+        with pytest.raises(HTTPException) as exc:
+            await start_shadow_eval(self._start_request(), ADMIN)
+
+        assert exc.value.status_code == 409
+
+    @pytest.mark.asyncio
     async def test_estimate_reads_the_daily_rollup_not_the_raw_spend_log_table(self, monkeypatch: pytest.MonkeyPatch):
         """LiteLLM_SpendLogs has no api_key index; a per-key count there scans every
         request in the window. The estimate must come from LiteLLM_DailyUserSpend."""

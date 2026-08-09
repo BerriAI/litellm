@@ -482,6 +482,21 @@ async def _recent_request_volume(prisma_client: "PrismaClient", api_key_id: str)
     return rows[0].request_count if rows else 0
 
 
+def _is_unique_violation(error: Exception) -> bool:
+    """Whether a Prisma create failed on a unique index.
+
+    The one-active-job-per-key guarantee lives in a partial unique index (raw SQL in
+    the migration — schema.prisma cannot express partial indexes), so the read-then-
+    create check above it is advisory: two concurrent starts pass the read, and the
+    loser must surface as the same 409 rather than a 500.
+    """
+    try:
+        from prisma.errors import UniqueViolationError
+    except ImportError:
+        return "unique constraint" in str(error).lower() or "P2002" in str(error)
+    return isinstance(error, UniqueViolationError)
+
+
 def _require_admin_viewer(user_api_key_dict: UserAPIKeyAuth, action: str) -> None:
     if user_api_key_dict.user_role not in (
         LitellmUserRoles.PROXY_ADMIN,
@@ -670,19 +685,27 @@ async def start_shadow_eval(
     estimated_cost: Final = round(sampled * per_call, 2)
     ends_at: Final = datetime.now(timezone.utc) + timedelta(days=data.duration_days)
 
-    job: Final = await prisma_client.db.litellm_shadowevaljob.create(
-        data={  # mutable-ok: Prisma payload
-            "api_key_id": data.api_key_id,
-            "router_name": data.router_name,
-            "shadow_percentage": data.shadow_percentage,
-            "judge_model": data.judge_model,
-            "team_id": data.team_id,
-            "status": "pending",
-            "cost_estimate": estimated_cost,
-            "created_by": user_api_key_dict.user_id,
-            "ends_at": ends_at,
-        }
-    )
+    try:
+        job: Final = await prisma_client.db.litellm_shadowevaljob.create(
+            data={  # mutable-ok: Prisma payload
+                "api_key_id": data.api_key_id,
+                "router_name": data.router_name,
+                "shadow_percentage": data.shadow_percentage,
+                "judge_model": data.judge_model,
+                "team_id": data.team_id,
+                "status": "pending",
+                "cost_estimate": estimated_cost,
+                "created_by": user_api_key_dict.user_id,
+                "ends_at": ends_at,
+            }
+        )
+    except Exception as e:
+        if not _is_unique_violation(e):
+            raise
+        raise HTTPException(
+            status_code=409,
+            detail="Key already has an active shadow eval job (started concurrently). Stop it first.",
+        ) from e
     return StartShadowEvalResponse(
         job_id=job.id,
         status="pending",

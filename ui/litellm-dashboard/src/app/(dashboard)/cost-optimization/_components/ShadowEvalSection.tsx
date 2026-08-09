@@ -365,6 +365,12 @@ const PreviousJob: React.FC<{
   const shown = detail ?? job;
   const results = shown.results;
   const okOrBetter = results ? results.overall_shadow_win_rate_pct + results.overall_tie_rate_pct : null;
+  let summary = "no verdicts";
+  if (okOrBetter != null) {
+    summary = pct(okOrBetter);
+  } else if (shown.completed_count > 0) {
+    summary = "view results";
+  }
 
   return (
     <div className="border-b last:border-b-0">
@@ -387,9 +393,7 @@ const PreviousJob: React.FC<{
             </p>
           </div>
         </div>
-        <span className="text-sm font-medium text-foreground">
-          {okOrBetter != null ? pct(okOrBetter) : "no verdicts"}
-        </span>
+        <span className="text-sm font-medium text-foreground">{summary}</span>
       </button>
       {expanded ? (
         <div className="px-6 pb-4">

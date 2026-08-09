@@ -243,10 +243,12 @@ def _job_is_over_spend_cap(job: ActiveShadowEvalJob) -> bool:
 
     Budgets bound what the *key* may spend; this bounds what a single eval may spend
     even under a generous budget, so a bad estimate or a traffic spike cannot quietly
-    turn a "$3 eval" into a much larger bill. A job with no estimate (older rows,
-    unpriced judge model) has nothing to be a multiple of, so it is uncapped.
+    turn a "$3 eval" into a much larger bill. Only a job with no estimate at all
+    (rows created before estimates existed) is uncapped; a $0 estimate — a key that
+    was quiet during the lookback — still gets the floor, since a later traffic spike
+    on exactly such a job is the scenario the cap exists for.
     """
-    if job.cost_estimate is None or job.cost_estimate <= 0.0:
+    if job.cost_estimate is None:
         return False
     return job.cost_actual >= max(job.cost_estimate * _SPEND_CAP_MULTIPLIER, _SPEND_CAP_FLOOR_USD)
 
@@ -269,7 +271,7 @@ class ShadowEvalLogger(CustomLogger):
         # distinct keys the proxy serves.
         self._jobs_by_key: dict[str, ActiveShadowEvalJob] = {}  # mutable-ok: TTL cache
         self._jobs_fetched_at: float | None = None
-        self._jobs_refresh_lock: asyncio.Lock = asyncio.Lock()
+        self._jobs_refresh_task: asyncio.Task[None] | None = None
         self._inflight_shadow_tasks: int = 0
         self._pending_seen: dict[str, int] = {}  # mutable-ok: flush buffer
         self._last_seen_flush: float = 0.0
@@ -300,7 +302,7 @@ class ShadowEvalLogger(CustomLogger):
             api_key_hash: Final = metadata.get("user_api_key_hash")
             if not api_key_hash:
                 return
-            job: Final = await self._get_active_job(api_key_hash)
+            job: Final = self._get_active_job(api_key_hash)
             if job is None:
                 return
             if _job_is_past_its_end(job):
@@ -353,46 +355,48 @@ class ShadowEvalLogger(CustomLogger):
 
     #### job lookup ####
 
-    async def _get_active_job(self, api_key_hash: str) -> ActiveShadowEvalJob | None:
+    def _get_active_job(self, api_key_hash: str) -> ActiveShadowEvalJob | None:
+        """Serve from the snapshot; never await the DB on the request path.
+
+        An expired (or missing) snapshot kicks a detached refresh and this request is
+        answered from whatever is already in memory — possibly stale, on a cold pod
+        possibly empty. A sampled eval tolerates a missed slice far better than every
+        request on the proxy tolerating a synchronous Prisma read in its success hook.
+        """
         now: Final = asyncio.get_event_loop().time()
-        if self._jobs_fetched_at is None or now - self._jobs_fetched_at >= _JOB_CACHE_TTL_SECONDS:
-            await self._refresh_active_jobs(now)
+        expired: Final = self._jobs_fetched_at is None or now - self._jobs_fetched_at >= _JOB_CACHE_TTL_SECONDS
+        if expired and (self._jobs_refresh_task is None or self._jobs_refresh_task.done()):
+            self._jobs_refresh_task = asyncio.create_task(self._refresh_active_jobs(now))
         return self._jobs_by_key.get(api_key_hash)
 
     async def _refresh_active_jobs(self, now: float) -> None:
-        """Reload the active-job set, at most once per TTL across concurrent requests.
-
-        On a DB blip the stale snapshot is kept and the next TTL retries, so a blip
-        degrades freshness rather than turning the feature off.
-        """
-        async with self._jobs_refresh_lock:
-            if self._jobs_fetched_at is not None and now - self._jobs_fetched_at < _JOB_CACHE_TTL_SECONDS:
-                return
-            prisma: Final = self._prisma_provider()
-            if prisma is None:
-                return
-            try:
-                records: Final = await prisma.db.litellm_shadowevaljob.find_many(
-                    where={"status": {"in": ["pending", "running"]}},  # mutable-ok: Prisma filter
-                    order={"created_at": "desc"},  # mutable-ok: Prisma order
-                )
-            except Exception as e:  # noqa: BLE001  # a DB blip must not break request logging
-                verbose_logger.debug("shadow_eval: active-job refresh failed: %s", e)
-                return
-            jobs_by_key: Final[dict[str, ActiveShadowEvalJob]] = {}  # mutable-ok: building the new snapshot
-            for record in reversed(records or []):
-                jobs_by_key[str(record.api_key_id)] = ActiveShadowEvalJob(
-                    id=str(record.id),
-                    router_name=str(record.router_name),
-                    shadow_percentage=float(record.shadow_percentage),
-                    judge_model=str(record.judge_model),
-                    status=str(record.status),
-                    cost_estimate=float(record.cost_estimate) if record.cost_estimate is not None else None,
-                    cost_actual=float(record.cost_actual or 0.0),
-                    ends_at=_as_utc(getattr(record, "ends_at", None)),
-                )
-            self._jobs_by_key = jobs_by_key  # mutable-ok: atomic snapshot swap
-            self._jobs_fetched_at = now
+        """Reload the active-job set. On a DB blip the stale snapshot is kept and the
+        next TTL retries, so a blip degrades freshness rather than turning the feature off."""
+        prisma: Final = self._prisma_provider()
+        if prisma is None:
+            return
+        try:
+            records: Final = await prisma.db.litellm_shadowevaljob.find_many(
+                where={"status": {"in": ["pending", "running"]}},  # mutable-ok: Prisma filter
+                order={"created_at": "desc"},  # mutable-ok: Prisma order
+            )
+        except Exception as e:  # noqa: BLE001  # a DB blip must not break request logging
+            verbose_logger.debug("shadow_eval: active-job refresh failed: %s", e)
+            return
+        jobs_by_key: Final[dict[str, ActiveShadowEvalJob]] = {}  # mutable-ok: building the new snapshot
+        for record in reversed(records or []):
+            jobs_by_key[str(record.api_key_id)] = ActiveShadowEvalJob(
+                id=str(record.id),
+                router_name=str(record.router_name),
+                shadow_percentage=float(record.shadow_percentage),
+                judge_model=str(record.judge_model),
+                status=str(record.status),
+                cost_estimate=float(record.cost_estimate) if record.cost_estimate is not None else None,
+                cost_actual=float(record.cost_actual or 0.0),
+                ends_at=_as_utc(getattr(record, "ends_at", None)),
+            )
+        self._jobs_by_key = jobs_by_key  # mutable-ok: atomic snapshot swap
+        self._jobs_fetched_at = now
 
     async def _finalize_job(self, job: ActiveShadowEvalJob, reason: str) -> None:
         """Flip a finished job to completed, keeping the verdicts it already produced.

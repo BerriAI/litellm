@@ -285,4 +285,17 @@ describe("ShadowEvalSection", () => {
     expect(await screen.findByText("SIMPLE")).toBeInTheDocument();
     expect(screen.getByText("REASONING")).toBeInTheDocument();
   });
+
+  it("labels an unexpanded previous job as viewable, not verdictless", async () => {
+    const user = userEvent.setup();
+    const current = job({ job_id: "job-new" });
+    const older = job({ job_id: "job-old", status: "completed", results: null });
+    mockHooks({ jobs: [current, older], detailsById: { "job-new": current } });
+    render(<ShadowEvalSection accessToken="token" />);
+
+    await user.click(screen.getByRole("button", { name: /Previous evaluations \(1\)/ }));
+
+    expect(screen.getByText("view results")).toBeInTheDocument();
+    expect(screen.queryByText("no verdicts")).not.toBeInTheDocument();
+  });
 });
