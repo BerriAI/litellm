@@ -787,8 +787,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           }
         } else {
           // Dedicated fields path (command/args + env JSON)
-          let parsedEnv: Record<string, string> =
-            rawEnvJson === undefined && mcpServer.env ? { ...mcpServer.env } : {};
+          let parsedEnv: Record<string, string> = rawEnvJson === undefined && mcpServer.env ? { ...mcpServer.env } : {};
           if (rawEnvJson) {
             try {
               const env = JSON.parse(rawEnvJson);
