@@ -8,6 +8,7 @@ Also ensures that tool calls that only appear in the final built response still 
 before response.completed.
 """
 
+from itertools import islice, takewhile
 from unittest.mock import AsyncMock
 
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
@@ -107,18 +108,15 @@ def test_tool_calls_present_only_in_final_response_are_emitted_before_completed(
     iterator.litellm_model_response = response
 
     # The message item holds output_index 0, so it finishes before the tool item at index 1.
-    message_done = []
-    while True:
-        evt1 = iterator.common_done_event_logic(sync_mode=True)
-        if evt1.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED:
-            break
-        message_done.append(evt1)
-    assert [evt.type for evt in message_done] == [
+    prelude = tuple(iterator.common_done_event_logic(sync_mode=True) for _ in range(4))
+    message_done, evt1 = prelude[:-1], prelude[-1]
+    assert tuple(evt.type for evt in message_done) == (
         ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
         ResponsesAPIStreamEvents.CONTENT_PART_DONE,
         ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
-    ]
+    )
     assert all(evt.output_index == 0 for evt in message_done)
+    assert evt1.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
     assert evt1.output_index == 1
 
     # Now delta events are emitted (arguments split into chunks)
@@ -442,13 +440,11 @@ def test_output_item_done_events_arrive_in_output_index_order():
         ],
     )
 
-    done_indexes = []
-    for _ in range(40):
-        evt = iterator.common_done_event_logic(sync_mode=True)
-        if evt.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
-            break
-        if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
-            done_indexes.append(evt.output_index)
+    events = islice(iter(lambda: iterator.common_done_event_logic(sync_mode=True), None), 40)
+    turn = takewhile(lambda evt: evt.type != ResponsesAPIStreamEvents.RESPONSE_COMPLETED, events)
+    done_indexes = tuple(
+        evt.output_index for evt in turn if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+    )
 
-    assert done_indexes == sorted(done_indexes)
-    assert done_indexes == [0, 1]
+    assert done_indexes == tuple(sorted(done_indexes))
+    assert done_indexes == (0, 1)
