@@ -169,3 +169,16 @@ def test_azure_gpt_5_6_luna_pricing(prices: dict, model: str, expected_pricing: 
     assert model in prices
     for key, expected_value in expected_pricing.items():
         assert prices[model][key] == expected_value
+
+
+def test_azure_gpt_5_6_luna_backup_matches_main():
+    """Ensure Azure GPT-5.6 Luna pricing stays in sync between main and backup cost maps."""
+    main_cost = json.loads(PRICES_PATH.read_text())
+    backup_cost = json.loads(
+        (REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json").read_text()
+    )
+
+    for model in ("azure/gpt-5.6-luna", "azure/us/gpt-5.6-luna"):
+        assert backup_cost.get(model) == main_cost.get(
+            model
+        ), f"{model} differs between main and backup model cost maps"
