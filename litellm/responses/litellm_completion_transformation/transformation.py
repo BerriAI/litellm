@@ -232,6 +232,7 @@ class LiteLLMCompletionResponsesConfig:
         tools: Sequence[ChatCompletionToolParam | OpenAIMcpServerTool] | None,
         web_search_options: OpenAIWebSearchOptions | None,
         reasoning_param: Reasoning,
+        api_base: str | None,
     ) -> bool:
         """
         Whether ``litellm.completion`` will route this model back onto the Responses API.
@@ -249,6 +250,7 @@ class LiteLLMCompletionResponsesConfig:
                 tools=tools,
                 reasoning_effort=reasoning_param,
                 reasoning_summary=reasoning_param.get("summary"),
+                api_base=api_base,
             )
         except Exception as e:  # noqa: BLE001  # a capability probe must never fail the request it probes for
             verbose_logger.debug(f"responses bridge: reasoning effort mode check failed: {e}")
@@ -262,6 +264,7 @@ class LiteLLMCompletionResponsesConfig:
         custom_llm_provider: str | None,
         tools: Sequence[ChatCompletionToolParam | OpenAIMcpServerTool] | None = None,
         web_search_options: OpenAIWebSearchOptions | None = None,
+        api_base: str | None = None,
     ) -> Reasoning | str | None:
         """
         Map the Responses ``reasoning`` param onto Chat Completions ``reasoning_effort``.
@@ -282,6 +285,7 @@ class LiteLLMCompletionResponsesConfig:
             tools=tools,
             web_search_options=web_search_options,
             reasoning_param=reasoning_param,
+            api_base=api_base,
         ):
             return reasoning_param
         return reasoning_param.get("effort")
@@ -323,6 +327,7 @@ class LiteLLMCompletionResponsesConfig:
                 custom_llm_provider=custom_llm_provider,
                 tools=tools,
                 web_search_options=web_search_options,
+                api_base=kwargs.get("api_base"),
             )
         )
 
