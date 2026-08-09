@@ -2612,23 +2612,20 @@ class TestEnsureOutputItemContentPartAdded:
 
     def _make_iterator(self):
         """Create a minimal LiteLLMCompletionStreamingIterator for testing."""
-        from unittest.mock import MagicMock
+        from unittest.mock import Mock
 
         from litellm.responses.litellm_completion_transformation.streaming_iterator import (
             LiteLLMCompletionStreamingIterator,
         )
 
-        iterator = LiteLLMCompletionStreamingIterator.__new__(
-            LiteLLMCompletionStreamingIterator
+        mock_stream_wrapper = Mock()
+        mock_stream_wrapper.logging_obj = Mock()
+        return LiteLLMCompletionStreamingIterator(
+            model="test-model",
+            litellm_custom_stream_wrapper=mock_stream_wrapper,
+            request_input="test input",
+            responses_api_request={},
         )
-        iterator.sent_output_item_added_event = False
-        iterator.sent_content_part_added_event = False
-        iterator._sequence_number = 0
-        iterator._cached_item_id = None
-        iterator._cached_reasoning_item_id = None
-        iterator._reasoning_active = False
-        iterator._pending_response_events = []
-        return iterator
 
     def _make_text_chunk(self):
         """Create a mock ModelResponseStream with a text delta."""
@@ -2707,7 +2704,7 @@ class TestEnsureOutputItemContentPartAdded:
                 Choices(
                     finish_reason="content_filter",
                     index=0,
-                    message=Message(content="", role="assistant"),
+                    message=Message(content="partial answer", role="assistant"),
                 )
             ],
             usage=Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
@@ -2722,8 +2719,11 @@ class TestEnsureOutputItemContentPartAdded:
         assert completed_event.response.output[0].status == "incomplete"
 
     def test_reasoning_item_does_not_emit_content_part_added(self):
-        """Reasoning items should not get a content_part.added event."""
-        from litellm.types.llms.openai import OutputItemAddedEvent
+        """Reasoning items get a summary part, not a message content part."""
+        from litellm.types.llms.openai import (
+            OutputItemAddedEvent,
+            ResponsePartAddedEvent,
+        )
 
         iterator = self._make_iterator()
         chunk = self._make_reasoning_chunk()
@@ -2731,8 +2731,10 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._ensure_output_item_for_chunk(chunk)
 
         events = iterator._pending_response_events
-        assert len(events) == 1
-        assert isinstance(events[0], OutputItemAddedEvent)
+        assert [type(event) for event in events] == [
+            OutputItemAddedEvent,
+            ResponsePartAddedEvent,
+        ]
         assert iterator.sent_content_part_added_event is False
 
     def test_only_emits_once(self):
