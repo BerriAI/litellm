@@ -672,3 +672,134 @@ class TestShadowEvalJobsAreTimeBound:
         }
         response = _job_to_response(type("Row", (), fields)(), None)
         assert response.ends_at == "2026-08-08T00:00:00+00:00"
+
+
+class TestShadowEvalJobLifecycleEndpoints:
+    """List shows every job newest-first, get returns one job with its results, and
+    stop flips only active jobs while keeping the verdicts already collected."""
+
+    @staticmethod
+    def _job_record(job_id: str = "job-1", status: str = "running") -> MagicMock:
+        record = MagicMock()
+        record.id = job_id
+        record.status = status
+        record.router_name = "claude-auto"
+        record.api_key_id = "hashed-key"
+        record.team_id = None
+        record.shadow_percentage = 10.0
+        record.request_count = 100
+        record.completed_count = 9
+        record.failed_count = 1
+        record.cost_estimate = 3.0
+        record.cost_actual = 0.42
+        record.created_at = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        record.ends_at = None
+        record.completed_at = None
+        return record
+
+    def _prisma(self, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+        from litellm.proxy import proxy_server
+
+        prisma = MagicMock()
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+        return prisma
+
+    @pytest.mark.asyncio
+    async def test_list_returns_jobs_without_results(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import list_shadow_eval_jobs
+
+        prisma = self._prisma(monkeypatch)
+        prisma.db.litellm_shadowevaljob.find_many = AsyncMock(
+            return_value=[self._job_record("job-2"), self._job_record("job-1", status="completed")]
+        )
+
+        jobs = await list_shadow_eval_jobs(ADMIN)
+
+        assert [j.job_id for j in jobs] == ["job-2", "job-1"]
+        assert all(j.results is None for j in jobs)
+        assert prisma.db.litellm_shadowevaljob.find_many.call_args.kwargs["order"] == {"created_at": "desc"}
+
+    @pytest.mark.asyncio
+    async def test_get_returns_the_job_with_aggregated_results(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import get_shadow_eval_job
+
+        prisma = self._prisma(monkeypatch)
+        prisma.db.litellm_shadowevaljob.find_unique = AsyncMock(return_value=self._job_record())
+        prisma.db.query_raw = AsyncMock(
+            return_value=[
+                {
+                    "tier_classification": "SIMPLE",
+                    "real_model": "gpt-4o",
+                    "turn_count": 10,
+                    "real_wins": 2,
+                    "shadow_wins": 6,
+                    "ties": 2,
+                    "avg_confidence": 0.8,
+                }
+            ]
+        )
+
+        response = await get_shadow_eval_job("job-1", ADMIN)
+
+        assert response.job_id == "job-1"
+        assert response.results is not None
+        assert response.results.groups[0].tier == "SIMPLE"
+        assert response.results.groups[0].shadow_win_rate_pct == 60.0
+
+    @pytest.mark.asyncio
+    async def test_get_unknown_job_is_a_404(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import get_shadow_eval_job
+
+        prisma = self._prisma(monkeypatch)
+        prisma.db.litellm_shadowevaljob.find_unique = AsyncMock(return_value=None)
+
+        with pytest.raises(HTTPException) as exc:
+            await get_shadow_eval_job("nope", ADMIN)
+
+        assert exc.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_stop_completes_an_active_job_and_returns_its_verdicts(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import stop_shadow_eval_job
+
+        prisma = self._prisma(monkeypatch)
+        prisma.db.litellm_shadowevaljob.find_unique = AsyncMock(return_value=self._job_record())
+        stopped = self._job_record(status="completed")
+        prisma.db.litellm_shadowevaljob.update = AsyncMock(return_value=stopped)
+        prisma.db.query_raw = AsyncMock(return_value=[])
+
+        response = await stop_shadow_eval_job("job-1", ADMIN)
+
+        assert response.status == "completed"
+        data = prisma.db.litellm_shadowevaljob.update.call_args.kwargs["data"]
+        assert data["status"] == "completed"
+        assert data["completed_at"] is not None
+
+    @pytest.mark.asyncio
+    async def test_stopping_a_finished_job_is_a_400_not_a_silent_rewrite(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import stop_shadow_eval_job
+
+        prisma = self._prisma(monkeypatch)
+        prisma.db.litellm_shadowevaljob.find_unique = AsyncMock(return_value=self._job_record(status="completed"))
+
+        with pytest.raises(HTTPException) as exc:
+            await stop_shadow_eval_job("job-1", ADMIN)
+
+        assert exc.value.status_code == 400
+        prisma.db.litellm_shadowevaljob.update.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_stop_and_viewer_can_list(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import (
+            list_shadow_eval_jobs,
+            stop_shadow_eval_job,
+        )
+
+        prisma = self._prisma(monkeypatch)
+        prisma.db.litellm_shadowevaljob.find_many = AsyncMock(return_value=[])
+        viewer = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, api_key="sk-view", user_id="viewer")
+
+        assert await list_shadow_eval_jobs(viewer) == []
+        with pytest.raises(HTTPException) as exc:
+            await stop_shadow_eval_job("job-1", viewer)
+        assert exc.value.status_code == 403

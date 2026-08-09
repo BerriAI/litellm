@@ -906,6 +906,64 @@ class TestJobsStopAtTheirScheduledEnd:
         assert _job_is_past_its_end(job)
 
 
+@pytest.mark.asyncio
+class TestJudgeFailureModes:
+    """A judge outage or malformed verdict must be a counted failure, never a crash,
+    and must never write a verdict row."""
+
+    @staticmethod
+    def _logger():
+        prisma = MagicMock()
+        return ShadowEvalLogger(router_provider=lambda: MagicMock(), prisma_provider=lambda: prisma), prisma
+
+    async def test_judge_provider_error_returns_none(self, monkeypatch: pytest.MonkeyPatch):
+        import litellm as litellm_module
+
+        logger, _ = self._logger()
+        monkeypatch.setattr(litellm_module, "acompletion", AsyncMock(side_effect=RuntimeError("provider down")))
+
+        verdict = await logger._call_judge("m", [{"role": "user", "content": "hi"}], "real", "shadow", {})
+
+        assert verdict is None
+
+    async def test_unparseable_judge_output_returns_none(self, monkeypatch: pytest.MonkeyPatch):
+        import litellm as litellm_module
+
+        logger, _ = self._logger()
+        monkeypatch.setattr(
+            litellm_module,
+            "acompletion",
+            AsyncMock(return_value={"choices": [{"message": {"content": "I prefer response A because"}}]}),
+        )
+
+        verdict = await logger._call_judge("m", [{"role": "user", "content": "hi"}], "real", "shadow", {})
+
+        assert verdict is None
+
+    async def test_failed_judge_bumps_failed_count_and_writes_no_verdict(self, monkeypatch: pytest.MonkeyPatch):
+        import litellm as litellm_module
+
+        logger, prisma = self._logger()
+        monkeypatch.setattr(litellm_module, "acompletion", AsyncMock(side_effect=RuntimeError("down")))
+        router = logger._router_provider()
+        router.acompletion = AsyncMock(return_value={"choices": [{"message": {"content": "shadow says"}}]})
+        prisma.db.litellm_shadowevaljob.update = AsyncMock()
+        job = ActiveShadowEvalJob(id="j1", router_name="r", shadow_percentage=100.0, judge_model="m", status="running")
+
+        await logger._run_shadow_eval(
+            job=job,
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            response_obj={"choices": [{"message": {"content": "real says"}}]},
+            real_model="gpt-4o",
+            model_parameters={},
+            parent_metadata={},
+        )
+
+        prisma.db.litellm_shadowevalverdict.create.assert_not_called()
+        assert prisma.db.litellm_shadowevaljob.update.call_args.kwargs["data"] == {"failed_count": {"increment": 1}}
+
+
 class TestExtractResponseText:
     def test_dict_response(self):
         resp = {"choices": [{"message": {"content": "hello"}}]}
