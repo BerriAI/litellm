@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
 import EntityUsage from "./EntityUsage";
@@ -854,6 +854,47 @@ describe("EntityUsage", () => {
 
     const logo = await screen.findByAltText("openai logo");
     expect(logo.getAttribute("src")).toContain("openai_small");
+  });
+
+  describe("capability gating", () => {
+    it.each([
+      ["organization", () => mockOrganizationDailyActivityCall, "Organization Spend Overview"],
+      ["agent", () => mockAgentDailyActivityCall, "Agent Spend Overview"],
+    ] as const)("fetches %s activity for an admin but not for an internal user", async (entityType, call, heading) => {
+      render(<EntityUsage {...defaultProps} entityType={entityType} />);
+      await waitFor(() => {
+        expect(call()).toHaveBeenCalled();
+      });
+
+      cleanup();
+      call().mockClear();
+
+      render(<EntityUsage {...defaultProps} entityType={entityType} userRole="Internal User" />);
+      expect(await screen.findByText(heading)).toBeInTheDocument();
+      expect(call()).not.toHaveBeenCalled();
+    });
+
+    it("keeps the team breakdown but drops its agent sub-fetch for an internal user", async () => {
+      render(<EntityUsage {...defaultProps} entityType="team" userRole="Internal User" />);
+
+      await waitFor(() => {
+        expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+      });
+      expect(screen.getByText("Team Spend Overview")).toBeInTheDocument();
+
+      expect(mockAgentDailyActivityCall).not.toHaveBeenCalled();
+      expect(screen.queryByText("Agent Activity")).not.toBeInTheDocument();
+      expect(screen.queryByText("Top Agents Driving Spend")).not.toBeInTheDocument();
+    });
+
+    it("keeps the tag breakdown for an internal user", async () => {
+      render(<EntityUsage {...defaultProps} entityType="tag" userRole="Internal User" />);
+
+      await waitFor(() => {
+        expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      });
+      expect(screen.getByText("Tag Spend Overview")).toBeInTheDocument();
+    });
   });
 
   it("renders a letter avatar instead of an img for an unknown provider slug", async () => {

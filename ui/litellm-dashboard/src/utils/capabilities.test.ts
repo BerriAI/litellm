@@ -1,21 +1,31 @@
 import { describe, expect, it } from "vitest";
 
-import { hasCapability, rolesWithCapability } from "./capabilities";
+import { hasCapability, rolesWithCapability, type Capability } from "./capabilities";
+
+const ADMIN_ROLES = ["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer"];
+const NON_ADMIN_ROLES = [
+  "Internal User",
+  "Internal Viewer",
+  "App User",
+  "Org Admin",
+  "Unknown Role",
+  "",
+  null,
+  undefined,
+];
+
+const ADMIN_ONLY_CAPABILITIES: Capability[] = ["viewToolPolicies", "viewOrganizationUsage", "viewAgentUsage"];
 
 describe("hasCapability", () => {
-  it.each(["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer"])(
-    "should grant viewToolPolicies to %s",
-    (role) => {
-      expect(hasCapability(role, "viewToolPolicies")).toBe(true);
-    },
-  );
+  describe.each(ADMIN_ONLY_CAPABILITIES)("%s", (capability) => {
+    it.each(ADMIN_ROLES)("should grant it to %s", (role) => {
+      expect(hasCapability(role, capability)).toBe(true);
+    });
 
-  it.each(["Internal User", "Internal Viewer", "App User", "Org Admin", "Unknown Role", "", null, undefined])(
-    "should deny viewToolPolicies to %s",
-    (role) => {
-      expect(hasCapability(role, "viewToolPolicies")).toBe(false);
-    },
-  );
+    it.each(NON_ADMIN_ROLES)("should deny it to %s", (role) => {
+      expect(hasCapability(role, capability)).toBe(false);
+    });
+  });
 });
 
 describe("rolesWithCapability", () => {

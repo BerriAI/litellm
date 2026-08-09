@@ -2,6 +2,7 @@ import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { BarChart, DonutChart } from "@/components/shared/charts";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { hasCapability, type Capability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import {
   Card,
@@ -108,7 +109,19 @@ const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
   user: userDailyActivityCall,
 };
 
-const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, entityId, entityList, dateValue }) => {
+const ENTITY_CAPABILITIES: Partial<Record<EntityType, Capability>> = {
+  organization: "viewOrganizationUsage",
+  agent: "viewAgentUsage",
+};
+
+const EntityUsage: React.FC<EntityUsageProps> = ({
+  accessToken,
+  entityType,
+  entityId,
+  entityList,
+  userRole,
+  dateValue,
+}) => {
   const { teams } = useTeams();
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [modelViewType, setModelViewType] = useState<ModelViewType>("groups");
@@ -125,7 +138,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   }, [entityType, selectedTags]);
 
   const fetchFn = ENTITY_FETCH_FNS[entityType];
-  const enabled = !!accessToken && !!startTime && !!endTime;
+  const entityCapability = ENTITY_CAPABILITIES[entityType];
+  const canViewEntity = entityCapability === undefined || hasCapability(userRole, entityCapability);
+  const showAgentBreakdown = entityType === "team" && hasCapability(userRole, "viewAgentUsage");
+  const hasRequestWindow = !!accessToken && !!startTime && !!endTime;
+  const enabled = hasRequestWindow && canViewEntity;
 
   const {
     data: spendDataRaw,
@@ -150,7 +167,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   } = usePaginatedDailyActivity({
     fetchFn: agentDailyActivityCall,
     args: [accessToken, startTime, endTime, null],
-    enabled: enabled && entityType === "team",
+    enabled: enabled && showAgentBreakdown,
   });
 
   const agentSpendData = agentSpendDataRaw as unknown as EntitySpendData;
@@ -158,7 +175,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   const modelBreakdownKey = modelViewType === "groups" ? "model_groups" : "models";
   const modelMetrics = processActivityData(spendData, modelBreakdownKey, teams || []);
   const keyMetrics = processActivityData(spendData, "api_keys", teams || []);
-  const agentMetrics = entityType === "team" ? processActivityData(agentSpendData, "entities", teams || []) : {};
+  const agentMetrics = showAgentBreakdown ? processActivityData(agentSpendData, "entities", teams || []) : {};
 
   const getTopModels = () => {
     const modelSpend: { [key: string]: any } = {};
@@ -621,8 +638,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         </Card>
       </Col>
 
-      {/* Top Agents - only for team entity type */}
-      {entityType === "team" && (
+      {showAgentBreakdown && (
         <Col numColSpan={2}>
           <Card>
             <Title>Top Agents Driving Spend</Title>
@@ -708,7 +724,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         </>
       ),
     },
-    ...(entityType === "team"
+    ...(showAgentBreakdown
       ? [{ key: "agents", label: "Agent Activity", content: <ActivityMetrics modelMetrics={agentMetrics} /> }]
       : []),
     {
@@ -757,7 +773,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
           }
         />
       )}
-      {agentIsFetchingMore && entityType === "team" && (
+      {agentIsFetchingMore && showAgentBreakdown && (
         <Alert
           banner
           type="warning"
@@ -781,7 +797,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
           }
         />
       )}
-      {agentCancelled && entityType === "team" && (
+      {agentCancelled && showAgentBreakdown && (
         <Alert
           banner
           type="info"
