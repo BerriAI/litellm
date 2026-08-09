@@ -563,8 +563,14 @@ class Router:
 
         if cache_responses:
             if litellm.cache is None:
-                # the cache can be initialized on the proxy server. We should not overwrite it
-                litellm.cache = litellm.Cache(type=cache_type, **cache_config)
+                # SECURITY FIX: Do not allow a Router to initialize the global cache 
+                # with client-provided cache_kwargs. This prevents cache exfiltration.
+                # The global cache must be initialized by the server admin or proxy config.
+                 verbose_router_logger.warning(
+                    "cache_responses=True but litellm.cache is None. "
+                    "Global cache will not be initialized by the Router for security reasons. "
+                    "Please configure litellm.cache globally."
+                )
             self.cache_responses = cache_responses
         self.cache = DualCache(
             redis_cache=redis_cache, in_memory_cache=InMemoryCache()
