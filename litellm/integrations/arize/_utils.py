@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from typing_extensions import override
@@ -1072,7 +1073,7 @@ def _parse_passthrough_response(raw_response_obj, coerced_response_obj, kwargs):
 
 def _maybe_set_mcp_tool_attrs(
     span: "Span",
-    kwargs: dict,
+    kwargs: Mapping[str, object],
     standard_logging_payload: StandardLoggingPayload | None,
     coerced_response_obj: object,
 ) -> None:
@@ -1083,24 +1084,24 @@ def _maybe_set_mcp_tool_attrs(
     in `metadata.mcp_tool_call_metadata`; the result is an MCP `CallToolResult`
     whose `content` is a list of typed parts.
     """
-    if not isinstance(standard_logging_payload, dict):
+    if standard_logging_payload is None:
         return
     if standard_logging_payload.get("call_type") != CallTypes.call_mcp_tool.value:
         return
 
     metadata: Final = standard_logging_payload.get("metadata")
-    mcp_meta: Final = metadata.get("mcp_tool_call_metadata") if isinstance(metadata, dict) else None
-    if not isinstance(mcp_meta, dict):
+    mcp_meta: Final = metadata.get("mcp_tool_call_metadata") if metadata else None
+    if mcp_meta is None:
         return
 
     tool_name: Final = mcp_meta.get("name") or mcp_meta.get("namespaced_tool_name")
     if tool_name:
         safe_set_attribute(span, SpanAttributes.TOOL_NAME, tool_name)
 
-    if should_redact_message_logging(kwargs):
+    if should_redact_message_logging(kwargs):  # pyright: ignore[reportArgumentType]  # reads the mapping, never mutates it
         return
 
-    arguments: Final = mcp_meta.get("arguments")
+    arguments: Final[object] = mcp_meta.get("arguments")
     if arguments:
         safe_set_attribute(span, SpanAttributes.INPUT_VALUE, safe_dumps(arguments))
         safe_set_attribute(span, SpanAttributes.INPUT_MIME_TYPE, OpenInferenceMimeTypeValues.JSON.value)
@@ -1109,11 +1110,11 @@ def _maybe_set_mcp_tool_attrs(
 
 
 def _set_mcp_tool_output(span: "Span", coerced_response_obj: object) -> None:
-    if not isinstance(coerced_response_obj, dict):
+    if not isinstance(coerced_response_obj, Mapping):
         return
 
-    content: Final = coerced_response_obj.get("content")
-    text: Final = _coerce_text(content)
+    content: Final[object] = coerced_response_obj.get("content")
+    text: Final[str | None] = _coerce_text(content)
     if text:
         safe_set_attribute(span, SpanAttributes.OUTPUT_VALUE, text)
         safe_set_attribute(span, SpanAttributes.OUTPUT_MIME_TYPE, OpenInferenceMimeTypeValues.TEXT.value)
