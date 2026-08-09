@@ -781,6 +781,154 @@ async def test_update_key_personal_non_admin_denied_access_groups(
     assert "Access groups" in str(exc.value.detail)
 
 
+# ---------------------------------------------------------------------------
+# Regression tests for GHSA-q775-qw9r-2r4g on the UPDATE path: /key/update must
+# not let a non-admin caller raise a key's max_budget / budget_limits /
+# temp_budget_increase above their own delegation ceiling.
+# _check_key_admin_access proves identity (proxy admin / key owner / team admin
+# / org admin) but never compares the requested values against the caller's
+# ceiling; the fix adds that value-vs-ceiling check to _validate_update_key_data.
+# prisma_client=None plus a personal key (team_id=None) skips the admin-identity
+# and team-member paths so these tests exercise only the ceiling gate.
+# ---------------------------------------------------------------------------
+
+
+def _update_key_ceiling_caller(max_budget):
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+    return UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-alice",
+        user_id="alice",
+        max_budget=max_budget,
+    )
+
+
+def _update_key_ceiling_existing_row(max_budget):
+    return MagicMock(
+        token="hashed_alice_personal_key",
+        user_id="alice",
+        team_id=None,
+        created_by="alice",
+        max_budget=max_budget,
+        organization_id=None,
+        project_id=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_key_non_admin_cannot_raise_max_budget_above_ceiling():
+    """Caller with max_budget=100 must not raise their key from 50 to 200."""
+    from litellm.proxy._types import UpdateKeyRequest
+
+    data = UpdateKeyRequest(key="sk-alice-personal", max_budget=200)
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            data=data,
+            existing_key_row=_update_key_ceiling_existing_row(50),
+            user_api_key_dict=_update_key_ceiling_caller(100),
+            llm_router=None,
+            premium_user=True,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+        )
+    assert exc.value.status_code == 400
+    assert "cannot exceed the caller's own max_budget" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_update_key_non_admin_within_ceiling_max_budget_allowed():
+    """Caller with max_budget=100 may raise their key to 80 (within ceiling)."""
+    from litellm.proxy._types import UpdateKeyRequest
+
+    data = UpdateKeyRequest(key="sk-alice-personal", max_budget=80)
+    await _validate_update_key_data(
+        data=data,
+        existing_key_row=_update_key_ceiling_existing_row(50),
+        user_api_key_dict=_update_key_ceiling_caller(100),
+        llm_router=None,
+        premium_user=True,
+        prisma_client=None,
+        user_api_key_cache=MagicMock(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_key_non_admin_cannot_raise_budget_limits_above_ceiling():
+    """budget_limits window of 150 must be rejected for a caller capped at 100."""
+    from litellm.models.team import BudgetLimitEntry
+    from litellm.proxy._types import UpdateKeyRequest
+
+    data = UpdateKeyRequest(
+        key="sk-alice-personal",
+        budget_limits=[BudgetLimitEntry(budget_duration="30d", max_budget=150)],
+    )
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            data=data,
+            existing_key_row=_update_key_ceiling_existing_row(50),
+            user_api_key_dict=_update_key_ceiling_caller(100),
+            llm_router=None,
+            premium_user=True,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+        )
+    assert exc.value.status_code == 400
+    assert "cannot exceed the caller's own max_budget" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_update_key_non_admin_cannot_raise_temp_budget_increase_above_ceiling():
+    """temp_budget_increase is applied on top of max_budget at request time, so
+    50 + 100 = 150 must be rejected for a caller capped at 100."""
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.proxy._types import UpdateKeyRequest
+
+    data = UpdateKeyRequest(
+        key="sk-alice-personal",
+        max_budget=50,
+        temp_budget_increase=100,
+        temp_budget_expiry=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            data=data,
+            existing_key_row=_update_key_ceiling_existing_row(50),
+            user_api_key_dict=_update_key_ceiling_caller(100),
+            llm_router=None,
+            premium_user=True,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+        )
+    assert exc.value.status_code == 400
+    assert "temp_budget_increase" in str(exc.value.detail)
+    assert "cannot exceed the caller's own max_budget" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_update_key_proxy_admin_can_raise_max_budget_above_ceiling():
+    """PROXY_ADMIN is not bound by the delegation ceiling."""
+    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+    data = UpdateKeyRequest(key="sk-alice-personal", max_budget=200)
+    await _validate_update_key_data(
+        data=data,
+        existing_key_row=_update_key_ceiling_existing_row(50),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-admin",
+            user_id="admin",
+            max_budget=50,
+        ),
+        llm_router=None,
+        premium_user=True,
+        prisma_client=None,
+        user_api_key_cache=MagicMock(),
+    )
+
+
 @pytest.mark.asyncio
 async def test_generate_key_helper_fn_with_access_group_ids(monkeypatch):
     """Ensure generate_key_helper_fn passes access_group_ids into the key insert payload."""

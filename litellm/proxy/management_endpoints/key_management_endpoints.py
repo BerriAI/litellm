@@ -2524,6 +2524,69 @@ async def _validate_update_key_data(
                 prisma_client=prisma_client,
             )
 
+    # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
+    # must not be able to raise a key's budget above their own authority on
+    # /key/update.  _check_key_admin_access above proves identity (proxy admin
+    # / key owner / team admin / org admin) but never compares the requested
+    # values against the caller's delegation ceiling, which is what let a team
+    # admin grant a key a higher max_budget / budget_limits /
+    # temp_budget_increase than they are allowed to delegate.  Mirrors the
+    # generate-path guards in _common_key_generation_helper.
+    _is_ui_session_team_key: Final = (
+        user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID and _team_id_to_check is not None
+    )
+    _delegation_ceiling: Final = (
+        user_api_key_dict.max_budget
+        if user_api_key_dict.max_budget is not None
+        else (team_obj.max_budget if user_api_key_dict.is_session_token and team_obj is not None else None)
+    )
+    if not _is_proxy_admin and not _is_ui_session_team_key:
+        _requested_max_budget: Final = data.max_budget
+        if (
+            _requested_max_budget is not None
+            and _requested_max_budget != existing_key_row.max_budget
+            and _delegation_ceiling is not None
+            and _requested_max_budget > _delegation_ceiling
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        f"max_budget ({_requested_max_budget}) cannot exceed the caller's "
+                        f"own max_budget ({_delegation_ceiling})."
+                    )
+                },
+            )
+        if data.temp_budget_increase is not None and _delegation_ceiling is not None:
+            # temp_budget_increase is applied on top of the key's max_budget at
+            # request time (user_api_key_auth._update_key_budget_with_temp_budget_increase),
+            # so the effective budget must stay under the caller's ceiling too.
+            _effective_max_budget: Final = (
+                data.max_budget if data.max_budget is not None else existing_key_row.max_budget
+            )
+            if (
+                _effective_max_budget is not None
+                and _effective_max_budget + data.temp_budget_increase > _delegation_ceiling
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": (
+                            f"max_budget plus temp_budget_increase "
+                            f"({_effective_max_budget} + {data.temp_budget_increase} = "
+                            f"{_effective_max_budget + data.temp_budget_increase}) cannot exceed "
+                            f"the caller's own max_budget ({_delegation_ceiling})."
+                        )
+                    },
+                )
+        _check_budget_limits_delegation_ceiling(
+            budget_limits=data.budget_limits,
+            delegation_ceiling=_delegation_ceiling,
+            user_api_key_dict=user_api_key_dict,
+            is_ui_session_team_key=_is_ui_session_team_key,
+            team_table=team_obj,
+        )
+
     TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
         user_api_key_dict=user_api_key_dict,
         team_table=team_obj,
