@@ -344,7 +344,7 @@ class RedisCache(BaseCache):
         """Setup async and sync health pings for Redis."""
         # ASYNC HEALTH PING
         try:
-            _health_ping_task = asyncio.get_running_loop().create_task(self.ping())
+            _health_ping_task: Final = asyncio.get_running_loop().create_task(self.ping())
             self._service_logging_tasks.add(_health_ping_task)
             _health_ping_task.add_done_callback(self._service_logging_tasks.discard)
         except Exception as e:
@@ -372,7 +372,7 @@ class RedisCache(BaseCache):
             loop: Final = asyncio.get_running_loop()
             start_time: Final = time.time()
             end_time: Final = start_time
-            _service_logging_task = loop.create_task(
+            _service_logging_task = loop.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=end_time - start_time,
@@ -391,7 +391,7 @@ class RedisCache(BaseCache):
             loop: Final = asyncio.get_running_loop()
             start_time: Final = time.time()
             end_time: Final = start_time
-            _service_logging_task = loop.create_task(
+            _service_logging_task = loop.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=end_time - start_time,
@@ -573,7 +573,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -590,7 +590,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -698,7 +698,7 @@ class RedisCache(BaseCache):
         except Exception as e:
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -736,7 +736,7 @@ class RedisCache(BaseCache):
             print_verbose(f"Successfully Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}")
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -753,7 +753,7 @@ class RedisCache(BaseCache):
         except Exception as e:
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -825,7 +825,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -842,7 +842,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -890,7 +890,7 @@ class RedisCache(BaseCache):
         except Exception as e:
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -918,7 +918,7 @@ class RedisCache(BaseCache):
             print_verbose(f"Successfully Set ASYNC Redis Cache SADD: key: {key}\nValue {value}\nttl={ttl}")
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -933,7 +933,7 @@ class RedisCache(BaseCache):
         except Exception as e:
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -993,7 +993,7 @@ class RedisCache(BaseCache):
             end_time = time.time()
             _duration = end_time - start_time
 
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1010,7 +1010,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1193,7 +1193,7 @@ class RedisCache(BaseCache):
 
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1210,7 +1210,7 @@ class RedisCache(BaseCache):
         except Exception as e:
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1258,7 +1258,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1287,7 +1287,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1348,7 +1348,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1363,7 +1363,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1506,7 +1506,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1523,7 +1523,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1595,7 +1595,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1610,7 +1610,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1668,7 +1668,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1682,7 +1682,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1737,7 +1737,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1764,7 +1764,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1865,7 +1865,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1879,7 +1879,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            _service_logging_task = asyncio.create_task(
+            _service_logging_task = asyncio.create_task(  # rebind-ok: one log task per exit path
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
