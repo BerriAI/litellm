@@ -2548,6 +2548,23 @@
         "interactions": true
       }
     },
+    "wavespeed": {
+      "display_name": "WaveSpeedAI (`wavespeed`)",
+      "url": "https://docs.litellm.ai/docs/providers/wavespeed",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "watsonx_text": {
       "display_name": "Watsonx Text (`watsonx_text`)",
       "url": "https://docs.litellm.ai/docs/providers/watsonx",
