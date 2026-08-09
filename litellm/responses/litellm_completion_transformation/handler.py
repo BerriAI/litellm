@@ -2,8 +2,9 @@
 Handler for transforming responses api requests to litellm.completion requests
 """
 
-from collections.abc import Coroutine
-from typing import Any, Final
+from collections.abc import Coroutine, Mapping
+from types import MappingProxyType
+from typing import Any, Final, get_type_hints
 
 import litellm
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
@@ -18,7 +19,36 @@ from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
 )
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, all_litellm_params
+
+
+def _drop_untranslated_responses_params(kwargs: Mapping[str, Any], model: str) -> Mapping[str, Any]:
+    """Drop the Responses params this bridge has no chat-completion translation for.
+
+    Every Responses request param reaches this bridge twice. ``litellm.responses()``
+    filters the caller's params against ``ResponsesAPIOptionalRequestParams`` and hands
+    the result over as ``responses_api_request``, which is the copy the bridge actually
+    translates. The same params also arrive untouched in ``**kwargs``, and merging that
+    second copy into the ``litellm.completion`` call below is what leaks them.
+
+    An untranslated param then fails in one of two ways. If Chat Completions does not
+    define it, it is swept into the provider request downstream, so Bedrock Converse
+    puts it in ``additionalModelRequestFields`` and rejects the call. If it happens to
+    share a name with a chat-completion param, it is validated against the provider
+    instead, so ``top_logprobs`` raises ``UnsupportedParamsError`` on a provider that
+    does not support it, before any request is made.
+
+    Deriving the drop set from the same TypedDict the params were filtered with, minus
+    what the bridge translates, minus ``all_litellm_params``, keeps this a filter rather
+    than an allowlist: LiteLLM plumbing, deployment credentials and provider-specific
+    params are not Responses params, so they pass through untouched.
+    """
+    untranslated: Final = (
+        frozenset(get_type_hints(ResponsesAPIOptionalRequestParams))
+        - frozenset(LiteLLMCompletionResponsesConfig.get_supported_openai_params(model))
+        - frozenset(all_litellm_params)
+    )
+    return MappingProxyType({key: value for key, value in kwargs.items() if key not in untranslated})
 
 
 class LiteLLMCompletionTransformationHandler:
@@ -58,7 +88,7 @@ class LiteLLMCompletionTransformationHandler:
             )
 
         completion_args: Final = {}
-        completion_args.update(kwargs)
+        completion_args.update(_drop_untranslated_responses_params(kwargs, model))
         completion_args.update(litellm_completion_request)
         completion_args["_skip_responses_api_bridge"] = True
 
@@ -103,7 +133,9 @@ class LiteLLMCompletionTransformationHandler:
             )
 
         acompletion_args: Final = {}
-        acompletion_args.update(kwargs)
+        acompletion_args.update(
+            _drop_untranslated_responses_params(kwargs, litellm_completion_request.get("model") or "")
+        )
         acompletion_args.update(litellm_completion_request)
         acompletion_args["_skip_responses_api_bridge"] = True
 

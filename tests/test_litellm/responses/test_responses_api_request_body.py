@@ -367,3 +367,104 @@ async def test_aresponses_client_header_conflict_is_case_insensitive():
 
     assert [name for name in request_headers if name.lower() == "x-shared"] == ["x-shared"]
     assert request_headers["x-shared"] == "from-caller"
+
+
+def _bedrock_converse_response() -> httpx.Response:
+    """A real httpx.Response: the Bedrock path calls raise_for_status() and reads headers."""
+    return httpx.Response(
+        status_code=200,
+        json={
+            "output": {"message": {"role": "assistant", "content": [{"text": "Done."}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
+        },
+        request=httpx.Request("POST", "https://bedrock-runtime.us-west-2.amazonaws.com/"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_aresponses_completion_bridge_does_not_leak_untranslated_params(monkeypatch):
+    """
+    Bedrock has no native Responses config, so the request goes through the
+    chat-completion bridge. Responses params the bridge cannot translate must not
+    reach the provider: Bedrock sweeps unrecognised params into
+    additionalModelRequestFields and rejects the request.
+    """
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "fake-key-id")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "fake-secret")
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = _bedrock_converse_response()
+
+        await litellm.aresponses(
+            model="bedrock/converse/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            aws_region_name="us-west-2",
+            input="hi",
+            max_tool_calls=3,
+            partial_images=2,
+            prompt_cache_key="pck-1",
+        )
+
+        mock_post.assert_called_once()
+        post_kwargs = mock_post.call_args.kwargs
+        request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
+        assert "additionalModelRequestFields" not in request_body
+
+
+@pytest.mark.asyncio
+async def test_aresponses_completion_bridge_untranslated_param_does_not_raise(monkeypatch):
+    """
+    top_logprobs is both a Responses param and a chat-completion param, so
+    forwarding it made LiteLLM reject the call outright for a provider that does
+    not support it. Dropping it at the bridge lets the request through.
+    """
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "fake-key-id")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "fake-secret")
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = _bedrock_converse_response()
+
+        await litellm.aresponses(
+            model="bedrock/converse/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            aws_region_name="us-west-2",
+            input="hi",
+            top_logprobs=2,
+        )
+
+        mock_post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_aresponses_completion_bridge_keeps_provider_params(monkeypatch):
+    """
+    The bridge must not become an allowlist: a provider-specific param carried in
+    the deployment's litellm_params still has to reach the provider.
+    """
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "fake-key-id")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "fake-secret")
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = _bedrock_converse_response()
+
+        await litellm.aresponses(
+            model="bedrock/converse/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            aws_region_name="us-west-2",
+            input="hi",
+            top_k=7,
+            prompt_cache_key="pck-1",
+        )
+
+        mock_post.assert_called_once()
+        post_kwargs = mock_post.call_args.kwargs
+        request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
+        assert request_body["additionalModelRequestFields"] == {"top_k": 7}
