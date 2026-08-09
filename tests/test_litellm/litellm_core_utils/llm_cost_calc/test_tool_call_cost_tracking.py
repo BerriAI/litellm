@@ -604,3 +604,64 @@ def test_web_search_provider_prefix_fallback_does_not_misprice_non_gemini_model(
 
 # Note: File search integration test removed due to complex annotation detection logic
 # The unit tests in test_azure_assistant_cost_tracking.py provide comprehensive coverage
+
+
+def test_web_search_and_file_search_costs_are_additive(local_model_cost_map):
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/34730: a response that
+    performs both a web search and a file search must be charged for both fees, not
+    only the first detected tool category.
+    """
+    from openai.types.responses import (
+        ResponseFileSearchToolCall,
+        ResponseFunctionWebSearch,
+    )
+
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    model = "gpt-4o-search-preview"
+    response_object = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        model=model,
+        object="response",
+        output=[
+            ResponseFunctionWebSearch(
+                id="ws_1",
+                type="web_search_call",
+                status="completed",
+                action={"type": "search", "query": "litellm"},
+            ),
+            ResponseFileSearchToolCall(
+                id="fs_1",
+                type="file_search_call",
+                status="completed",
+                queries=["litellm"],
+            ),
+        ],
+        parallel_tool_calls=False,
+        tools=[],
+        temperature=1,
+        top_p=1,
+    )
+    standard_built_in_tools_params = StandardBuiltInToolsParams(
+        web_search_options=WebSearchOptions(search_context_size="medium"),
+        file_search=FileSearchTool(type="file_search"),
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=response_object,
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=standard_built_in_tools_params,
+    )
+
+    expected_web_search_cost = litellm.get_model_info(model)[
+        "search_context_cost_per_query"
+    ]["search_context_size_medium"]
+    expected_file_search_cost = 0.0025
+
+    assert cost == pytest.approx(
+        expected_web_search_cost + expected_file_search_cost
+    ), f"expected additive built-in tool cost, got ${cost}"
