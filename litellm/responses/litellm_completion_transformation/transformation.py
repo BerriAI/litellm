@@ -630,7 +630,7 @@ class LiteLLMCompletionResponsesConfig:
                 if existing:
                     combined = combined + "\n" + existing
                 if isinstance(msg, dict):
-                    msg["reasoning_content"] = combined
+                    cast(dict[str, Any], msg)["reasoning_content"] = combined  # cast-ok: mutable reasoning carrier
                 else:
                     setattr(msg, "reasoning_content", combined)  # noqa: B010
                 pending_reasoning = []  # mutable-ok: reset accumulator
