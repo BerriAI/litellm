@@ -514,14 +514,6 @@ class TestOllamaTextCompletionResponseIterator:
 
 
 class TestOllamaFakeStreamActivation:
-    """Unit coverage for the #35711 fix's trigger condition: OllamaConfig.map_openai_params()
-    sets optional_params["fake_stream"] = True only when tool-call emulation is active
-    (functions_unsupported_model present, mirroring the pattern in
-    test_ollama_chat_transformation.py's assertions on get_optional_params()'s output)
-    and the caller actually requested streaming. Complements
-    TestOllamaFakeStreamToolCalls, which proves the full chain that this trigger feeds into.
-    """
-
     def _tools(self):
         return [
             {
@@ -568,21 +560,8 @@ class TestOllamaFakeStreamActivation:
 
 
 class TestOllamaFakeStreamToolCalls:
-    """Regression test for #35711 at the level the fix actually operates on.
-
-    OllamaTextCompletionResponseIterator.chunk_parser() never reconstructs tool calls
-    from streamed text and is not meant to: for ollama/ tool emulation (tools injected
-    into the prompt, never sent as a native `tools` field), OllamaConfig.map_openai_params()
-    sets fake_stream=True, which routes the request through a real non-streaming call to
-    Ollama, reuses the already-correct transform_response() reconstruction (see
-    test_transform_response_json_function_call above), and wraps the result as a single
-    fake stream chunk via MockResponseIterator. Only the HTTP boundary is mocked here;
-    the rest of litellm.completion()'s execution path runs for real, following the pattern
-    in test_vertex_gemma_transformation.py::test_acompletion_fake_streaming and
-    test_llm_http_handler.py::test_responses_handler_signs_after_fake_stream_prep_strips_stream.
-    """
-
     def test_tools_stream_true_reconstructs_tool_calls_via_fake_stream(self):
+        """Test that tools + stream=True routes through fake_stream and yields reconstructed tool_calls."""
         tool_call_json = {
             "name": "get_current_weather",
             "arguments": {"location": "San Francisco"},
@@ -595,68 +574,55 @@ class TestOllamaFakeStreamToolCalls:
             "prompt_eval_count": 42,
             "eval_count": 16,
         }
-        mock_ollama_response_bytes = json.dumps(mock_ollama_response).encode()
 
-        captured_requests = []
+        mock_client = MagicMock(spec=HTTPHandler)
+        mock_client.post.return_value = httpx.Response(
+            status_code=200,
+            content=json.dumps(mock_ollama_response).encode(),
+            request=httpx.Request("POST", "http://127.0.0.1:11434/api/generate"),
+        )
 
-        def _fake_post(
-            self, url, headers=None, data=None, timeout=None, stream=False, logging_obj=None, **kwargs
-        ):
-            request_body = json.loads(data) if isinstance(data, (str, bytes)) else {}
-            captured_requests.append({"url": url, "body": request_body})
-            return httpx.Response(
-                status_code=200,
-                content=mock_ollama_response_bytes,
-                request=httpx.Request("POST", url),
-            )
-
-        with patch.object(HTTPHandler, "post", _fake_post):
-            response = litellm.completion(
-                model="ollama/llama2",
-                api_base="http://127.0.0.1:11434",
-                messages=[
-                    {"role": "user", "content": "What is the weather in San Francisco?"}
-                ],
-                tools=[
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "get_current_weather",
-                            "description": "Get current weather.",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {"location": {"type": "string"}},
-                                "required": ["location"],
-                            },
+        response = litellm.completion(
+            model="ollama/llama2",
+            api_base="http://127.0.0.1:11434",
+            messages=[{"role": "user", "content": "What is the weather in San Francisco?"}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_current_weather",
+                        "description": "Get current weather.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"location": {"type": "string"}},
+                            "required": ["location"],
                         },
-                    }
-                ],
-                stream=True,
-                drop_params=True,
-            )
+                    },
+                }
+            ],
+            stream=True,
+            drop_params=True,
+            client=mock_client,
+        )
 
-            reassembled_content = ""
-            tool_calls_seen = []
-            finish_reasons = []
-            for chunk in response:
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    reassembled_content += delta.content
-                if getattr(delta, "tool_calls", None):
-                    tool_calls_seen.extend(delta.tool_calls)
-                if chunk.choices[0].finish_reason:
-                    finish_reasons.append(chunk.choices[0].finish_reason)
+        reassembled_content = ""
+        tool_calls_seen = []
+        finish_reasons = []
+        for chunk in response:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                reassembled_content += delta.content
+            if getattr(delta, "tool_calls", None):
+                tool_calls_seen.extend(delta.tool_calls)
+            if chunk.choices[0].finish_reason:
+                finish_reasons.append(chunk.choices[0].finish_reason)
 
-        assert len(captured_requests) == 1
-        request_body = captured_requests[0]["body"]
+        assert mock_client.post.call_count == 1
+        request_body = json.loads(mock_client.post.call_args.kwargs["data"])
 
-        # fake_stream engaged: the actual wire request to Ollama is non-streaming.
         assert request_body.get("stream") is False
-
-        # tools are emulated via the injected prompt, never sent as a native field.
         assert "tools" not in request_body
 
-        # the streamed response reconstructs the tool call, not raw JSON text.
         assert tool_calls_seen, "expected delta.tool_calls to be populated"
         assert tool_calls_seen[0]["function"]["name"] == "get_current_weather"
         assert json.loads(tool_calls_seen[0]["function"]["arguments"]) == {

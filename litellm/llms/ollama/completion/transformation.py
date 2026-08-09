@@ -1,6 +1,6 @@
 import json
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
@@ -189,10 +189,7 @@ class OllamaConfig(BaseConfig):
                     optional_params["format"] = value["json_schema"]["schema"]
 
         if "functions_unsupported_model" in optional_params and optional_params.get("stream") is True:
-            # Tools are emulated via a prompt instruction + format=json for ollama/, not a
-            # native `tools` request field. transform_response() already reconstructs the
-            # resulting JSON into tool_calls for stream=False; fake_stream reuses that same
-            # reconstruction for stream=True instead of forwarding the raw JSON as text.
+            # functions_unsupported_model means tools are emulated via prompt injection here.
             optional_params["fake_stream"] = True
 
         return optional_params
@@ -404,15 +401,15 @@ class OllamaConfig(BaseConfig):
 
     def sign_request(
         self,
-        headers: dict,  # mutable-ok: matches BaseConfig.sign_request's fixed override signature
-        optional_params: dict,  # mutable-ok: matches BaseConfig.sign_request's fixed override signature
-        request_data: dict,  # mutable-ok: matches BaseConfig.sign_request's fixed override signature
+        headers: dict[str, str],  # mutable-ok: returned unchanged, must stay assignable to BaseConfig's dict return type
+        optional_params: Mapping[str, object],
+        request_data: Mapping[str, object],
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
         stream: bool | None = None,
         fake_stream: bool | None = None,
-    ) -> tuple[dict, bytes | None]:  # mutable-ok: matches BaseConfig.sign_request's fixed override signature
+    ) -> tuple[dict[str, str], bytes | None]:  # mutable-ok: return type must match BaseConfig's dict-shaped contract
         if fake_stream is True:
             # /api/generate defaults to streaming when "stream" is absent from the body, but
             # the shared fake-stream handling drops the key instead of setting it False. Force
