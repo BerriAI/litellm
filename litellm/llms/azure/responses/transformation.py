@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
+from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -19,6 +20,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+_JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -96,20 +100,24 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         # Then filter out status from message items
         if isinstance(validated_input, list):
-            filtered_input: Final[list[Any]] = []
+            filtered_input: Final[list[object]] = []
             for item in validated_input:
                 filtered_item = (
                     {k: v for k, v in item.items() if k != "status"}
                     if isinstance(item, dict) and item.get("type") == "message"
                     else item
                 )
-                filtered_input.append(self._normalize_additional_tools_item(filtered_item))
+                if filtered_item.get("type") == "additional_tools":
+                    validated_additional_tools_item: JsonValue = _JSON_VALUE_ADAPTER.validate_python(filtered_item)
+                    filtered_input.append(self._normalize_additional_tools_item(validated_additional_tools_item))
+                else:
+                    filtered_input.append(filtered_item)
             return cast(ResponseInputParam, filtered_input)
 
         return validated_input
 
     @staticmethod
-    def _normalize_namespace_tool_description(tool: Any) -> Any:
+    def _normalize_namespace_tool_description(tool: JsonValue) -> JsonValue:
         if not isinstance(tool, dict) or tool.get("type") != "namespace":
             return tool
 
@@ -122,7 +130,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return {**tool, "description": fallback_description}
 
     @classmethod
-    def _normalize_additional_tools_item(cls, item: Any) -> Any:
+    def _normalize_additional_tools_item(cls, item: JsonValue) -> JsonValue:
         if not isinstance(item, dict) or item.get("type") != "additional_tools":
             return item
 
