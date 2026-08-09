@@ -35,7 +35,7 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
-from pydantic import BaseModel, Json, JsonValue
+from pydantic import BaseModel, Json, JsonValue, TypeAdapter
 from typing_extensions import NotRequired, assert_never
 
 from litellm._uuid import uuid
@@ -112,6 +112,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_errors_from_headers,
     get_hidden_params_dict,
 )
+from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -631,6 +632,7 @@ from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import (
     DeploymentTypedDict,
     RouterGeneralSettings,
+    RoutingGroup,
     RoutingPlugin,
     SearchToolTypedDict,
     updateDeployment,
@@ -5926,7 +5928,32 @@ class ProxyConfig:
                 combined_router_settings = db_router_settings.param_value
 
             if combined_router_settings:
-                llm_router.update_settings(**combined_router_settings)
+                llm_router.update_settings(**self._drop_invalid_routing_groups(combined_router_settings))
+
+    @staticmethod
+    def _drop_invalid_routing_groups(router_settings: Mapping[str, object]) -> Mapping[str, object]:
+        """
+        A `routing_groups` value already persisted in the DB (saved before
+        save-time validation existed) must not take the rest of the reconcile
+        down with it: log it and apply every other setting, leaving whatever
+        groups the router already holds in place.
+        """
+        raw_groups: Final = router_settings.get("routing_groups")
+        if raw_groups is None:
+            return router_settings
+        try:
+            parse_routing_groups(
+                TypeAdapter(list[RoutingGroup]).validate_python(raw_groups),
+                validate_strategy=Router._validate_routing_strategy,
+            )
+        except ValueError as validation_error:
+            verbose_proxy_logger.error(
+                "Ignoring invalid router_settings.routing_groups from config/DB, all other router settings still "
+                "apply. Fix the routing groups in the Admin UI to load them: %s",
+                validation_error,
+            )
+            return {k: v for k, v in router_settings.items() if k != "routing_groups"}
+        return router_settings
 
     def _add_general_settings_from_db_config(
         self, config_data: dict, general_settings: dict, proxy_logging_obj: ProxyLogging
@@ -14880,6 +14907,15 @@ async def update_config(
 
         if prisma_client is None:
             raise Exception("No DB Connected")
+
+        if config_info.router_settings is not None:
+            try:
+                parse_routing_groups(
+                    config_info.router_settings.routing_groups,
+                    validate_strategy=Router._validate_routing_strategy,
+                )
+            except ValueError as validation_error:
+                raise HTTPException(status_code=400, detail={"error": str(validation_error)})
 
         async def _read_section(param_name: str) -> dict:
             row: Final = await ConfigRepository(prisma_client).table.find_first(where={"param_name": param_name})

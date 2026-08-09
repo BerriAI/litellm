@@ -3,6 +3,7 @@
 import React, { useMemo } from "react";
 import { Form, Input, Modal, Select, Space, Typography } from "antd";
 import type { RoutingGroup, RoutingStrategy } from "./types";
+import { modelConflictError } from "./modelOwnership";
 
 const { Text, Paragraph } = Typography;
 
@@ -14,6 +15,7 @@ interface RoutingGroupModalProps {
   strategyDescriptions: Record<string, string>;
   modelOptions: string[];
   existingGroupNames: string[];
+  groupNameByModel: Record<string, string>;
   onClose: () => void;
   onSubmit: (group: RoutingGroup) => Promise<void> | void;
   saving?: boolean;
@@ -31,6 +33,16 @@ const STRATEGIES_WITH_ARGS = new Set<string>(["latency-based-routing", "usage-ba
 const GROUP_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 const GROUP_NAME_MAX_LENGTH = 64;
 
+const modelRules = (groupNameByModel: Record<string, string>) => [
+  { required: true, message: "Select at least one model" },
+  {
+    validator: (_: unknown, value: string[] | undefined) => {
+      const error = modelConflictError(value, groupNameByModel);
+      return error ? Promise.reject(new Error(error)) : Promise.resolve();
+    },
+  },
+];
+
 const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
   open,
   mode,
@@ -39,6 +51,7 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
   strategyDescriptions,
   modelOptions,
   existingGroupNames,
+  groupNameByModel,
   onClose,
   onSubmit,
   saving,
@@ -125,7 +138,7 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
               },
             },
           ]}
-          extra="Use this name as the model in API calls — LiteLLM routes the request to one of the group's models."
+          extra="Names the group's shared routing strategy. Requests still use the model names, not this name."
         >
           <Input placeholder="fast-chat" disabled={mode === "edit"} />
         </Form.Item>
@@ -133,8 +146,8 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
         <Form.Item
           label="Models"
           name="models"
-          rules={[{ required: true, message: "Select at least one model" }]}
-          extra="Models from your model list that this group routes between."
+          rules={modelRules(groupNameByModel)}
+          extra="Models from your model list that this group routes between. A model can only be in one group."
         >
           <Select
             mode="multiple"

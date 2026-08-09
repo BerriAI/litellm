@@ -11278,3 +11278,24 @@ async def test_setup_prisma_client_returns_none_when_connect_itself_fails(monkey
     assert result is None
     assert mock_client.start_db_health_watchdog_task.await_count == 0
     assert mock_client.health_check.await_count == 0
+
+
+def test_drop_invalid_routing_groups_keeps_other_router_settings():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    valid = {
+        "num_retries": 3,
+        "routing_groups": [
+            {"group_name": "g1", "models": ["m1"], "routing_strategy": "least-busy"},
+        ],
+    }
+    assert ProxyConfig._drop_invalid_routing_groups(valid) == valid
+
+    overlapping = {
+        "num_retries": 3,
+        "routing_groups": [
+            {"group_name": "g1", "models": ["m1"], "routing_strategy": "least-busy"},
+            {"group_name": "g2", "models": ["m1"], "routing_strategy": "least-busy"},
+        ],
+    }
+    assert ProxyConfig._drop_invalid_routing_groups(overlapping) == {"num_retries": 3}

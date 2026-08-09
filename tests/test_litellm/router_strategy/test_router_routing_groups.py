@@ -726,3 +726,65 @@ def test_strategy_reinit_unregisters_override_selectors():
     assert router._override_selectors == {}
     assert not any(id(cb) == id(override_selector) for cb in litellm.callbacks)
     assert router._get_override_strategy_selector("latency-based-routing") is router.lowestlatency_logger
+
+
+def test_failed_routing_groups_update_keeps_previous_groups():
+    router = _build_router(
+        routing_groups=[
+            {"group_name": "g1", "models": ["filtered-model"], "routing_strategy": "latency-based-routing"},
+        ],
+    )
+    selector = router._group_selectors["g1"]["latency-based-routing"]
+
+    with pytest.raises(ValueError, match="appears in"):
+        router.update_settings(
+            routing_groups=[
+                {"group_name": "g1", "models": ["filtered-model"], "routing_strategy": "latency-based-routing"},
+                {"group_name": "g2", "models": ["filtered-model"], "routing_strategy": "least-busy"},
+            ],
+        )
+
+    assert list(router._routing_groups) == ["g1"]
+    assert router._model_to_group == {"filtered-model": "g1"}
+    assert router._group_selectors["g1"]["latency-based-routing"] is selector
+    assert router._get_routing_context("filtered-model", None) == ("latency-based-routing", selector)
+
+
+def test_overlap_error_names_every_conflicting_model():
+    with pytest.raises(ValueError) as exc_info:
+        _build_router(
+            routing_groups=[
+                {
+                    "group_name": "g1",
+                    "models": ["filtered-model", "other-model"],
+                    "routing_strategy": "latency-based-routing",
+                },
+                {
+                    "group_name": "g2",
+                    "models": ["filtered-model", "other-model"],
+                    "routing_strategy": "least-busy",
+                },
+            ],
+        )
+    message = str(exc_info.value)
+    assert "'filtered-model' appears in 'g1' and 'g2'" in message
+    assert "'other-model' appears in 'g1' and 'g2'" in message
+
+
+def test_invalid_group_strategy_does_not_leak_a_selector():
+    router = _build_router(
+        routing_groups=[
+            {"group_name": "g1", "models": ["filtered-model"], "routing_strategy": "latency-based-routing"},
+        ],
+    )
+    selector = router._group_selectors["g1"]["latency-based-routing"]
+
+    with pytest.raises(ValueError, match="Invalid routing_strategy"):
+        router.update_settings(
+            routing_groups=[
+                {"group_name": "g2", "models": ["other-model"], "routing_strategy": "not-a-real-strategy"},
+            ],
+        )
+
+    assert list(router._routing_groups) == ["g1"]
+    assert any(id(cb) == id(selector) for cb in litellm.callbacks)

@@ -154,6 +154,7 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
 )
+from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -898,7 +899,8 @@ class Router:
             return strategy.value
         return strategy
 
-    def _validate_routing_strategy(self, routing_strategy: RoutingStrategy | str | None) -> None:
+    @staticmethod
+    def _validate_routing_strategy(routing_strategy: RoutingStrategy | str | None) -> None:
         # See: https://github.com/BerriAI/litellm/issues/11330
         valid_strategy_strings: Final = ["simple-shuffle", "lar1"] + [s.value for s in RoutingStrategy]
         if routing_strategy is None:
@@ -1014,66 +1016,42 @@ class Router:
         at most one explicit group. Constructs per-group strategy selectors so
         groups with different `routing_strategy_args` track independent state.
 
+        Validation runs to completion before any router state changes, so an
+        invalid input raises with the previously loaded groups left intact.
+
         Models not claimed by any explicit group are served by the implicit
         `"default"` group, whose selectors are the `self.<strategy>_logger`
         attributes set up in `routing_strategy_init`.
         """
+        known_model_names: Final = frozenset(m["model_name"] for m in (self.model_list or []) if m.get("model_name"))
+        groups: Final = parse_routing_groups(
+            groups_input,
+            validate_strategy=self._validate_routing_strategy,
+            known_model_names=known_model_names,
+        )
+
         self._unregister_router_selectors(
             [sel for selectors in getattr(self, "_group_selectors", {}).values() for sel in selectors.values()]
         )
 
-        self._routing_groups: dict[str, RoutingGroup] = {}
-        self._model_to_group: dict[str, str] = {}
-        self._group_selectors: dict[str, dict[str, Any]] = {}
-
-        if not groups_input:
-            return
-
-        known_model_names: Final = {m.get("model_name") for m in (self.model_list or []) if m.get("model_name")}
-
-        seen_group_names: Final[set] = set()
-        for raw in groups_input:
-            group = raw if isinstance(raw, RoutingGroup) else RoutingGroup(**raw)
-
-            if not group.group_name:
-                raise ValueError("routing_groups: group_name must be non-empty.")
-            if group.group_name == "default":
-                raise ValueError("routing_groups: 'default' is reserved for the implicit fallback group.")
-            if group.group_name in seen_group_names:
-                raise ValueError(
-                    f"routing_groups: group names must be unique, duplicate group_name '{group.group_name}'."
+        self._routing_groups: dict[str, RoutingGroup] = {group.group_name: group for group in groups}
+        self._model_to_group: dict[str, str] = {
+            model_name: group.group_name for group in groups for model_name in group.models
+        }
+        self._group_selectors: dict[str, dict[str, Any]] = {
+            group.group_name: (
+                {}
+                if (
+                    selector := self._build_strategy_selector(
+                        strategy=group.routing_strategy,
+                        routing_strategy_args=group.routing_strategy_args or {},
+                    )
                 )
-            seen_group_names.add(group.group_name)
-
-            self._validate_routing_strategy(group.routing_strategy)
-
-            for model_name in group.models:
-                if model_name in self._model_to_group:
-                    raise ValueError(
-                        f"routing_groups: model_name '{model_name}' appears in "
-                        f"both '{self._model_to_group[model_name]}' and "
-                        f"'{group.group_name}'. Each model may belong to at most one group."
-                    )
-                if known_model_names and model_name not in known_model_names:
-                    verbose_router_logger.warning(
-                        "routing_groups: model_name '%s' (group '%s') is not in model_list; "
-                        "the group entry will only take effect once a deployment with that "
-                        "model_name is added.",
-                        model_name,
-                        group.group_name,
-                    )
-                self._model_to_group[model_name] = group.group_name
-
-            self._routing_groups[group.group_name] = group
-
-            strategy_value = self._normalize_strategy(group.routing_strategy) or ""
-            group_selector = self._build_strategy_selector(
-                strategy=group.routing_strategy,
-                routing_strategy_args=group.routing_strategy_args or {},
+                is None
+                else {self._normalize_strategy(group.routing_strategy) or "": selector}
             )
-            self._group_selectors[group.group_name] = (
-                {strategy_value: group_selector} if group_selector is not None else {}
-            )
+            for group in groups
+        }
 
     _OVERRIDABLE_ROUTING_STRATEGIES: frozenset[str] = frozenset({"simple-shuffle", *_DEFAULT_SELECTOR_ATTR_BY_STRATEGY})
 
