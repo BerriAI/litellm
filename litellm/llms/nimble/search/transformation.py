@@ -46,9 +46,9 @@ class _NimbleSearchResponse(BaseModel):
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    # Nimble sends `"results": null` on some error bodies, so None is accepted and
-    # normalized rather than rejected.
-    results: tuple[_NimbleResult, ...] | None = None
+    # Required: a search with no hits returns `[]`, so a null or absent `results` means the
+    # body is not a search response and must not be reported as a successful empty search.
+    results: tuple[_NimbleResult, ...]
 
 
 class _AdditionalData(BaseModel):
@@ -60,11 +60,13 @@ class _AdditionalData(BaseModel):
 
 
 class _ErrorEnvelope(BaseModel):
-    """Nimble wraps API errors as `{"detail": "..."}`."""
+    """Nimble reports errors as either `{"detail": ...}` (validation) or
+    `{"success": "false", "task_id": ..., "message": ...}` (collection)."""
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     detail: str | None = None
+    message: str | None = None
 
 
 _DomainListAdapter: Final = TypeAdapter(tuple[str, ...])
@@ -178,11 +180,9 @@ class NimbleSearchConfig(BaseSearchConfig):
 
         Nimble ranks results itself via metadata.position, so the order is preserved as received.
         A body that does not match the documented schema raises an attributed error rather than
-        being reported as a successful empty search.
+        being reported as a successful empty search. Parsing the response bytes rather than
+        `.json()` covers the non-JSON case through that same path.
         """
-        # Parsed straight from the response bytes rather than `.json()`, so a non-JSON body and a
-        # JSON body of the wrong shape both surface as one attributed error, nothing here is typed
-        # `Any`, and httpx never has to decode and cache a `str` copy of a large payload.
         try:
             parsed: Final = _NimbleSearchResponse.model_validate_json(raw_response.content)
         except ValidationError as e:
@@ -202,7 +202,7 @@ class NimbleSearchConfig(BaseSearchConfig):
                     last_updated=None,
                     **_optional("additional_data", result.additional_data),
                 )
-                for result in parsed.results or ()
+                for result in parsed.results
             ],
             object="search",
         )
@@ -223,7 +223,7 @@ class NimbleSearchConfig(BaseSearchConfig):
 
 def _unwrap_error_detail(error_message: str) -> str:
     """
-    Surface the message inside Nimble's `{"detail": "..."}` error envelope.
+    Surface the human-readable message inside Nimble's error envelopes.
 
     Falls back to the raw body for anything else (CDN HTML pages, plain text, other shapes).
     """
@@ -231,7 +231,7 @@ def _unwrap_error_detail(error_message: str) -> str:
         body: Final = _ErrorEnvelope.model_validate_json(error_message)
     except ValidationError:
         return error_message
-    return body.detail or error_message
+    return body.detail or body.message or error_message
 
 
 def _domain_filters(search_domain_filter: object) -> Mapping[str, object]:

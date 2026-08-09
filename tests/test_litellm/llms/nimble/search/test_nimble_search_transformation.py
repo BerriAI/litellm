@@ -191,9 +191,9 @@ def test_transform_search_response_degraded_result_does_not_fail_the_call():
     assert resp.results[1].title == "Test Title"
 
 
-@pytest.mark.parametrize("payload", [{"results": None}, {}])
-def test_transform_search_response_absent_results(payload):
-    """`.get("results", [])` would return None for the first case and blow up the loop."""
+def test_transform_search_response_zero_hits():
+    """A search with no hits really does come back as `"results": []`."""
+    payload = {"request_id": "abc", "total_results": 0, "results": []}
     assert _config().transform_search_response(_resp(payload), logging_obj=Mock()).results == []
 
 
@@ -203,6 +203,8 @@ def test_transform_search_response_absent_results(payload):
         "<html>502 Bad Gateway</html>",  # non-JSON body
         '{"results": ["garbage"]}',  # right key, wrong element shape
         '{"results": {"unexpected": "shape"}}',
+        '{"results": null}',  # must not degrade to a successful empty search
+        "{}",  # ditto for an absent key
     ],
 )
 def test_transform_search_response_malformed_body_raises_instead_of_reporting_empty(body: str):
@@ -227,6 +229,19 @@ def test_get_error_class_unwraps_nimble_detail_envelope():
     )
     assert (
         str(error) == "Nimble Search: search_depth='fast' is only supported with focus='general'. "
+        "See https://docs.nimbleway.com/api-reference/search/search for details."
+    )
+
+
+def test_get_error_class_unwraps_nimble_message_envelope():
+    """Verbatim body from a live collection failure, which uses a different envelope."""
+    error = _config().get_error_class(
+        error_message='{"success":"false","task_id":"4f74af04","message":"can\'t download the query response"}',
+        status_code=500,
+        headers={},
+    )
+    assert (
+        str(error) == "Nimble Search: can't download the query response. "
         "See https://docs.nimbleway.com/api-reference/search/search for details."
     )
 
