@@ -1,4 +1,5 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import useCan from "@/app/(dashboard)/hooks/useCan";
 import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useQueryClient } from "@tanstack/react-query";
 import UserSearchModal from "@/components/common_components/user_search_modal";
@@ -196,6 +197,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const { data: guardrailsData, isLoading: isGuardrailsLoading } = useGuardrails();
   const globalGuardrailNames = guardrailsData?.globalGuardrailNames ?? new Set<string>();
+  const canViewPolicies = useCan("viewPolicies");
   const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [policyGuardrails, setPolicyGuardrails] = useState<Record<string, string[]>>({});
   const [loadingPolicies, setLoadingPolicies] = useState(false);
@@ -293,8 +295,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
     };
 
-    fetchPolicies();
-  }, [accessToken]);
+    if (canViewPolicies) fetchPolicies();
+  }, [accessToken, canViewPolicies]);
 
   // Fetch resolved guardrails for all policies
   useEffect(() => {
@@ -1284,30 +1286,32 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <Switch checkedChildren="Yes" unCheckedChildren="No" />
                     </Form.Item>
 
-                    <Form.Item
-                      label={
-                        <span>
-                          Policies{" "}
-                          <Tooltip title="Apply policies to this team to control guardrails and other settings">
-                            <a
-                              href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                            </a>
-                          </Tooltip>
-                        </span>
-                      }
-                      name="policies"
-                    >
-                      <Select
-                        mode="tags"
-                        placeholder="Select or enter policies"
-                        options={policiesList.map((name) => ({ value: name, label: name }))}
-                      />
-                    </Form.Item>
+                    {canViewPolicies && (
+                      <Form.Item
+                        label={
+                          <span>
+                            Policies{" "}
+                            <Tooltip title="Apply policies to this team to control guardrails and other settings">
+                              <a
+                                href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              </a>
+                            </Tooltip>
+                          </span>
+                        }
+                        name="policies"
+                      >
+                        <Select
+                          mode="tags"
+                          placeholder="Select or enter policies"
+                          options={policiesList.map((name) => ({ value: name, label: name }))}
+                        />
+                      </Form.Item>
+                    )}
 
                     <Form.Item
                       label={

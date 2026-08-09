@@ -158,7 +158,7 @@ const menuGroups: MenuGroup[] = [
         page: "policies",
         label: "Policies",
         icon: <ScrollText {...ICON} />,
-        roles: all_admin_roles,
+        roles: rolesWithCapability("viewPolicies"),
       },
       {
         key: "tools",
@@ -268,7 +268,13 @@ const menuGroups: MenuGroup[] = [
         label: "Experimental",
         icon: <FlaskConical {...ICON} />,
         children: [
-          { key: "prompts", page: "prompts", label: "Prompts", icon: <FileText {...ICON} />, roles: all_admin_roles },
+          {
+            key: "prompts",
+            page: "prompts",
+            label: "Prompts",
+            icon: <FileText {...ICON} />,
+            roles: rolesWithCapability("viewPrompts"),
+          },
           {
             key: "transform-request",
             page: "transform-request",
