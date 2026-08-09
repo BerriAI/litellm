@@ -24,7 +24,7 @@ def apply_server_side_tool_usage_details_to_usage(usage: Usage, details: Mapping
     """
     if details is None:
         return
-    setattr(usage, "server_side_tool_usage_details", details)
+    usage.server_side_tool_usage_details = details  # pyright: ignore[reportAttributeAccessIssue]  # extra  # rebind-ok: extras
     try:
         web_search_calls: Final = int(details.get("web_search_calls") or 0)
     except (TypeError, ValueError):
@@ -32,8 +32,8 @@ def apply_server_side_tool_usage_details_to_usage(usage: Usage, details: Mapping
     if web_search_calls <= 0:
         return
     prompt_tokens_details: Final = usage.prompt_tokens_details or PromptTokensDetailsWrapper()
-    setattr(prompt_tokens_details, "web_search_requests", web_search_calls)
-    setattr(usage, "prompt_tokens_details", prompt_tokens_details)
+    prompt_tokens_details.web_search_requests = web_search_calls
+    usage.prompt_tokens_details = prompt_tokens_details  # rebind-ok: write details onto caller usage
 
 
 def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
