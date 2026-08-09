@@ -1404,11 +1404,26 @@ def completion_cost(  # noqa: PLR0915
                     # Check _hidden_params first (duration stored there to
                     # avoid polluting the response body), then fall back to
                     # the response attribute (for verbose_json responses that
-                    # naturally include duration from the provider).
+                    # naturally include duration from the provider), then to
+                    # duration-based usage returned by newer transcription APIs.
                     _hidden = getattr(completion_response, "_hidden_params", {}) or {}
-                    audio_transcription_file_duration = _hidden.get(
-                        "audio_transcription_duration",
-                        getattr(completion_response, "duration", 0.0),
+                    _transcription_usage = getattr(completion_response, "usage", None)
+                    _usage_duration = (
+                        _transcription_usage.get("seconds")
+                        if isinstance(_transcription_usage, dict)
+                        else getattr(_transcription_usage, "seconds", None)
+                    )
+                    audio_transcription_file_duration = next(
+                        (
+                            duration
+                            for duration in (
+                                _hidden.get("audio_transcription_duration"),
+                                getattr(completion_response, "duration", None),
+                                _usage_duration,
+                            )
+                            if duration is not None
+                        ),
+                        0.0,
                     )
                 elif call_type in _RERANK_CALL_TYPES:
                     if completion_response is not None and isinstance(
