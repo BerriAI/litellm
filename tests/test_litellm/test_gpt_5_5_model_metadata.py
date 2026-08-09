@@ -6,8 +6,18 @@ import pytest
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
 
-@pytest.mark.parametrize("model", ["azure_ai/gpt-5.5", "azure_ai/gpt-5.5-2026-04-23"])
-def test_azure_ai_gpt_5_5_model_info(model):
+@pytest.mark.parametrize(
+    "model,expected_provider",
+    [
+        # gpt-5.5 is a known OpenAI model name, so azure_ai/gpt-5.5 is routed
+        # through the Azure OpenAI path (custom_llm_provider="azure").
+        ("azure_ai/gpt-5.5", "azure"),
+        # 2026-04-24 is Azure's own GPT-5.5 snapshot (OpenAI's is 2026-04-23),
+        # so it is not an OpenAI model name and stays on the azure_ai path.
+        ("azure_ai/gpt-5.5-2026-04-24", "azure_ai"),
+    ],
+)
+def test_azure_ai_gpt_5_5_model_info(model, expected_provider):
     json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
     with open(json_path) as f:
         model_cost = json.load(f)
@@ -47,8 +57,7 @@ def test_azure_ai_gpt_5_5_model_info(model):
 
     routed_model, provider, _, _ = get_llm_provider(model=model)
     assert routed_model == model.split("/", 1)[1]
-    # azure_ai/* models resolve under the azure provider in get_llm_provider
-    assert provider == "azure"
+    assert provider == expected_provider
 
 
 def test_azure_ai_gpt_5_5_backup_matches_main():
@@ -62,7 +71,7 @@ def test_azure_ai_gpt_5_5_backup_matches_main():
     with open(backup_path) as f:
         backup_cost = json.load(f)
 
-    for model in ("azure_ai/gpt-5.5", "azure_ai/gpt-5.5-2026-04-23"):
+    for model in ("azure_ai/gpt-5.5", "azure_ai/gpt-5.5-2026-04-24"):
         assert backup_cost.get(model) == main_cost.get(
             model
         ), f"{model} differs between main and backup model cost maps"
