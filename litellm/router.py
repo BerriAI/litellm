@@ -528,6 +528,10 @@ class Router:
         cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = "local"  # default to an in-memory cache
         redis_cache = None
         cache_config: Final[dict[str, Any]] = {}
+        # FIX: Apply cache_kwargs regardless of whether Redis is used
+        cache_config.update(cache_kwargs)
+        if "type" in cache_kwargs:
+            cache_type = cache_kwargs["type"]
 
         self.client_ttl = client_ttl
         if redis_url is not None or (redis_host is not None and redis_port is not None):
