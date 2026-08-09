@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Any, Final
 
 import httpx
@@ -363,8 +363,8 @@ class XAIChatConfig(OpenAIGPTConfig):
         response_usage: Final = raw_response_json.get("usage")
         if not isinstance(response_usage, dict):
             return
-        details = response_usage.get("server_side_tool_usage_details")
-        if details is not None:
+        details: Final = response_usage.get("server_side_tool_usage_details")
+        if isinstance(details, Mapping):
             apply_server_side_tool_usage_details_to_usage(usage, details)
             verbose_logger.debug("X.AI server_side_tool_usage_details: %s", details)
 

@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo
 
 # https://docs.x.ai/developers/pricing#tools-pricing — default when unset in model map
-_DEFAULT_WEB_SEARCH_COST_PER_CALL = 5.0 / 1000.0
+_DEFAULT_WEB_SEARCH_COST_PER_CALL: Final = 5.0 / 1000.0
 
 
 def apply_server_side_tool_usage_details_to_usage(usage: Usage, details: Mapping[str, object] | None) -> None:
@@ -26,14 +26,14 @@ def apply_server_side_tool_usage_details_to_usage(usage: Usage, details: Mapping
         return
     setattr(usage, "server_side_tool_usage_details", details)
     try:
-        web_search_calls = int(details.get("web_search_calls") or 0)
+        web_search_calls: Final = int(details.get("web_search_calls") or 0)
     except (TypeError, ValueError):
         return
     if web_search_calls <= 0:
         return
-    if usage.prompt_tokens_details is None:
-        usage.prompt_tokens_details = PromptTokensDetailsWrapper()
-    usage.prompt_tokens_details.web_search_requests = web_search_calls
+    prompt_tokens_details: Final = usage.prompt_tokens_details or PromptTokensDetailsWrapper()
+    setattr(prompt_tokens_details, "web_search_requests", web_search_calls)
+    setattr(usage, "prompt_tokens_details", prompt_tokens_details)
 
 
 def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
@@ -55,9 +55,11 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     prompt_tokens: Final = int(getattr(usage, "prompt_tokens", 0) or 0)
     completion_tokens: Final = int(getattr(usage, "completion_tokens", 0) or 0)
     total_tokens: Final = int(getattr(usage, "total_tokens", 0) or 0)
-    reasoning_tokens = 0
-    if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details:
-        reasoning_tokens = int(getattr(usage.completion_tokens_details, "reasoning_tokens", 0) or 0)
+    reasoning_tokens: Final = (
+        int(getattr(usage.completion_tokens_details, "reasoning_tokens", 0) or 0)
+        if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details
+        else 0
+    )
 
     already_normalised: Final = total_tokens == prompt_tokens + completion_tokens
     total_completion_tokens: Final = completion_tokens if already_normalised else completion_tokens + reasoning_tokens
@@ -82,22 +84,23 @@ def _web_search_cost_per_call_from_model_info(model_info: "ModelInfo") -> float:
     Prefer ``search_context_cost_per_query`` (same shape as Gemini/Anthropic web
     search pricing in the model cost map). Fall back to current xAI list pricing.
     """
-    search_costs = model_info.get("search_context_cost_per_query") or {}
-    if isinstance(search_costs, Mapping):
-        for key in (
-            "search_context_size_medium",
-            "search_context_size_low",
-            "search_context_size_high",
-        ):
-            value = search_costs.get(key)
-            if value is None:
-                continue
-            try:
-                cost = float(value)
-            except (TypeError, ValueError):
-                continue
-            if cost > 0:
-                return cost
+    search_costs: Final = model_info.get("search_context_cost_per_query")
+    if not isinstance(search_costs, Mapping):
+        return _DEFAULT_WEB_SEARCH_COST_PER_CALL
+    for key in (
+        "search_context_size_medium",
+        "search_context_size_low",
+        "search_context_size_high",
+    ):
+        value = search_costs.get(key)
+        if value is None:
+            continue
+        try:
+            cost = float(value)
+        except (TypeError, ValueError):
+            continue
+        if cost > 0:
+            return cost
     return _DEFAULT_WEB_SEARCH_COST_PER_CALL
 
 
@@ -109,11 +112,11 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
     Per-call rate comes from model_info.search_context_cost_per_query when set,
     otherwise the default xAI tools rate ($5 / 1k calls).
     """
-    details = getattr(usage, "server_side_tool_usage_details", None)
+    details: Final = getattr(usage, "server_side_tool_usage_details", None)
     if not isinstance(details, Mapping):
         return 0.0
     try:
-        web_search_calls = int(details.get("web_search_calls") or 0)
+        web_search_calls: Final = int(details.get("web_search_calls") or 0)
     except (TypeError, ValueError):
         return 0.0
     if web_search_calls <= 0:
