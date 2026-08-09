@@ -1,6 +1,22 @@
-from typing import Dict, Optional
+from typing import Any, Dict, Iterator, Optional
 
 from litellm.types.utils import StandardCallbackDynamicParams
+
+_CLIENT_CALLBACK_METADATA_SLOTS: tuple[str, ...] = ("litellm_metadata", "metadata")
+
+
+def iter_client_callback_metadata_dicts(
+    kwargs: dict[str, Any],
+) -> Iterator[tuple[str, dict[str, Any]]]:
+    litellm_params = kwargs.get("litellm_params")
+    if isinstance(litellm_params, dict):
+        nested = litellm_params.get("metadata")
+        if isinstance(nested, dict):
+            yield "litellm_params.metadata", nested
+    for key in _CLIENT_CALLBACK_METADATA_SLOTS:
+        candidate = kwargs.get(key)
+        if isinstance(candidate, dict):
+            yield key, candidate
 
 
 def _is_env_reference(value: object) -> bool:
@@ -55,6 +71,7 @@ _supported_callback_params = [
     "dd_site",
     "dd_agent_host",
     "dd_agent_port",
+    "turn_off_message_logging",
 ]
 
 _request_blocked_callback_params = {
@@ -87,19 +104,13 @@ def initialize_standard_callback_dynamic_params(
                 validate_no_callback_env_reference(param, _param_value, source="request body")
                 standard_callback_dynamic_params[param] = _param_value  # type: ignore
 
-        # 2. Fallback: check "metadata" or "litellm_params" -> "metadata"
-        metadata = (kwargs.get("metadata") or {}).copy()
-        litellm_params = kwargs.get("litellm_params") or {}
-        if isinstance(litellm_params, dict):
-            metadata.update(litellm_params.get("metadata") or {})
-
-        if isinstance(metadata, dict):
+        for slot_label, metadata in iter_client_callback_metadata_dicts(kwargs):
             for param in _supported_callback_params:
                 if param in _request_blocked_callback_params:
                     continue
                 if param not in standard_callback_dynamic_params and param in metadata:
                     _param_value = metadata.get(param)
-                    validate_no_callback_env_reference(param, _param_value, source="metadata")
+                    validate_no_callback_env_reference(param, _param_value, source=slot_label)
                     standard_callback_dynamic_params[param] = _param_value  # type: ignore
 
     return standard_callback_dynamic_params
