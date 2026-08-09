@@ -49,4 +49,26 @@ describe("resolveMCPConnectBaseUrl", () => {
       ),
     ).toBe(fallbackBaseUrl);
   });
+
+  it("trims trailing slashes before endpoint paths are appended", () => {
+    expect(
+      resolveMCPConnectBaseUrl(
+        {
+          LITELLM_UI_API_DOC_BASE_URL: " https://docs.litellm.test/// ",
+        },
+        fallbackBaseUrl,
+      ),
+    ).toBe("https://docs.litellm.test");
+
+    expect(
+      resolveMCPConnectBaseUrl(
+        {
+          PROXY_BASE_URL: "https://proxy.litellm.test/",
+        },
+        `${fallbackBaseUrl}/`,
+      ),
+    ).toBe("https://proxy.litellm.test");
+
+    expect(resolveMCPConnectBaseUrl(undefined, `${fallbackBaseUrl}/`)).toBe(fallbackBaseUrl);
+  });
 });
