@@ -28711,7 +28711,28 @@
         "supports_vision": false
     },
     "morph/morph-dsv4flash": {
-        "cache_read_input_token_cost": 0,
+        "cache_read_input_token_cost": 7e-08,
+        "input_cost_per_token": 1.39e-07,
+        "litellm_provider": "morph",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 2.78e-07,
+        "source": "https://www.morphllm.com/api/models/json",
+        "supported_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_native_structured_output": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_vision": false
+    },
+    "morph/morph-dsv4flash-0731": {
+        "cache_read_input_token_cost": 7e-08,
         "input_cost_per_token": 1.39e-07,
         "litellm_provider": "morph",
         "max_input_tokens": 1048576,
@@ -28755,7 +28776,7 @@
     },
     "morph/morph-kimik3": {
         "cache_read_input_token_cost": 2.9e-07,
-        "input_cost_per_token": 2.9e-06,
+        "input_cost_per_token": 2.5e-06,
         "litellm_provider": "morph",
         "max_input_tokens": 1048576,
         "max_output_tokens": 1048576,
