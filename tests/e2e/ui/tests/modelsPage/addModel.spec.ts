@@ -58,7 +58,10 @@ test.describe("Add Model", () => {
         model_name: modelName,
         litellm_params: {
           model: "openai/fake-gpt-4",
-          api_base: "http://127.0.0.1:8090/v1",
+          // Nothing here ever calls the model, but point it at the mock the
+          // harness actually started -- the port moves when two checkouts run
+          // the stack side by side.
+          api_base: `http://127.0.0.1:${process.env.MOCK_LLM_PORT ?? "8090"}/v1`,
           api_key: "fake-key",
           tpm: 100,
           rpm: 200,
@@ -68,7 +71,11 @@ test.describe("Add Model", () => {
         },
       },
     });
-    expect(createResponse.ok()).toBe(true);
+    // Say why it failed. A bare toBe(true) here reports "expected true, received
+    // false" and sends you looking at the UI for a setup call that never landed.
+    expect(createResponse.ok(), `/model/new failed: ${createResponse.status()} ${await createResponse.text()}`).toBe(
+      true,
+    );
     const createdModelId = (await createResponse.json()).model_info?.id;
     expect(createdModelId, "model id from /model/new").toBeTruthy();
 
