@@ -180,12 +180,12 @@ class BaseSearchConfig:
 
     def sign_request(
         self,
-        headers: dict,  # mutable-ok: matches the request header dict every other hook on this base takes
-        optional_params: dict,  # mutable-ok: matches the optional params dict every other hook on this base takes
-        request_data: dict | list[dict],  # mutable-ok: matches transform_search_request's JSON body return type
+        headers: dict[str, str],  # mutable-ok: matches the request header dict every other hook on this base takes
+        optional_params: dict[str, object],  # mutable-ok: matches every other hook on this base
+        request_data: dict[str, object] | list[dict[str, object]],  # mutable-ok: transform_search_request's body
         api_base: str,
         api_key: str | None = None,
-    ) -> tuple[dict, bytes | None]:  # mutable-ok: the handler passes these headers straight to httpx
+    ) -> tuple[dict[str, str], bytes | None]:  # mutable-ok: the handler passes these headers straight to httpx
         """
         OPTIONAL
 

@@ -221,12 +221,12 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
 
     def sign_request(
         self,
-        headers: dict,  # mutable-ok: BaseSearchConfig hands providers the mutable request header dict
-        optional_params: dict,  # mutable-ok: BaseSearchConfig passes optional params as a dict
-        request_data: dict | list[dict],  # mutable-ok: BaseSearchConfig request bodies are JSON dicts
+        headers: dict[str, str],  # mutable-ok: BaseSearchConfig hands providers the mutable request header dict
+        optional_params: dict[str, object],  # mutable-ok: BaseSearchConfig passes optional params as a dict
+        request_data: dict[str, object] | list[dict[str, object]],  # mutable-ok: request bodies are JSON dicts
         api_base: str,
         api_key: str | None = None,
-    ) -> tuple[dict, bytes | None]:  # mutable-ok: BaseSearchConfig.sign_request returns httpx headers
+    ) -> tuple[dict[str, str], bytes | None]:  # mutable-ok: BaseSearchConfig.sign_request returns httpx headers
         """
         Authenticate the MCP request.
 

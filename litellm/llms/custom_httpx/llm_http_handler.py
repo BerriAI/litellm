@@ -1755,7 +1755,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": complete_url,
-                "headers": signed_headers,
+                "headers": headers,
             },
         )
 
@@ -1848,7 +1848,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": complete_url,
-                "headers": signed_headers,
+                "headers": headers,
             },
         )
 
