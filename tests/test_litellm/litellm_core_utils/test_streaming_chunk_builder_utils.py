@@ -1,4 +1,3 @@
-import json
 import os
 import sys
 
@@ -9,13 +8,13 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm import ChatCompletionUsageBlock, stream_chunk_builder
-from litellm.types.utils import GenericStreamingChunk
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
     Delta,
     Function,
+    GenericStreamingChunk,
     ModelResponseStream,
     PromptTokensDetails,
     ServerToolUse,
@@ -595,6 +594,38 @@ def test_stream_chunk_builder_litellm_usage_chunks():
     assert usage.prompt_tokens == 50
     assert usage.completion_tokens == 27
     assert usage.total_tokens == 77
+
+
+def test_calculate_usage_falls_back_to_hidden_usage():
+    hidden_usage = Usage(
+        prompt_tokens=2852,
+        completion_tokens=85,
+        total_tokens=2937,
+    )
+    chunk = ModelResponseStream(
+        id="chatcmpl-hidden-usage",
+        created=1745513206,
+        model="openai/test",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="done"),
+            )
+        ],
+        usage=None,
+    )
+    setattr(chunk, "_hidden_params", {"usage": hidden_usage})
+
+    usage = ChunkProcessor(chunks=[chunk]).calculate_usage(
+        chunks=[chunk],
+        model="openai/test",
+        completion_output="done",
+    )
+
+    assert usage.prompt_tokens == 2852
+    assert usage.completion_tokens == 85
+    assert usage.total_tokens == 2937
 
 
 def test_get_model_from_chunks_azure_model_router():

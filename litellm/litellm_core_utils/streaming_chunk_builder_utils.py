@@ -739,12 +739,12 @@ class ChunkProcessor:
         usage_chunk: Usage | None = None
         if hasattr(chunk, "usage") and chunk.usage is not None:
             usage_chunk = chunk.usage
-        elif "usage" in chunk:
-            usage_chunk = chunk["usage"]
         elif (isinstance(chunk, ModelResponse) or isinstance(chunk, ModelResponseStream)) and hasattr(
             chunk, "_hidden_params"
         ):
             usage_chunk = chunk._hidden_params.get("usage", None)
+        elif "usage" in chunk:
+            usage_chunk = chunk["usage"]
 
         if isinstance(usage_chunk, dict):
             return Usage(**usage_chunk)
