@@ -1,6 +1,7 @@
 import React from "react";
 import { Input, Button } from "antd";
 import { ArrowUpOutlined } from "@ant-design/icons";
+import { isSubmitEnterKey } from "@/utils/keyboardUtils";
 
 const { TextArea } = Input;
 
@@ -17,7 +18,7 @@ export function MessageInput({ value, onChange, onSend, disabled, hasAttachment,
   const canSend = !disabled && (value.trim().length > 0 || Boolean(hasAttachment));
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (isSubmitEnterKey(e)) {
       e.preventDefault();
       if (canSend) {
         onSend();
