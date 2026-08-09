@@ -24,6 +24,8 @@ describe("modelConflictError", () => {
 
   it("names every model already claimed by another group", () => {
     const error = modelConflictError(["m1", "m3", "m4"], groupNameByModel(groups));
-    expect(error).toBe('Each model may belong to at most one group. Already claimed: m1 (in "cheap"), m3 (in "security")');
+    expect(error).toBe(
+      'Each model may belong to at most one group. Already claimed: m1 (in "cheap"), m3 (in "security")',
+    );
   });
 });
