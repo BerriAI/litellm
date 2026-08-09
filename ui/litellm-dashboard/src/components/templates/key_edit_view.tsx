@@ -7,6 +7,7 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { TextInput, Button as TremorButton } from "@tremor/react";
 import { Form, Input, Select, Switch, Tooltip } from "antd";
 import { useEffect, useState } from "react";
+import { hasCapability } from "../../utils/capabilities";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
@@ -83,6 +84,8 @@ export function KeyEditView({
   premiumUser = false,
 }: KeyEditViewProps) {
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
+  const canViewPolicies = hasCapability(userRole, "viewPolicies");
+  const canViewPrompts = hasCapability(userRole, "viewPrompts");
   const [form] = Form.useForm();
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
@@ -148,9 +151,9 @@ export function KeyEditView({
       }
     };
 
-    fetchPrompts();
+    if (canViewPrompts) fetchPrompts();
     fetchModels();
-  }, [userID, userRole, accessToken, team, keyData.team_id]);
+  }, [userID, userRole, accessToken, team, keyData.team_id, canViewPrompts]);
 
   // Sync disabled callbacks with form when component mounts
   useEffect(() => {
@@ -610,27 +613,29 @@ export function KeyEditView({
         <Switch disabled={!canEditGuardrails} checkedChildren="Yes" unCheckedChildren="No" />
       </Form.Item>
 
-      <Form.Item
-        label={
-          <span>
-            Policies{" "}
-            <Tooltip title="Apply policies to this key to control guardrails and other settings">
-              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-            </Tooltip>
-          </span>
-        }
-        name="policies"
-      >
-        {accessToken && (
-          <PolicySelector
-            onChange={(v) => {
-              form.setFieldValue("policies", v);
-            }}
-            accessToken={accessToken}
-            disabled={!premiumUser}
-          />
-        )}
-      </Form.Item>
+      {canViewPolicies && (
+        <Form.Item
+          label={
+            <span>
+              Policies{" "}
+              <Tooltip title="Apply policies to this key to control guardrails and other settings">
+                <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+              </Tooltip>
+            </span>
+          }
+          name="policies"
+        >
+          {accessToken && (
+            <PolicySelector
+              onChange={(v) => {
+                form.setFieldValue("policies", v);
+              }}
+              accessToken={accessToken}
+              disabled={!premiumUser}
+            />
+          )}
+        </Form.Item>
+      )}
 
       <Form.Item label="Tags" name="tags">
         <Select
@@ -645,23 +650,25 @@ export function KeyEditView({
         />
       </Form.Item>
 
-      <Form.Item label="Prompts" name="prompts">
-        <Tooltip title={!premiumUser ? "Setting prompts by key is a premium feature" : ""} placement="top">
-          <Select
-            mode="tags"
-            style={{ width: "100%" }}
-            disabled={!premiumUser}
-            placeholder={
-              !premiumUser
-                ? "Premium feature - Upgrade to set prompts by key"
-                : Array.isArray(keyData.metadata?.prompts) && keyData.metadata.prompts.length > 0
-                  ? `Current: ${keyData.metadata.prompts.join(", ")}`
-                  : "Select or enter prompts"
-            }
-            options={promptsList.map((name) => ({ value: name, label: name }))}
-          />
-        </Tooltip>
-      </Form.Item>
+      {canViewPrompts && (
+        <Form.Item label="Prompts" name="prompts">
+          <Tooltip title={!premiumUser ? "Setting prompts by key is a premium feature" : ""} placement="top">
+            <Select
+              mode="tags"
+              style={{ width: "100%" }}
+              disabled={!premiumUser}
+              placeholder={
+                !premiumUser
+                  ? "Premium feature - Upgrade to set prompts by key"
+                  : Array.isArray(keyData.metadata?.prompts) && keyData.metadata.prompts.length > 0
+                    ? `Current: ${keyData.metadata.prompts.join(", ")}`
+                    : "Select or enter prompts"
+              }
+              options={promptsList.map((name) => ({ value: name, label: name }))}
+            />
+          </Tooltip>
+        </Form.Item>
+      )}
 
       <Form.Item
         label={

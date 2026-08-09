@@ -3,8 +3,16 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
-import { modelAvailableCall } from "../networking";
+import { getPoliciesList, getPromptsList, modelAvailableCall } from "../networking";
 import { KeyEditView } from "./key_edit_view";
+
+// PolicySelector gates itself on the session capability; in this bare template
+// render there is no session, so stub the hook to an admin to keep the selector
+// mounted and prove the gate under test is KeyEditView's own.
+const can = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
+  default: (...args: unknown[]) => can(...args),
+}));
 
 vi.mock("../networking", async () => {
   const actual = await vi.importActual("../networking");
@@ -212,6 +220,46 @@ describe("KeyEditView", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    can.mockReturnValue(true);
+  });
+
+  describe("policy and prompt fields", () => {
+    const renderAs = (userRole: string) =>
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="user-123"
+          userRole={userRole}
+          premiumUser={true}
+        />,
+      );
+
+    it("should render both fields and load prompts for an admin", async () => {
+      renderAs("Admin");
+
+      await waitFor(() => {
+        expect(getPromptsList).toHaveBeenCalledWith("test-token");
+      });
+      expect(screen.getByText("Prompts", { selector: "label" })).toBeInTheDocument();
+      expect(screen.getByText("Policies")).toBeInTheDocument();
+    });
+
+    it("should omit both fields and fire neither admin-only request for an internal user", async () => {
+      renderAs("Internal User");
+
+      // Models still loads, so the form really rendered and the fields are absent by gate.
+      await waitFor(() => {
+        expect(modelAvailableCall).toHaveBeenCalled();
+      });
+
+      expect(getPromptsList).not.toHaveBeenCalled();
+      expect(getPoliciesList).not.toHaveBeenCalled();
+      expect(screen.queryByText("Prompts", { selector: "label" })).not.toBeInTheDocument();
+      expect(screen.queryByText("Policies")).not.toBeInTheDocument();
+    });
   });
 
   it("should call onCancel when cancel button is clicked", async () => {
