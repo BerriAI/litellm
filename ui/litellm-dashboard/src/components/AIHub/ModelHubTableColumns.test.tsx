@@ -59,6 +59,23 @@ describe("getModelHubTableColumns", () => {
     expect(screen.queryByText("Parallel Function Calling")).not.toBeInTheDocument();
   });
 
+  it("uses the same color class for the same capability across rows", () => {
+    renderTable([
+      mockModel,
+      {
+        ...mockModel,
+        model_group: "gpt-4o-mini",
+        supports_vision: true,
+        supports_function_calling: false,
+      },
+    ]);
+    const visionBadges = screen.getAllByText("Vision");
+    expect(visionBadges.length).toBeGreaterThanOrEqual(2);
+    const classes = visionBadges.map((el) => el.getAttribute("class") || "");
+    expect(classes[0]).toBe(classes[1]);
+    expect(classes[0]).toContain("purple");
+  });
+
   it("shows the public status badge", () => {
     renderTable([mockModel]);
     expect(screen.getByText("Yes")).toBeInTheDocument();
