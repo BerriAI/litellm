@@ -188,6 +188,13 @@ class OllamaConfig(BaseConfig):
                 elif value["type"] == "json_schema":
                     optional_params["format"] = value["json_schema"]["schema"]
 
+        if "functions_unsupported_model" in optional_params and optional_params.get("stream") is True:
+            # Tools are emulated via a prompt instruction + format=json for ollama/, not a
+            # native `tools` request field. transform_response() already reconstructs the
+            # resulting JSON into tool_calls for stream=False; fake_stream reuses that same
+            # reconstruction for stream=True instead of forwarding the raw JSON as text.
+            optional_params["fake_stream"] = True
+
         return optional_params
 
     def _supports_function_calling(self, ollama_model_info: dict) -> bool:
@@ -246,7 +253,7 @@ class OllamaConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: str,
+        encoding: str | None,
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -323,9 +330,11 @@ class OllamaConfig(BaseConfig):
         model_response.created = int(time.time())
         model_response.model = "ollama/" + model
         _prompt: Final = request_data.get("prompt", "")
-        prompt_tokens: Final = response_json.get(
-            "prompt_eval_count",
-            len(encoding.encode(_prompt, disallowed_special=())),
+        _prompt_eval_count: Final = response_json.get("prompt_eval_count")
+        prompt_tokens: Final = (
+            _prompt_eval_count
+            if _prompt_eval_count is not None
+            else (len(encoding.encode(_prompt, disallowed_special=())) if encoding is not None else 0)
         )
         completion_tokens: Final = response_json.get(
             "eval_count", len(response_json.get("message", dict()).get("content", ""))
@@ -392,6 +401,24 @@ class OllamaConfig(BaseConfig):
             data["think"] = think
 
         return data
+
+    def sign_request(
+        self,
+        headers: dict,  # mutable-ok: matches BaseConfig.sign_request's fixed override signature
+        optional_params: dict,  # mutable-ok: matches BaseConfig.sign_request's fixed override signature
+        request_data: dict,  # mutable-ok: matches BaseConfig.sign_request's fixed override signature
+        api_base: str,
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict, bytes | None]:  # mutable-ok: matches BaseConfig.sign_request's fixed override signature
+        if fake_stream is True:
+            # /api/generate defaults to streaming when "stream" is absent from the body, but
+            # the shared fake-stream handling drops the key instead of setting it False. Force
+            # it explicitly so the actual request to Ollama is a single non-streaming call.
+            return headers, json.dumps({**request_data, "stream": False}).encode()
+        return headers, None
 
     def validate_environment(
         self,

@@ -4,17 +4,21 @@ import sys
 from litellm._uuid import uuid
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
+import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.ollama.completion.transformation import (
     OllamaConfig,
     OllamaTextCompletionResponseIterator,
 )
 from litellm.types.utils import Message, ModelResponse, ModelResponseStream
+from litellm.utils import get_optional_params
 
 
 class TestOllamaConfig:
@@ -507,3 +511,157 @@ class TestOllamaTextCompletionResponseIterator:
         assert result["usage"]["prompt_tokens"] == 10
         assert result["usage"]["completion_tokens"] == 5
         assert result["usage"]["total_tokens"] == 15
+
+
+class TestOllamaFakeStreamActivation:
+    """Unit coverage for the #35711 fix's trigger condition: OllamaConfig.map_openai_params()
+    sets optional_params["fake_stream"] = True only when tool-call emulation is active
+    (functions_unsupported_model present, mirroring the pattern in
+    test_ollama_chat_transformation.py's assertions on get_optional_params()'s output)
+    and the caller actually requested streaming. Complements
+    TestOllamaFakeStreamToolCalls, which proves the full chain that this trigger feeds into.
+    """
+
+    def _tools(self):
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+
+    def test_tools_and_stream_activate_fake_stream(self):
+        optional_params = get_optional_params(
+            model="llama2",
+            custom_llm_provider="ollama",
+            tools=self._tools(),
+            stream=True,
+            drop_params=True,
+        )
+
+        assert optional_params.get("fake_stream") is True
+        assert optional_params.get("format") == "json"
+        assert "functions_unsupported_model" in optional_params
+
+    def test_tools_without_stream_does_not_activate_fake_stream(self):
+        optional_params = get_optional_params(
+            model="llama2",
+            custom_llm_provider="ollama",
+            tools=self._tools(),
+            stream=False,
+            drop_params=True,
+        )
+
+        assert "fake_stream" not in optional_params
+
+    def test_stream_without_tools_does_not_activate_fake_stream(self):
+        optional_params = get_optional_params(
+            model="llama2",
+            custom_llm_provider="ollama",
+            stream=True,
+        )
+
+        assert "fake_stream" not in optional_params
+
+
+class TestOllamaFakeStreamToolCalls:
+    """Regression test for #35711 at the level the fix actually operates on.
+
+    OllamaTextCompletionResponseIterator.chunk_parser() never reconstructs tool calls
+    from streamed text and is not meant to: for ollama/ tool emulation (tools injected
+    into the prompt, never sent as a native `tools` field), OllamaConfig.map_openai_params()
+    sets fake_stream=True, which routes the request through a real non-streaming call to
+    Ollama, reuses the already-correct transform_response() reconstruction (see
+    test_transform_response_json_function_call above), and wraps the result as a single
+    fake stream chunk via MockResponseIterator. Only the HTTP boundary is mocked here;
+    the rest of litellm.completion()'s execution path runs for real, following the pattern
+    in test_vertex_gemma_transformation.py::test_acompletion_fake_streaming and
+    test_llm_http_handler.py::test_responses_handler_signs_after_fake_stream_prep_strips_stream.
+    """
+
+    def test_tools_stream_true_reconstructs_tool_calls_via_fake_stream(self):
+        tool_call_json = {
+            "name": "get_current_weather",
+            "arguments": {"location": "San Francisco"},
+        }
+        mock_ollama_response = {
+            "model": "llama2",
+            "response": json.dumps(tool_call_json),
+            "done": True,
+            "done_reason": "stop",
+            "prompt_eval_count": 42,
+            "eval_count": 16,
+        }
+        mock_ollama_response_bytes = json.dumps(mock_ollama_response).encode()
+
+        captured_requests = []
+
+        def _fake_post(
+            self, url, headers=None, data=None, timeout=None, stream=False, logging_obj=None, **kwargs
+        ):
+            request_body = json.loads(data) if isinstance(data, (str, bytes)) else {}
+            captured_requests.append({"url": url, "body": request_body})
+            return httpx.Response(
+                status_code=200,
+                content=mock_ollama_response_bytes,
+                request=httpx.Request("POST", url),
+            )
+
+        with patch.object(HTTPHandler, "post", _fake_post):
+            response = litellm.completion(
+                model="ollama/llama2",
+                api_base="http://127.0.0.1:11434",
+                messages=[
+                    {"role": "user", "content": "What is the weather in San Francisco?"}
+                ],
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_current_weather",
+                            "description": "Get current weather.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"location": {"type": "string"}},
+                                "required": ["location"],
+                            },
+                        },
+                    }
+                ],
+                stream=True,
+                drop_params=True,
+            )
+
+            reassembled_content = ""
+            tool_calls_seen = []
+            finish_reasons = []
+            for chunk in response:
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    reassembled_content += delta.content
+                if getattr(delta, "tool_calls", None):
+                    tool_calls_seen.extend(delta.tool_calls)
+                if chunk.choices[0].finish_reason:
+                    finish_reasons.append(chunk.choices[0].finish_reason)
+
+        assert len(captured_requests) == 1
+        request_body = captured_requests[0]["body"]
+
+        # fake_stream engaged: the actual wire request to Ollama is non-streaming.
+        assert request_body.get("stream") is False
+
+        # tools are emulated via the injected prompt, never sent as a native field.
+        assert "tools" not in request_body
+
+        # the streamed response reconstructs the tool call, not raw JSON text.
+        assert tool_calls_seen, "expected delta.tool_calls to be populated"
+        assert tool_calls_seen[0]["function"]["name"] == "get_current_weather"
+        assert json.loads(tool_calls_seen[0]["function"]["arguments"]) == {
+            "location": "San Francisco"
+        }
+
+        assert finish_reasons == ["tool_calls"]
+        assert json.dumps(tool_call_json) not in reassembled_content
