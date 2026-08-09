@@ -1,5 +1,5 @@
 import { fetchProxySettings } from "@/utils/proxyUtils";
-import { useQuery } from "@tanstack/react-query";
+import { QueryClient, useQuery } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 
 export const proxySettingsKeys = createQueryKeys("proxySettings");
@@ -23,4 +23,14 @@ export default function useProxySettings(accessToken: string | null): ProxySetti
     enabled: Boolean(accessToken),
   });
   return data ?? EMPTY_PROXY_SETTINGS;
+}
+
+export function ensureProxySettings(
+  queryClient: QueryClient,
+  accessToken: string | null,
+): Promise<ProxySettings | null> {
+  return queryClient.ensureQueryData({
+    queryKey: [...proxySettingsKeys.all, accessToken],
+    queryFn: () => fetchProxySettings(accessToken),
+  });
 }
