@@ -253,7 +253,7 @@ class LiteLLMCompletionResponsesConfig:
                 api_base=api_base,
             )
         except Exception as e:  # noqa: BLE001  # a capability probe must never fail the request it probes for
-            verbose_logger.debug(f"responses bridge: reasoning effort mode check failed: {e}")
+            verbose_logger.debug("responses bridge: reasoning effort mode check failed: %s", e)
             return False
         return model_info.get("mode") == "responses"
 
