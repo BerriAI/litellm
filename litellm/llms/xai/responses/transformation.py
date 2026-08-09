@@ -145,7 +145,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         chat_usage: Final = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(response.usage)
         apply_server_side_tool_usage_details_to_usage(chat_usage, details)
-        setattr(response, "usage", chat_usage)
+        response.usage = chat_usage  # pyright: ignore[reportAttributeAccessIssue]  # extra  # rebind-ok: chat Usage
 
     def _transform_web_search_tool(self, tool: dict[str, Any]) -> XAIWebSearchTool | dict[str, Any]:
         """
