@@ -1,8 +1,21 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page as PlaywrightPage } from "@playwright/test";
 import { ADMIN_STORAGE_PATH, E2E_TEAM_CRUD_ID } from "../../constants";
 import { Role, users } from "../../fixtures/users";
 import { navigateToPage } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
+import { captureRequestBody, readBack } from "../../helpers/roundTrip";
+
+/** GET /model/info?litellm_model_id= returns {data: [row]} — the deployment as stored. */
+async function readDeployment(page: PlaywrightPage, modelId: string): Promise<Record<string, any> | undefined> {
+  const body = await readBack<{ data: Record<string, any>[] }>(page, `/model/info?litellm_model_id=${modelId}`);
+  return body.data[0];
+}
+
+/** GET /v2/model/info lists every deployment; created models are found by model_name. */
+async function findDeploymentByName(page: PlaywrightPage, modelName: string): Promise<Record<string, any> | undefined> {
+  const body = await readBack<{ data: Record<string, any>[] }>(page, "/v2/model/info");
+  return body.data.find((row) => row.model_name === modelName);
+}
 
 /**
  * Helper to select a provider from the Add Model form dropdown.
@@ -76,11 +89,41 @@ test.describe("Add Model", () => {
     await page.getByPlaceholder("Enter TPM").fill("999");
     await page.getByPlaceholder("Enter RPM").fill("888");
 
-    await page.getByRole("button", { name: "Save Changes" }).click();
+    // handleModelUpdate rebuilds the whole litellm_params blob on every save and
+    // PATCHes it wholesale, so what goes on the wire is worth pinning: the edit
+    // is only correct if the two changed fields are in there.
+    const patch = await captureRequestBody(
+      page,
+      { method: "PATCH", urlIncludes: `/model/${createdModelId}/update` },
+      async () => {
+        await page.getByRole("button", { name: "Save Changes" }).click();
+      },
+    );
+    expect(Number(patch.litellm_params?.tpm), "new TPM on the wire").toBe(999);
+    expect(Number(patch.litellm_params?.rpm), "new RPM on the wire").toBe(888);
 
     // Verify the new values render back in view mode
     await expect(page.getByText("999", { exact: true })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("888", { exact: true })).toBeVisible({ timeout: 10_000 });
+
+    // ...but view mode re-renders from the form's own state, so it shows what the
+    // UI asked for whether or not the backend kept it. Read the deployment back.
+    await expect
+      .poll(
+        async () => {
+          const stored = await readDeployment(page, createdModelId);
+          return [Number(stored?.litellm_params?.tpm), Number(stored?.litellm_params?.rpm)];
+        },
+        { message: "TPM/RPM did not persist on the deployment", timeout: 15_000 },
+      )
+      .toEqual([999, 888]);
+
+    // A save that lands the edited fields and silently drops the untouched ones
+    // is the exact shape of the reported regressions, and it looks identical in
+    // the UI. Pin the fields this edit had no business changing.
+    const after = await readDeployment(page, createdModelId);
+    expect(after?.litellm_params?.model, "upstream model untouched by a limits edit").toBe("openai/fake-gpt-4");
+    expect(after?.model_info?.team_id, "team ownership untouched by a limits edit").toBe(E2E_TEAM_CRUD_ID);
   });
 
   test("Test connection with bad credentials shows failure", async ({ page }) => {
@@ -126,7 +169,16 @@ test.describe("Add Model", () => {
     await apiKeyInput.fill("sk-any-key-for-add-test");
 
     // Click Add Model button by its text
-    await page.getByRole("button", { name: "Add Model" }).last().click();
+    const created = await captureRequestBody(page, { method: "POST", urlIncludes: "/model/new" }, async () => {
+      await page.getByRole("button", { name: "Add Model" }).last().click();
+    });
+    // The form carries the provider separately from the model name (it sends
+    // custom_llm_provider rather than an "anthropic/" prefix), so both halves
+    // have to arrive. A deployment that loses the provider selection looks
+    // right in the table and is unroutable.
+    expect(created.model_name, "the selected model is what goes on the wire").toBe("claude-haiku-4-5");
+    expect(created.litellm_params?.model, "the model name goes on the wire").toBe("claude-haiku-4-5");
+    expect(created.litellm_params?.custom_llm_provider, "the picked provider goes on the wire").toBe("anthropic");
 
     // Wait for success notification
     await expect(page.getByText("created successfully")).toBeVisible({ timeout: 15_000 });
@@ -148,6 +200,14 @@ test.describe("Add Model", () => {
     // Verify the model name appears in the table body
     const tableBody = page.locator("table tbody");
     await expect(tableBody.getByText("claude-haiku-4-5").first()).toBeVisible({ timeout: 15_000 });
+
+    // The table is populated from the model list the UI refetches, but a row is
+    // only evidence the name is there -- it says nothing about what the
+    // deployment actually routes to. Read the stored deployment back.
+    const stored = await findDeploymentByName(page, "claude-haiku-4-5");
+    expect(stored, "created model readable from /v2/model/info").toBeTruthy();
+    expect(stored?.litellm_params?.model, "stored deployment keeps the model name").toBe("claude-haiku-4-5");
+    expect(stored?.litellm_params?.custom_llm_provider, "stored deployment keeps its provider").toBe("anthropic");
   });
 
   test("Add team-only model via Team-BYOK toggle and verify it appears with the team", async ({ page, request }) => {
@@ -270,7 +330,12 @@ test.describe("Add Model", () => {
     await apiKeyInput.fill("sk-any-key-for-wildcard-test");
 
     // Click Add Model button by its text
-    await page.getByRole("button", { name: "Add Model" }).last().click();
+    const created = await captureRequestBody(page, { method: "POST", urlIncludes: "/model/new" }, async () => {
+      await page.getByRole("button", { name: "Add Model" }).last().click();
+    });
+    // A wildcard that arrives with the star stripped becomes an ordinary
+    // deployment named "cohere" and silently stops matching anything.
+    expect(created.model_name, "the wildcard route goes on the wire intact").toBe("cohere/*");
 
     // Wait for success notification
     await expect(page.getByText("created successfully")).toBeVisible({ timeout: 15_000 });
@@ -292,5 +357,11 @@ test.describe("Add Model", () => {
     // Verify the wildcard model appears in the table body (wildcard models show as "cohere/*")
     const tableBody = page.locator("table tbody");
     await expect(tableBody.getByText("cohere/").first()).toBeVisible({ timeout: 15_000 });
+
+    // "cohere/" in the table would also match a plain cohere deployment. Read
+    // the stored route back and require the wildcard exactly.
+    const stored = await findDeploymentByName(page, "cohere/*");
+    expect(stored, "wildcard deployment readable from /v2/model/info").toBeTruthy();
+    expect(stored?.litellm_params?.model, "stored deployment keeps the wildcard route").toBe("cohere/*");
   });
 });
