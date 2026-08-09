@@ -536,6 +536,7 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
     set_files_config,
 )
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+    openai_passthrough_router,
     passthrough_endpoint_router,
     vertex_ai_live_websocket_passthrough,
 )
@@ -16607,6 +16608,7 @@ app.include_router(search_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(credential_router)
+app.include_router(openai_passthrough_router)
 app.include_router(batches_router)
 app.include_router(openai_files_router)
 app.include_router(llm_passthrough_router)
