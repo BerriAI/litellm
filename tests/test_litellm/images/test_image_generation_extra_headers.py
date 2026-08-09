@@ -8,7 +8,7 @@ code paths.
 
 import os
 import sys
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -81,8 +81,8 @@ class TestImageGenerationExtraHeaders:
     @patch("litellm.images.main.image_generation")
     @patch("litellm.images.main.get_llm_provider")
     async def test_aimage_generation_forwards_explicit_provider_to_resolution(
-        self, mock_get_llm_provider, mock_image_generation
-    ):
+        self, mock_get_llm_provider: Mock, mock_image_generation: Mock
+    ) -> None:
         mock_get_llm_provider.return_value = ("Qwen-Image", "openai", None, None)
         mock_image_generation.return_value = litellm.utils.ImageResponse(
             created=1234567890,
