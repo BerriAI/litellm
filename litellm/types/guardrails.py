@@ -5,6 +5,7 @@ from typing import Any, Final, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Required, TypedDict
 
+from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
     AktoConfigModel,
 )
@@ -524,6 +525,15 @@ class BedrockGuardrailConfigModel(BaseModel):
         le=1.0,
         description="InvokeGuardrailChecks: block when any sensitiveInformation confidenceScore "
         ">= this value (scores are in [0,1]). Set to null to make PII detection detect-only.",
+    )
+    chunk_budget_chars: int = Field(
+        default=BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS,
+        gt=0,
+        description="ApplyGuardrail: batch size, in characters, used to re-send content after AWS "
+        "has rejected a request as too large. Requests AWS accepts are always sent in a single "
+        "call, so this has no effect until a rejection happens. Defaults to 25,000; a batch AWS "
+        "still rejects is bisected automatically, so this value only trades round trips against "
+        "batch size and cannot fail a request on its own.",
     )
 
 

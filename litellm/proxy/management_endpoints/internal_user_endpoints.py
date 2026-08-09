@@ -17,7 +17,7 @@ import json
 import traceback
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Any, Final, cast
+from typing import Any, Final, Literal, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status

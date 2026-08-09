@@ -12,8 +12,10 @@ from typing import Final
 
 import pytest
 
-from litellm.proxy.db.autorouter_session_rollup import UPSERT_AUTOROUTER_SESSION_SQL
-from litellm.proxy.management_endpoints.auto_router_endpoints import _BENCHMARKS_SQL
+from litellm.proxy.db.autorouter_session_rollup import (
+    AUTOROUTER_BENCHMARKS_SQL,
+    UPSERT_AUTOROUTER_SESSION_SQL,
+)
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -38,11 +40,13 @@ async def _turn(
     tokens: int = 100,
     spend: float = 0.01,
     saved: float = 0.02,
+    tier: "str | None" = None,
 ) -> None:
     touched: Final = 1 if (hit or ttl is not None or not covered) else 0
     await db.execute_raw(
         UPSERT_AUTOROUTER_SESSION_SQL,
         key, session_id, router, router_type, model, at.isoformat(), tokens, spend, saved, covered, hit, ttl, touched,
+        tier,
     )
 
 
@@ -162,7 +166,7 @@ async def test_the_benchmarks_aggregate_reads_only_overlapping_sessions(db):
     await _turn(db, key, "A", T0 - timedelta(days=40), session_id=out_of_window, router=router)
 
     rows = await db.query_raw(
-        _BENCHMARKS_SQL,
+        AUTOROUTER_BENCHMARKS_SQL,
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
     )
@@ -184,7 +188,7 @@ async def test_a_reconfigured_alias_reports_each_router_type_as_its_own_group(db
     await _turn(db, key, "A", T0 + timedelta(seconds=10), session_id=f"s-{uuid.uuid4()}", router=router, router_type="quality")
 
     rows = await db.query_raw(
-        _BENCHMARKS_SQL,
+        AUTOROUTER_BENCHMARKS_SQL,
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
     )
@@ -193,6 +197,106 @@ async def test_a_reconfigured_alias_reports_each_router_type_as_its_own_group(db
         key=lambda row: row["router_type"],
     )
     assert [(row["router_type"], row["sessions"]) for row in matching] == [("complexity", 1), ("quality", 1)]
+
+
+async def test_tier_turns_count_each_tier_that_served_a_turn(db):
+    key = f"k-{uuid.uuid4()}"
+    await _turn(db, key, "A", T0, tier="simple")
+    await _turn(db, key, "B", T0 + timedelta(seconds=10), tier="complex")
+    await _turn(db, key, "A", T0 + timedelta(seconds=20), tier="simple")
+
+    assert (await _row(db, key))["tier_turns"] == {"simple": 2, "complex": 1}
+
+
+async def test_an_untiered_turn_increments_no_tier_counter(db):
+    key = f"k-{uuid.uuid4()}"
+    await _turn(db, key, "A", T0, tier=None)
+    assert (await _row(db, key))["tier_turns"] == {}
+
+    await _turn(db, key, "A", T0 + timedelta(seconds=10), tier="medium")
+    await _turn(db, key, "A", T0 + timedelta(seconds=20), tier=None)
+    row = await _row(db, key)
+    assert row["tier_turns"] == {"medium": 1}
+    assert row["turns"] == 3
+
+
+async def test_a_mid_session_router_type_change_keeps_foreign_tier_names_out_of_the_map(db):
+    key = f"k-{uuid.uuid4()}"
+    await _turn(db, key, "A", T0, router_type="complexity", tier="medium")
+    await _turn(db, key, "A", T0 + timedelta(seconds=10), router_type="quality", tier="2")
+    await _turn(db, key, "A", T0 + timedelta(seconds=20), router_type="complexity", tier="medium")
+
+    row = await _row(db, key)
+    assert row["tier_turns"] == {"medium": 2}
+    assert row["turns"] == 3
+
+
+async def test_an_out_of_order_turn_still_counts_toward_its_tier(db):
+    key = f"k-{uuid.uuid4()}"
+    await _turn(db, key, "A", T0 + timedelta(seconds=60), tier="simple")
+    await _turn(db, key, "A", T0, tier="simple")
+
+    row = await _row(db, key)
+    assert row["tier_turns"] == {"simple": 2}
+    assert row["unordered_turns"] == 1
+
+
+async def test_the_benchmarks_aggregate_sums_tier_turns_across_sessions(db):
+    key = f"k-{uuid.uuid4()}"
+    router = f"r-{uuid.uuid4()}"
+    await _turn(db, key, "A", T0, session_id=f"s-{uuid.uuid4()}", router=router, tier="simple")
+    await _turn(db, key, "A", T0 + timedelta(seconds=10), session_id=f"s-{uuid.uuid4()}", router=router, tier="simple")
+    await _turn(db, key, "B", T0 + timedelta(seconds=20), session_id=f"s-{uuid.uuid4()}", router=router, tier="complex")
+    await _turn(db, key, "C", T0 + timedelta(seconds=30), session_id=f"s-{uuid.uuid4()}", router=router, tier=None)
+
+    rows = await db.query_raw(
+        AUTOROUTER_BENCHMARKS_SQL,
+        (T0 - timedelta(days=1)).isoformat(),
+        (T0 + timedelta(days=1)).isoformat(),
+    )
+    grouped = next(row for row in rows if row["router_name"] == router)
+    assert grouped["tier_turns"] == {"simple": 2, "complex": 1}
+    assert grouped["turns"] == 4
+
+
+async def test_tier_maps_stay_separate_per_router_type_on_a_reconfigured_alias(db):
+    key = f"k-{uuid.uuid4()}"
+    router = f"r-{uuid.uuid4()}"
+    await _turn(
+        db, key, "A", T0, session_id=f"s-{uuid.uuid4()}", router=router, router_type="complexity", tier="medium"
+    )
+    await _turn(
+        db,
+        key,
+        "A",
+        T0 + timedelta(seconds=10),
+        session_id=f"s-{uuid.uuid4()}",
+        router=router,
+        router_type="quality",
+        tier="2",
+    )
+
+    rows = await db.query_raw(
+        AUTOROUTER_BENCHMARKS_SQL,
+        (T0 - timedelta(days=1)).isoformat(),
+        (T0 + timedelta(days=1)).isoformat(),
+    )
+    by_type = {row["router_type"]: row["tier_turns"] for row in rows if row["router_name"] == router}
+    assert by_type == {"complexity": {"medium": 1}, "quality": {"2": 1}}
+
+
+async def test_a_window_with_no_tiered_turns_aggregates_to_an_empty_map(db):
+    key = f"k-{uuid.uuid4()}"
+    router = f"r-{uuid.uuid4()}"
+    await _turn(db, key, "A", T0, session_id=f"s-{uuid.uuid4()}", router=router, tier=None)
+
+    rows = await db.query_raw(
+        AUTOROUTER_BENCHMARKS_SQL,
+        (T0 - timedelta(days=1)).isoformat(),
+        (T0 + timedelta(days=1)).isoformat(),
+    )
+    grouped = next(row for row in rows if row["router_name"] == router)
+    assert grouped["tier_turns"] == {}
 
 
 async def test_a_miss_that_touched_no_cache_does_not_advance_the_ttl_clock(db):

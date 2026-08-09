@@ -985,6 +985,8 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   created_at DateTime @default(now())
   created_by String?
   team_id String?
+  api_key String?
+  request_tags Json? @default("[]")
   updated_at DateTime @updatedAt
   updated_by String?
 
@@ -1439,6 +1441,7 @@ model LiteLLM_AutoRouterSession {
   total_tokens          BigInt   @default(0)
   spend                 Float    @default(0)
   saved_spend           Float    @default(0)
+  tier_turns            Json     @default("{}")
 
   @@id([api_key, session_id, router_name])
   @@index([last_turn_at], map: "idx_autorouter_session_last_turn")
