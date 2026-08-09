@@ -12,6 +12,7 @@ import uuid
 from typing import Final
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -52,9 +53,10 @@ def _parse_data_url(data_url: str) -> tuple[bytes, str, str] | None:
 
 
 def _download_image_sync(url: str) -> tuple[bytes, str, str]:
-    """Download image from URL synchronously."""
+    """Download image from URL synchronously with SSRF guards."""
     client: Final = _get_httpx_client(params={"ssl_verify": False})
-    response: Final = client.get(url)
+    # Chat image_url is user/LLM controlled; use the shared redirect-aware guard.
+    response: Final = safe_get(client, url)
     response.raise_for_status()
 
     content_type: Final = response.headers.get("content-type", "image/jpeg")
@@ -64,12 +66,12 @@ def _download_image_sync(url: str) -> tuple[bytes, str, str]:
 
 
 async def _download_image_async(url: str) -> tuple[bytes, str, str]:
-    """Download image from URL asynchronously."""
+    """Download image from URL asynchronously with SSRF guards."""
     client: Final = get_async_httpx_client(
         llm_provider=LlmProviders.GIGACHAT,
         params={"ssl_verify": False},
     )
-    response: Final = await client.get(url)
+    response: Final = await async_safe_get(client, url)
     response.raise_for_status()
 
     content_type: Final = response.headers.get("content-type", "image/jpeg")
@@ -138,6 +140,9 @@ def upload_file_sync(
 
         return file_id
 
+    except SSRFError:
+        # Fail closed: do not treat blocked URLs as a soft upload miss.
+        raise
     except Exception as e:
         verbose_logger.error("Error uploading file to GigaChat: %s", e)
         return None
@@ -206,6 +211,9 @@ async def upload_file_async(
 
         return file_id
 
+    except SSRFError:
+        # Fail closed: do not treat blocked URLs as a soft upload miss.
+        raise
     except Exception as e:
         verbose_logger.error("Error uploading file to GigaChat: %s", e)
         return None
