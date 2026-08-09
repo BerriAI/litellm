@@ -18,6 +18,19 @@ describe("hasCapability", () => {
   );
 });
 
+describe.each(["viewAuditLogs", "viewDeletedTeams"] as const)("hasCapability - %s", (capability) => {
+  it.each(["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer"])("should grant it to %s", (role) => {
+    expect(hasCapability(role, capability)).toBe(true);
+  });
+
+  it.each(["Internal User", "Internal Viewer", "App User", "Org Admin", "Unknown Role", "", null, undefined])(
+    "should deny it to %s",
+    (role) => {
+      expect(hasCapability(role, capability)).toBe(false);
+    },
+  );
+});
+
 describe("rolesWithCapability", () => {
   it("should return a copy so callers cannot mutate the capability map", () => {
     const roles = rolesWithCapability("viewToolPolicies");
