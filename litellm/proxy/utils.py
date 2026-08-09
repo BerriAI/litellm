@@ -544,6 +544,11 @@ class ProxyLogging:
         for hook in PROXY_HOOKS:
             proxy_hook = get_proxy_hook(hook)
             expected_args = inspect.getfullargspec(proxy_hook).args
+            if "prisma_client" in expected_args and prisma_client is None:
+                verbose_proxy_logger.debug(
+                    "Skipping proxy hook %s: it requires a database and no prisma client is configured", hook
+                )
+                continue
             passed_in_args: dict[str, Any] = {}
             if "internal_usage_cache" in expected_args:
                 passed_in_args["internal_usage_cache"] = self.internal_usage_cache
