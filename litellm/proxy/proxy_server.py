@@ -9036,9 +9036,7 @@ async def model_list(
         get_available_models_for_user,
     )
 
-    # Claude Code's gateway discovery sends the same anthropic-version header it
-    # uses for /v1/messages and only parses the Anthropic-native models shape.
-    wants_anthropic_format = request is not None and request.headers.get("anthropic-version") is not None
+    wants_anthropic_format: Final = request is not None and request.headers.get("anthropic-version") is not None
 
     # Validate scope parameter if provided
     if scope is not None and scope != "expand":

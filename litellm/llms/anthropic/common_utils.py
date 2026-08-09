@@ -1225,20 +1225,17 @@ def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
     return additional_headers
 
 
-def create_anthropic_model_list_response(model_ids: list[str]) -> dict:
-    """Build the Anthropic-native /v1/models envelope for Claude Code gateway discovery.
+def create_anthropic_model_list_response(model_ids: Sequence[str]) -> Mapping[str, object]:
+    """Build the Anthropic-native /v1/models envelope.
 
-    Claude Code 2.1.126+ queries the gateway root's /v1/models with an
-    anthropic-version header and only parses the Anthropic Models API shape
-    (type/display_name/created_at plus has_more/first_id/last_id). It keeps
-    models whose id starts with claude/anthropic, so the full list is returned
-    here and the client filters. display_name falls back to the id, which is
-    the stable label a gateway can offer for arbitrary upstream models.
+    Clients that send an anthropic-version header parse the Anthropic Models API
+    shape (type/display_name/created_at plus has_more/first_id/last_id) and filter
+    the list themselves, so every model id is returned here
     """
-    created_at = (
+    created_at: Final = (
         datetime.fromtimestamp(DEFAULT_MODEL_CREATED_AT_TIME, tz=timezone.utc).isoformat().replace("+00:00", "Z")
     )
-    data = [  # mutable-ok: JSON response body, serialized by the route and never mutated
+    data: Final = [  # mutable-ok: JSON response body, serialized by the route and never mutated
         {  # mutable-ok: JSON response body, serialized by the route and never mutated
             "type": "model",
             "id": model_id,
