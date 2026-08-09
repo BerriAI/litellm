@@ -25,6 +25,7 @@ import {
   useStartShadowEval,
   useStopShadowEval,
   type ShadowEvalJob,
+  type ShadowEvalModelResult,
   type ShadowEvalTierResult,
 } from "./useShadowEval";
 
@@ -116,7 +117,10 @@ const TierResultsTable: React.FC<{ groups: readonly ShadowEvalTierResult[] }> = 
   <Table>
     <TableHeader>
       <TableRow>
-        <TableHead>Router tier</TableHead>
+        <HeadTooltip
+          label="Prompt difficulty"
+          tooltip="The router sorts every prompt into a difficulty tier and picks a model sized to it. Rows where the router holds up on hard tiers matter most."
+        />
         <TableHead className="text-right">Judged turns</TableHead>
         <TableHead className="text-right">Router wins</TableHead>
         <TableHead className="text-right">Current model wins</TableHead>
@@ -151,6 +155,69 @@ const TierResultsTable: React.FC<{ groups: readonly ShadowEvalTierResult[] }> = 
     </TableBody>
   </Table>
 );
+
+const ModelResultsTable: React.FC<{ models: readonly ShadowEvalModelResult[] }> = ({ models }) => (
+  <Table>
+    <TableHeader>
+      <TableRow>
+        <HeadTooltip
+          label="Compared against"
+          tooltip="The model that actually served each sampled request. Your traffic can mix models; each row is the router's head-to-head record against one of them."
+        />
+        <TableHead className="text-right">Judged turns</TableHead>
+        <TableHead className="text-right">Router wins</TableHead>
+        <TableHead className="text-right">Current model wins</TableHead>
+        <HeadTooltip
+          className="text-right"
+          label="Ties"
+          tooltip="The judge saw the same quality from both. Ties count in the router's favor — same answer quality, usually at lower cost."
+        />
+        <HeadTooltip
+          className="text-right"
+          label="Judge confidence"
+          tooltip="The judge's self-reported certainty in its verdicts (0 to 1), averaged over these turns."
+        />
+      </TableRow>
+    </TableHeader>
+    <TableBody>
+      {models.map((m) => (
+        <TableRow key={m.current_model}>
+          <TableCell className="font-mono text-xs text-foreground">
+            {m.current_model}
+            {m.turn_count < MIN_TURNS_FOR_CONFIDENCE ? <LowSampleFlag /> : null}
+          </TableCell>
+          <TableCell className="text-right tabular-nums">{m.turn_count.toLocaleString()}</TableCell>
+          <TableCell className="text-right font-medium tabular-nums text-foreground">
+            {pct(m.shadow_win_rate_pct)}
+          </TableCell>
+          <TableCell className="text-right tabular-nums">{pct(m.real_win_rate_pct)}</TableCell>
+          <TableCell className="text-right tabular-nums">{pct(m.tie_rate_pct)}</TableCell>
+          <TableCell className="text-right tabular-nums">{m.avg_judge_confidence.toFixed(2)}</TableCell>
+        </TableRow>
+      ))}
+    </TableBody>
+  </Table>
+);
+
+const TierBreakdown: React.FC<{ groups: readonly ShadowEvalTierResult[] }> = ({ groups }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="border-t">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((prev) => !prev)}
+        className="flex w-full items-center justify-between gap-3 px-6 py-3 text-left hover:bg-muted/50"
+      >
+        <span className="text-xs text-muted-foreground">
+          By prompt difficulty — how the router scored across the difficulty tiers it sorted prompts into
+        </span>
+        <span className="text-xs text-muted-foreground">{open ? "Hide" : "Show"}</span>
+      </button>
+      {open ? <TierResultsTable groups={groups} /> : null}
+    </div>
+  );
+};
 
 const MetricLabel: React.FC<{ label: string; tooltip: string }> = ({ label, tooltip }) => (
   <TooltipProvider delay={200}>
@@ -242,7 +309,12 @@ const JobResults: React.FC<{
             <p className="text-xs text-muted-foreground">of {job.completed_count.toLocaleString()} judged responses</p>
           </div>
           <VerdictBar results={results} />
-          <TierResultsTable groups={results.groups} />
+          {(results.by_current_model?.length ?? 0) > 0 ? (
+            <ModelResultsTable models={results.by_current_model ?? []} />
+          ) : (
+            <TierResultsTable groups={results.groups} />
+          )}
+          {(results.by_current_model?.length ?? 0) > 0 ? <TierBreakdown groups={results.groups} /> : null}
         </>
       ) : (
         <p className="px-6 py-8 text-center text-sm text-muted-foreground">

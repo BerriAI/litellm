@@ -6,6 +6,7 @@ import type { components } from "@/lib/http/schema";
 
 export type ShadowEvalJob = components["schemas"]["GetShadowEvalJobResponse"];
 export type ShadowEvalTierResult = components["schemas"]["ShadowEvalTierResult"];
+export type ShadowEvalModelResult = components["schemas"]["ShadowEvalModelResult"];
 export type StartShadowEvalRequest = components["schemas"]["StartShadowEvalRequest"];
 
 const JOBS_PATH = "/auto_router/shadow_eval" as const;

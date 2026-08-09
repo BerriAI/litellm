@@ -32580,10 +32580,36 @@ export interface components {
             timeout?: number | null;
         };
         /**
+         * ShadowEvalModelResult
+         * @description Judge outcomes against one of the models the shadowed key currently uses.
+         *
+         *     A key's real traffic can be a mix of models; per-tier win rates blend those
+         *     incumbents together, so this slice answers which of them the router actually beat.
+         */
+        ShadowEvalModelResult: {
+            /** Avg Judge Confidence */
+            avg_judge_confidence: number;
+            /** Current Model */
+            current_model: string;
+            /** Real Win Rate Pct */
+            real_win_rate_pct: number;
+            /** Shadow Win Rate Pct */
+            shadow_win_rate_pct: number;
+            /** Tie Rate Pct */
+            tie_rate_pct: number;
+            /** Turn Count */
+            turn_count: number;
+        };
+        /**
          * ShadowEvalResult
          * @description Stratified results of a completed (or in-progress) shadow-eval job.
          */
         ShadowEvalResult: {
+            /**
+             * By Current Model
+             * @default []
+             */
+            by_current_model: components["schemas"]["ShadowEvalModelResult"][];
             /** Groups */
             groups: components["schemas"]["ShadowEvalTierResult"][];
             /** Overall Shadow Win Rate Pct */

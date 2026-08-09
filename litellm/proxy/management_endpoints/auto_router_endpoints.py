@@ -4,7 +4,8 @@ AUTO ROUTER MANAGEMENT ENDPOINTS
 POST /auto_router/test_routing - Route one prompt through an unsaved complexity-router config
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final
@@ -41,6 +42,7 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterRoutingTestResponse,
     GetShadowEvalJobResponse,
     RequestComplexityRouterConfig,
+    ShadowEvalModelResult,
     ShadowEvalResult,
     ShadowEvalStatus,
     ShadowEvalTierResult,
@@ -540,6 +542,7 @@ def _estimate_judge_cost_per_call(judge_model: str) -> float:
 
 class _VerdictAggRow(BaseModel):
     tier_classification: str | None
+    real_model: str
     turn_count: int
     real_wins: int
     shadow_wins: int
@@ -552,6 +555,7 @@ _VERDICT_AGG_ROWS: Final = TypeAdapter(list[_VerdictAggRow])
 _VERDICT_AGG_SQL: Final = """
 SELECT
     tier_classification,
+    real_model,
     COUNT(*)::int AS turn_count,
     COUNT(*) FILTER (WHERE judge_preference = 'real')::int AS real_wins,
     COUNT(*) FILTER (WHERE judge_preference = 'shadow')::int AS shadow_wins,
@@ -559,29 +563,76 @@ SELECT
     AVG(judge_confidence)::float AS avg_confidence
 FROM "LiteLLM_ShadowEvalVerdict"
 WHERE job_id = $1
-GROUP BY tier_classification
+GROUP BY tier_classification, real_model
 """
 
 
+@dataclass
+class _VerdictTally:
+    turns: int = 0
+    real_wins: int = 0
+    shadow_wins: int = 0
+    ties: int = 0
+    confidence_weighted: float = 0.0
+
+    def absorb(self, row: _VerdictAggRow) -> None:
+        self.turns += row.turn_count
+        self.real_wins += row.real_wins
+        self.shadow_wins += row.shadow_wins
+        self.ties += row.ties
+        self.confidence_weighted += (row.avg_confidence or 0.0) * row.turn_count
+
+    @property
+    def avg_confidence(self) -> float:
+        return round(self.confidence_weighted / self.turns, 3) if self.turns else 0.0
+
+
+def _tally_by(rows: Sequence[_VerdictAggRow], key: Callable[[_VerdictAggRow], str]) -> Mapping[str, _VerdictTally]:
+    tallies: Final[dict[str, _VerdictTally]] = {}  # mutable-ok: aggregation accumulator
+    for row in rows:
+        tallies.setdefault(key(row), _VerdictTally()).absorb(row)
+    return tallies
+
+
 def _shadow_eval_results(rows: Sequence[_VerdictAggRow]) -> ShadowEvalResult | None:
+    """Both stratifications of one job's verdicts, from a single (tier, model) rollup.
+
+    Tier answers "where does the router do well"; current-model answers "which of the
+    models this key uses today would the router beat", which only says anything when
+    the key's traffic is a mix rather than a single incumbent.
+    """
     if not rows:
         return None
     total_turns: Final = sum(r.turn_count for r in rows)
     total_shadow_wins: Final = sum(r.shadow_wins for r in rows)
     total_ties: Final = sum(r.ties for r in rows)
+    by_tier: Final = _tally_by(rows, lambda r: r.tier_classification or "UNCLASSIFIED")
     groups: Final = tuple(
         ShadowEvalTierResult(
-            tier=row.tier_classification or "UNCLASSIFIED",
-            turn_count=row.turn_count,
-            real_win_rate_pct=_pct(row.real_wins, row.turn_count),
-            shadow_win_rate_pct=_pct(row.shadow_wins, row.turn_count),
-            tie_rate_pct=_pct(row.ties, row.turn_count),
-            avg_judge_confidence=round(row.avg_confidence or 0.0, 3),
+            tier=tier,
+            turn_count=tally.turns,
+            real_win_rate_pct=_pct(tally.real_wins, tally.turns),
+            shadow_win_rate_pct=_pct(tally.shadow_wins, tally.turns),
+            tie_rate_pct=_pct(tally.ties, tally.turns),
+            avg_judge_confidence=tally.avg_confidence,
         )
-        for row in sorted(rows, key=lambda r: r.turn_count, reverse=True)
+        for tier, tally in sorted(by_tier.items(), key=lambda kv: kv[1].turns, reverse=True)
+    )
+    by_model: Final = _tally_by(rows, lambda r: r.real_model)
+    model_groups: Final = tuple(
+        ShadowEvalModelResult(
+            current_model=model,
+            turn_count=tally.turns,
+            real_win_rate_pct=_pct(tally.real_wins, tally.turns),
+            shadow_win_rate_pct=_pct(tally.shadow_wins, tally.turns),
+            tie_rate_pct=_pct(tally.ties, tally.turns),
+            avg_judge_confidence=tally.avg_confidence,
+        )
+        for model, tally in sorted(by_model.items(), key=lambda kv: kv[1].turns, reverse=True)
     )
     return ShadowEvalResult(
         groups=groups,
+        by_current_model=model_groups,
         overall_shadow_win_rate_pct=_pct(total_shadow_wins, total_turns),
         overall_tie_rate_pct=_pct(total_ties, total_turns),
     )

@@ -82,6 +82,24 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
         avg_judge_confidence: 0.74,
       },
     ],
+    by_current_model: [
+      {
+        current_model: "gpt-4o",
+        turn_count: 30,
+        real_win_rate_pct: 30.0,
+        shadow_win_rate_pct: 45.0,
+        tie_rate_pct: 25.0,
+        avg_judge_confidence: 0.8,
+      },
+      {
+        current_model: "my-finetune",
+        turn_count: 12,
+        real_win_rate_pct: 25.0,
+        shadow_win_rate_pct: 58.3,
+        tie_rate_pct: 16.7,
+        avg_judge_confidence: 0.75,
+      },
+    ],
     overall_shadow_win_rate_pct: 48.0,
     overall_tie_rate_pct: 22.0,
   },
@@ -132,15 +150,31 @@ describe("ShadowEvalSection", () => {
     expect(screen.getByText("Start shadow eval")).toBeInTheDocument();
   });
 
-  it("renders per-tier win rates for an active job", () => {
+  it("leads with the models the router was compared against", () => {
     const j = job();
     mockHooks({ jobs: [j], detail: j });
     render(<ShadowEvalSection accessToken="token" />);
+    expect(screen.getByText("Compared against")).toBeInTheDocument();
+    expect(screen.getByText("gpt-4o")).toBeInTheDocument();
+    expect(screen.getByText("my-finetune")).toBeInTheDocument();
+    expect(screen.getByText("58.3%")).toBeInTheDocument();
+    // Overall matched-or-beat = shadow wins + ties = 70%
+    expect(screen.getByText("70.0%")).toBeInTheDocument();
+    // Tier rows are behind the difficulty toggle, not in the primary view.
+    expect(screen.queryByText("SIMPLE")).not.toBeInTheDocument();
+  });
+
+  it("reveals per-tier win rates behind the prompt-difficulty toggle", async () => {
+    const user = userEvent.setup();
+    const j = job();
+    mockHooks({ jobs: [j], detail: j });
+    render(<ShadowEvalSection accessToken="token" />);
+
+    await user.click(screen.getByText(/By prompt difficulty/));
+
     expect(screen.getByText("SIMPLE")).toBeInTheDocument();
     expect(screen.getByText("REASONING")).toBeInTheDocument();
     expect(screen.getByText("55.0%")).toBeInTheDocument();
-    // Overall matched-or-beat = shadow wins + ties = 70%
-    expect(screen.getByText("70.0%")).toBeInTheDocument();
   });
 
   it("states the metric's denominator next to the headline number", () => {
@@ -172,12 +206,23 @@ describe("ShadowEvalSection", () => {
     expect(screen.getByText(/LLM judge compares the two answers blind/)).toBeInTheDocument();
   });
 
-  it("flags low-sample tiers", () => {
+  it("flags low-sample rows", () => {
     const j = job();
     mockHooks({ jobs: [j], detail: j });
     render(<ShadowEvalSection accessToken="token" />);
-    // REASONING tier has 12 turns < 30
-    expect(screen.getByText("(low sample)")).toBeInTheDocument();
+    // my-finetune has 12 turns < 30
+    expect(screen.getAllByText("(low sample)")).toHaveLength(1);
+  });
+
+  it("falls back to the tier table when results predate the by-model slice", () => {
+    const j = job();
+    const results = j.results!;
+    const legacy = job({ results: { ...results, by_current_model: [] } });
+    mockHooks({ jobs: [legacy], detail: legacy });
+    render(<ShadowEvalSection accessToken="token" />);
+    expect(screen.getByText("SIMPLE")).toBeInTheDocument();
+    expect(screen.queryByText("Compared against")).not.toBeInTheDocument();
+    expect(screen.queryByText(/By prompt difficulty/)).not.toBeInTheDocument();
   });
 
   it("shows a stop button for running jobs but not completed ones", () => {
