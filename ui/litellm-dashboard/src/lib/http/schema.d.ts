@@ -6904,11 +6904,34 @@ export interface paths {
         /**
          * Info Key Fn
          * @description Retrieve information about a key.
+         *
          *     Parameters:
-         *         key: Optional[str] = Query parameter representing the key in the request
-         *         user_api_key_dict: UserAPIKeyAuth = Dependency representing the user's API key
+         *     - key: str | None (query parameter) - The key to look up. Accepts the plaintext key or its hash.
+         *       Defaults to the key in the Authorization header.
+         *
          *     Returns:
-         *         Dict containing the key and its associated information
+         *     - key: str - The key that was looked up, echoed back as it was passed in
+         *     - info: dict - The key's row, minus the hashed token
+         *         - key_alias: str | None - User-friendly key alias
+         *         - spend: float - Amount spent by the key. When budget_duration is set this covers only the
+         *           current budget window, not the key's lifetime
+         *         - max_budget: float | None - Max budget for the key, enforced against spend
+         *         - budget_duration: str | None - Budget reset period ("30d", "1h", etc.)
+         *         - budget_reset_at: datetime | None - When the current budget window ends and spend is next
+         *           reset to 0, not when it was last reset. Reset times snap to standard boundaries in the
+         *           configured timezone (30d and 1mo land on the 1st of the month, 7d on Monday, 1h on the
+         *           hour), so subtracting budget_duration from it does not give the window's start
+         *         - model_max_budget: dict - Per-model budgets, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+         *         - model_max_budget_usage: dict | None - Current-window spend per model, present only when
+         *           the key has per-model budgets
+         *         - models: list - Model_name's the key is allowed to call
+         *         - tpm_limit / rpm_limit: int | None - Tokens and requests per minute limits
+         *         - metadata: dict - Metadata for the key, e.g. {"team": "core-infra"}
+         *         - blocked: bool | None - Whether the key is blocked
+         *         - expires: datetime | None - When the key stops authenticating requests
+         *         - last_active: datetime | None - When the key was last used
+         *         - object_permission: dict | None - Resolved vector store / MCP permissions when the key has
+         *           an object_permission_id
          *
          *     Example Curl:
          *     ```
@@ -21368,6 +21391,13 @@ export interface components {
              * @description What the routed traffic actually cost
              */
             spend: number;
+            /**
+             * Tier Turns
+             * @description Turns per tier, keyed by the tier name the routing decision recorded at request time (never re-derived at read time, since the tier-to-model mapping is mutable config). Tier names are scoped to this group's router_type and are not comparable across types: a complexity router reports 'simple'/'medium'/'complex'/'reasoning', a quality router reports its numeric quality tier, and an adaptive router records no tier at all. Turns no tier served (the classifier fell back to default_model) are absent rather than pooled under a sentinel key, so the values may sum to less than turns
+             */
+            tier_turns?: {
+                [key: string]: number;
+            };
             /** Turns */
             turns: number;
         };
@@ -23389,6 +23419,11 @@ export interface components {
              * @description Proxy API Endpoints you want users to be able to access
              */
             allowed_routes?: unknown[] | null;
+            /**
+             * Apply User Budget To Team Keys
+             * @description If True, a user's personal max_budget is enforced on every request they make, including requests made with a team-scoped key. Defaults to False, where a team-scoped key is governed only by the team and team-member budgets and the key owner's personal max_budget does not apply (see GitHub issue #12905).
+             */
+            apply_user_budget_to_team_keys?: boolean | null;
             /**
              * Background Health Checks
              * @description run health checks in background
@@ -31661,6 +31696,12 @@ export interface components {
              */
             default_model?: string | null;
             /**
+             * Deployment Affinity
+             * @description When True and a session_id is resolvable on the request, pin the deployment chosen inside each routed model group and reuse it whenever the session returns to that group, without pinning which group the session routes to. Independent of session_affinity, which pins the model group instead (and always carries this deployment pin with it): with session_affinity off, every turn is still classified on its own merits while a session that escalates to a stronger tier and comes back still lands on the deployment it used before, which is what keeps a provider prompt cache warm. Pins are held per model group, so switching tiers does not disturb the pin left behind in the previous group. On by default because re-shuffling a conversation across deployments of the same model discards that cache for no benefit; set False to keep every turn load-balanced across the group, which is what a deployment set with tight per-deployment rate limits wants. Inert when no session_id is resolvable, since there is nothing to key a pin on, and suppressed when plugins are configured, for the same reason session_affinity is.
+             * @default true
+             */
+            deployment_affinity: boolean;
+            /**
              * Dimension Weights
              * @description Weights for each scoring dimension
              */
@@ -31717,13 +31758,13 @@ export interface components {
             semantic_keyword_matching: boolean;
             /**
              * Session Affinity
-             * @description When True and a session_id is resolvable on the request, pin the model chosen on the session's first turn and reuse it for every later turn, skipping re-classification. Off by default so every turn is classified on its own merits and routed to the cheapest adequate tier. Set True to keep a multi-turn session on one model, which preserves provider prompt caches and avoids cross-model conversation-history errors.
+             * @description When True and a session_id is resolvable on the request, pin the model chosen on the session's first turn and reuse it for every later turn, skipping re-classification. Off by default so every turn is classified on its own merits and routed to the cheapest adequate tier. Set True to keep a multi-turn session on one model, which preserves provider prompt caches and avoids cross-model conversation-history errors. Always implies the deployment pin regardless of deployment_affinity: the session sticks to one deployment of the pinned model, since freezing the model while re-shuffling its deployments would still go cache-cold.
              * @default false
              */
             session_affinity: boolean;
             /**
              * Session Affinity Ttl Seconds
-             * @description TTL for the session affinity pin; refreshed on every cache hit
+             * @description TTL for the session affinity pin; refreshed on every cache hit. Bounds both the session_affinity model pin and the deployment_affinity deployment pin, so it measures idle time for the session's routing decisions rather than total session length
              * @default 3600
              */
             session_affinity_ttl_seconds: number;
@@ -35259,6 +35300,10 @@ export interface components {
             base_model?: string | null;
             /** Blocked */
             blocked?: boolean | null;
+            /** Cache Creation Input Token Cost */
+            cache_creation_input_token_cost?: number | null;
+            /** Cache Read Input Token Cost */
+            cache_read_input_token_cost?: number | null;
             /** Created At */
             created_at?: string | null;
             /** Created By */
@@ -35270,6 +35315,14 @@ export interface components {
             db_model: boolean;
             /** Id */
             id: string | null;
+            /** Input Cost Per Character */
+            input_cost_per_character?: number | null;
+            /** Input Cost Per Token */
+            input_cost_per_token?: number | null;
+            /** Output Cost Per Character */
+            output_cost_per_character?: number | null;
+            /** Output Cost Per Token */
+            output_cost_per_token?: number | null;
             /** Team Id */
             team_id?: string | null;
             /** Team Public Model Name */
