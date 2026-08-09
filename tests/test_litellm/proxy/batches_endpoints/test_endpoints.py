@@ -1483,6 +1483,8 @@ async def test_list__managed_files_path(list_harness):
         user_api_key_dict=user,
         limit=7,
         after="batch-cursor",
+        provider=None,
+        target_model_names=None,
         llm_router=list_harness.router,
     )
     list_harness.litellm_alist.assert_not_called()
@@ -1505,7 +1507,6 @@ async def test_list__managed_files_rejects_provider_filter(list_harness):
         limit=7,
         after="batch-cursor",
         provider="openai",
-        target_model_names="m1,m2",
     )
 
     # Filtered requests bypass managed-files and use provider fallback.
