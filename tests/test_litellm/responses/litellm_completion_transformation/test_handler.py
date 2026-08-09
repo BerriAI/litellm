@@ -78,9 +78,7 @@ async def test_async_fallback_tags_skip_responses_api_bridge():
     assert captured.get("_skip_responses_api_bridge") is True
 
 
-# Responses API request params the bridge has no chat-completion translation for.
-# litellm.aresponses() does not declare them, so they arrive in **kwargs.
-UNTRANSLATED_RESPONSES_PARAMS: dict = {
+UNTRANSLATED_RESPONSES_PARAMS: dict[str, object] = {
     "prompt_cache_key": "pck-1",
     "prompt_cache_retention": "24h",
     "max_tool_calls": 3,
@@ -88,9 +86,7 @@ UNTRANSLATED_RESPONSES_PARAMS: dict = {
     "top_logprobs": 2,
 }
 
-# Kwargs the bridge must keep forwarding: LiteLLM-level plumbing, deployment
-# credentials and provider-specific params, none of which the transform reproduces.
-PRESERVED_KWARGS: dict = {
+PRESERVED_KWARGS: dict[str, object] = {
     "litellm_metadata": {"model_group": "claude"},
     "aws_region_name": "us-west-2",
     "stream_chunk_size": 1,
@@ -98,11 +94,11 @@ PRESERVED_KWARGS: dict = {
 }
 
 
-def _capture_sync_forwarded_kwargs(**handler_kwargs) -> dict:
+def _capture_sync_forwarded_kwargs(**handler_kwargs: object) -> dict[str, object]:
     handler = LiteLLMCompletionTransformationHandler()
-    captured: dict = {}
+    captured: dict[str, object] = {}
 
-    def fake_completion(**kwargs):
+    def fake_completion(**kwargs: object) -> None:
         captured.update(kwargs)
         raise _StopForwarding()
 
@@ -119,11 +115,11 @@ def _capture_sync_forwarded_kwargs(**handler_kwargs) -> dict:
     return captured
 
 
-async def _capture_async_forwarded_kwargs(**handler_kwargs) -> dict:
+async def _capture_async_forwarded_kwargs(**handler_kwargs: object) -> dict[str, object]:
     handler = LiteLLMCompletionTransformationHandler()
-    captured: dict = {}
+    captured: dict[str, object] = {}
 
-    async def fake_acompletion(**kwargs):
+    async def fake_acompletion(**kwargs: object) -> None:
         captured.update(kwargs)
         raise _StopForwarding()
 

@@ -22,26 +22,16 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse, all_litellm_params
 
 
-def _drop_untranslated_responses_params(kwargs: Mapping[str, Any], model: str) -> Mapping[str, Any]:
+def _drop_untranslated_responses_params(kwargs: Mapping[str, object], model: str) -> Mapping[str, object]:
     """Drop the Responses params this bridge has no chat-completion translation for.
 
-    Every Responses request param reaches this bridge twice. ``litellm.responses()``
-    filters the caller's params against ``ResponsesAPIOptionalRequestParams`` and hands
-    the result over as ``responses_api_request``, which is the copy the bridge actually
-    translates. The same params also arrive untouched in ``**kwargs``, and merging that
-    second copy into the ``litellm.completion`` call below is what leaks them.
+    Every Responses param reaches the bridge twice, once filtered into
+    ``responses_api_request`` and once raw in ``**kwargs``. Forwarding the raw copy sends
+    params the bridge never translated on to the provider, which either rejects them or
+    fails validation before the request is made.
 
-    An untranslated param then fails in one of two ways. If Chat Completions does not
-    define it, it is swept into the provider request downstream, so Bedrock Converse
-    puts it in ``additionalModelRequestFields`` and rejects the call. If it happens to
-    share a name with a chat-completion param, it is validated against the provider
-    instead, so ``top_logprobs`` raises ``UnsupportedParamsError`` on a provider that
-    does not support it, before any request is made.
-
-    Deriving the drop set from the same TypedDict the params were filtered with, minus
-    what the bridge translates, minus ``all_litellm_params``, keeps this a filter rather
-    than an allowlist: LiteLLM plumbing, deployment credentials and provider-specific
-    params are not Responses params, so they pass through untouched.
+    Subtracting from the Responses TypedDict keeps this a filter rather than an allowlist,
+    so LiteLLM plumbing, credentials and provider-specific params still pass through.
     """
     untranslated: Final = (
         frozenset(get_type_hints(ResponsesAPIOptionalRequestParams))
