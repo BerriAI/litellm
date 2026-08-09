@@ -10,10 +10,12 @@ import { SearchSelect, type SearchSelectOption } from "@/components/shared/Searc
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ApiError } from "@/lib/http/client";
 
 import { usd } from "./costOptimizationUtils";
@@ -56,16 +58,82 @@ const StatusBadge: React.FC<{ status: string }> = ({ status }) => (
 /** Verdict counts are meaningless below this; the table warns instead of misleading. */
 const MIN_TURNS_FOR_CONFIDENCE = 30;
 
+const HOW_IT_WORKS_STEPS = [
+  "A sampled slice of the key's live traffic is picked at random. Users are never affected — they keep getting answers from your current models.",
+  "Each sampled request is quietly duplicated through the auto-router, which classifies the prompt and picks whatever model it would have picked.",
+  "An LLM judge compares the two answers blind: it sees them only as “A” and “B” in random order, never which system produced which.",
+  "Verdicts accumulate below, broken down by the router's difficulty tier. Shadow and judge calls bill to the shadowed key, capped per job.",
+] as const;
+
+const HowThisWorks: React.FC = () => {
+  const [open, setOpen] = useState(false);
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <CollapsibleTrigger className="text-xs text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground">
+        {open ? "Hide how this works" : "How this works"}
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <ol className="mt-2 max-w-3xl list-decimal space-y-1 pl-5 text-xs text-muted-foreground">
+          {HOW_IT_WORKS_STEPS.map((step) => (
+            <li key={step}>{step}</li>
+          ))}
+        </ol>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+};
+
+const HeadTooltip: React.FC<{ label: string; tooltip: string; className?: string }> = ({
+  label,
+  tooltip,
+  className,
+}) => (
+  <TableHead className={className}>
+    <TooltipProvider delay={200}>
+      <Tooltip>
+        <TooltipTrigger render={<span />}>
+          <span className="underline decoration-dotted underline-offset-2">{label}</span>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs">{tooltip}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  </TableHead>
+);
+
+const LOW_SAMPLE_TOOLTIP = `Fewer than ${MIN_TURNS_FOR_CONFIDENCE} judged turns — treat as directional only.`;
+
+const LowSampleFlag: React.FC = () => (
+  <TooltipProvider delay={200}>
+    <Tooltip>
+      <TooltipTrigger render={<span className="ml-2 text-xs text-muted-foreground" />}>
+        <span className="underline decoration-dotted underline-offset-2">(low sample)</span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs">{LOW_SAMPLE_TOOLTIP}</TooltipContent>
+    </Tooltip>
+  </TooltipProvider>
+);
+
 const TierResultsTable: React.FC<{ groups: readonly ShadowEvalTierResult[] }> = ({ groups }) => (
   <Table>
     <TableHeader>
       <TableRow>
-        <TableHead>Router tier</TableHead>
+        <HeadTooltip
+          label="Prompt difficulty"
+          tooltip="The router sorts every prompt into a difficulty tier and picks a model sized to it. Rows where the router holds up on hard tiers matter most."
+        />
         <TableHead className="text-right">Judged turns</TableHead>
-        <TableHead className="text-right">Router pick wins</TableHead>
+        <TableHead className="text-right">Router wins</TableHead>
         <TableHead className="text-right">Current model wins</TableHead>
-        <TableHead className="text-right">Ties</TableHead>
-        <TableHead className="text-right">Judge confidence</TableHead>
+        <HeadTooltip
+          className="text-right"
+          label="Ties"
+          tooltip="The judge saw the same quality from both. Ties count in the router's favor — same answer quality, usually at lower cost."
+        />
+        <HeadTooltip
+          className="text-right"
+          label="Judge confidence"
+          tooltip="The judge's self-reported certainty in its verdicts (0 to 1), averaged over this tier's turns."
+        />
       </TableRow>
     </TableHeader>
     <TableBody>
@@ -73,9 +141,7 @@ const TierResultsTable: React.FC<{ groups: readonly ShadowEvalTierResult[] }> = 
         <TableRow key={g.tier}>
           <TableCell className="font-medium text-foreground">
             {g.tier}
-            {g.turn_count < MIN_TURNS_FOR_CONFIDENCE ? (
-              <span className="ml-2 text-xs text-muted-foreground">(low sample)</span>
-            ) : null}
+            {g.turn_count < MIN_TURNS_FOR_CONFIDENCE ? <LowSampleFlag /> : null}
           </TableCell>
           <TableCell className="text-right tabular-nums">{g.turn_count.toLocaleString()}</TableCell>
           <TableCell className="text-right font-medium tabular-nums text-foreground">
@@ -91,41 +157,113 @@ const TierResultsTable: React.FC<{ groups: readonly ShadowEvalTierResult[] }> = 
 );
 
 const ModelResultsTable: React.FC<{ models: readonly ShadowEvalModelResult[] }> = ({ models }) => (
-  <div className="border-t">
-    <p className="px-6 pt-4 text-[11px] uppercase tracking-wide text-muted-foreground">By current model</p>
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Current model</TableHead>
-          <TableHead className="text-right">Judged turns</TableHead>
-          <TableHead className="text-right">Router pick wins</TableHead>
-          <TableHead className="text-right">Current model wins</TableHead>
-          <TableHead className="text-right">Ties</TableHead>
-          <TableHead className="text-right">Judge confidence</TableHead>
+  <Table>
+    <TableHeader>
+      <TableRow>
+        <HeadTooltip
+          label="Compared against"
+          tooltip="The model that actually served each sampled request. Your traffic can mix models; each row is the router's head-to-head record against one of them."
+        />
+        <TableHead className="text-right">Judged turns</TableHead>
+        <TableHead className="text-right">Router wins</TableHead>
+        <TableHead className="text-right">Current model wins</TableHead>
+        <HeadTooltip
+          className="text-right"
+          label="Ties"
+          tooltip="The judge saw the same quality from both. Ties count in the router's favor — same answer quality, usually at lower cost."
+        />
+        <HeadTooltip
+          className="text-right"
+          label="Judge confidence"
+          tooltip="The judge's self-reported certainty in its verdicts (0 to 1), averaged over these turns."
+        />
+      </TableRow>
+    </TableHeader>
+    <TableBody>
+      {models.map((m) => (
+        <TableRow key={m.current_model}>
+          <TableCell className="font-mono text-xs text-foreground">
+            {m.current_model}
+            {m.turn_count < MIN_TURNS_FOR_CONFIDENCE ? <LowSampleFlag /> : null}
+          </TableCell>
+          <TableCell className="text-right tabular-nums">{m.turn_count.toLocaleString()}</TableCell>
+          <TableCell className="text-right font-medium tabular-nums text-foreground">
+            {pct(m.shadow_win_rate_pct)}
+          </TableCell>
+          <TableCell className="text-right tabular-nums">{pct(m.real_win_rate_pct)}</TableCell>
+          <TableCell className="text-right tabular-nums">{pct(m.tie_rate_pct)}</TableCell>
+          <TableCell className="text-right tabular-nums">{m.avg_judge_confidence.toFixed(2)}</TableCell>
         </TableRow>
-      </TableHeader>
-      <TableBody>
-        {models.map((m) => (
-          <TableRow key={m.current_model}>
-            <TableCell className="font-mono text-xs text-foreground">
-              {m.current_model}
-              {m.turn_count < MIN_TURNS_FOR_CONFIDENCE ? (
-                <span className="ml-2 font-sans text-xs text-muted-foreground">(low sample)</span>
-              ) : null}
-            </TableCell>
-            <TableCell className="text-right tabular-nums">{m.turn_count.toLocaleString()}</TableCell>
-            <TableCell className="text-right font-medium tabular-nums text-foreground">
-              {pct(m.shadow_win_rate_pct)}
-            </TableCell>
-            <TableCell className="text-right tabular-nums">{pct(m.real_win_rate_pct)}</TableCell>
-            <TableCell className="text-right tabular-nums">{pct(m.tie_rate_pct)}</TableCell>
-            <TableCell className="text-right tabular-nums">{m.avg_judge_confidence.toFixed(2)}</TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
-  </div>
+      ))}
+    </TableBody>
+  </Table>
 );
+
+const TierBreakdown: React.FC<{ groups: readonly ShadowEvalTierResult[] }> = ({ groups }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="border-t">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((prev) => !prev)}
+        className="flex w-full items-center justify-between gap-3 px-6 py-3 text-left hover:bg-muted/50"
+      >
+        <span className="text-xs text-muted-foreground">
+          By prompt difficulty — how the router scored across the difficulty tiers it sorted prompts into
+        </span>
+        <span className="text-xs text-muted-foreground">{open ? "Hide" : "Show"}</span>
+      </button>
+      {open ? <TierResultsTable groups={groups} /> : null}
+    </div>
+  );
+};
+
+const MetricLabel: React.FC<{ label: string; tooltip: string }> = ({ label, tooltip }) => (
+  <TooltipProvider delay={200}>
+    <Tooltip>
+      <TooltipTrigger render={<span className="w-fit text-[11px] uppercase tracking-wide text-muted-foreground" />}>
+        <span className="underline decoration-dotted underline-offset-2">{label}</span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs">{tooltip}</TooltipContent>
+    </Tooltip>
+  </TooltipProvider>
+);
+
+const VerdictBar: React.FC<{ results: NonNullable<ShadowEvalJob["results"]> }> = ({ results }) => {
+  const routerWins = results.overall_shadow_win_rate_pct;
+  const ties = results.overall_tie_rate_pct;
+  const currentWins = Math.max(0, 100 - routerWins - ties);
+  const segments = [
+    { label: "Router won", value: routerWins, className: "bg-emerald-500" },
+    { label: "Tie", value: ties, className: "bg-emerald-200" },
+    { label: "Current model won", value: currentWins, className: "bg-muted-foreground/30" },
+  ];
+  return (
+    <div className="space-y-2 border-b px-6 py-4">
+      <div className="flex h-2 w-full overflow-hidden rounded-full" role="img" aria-label="Verdict breakdown">
+        {segments.map((segment) =>
+          segment.value > 0 ? (
+            <div
+              key={segment.label}
+              data-testid={`verdict-segment-${segment.label}`}
+              className={segment.className}
+              style={{ width: `${segment.value}%` }}
+            />
+          ) : null,
+        )}
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        {segments.map((segment) => (
+          <span key={segment.label} className="flex items-center gap-1.5">
+            <span className={`size-2 rounded-full ${segment.className}`} />
+            {segment.label} {pct(segment.value)}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+};
 
 const JobResults: React.FC<{
   job: ShadowEvalJob;
@@ -135,7 +273,6 @@ const JobResults: React.FC<{
   const active = job.status === "pending" || job.status === "running";
   const results = job.results;
   const okOrBetter = results ? results.overall_shadow_win_rate_pct + results.overall_tie_rate_pct : null;
-  const mixedTraffic = (results?.by_current_model?.length ?? 0) > 1;
   return (
     <Card className="overflow-hidden py-0">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b px-6 py-4">
@@ -146,9 +283,10 @@ const JobResults: React.FC<{
               Shadowing {job.shadow_percentage}% via <span className="font-mono text-xs">{job.router_name}</span>
             </p>
             <p className="text-xs text-muted-foreground">
-              {job.completed_count.toLocaleString()} judged · {job.failed_count.toLocaleString()} failed ·{" "}
+              {job.completed_count.toLocaleString()} responses judged · {job.failed_count.toLocaleString()} errored
+              (shadow or judge call) ·{" "}
               {job.cost_actual != null ? `${usd(job.cost_actual)} judge spend` : "no judge spend yet"}
-              {job.cost_estimate != null ? ` (est. ${usd(job.cost_estimate)})` : ""}
+              {job.cost_estimate != null ? ` of ~${usd(job.cost_estimate)} estimated` : ""}
               {active && endsIn(job.ends_at) ? ` · ${endsIn(job.ends_at)}` : ""}
             </p>
           </div>
@@ -162,20 +300,21 @@ const JobResults: React.FC<{
 
       {results && results.groups.length > 0 ? (
         <>
-          <div className="grid gap-0 border-b sm:grid-cols-2">
-            <div className="flex flex-col justify-center gap-1 px-6 py-4">
-              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                Router pick judged as good or better
-              </p>
-              <p className="text-3xl font-semibold text-foreground">{okOrBetter != null ? pct(okOrBetter) : "—"}</p>
-            </div>
-            <div className="flex flex-col justify-center gap-1 border-t px-6 py-4 sm:border-l sm:border-t-0">
-              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Router pick strictly better</p>
-              <p className="text-3xl font-semibold text-foreground">{pct(results.overall_shadow_win_rate_pct)}</p>
-            </div>
+          <div className="flex flex-col justify-center gap-1 border-b px-6 py-4">
+            <MetricLabel
+              label="Router matched or beat your current model"
+              tooltip="Router wins plus ties. A tie counts in the router's favor: the judge saw the same quality, and the router usually picked a cheaper model."
+            />
+            <p className="text-3xl font-semibold text-foreground">{okOrBetter != null ? pct(okOrBetter) : "—"}</p>
+            <p className="text-xs text-muted-foreground">of {job.completed_count.toLocaleString()} judged responses</p>
           </div>
-          <TierResultsTable groups={results.groups} />
-          {mixedTraffic ? <ModelResultsTable models={results.by_current_model ?? []} /> : null}
+          <VerdictBar results={results} />
+          {(results.by_current_model?.length ?? 0) > 0 ? (
+            <ModelResultsTable models={results.by_current_model ?? []} />
+          ) : (
+            <TierResultsTable groups={results.groups} />
+          )}
+          {(results.by_current_model?.length ?? 0) > 0 ? <TierBreakdown groups={results.groups} /> : null}
         </>
       ) : (
         <p className="px-6 py-8 text-center text-sm text-muted-foreground">
@@ -405,6 +544,12 @@ const PreviousJob: React.FC<{
   const shown = detail ?? job;
   const results = shown.results;
   const okOrBetter = results ? results.overall_shadow_win_rate_pct + results.overall_tie_rate_pct : null;
+  let summary = "no verdicts";
+  if (okOrBetter != null) {
+    summary = pct(okOrBetter);
+  } else if (shown.completed_count > 0) {
+    summary = "view results";
+  }
 
   return (
     <div className="border-b last:border-b-0">
@@ -427,9 +572,7 @@ const PreviousJob: React.FC<{
             </p>
           </div>
         </div>
-        <span className="text-sm font-medium text-foreground">
-          {okOrBetter != null ? pct(okOrBetter) : "no verdicts"}
-        </span>
+        <span className="text-sm font-medium text-foreground">{summary}</span>
       </button>
       {expanded ? (
         <div className="px-6 pb-4">
@@ -489,11 +632,15 @@ const ShadowEvalSection: React.FC<ShadowEvalSectionProps> = ({ accessToken }) =>
 
   return (
     <div id="shadow-eval-section" className="space-y-4 scroll-mt-6">
-      <div className="flex flex-wrap items-baseline gap-2">
-        <h3 className="text-lg font-semibold text-foreground">Shadow eval</h3>
-        <p className="text-xs text-muted-foreground">
-          pre-adoption quality check: your current model vs. what the router would have picked
-        </p>
+      <div className="space-y-1">
+        <div className="flex flex-wrap items-baseline gap-2">
+          <h3 className="text-lg font-semibold text-foreground">Shadow eval</h3>
+          <p className="text-sm text-muted-foreground">
+            Would the auto-router have answered as well as the models you use today? Find out on your real traffic,
+            before switching anything.
+          </p>
+        </div>
+        <HowThisWorks />
       </div>
 
       {latest && latestDetail ? (

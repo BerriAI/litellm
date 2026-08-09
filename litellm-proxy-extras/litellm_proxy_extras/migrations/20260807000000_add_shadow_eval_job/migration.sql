@@ -24,6 +24,11 @@ CREATE TABLE IF NOT EXISTS "LiteLLM_ShadowEvalJob" (
 CREATE INDEX IF NOT EXISTS "LiteLLM_ShadowEvalJob_team_id_status_idx" ON "LiteLLM_ShadowEvalJob"("team_id", "status");
 CREATE INDEX IF NOT EXISTS "LiteLLM_ShadowEvalJob_api_key_id_status_idx" ON "LiteLLM_ShadowEvalJob"("api_key_id", "status");
 CREATE INDEX IF NOT EXISTS "LiteLLM_ShadowEvalJob_status_idx" ON "LiteLLM_ShadowEvalJob"("status");
+-- One active job per key, enforced by the database rather than a read-then-create
+-- in the start endpoint, which races against a concurrent start on another pod.
+-- Partial indexes are not expressible in schema.prisma, so this lives here only.
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_ShadowEvalJob_one_active_per_key"
+    ON "LiteLLM_ShadowEvalJob"("api_key_id") WHERE status IN ('pending', 'running');
 CREATE INDEX IF NOT EXISTS "LiteLLM_ShadowEvalJob_created_at_idx" ON "LiteLLM_ShadowEvalJob"("created_at");
 
 CREATE TABLE IF NOT EXISTS "LiteLLM_ShadowEvalVerdict" (

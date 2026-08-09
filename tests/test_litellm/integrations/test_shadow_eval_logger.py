@@ -709,6 +709,28 @@ class TestPerJobSpendCap:
         logger._run_shadow_eval.assert_awaited_once()
         prisma.db.litellm_shadowevaljob.update_many.assert_not_awaited()
 
+    async def test_a_zero_estimate_job_is_still_capped_at_the_floor(self):
+        """A key quiet during the lookback gets estimate $0.00; a later traffic spike on
+        exactly that job must still hit the floor instead of billing until ends_at."""
+        job = ActiveShadowEvalJob(
+            id="j1",
+            router_name="r",
+            shadow_percentage=100.0,
+            judge_model="m",
+            status="running",
+            cost_estimate=0.0,
+            cost_actual=1.5,
+        )
+        logger, prisma, _ = _logger_with_mocks(job)
+        prisma.db.litellm_shadowevaljob.update_many = AsyncMock()
+        logger._run_shadow_eval = AsyncMock()
+
+        await logger.async_log_success_event(self._success_kwargs(), MagicMock(), None, None)
+        await asyncio.sleep(0)
+
+        logger._run_shadow_eval.assert_not_awaited()
+        assert prisma.db.litellm_shadowevaljob.update_many.call_args.kwargs["data"]["status"] == "completed"
+
     async def test_a_cent_sized_estimate_is_not_stopped_by_its_first_verdict(self):
         """1.5x a $0.01 estimate is $0.015; without the floor a single judge call ends the job."""
         job = ActiveShadowEvalJob(
@@ -768,14 +790,22 @@ class TestActiveJobSnapshot:
         record.ends_at = None
         return record
 
-    async def test_one_query_serves_lookups_for_many_distinct_keys(self):
+    @staticmethod
+    async def _settled(logger):
+        if logger._jobs_refresh_task is not None:
+            await logger._jobs_refresh_task
+
+    async def test_lookup_never_awaits_the_db_and_one_query_serves_many_keys(self):
         logger, prisma, _ = _logger_with_mocks()
         prisma.db.litellm_shadowevaljob.find_many = AsyncMock(return_value=[self._record("j1", "key-1")])
 
-        job_hit = await logger._get_active_job("key-1")
-        misses = [await logger._get_active_job(f"other-{i}") for i in range(50)]
+        cold = logger._get_active_job("key-1")
+        await self._settled(logger)
+        warm = logger._get_active_job("key-1")
+        misses = [logger._get_active_job(f"other-{i}") for i in range(50)]
 
-        assert job_hit is not None and job_hit.id == "j1"
+        assert cold is None, "cold pod answers from the empty snapshot instead of blocking on Prisma"
+        assert warm is not None and warm.id == "j1"
         assert all(m is None for m in misses)
         assert prisma.db.litellm_shadowevaljob.find_many.await_count == 1
 
@@ -785,21 +815,46 @@ class TestActiveJobSnapshot:
             return_value=[self._record("j-newest", "key-1"), self._record("j-oldest", "key-1")]
         )
 
-        job = await logger._get_active_job("key-1")
+        logger._get_active_job("key-1")
+        await self._settled(logger)
+        job = logger._get_active_job("key-1")
 
         assert job is not None and job.id == "j-newest"
 
     async def test_db_blip_keeps_the_stale_snapshot_instead_of_disabling_the_feature(self):
         logger, prisma, _ = _logger_with_mocks()
         prisma.db.litellm_shadowevaljob.find_many = AsyncMock(return_value=[self._record("j1", "key-1")])
-        assert (await logger._get_active_job("key-1")) is not None
+        logger._get_active_job("key-1")
+        await self._settled(logger)
 
         logger._jobs_fetched_at = asyncio.get_event_loop().time() - 61.0
         prisma.db.litellm_shadowevaljob.find_many = AsyncMock(side_effect=RuntimeError("db down"))
 
-        job = await logger._get_active_job("key-1")
+        stale = logger._get_active_job("key-1")
+        await self._settled(logger)
 
-        assert job is not None and job.id == "j1"
+        assert stale is not None and stale.id == "j1"
+        assert logger._get_active_job("key-1") is not None
+
+    async def test_a_slow_refresh_is_not_stacked_by_concurrent_lookups(self):
+        logger, prisma, _ = _logger_with_mocks()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_find_many(**_kwargs):
+            started.set()
+            await release.wait()
+            return [self._record("j1", "key-1")]
+
+        prisma.db.litellm_shadowevaljob.find_many = AsyncMock(side_effect=slow_find_many)
+
+        for _ in range(10):
+            logger._get_active_job("key-1")
+        await started.wait()
+        release.set()
+        await self._settled(logger)
+
+        assert prisma.db.litellm_shadowevaljob.find_many.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -880,13 +935,74 @@ class TestJobsStopAtTheirScheduledEnd:
         record.ends_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1)
         prisma.db.litellm_shadowevaljob.find_many = AsyncMock(return_value=[record])
 
-        job = await logger._get_active_job("key-hash")
+        logger._get_active_job("key-hash")
+        if logger._jobs_refresh_task is not None:
+            await logger._jobs_refresh_task
+        job = logger._get_active_job("key-hash")
 
         assert job is not None
         assert job.ends_at is not None and job.ends_at.tzinfo is not None
         from litellm.integrations.shadow_eval_logger import _job_is_past_its_end
 
         assert _job_is_past_its_end(job)
+
+
+@pytest.mark.asyncio
+class TestJudgeFailureModes:
+    """A judge outage or malformed verdict must be a counted failure, never a crash,
+    and must never write a verdict row."""
+
+    @staticmethod
+    def _logger():
+        prisma = MagicMock()
+        return ShadowEvalLogger(router_provider=lambda: MagicMock(), prisma_provider=lambda: prisma), prisma
+
+    async def test_judge_provider_error_returns_none(self, monkeypatch: pytest.MonkeyPatch):
+        import litellm as litellm_module
+
+        logger, _ = self._logger()
+        monkeypatch.setattr(litellm_module, "acompletion", AsyncMock(side_effect=RuntimeError("provider down")))
+
+        verdict = await logger._call_judge("m", [{"role": "user", "content": "hi"}], "real", "shadow", {})
+
+        assert verdict is None
+
+    async def test_unparseable_judge_output_returns_none(self, monkeypatch: pytest.MonkeyPatch):
+        import litellm as litellm_module
+
+        logger, _ = self._logger()
+        monkeypatch.setattr(
+            litellm_module,
+            "acompletion",
+            AsyncMock(return_value={"choices": [{"message": {"content": "I prefer response A because"}}]}),
+        )
+
+        verdict = await logger._call_judge("m", [{"role": "user", "content": "hi"}], "real", "shadow", {})
+
+        assert verdict is None
+
+    async def test_failed_judge_bumps_failed_count_and_writes_no_verdict(self, monkeypatch: pytest.MonkeyPatch):
+        import litellm as litellm_module
+
+        logger, prisma = self._logger()
+        monkeypatch.setattr(litellm_module, "acompletion", AsyncMock(side_effect=RuntimeError("down")))
+        router = logger._router_provider()
+        router.acompletion = AsyncMock(return_value={"choices": [{"message": {"content": "shadow says"}}]})
+        prisma.db.litellm_shadowevaljob.update = AsyncMock()
+        job = ActiveShadowEvalJob(id="j1", router_name="r", shadow_percentage=100.0, judge_model="m", status="running")
+
+        await logger._run_shadow_eval(
+            job=job,
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            response_obj={"choices": [{"message": {"content": "real says"}}]},
+            real_model="gpt-4o",
+            model_parameters={},
+            parent_metadata={},
+        )
+
+        prisma.db.litellm_shadowevalverdict.create.assert_not_called()
+        assert prisma.db.litellm_shadowevaljob.update.call_args.kwargs["data"] == {"failed_count": {"increment": 1}}
 
 
 class TestExtractResponseText:

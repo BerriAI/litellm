@@ -150,42 +150,79 @@ describe("ShadowEvalSection", () => {
     expect(screen.getByText("Start shadow eval")).toBeInTheDocument();
   });
 
-  it("renders per-tier win rates for an active job", () => {
+  it("leads with the models the router was compared against", () => {
     const j = job();
     mockHooks({ jobs: [j], detail: j });
     render(<ShadowEvalSection accessToken="token" />);
-    expect(screen.getByText("SIMPLE")).toBeInTheDocument();
-    expect(screen.getByText("REASONING")).toBeInTheDocument();
-    expect(screen.getByText("55.0%")).toBeInTheDocument();
-    // Overall good-or-better = shadow wins + ties = 70%
-    expect(screen.getByText("70.0%")).toBeInTheDocument();
-  });
-
-  it("flags low-sample tiers", () => {
-    const j = job();
-    mockHooks({ jobs: [j], detail: j });
-    render(<ShadowEvalSection accessToken="token" />);
-    // REASONING tier (12 turns) and my-finetune (12 turns) are both under 30
-    expect(screen.getAllByText("(low sample)")).toHaveLength(2);
-  });
-
-  it("breaks results down by current model when the key's traffic is a mix", () => {
-    const j = job();
-    mockHooks({ jobs: [j], detail: j });
-    render(<ShadowEvalSection accessToken="token" />);
-    expect(screen.getByText("By current model")).toBeInTheDocument();
+    expect(screen.getByText("Compared against")).toBeInTheDocument();
     expect(screen.getByText("gpt-4o")).toBeInTheDocument();
     expect(screen.getByText("my-finetune")).toBeInTheDocument();
     expect(screen.getByText("58.3%")).toBeInTheDocument();
+    // Overall matched-or-beat = shadow wins + ties = 70%
+    expect(screen.getByText("70.0%")).toBeInTheDocument();
+    // Tier rows are behind the difficulty toggle, not in the primary view.
+    expect(screen.queryByText("SIMPLE")).not.toBeInTheDocument();
   });
 
-  it("omits the by-model table when all traffic came from a single model", () => {
+  it("reveals per-tier win rates behind the prompt-difficulty toggle", async () => {
+    const user = userEvent.setup();
+    const j = job();
+    mockHooks({ jobs: [j], detail: j });
+    render(<ShadowEvalSection accessToken="token" />);
+
+    await user.click(screen.getByText(/By prompt difficulty/));
+
+    expect(screen.getByText("SIMPLE")).toBeInTheDocument();
+    expect(screen.getByText("REASONING")).toBeInTheDocument();
+    expect(screen.getByText("55.0%")).toBeInTheDocument();
+  });
+
+  it("states the metric's denominator next to the headline number", () => {
+    const j = job();
+    mockHooks({ jobs: [j], detail: j });
+    render(<ShadowEvalSection accessToken="token" />);
+    expect(screen.getByText("Router matched or beat your current model")).toBeInTheDocument();
+    expect(screen.getByText("of 42 judged responses")).toBeInTheDocument();
+  });
+
+  it("shows the win/tie/loss split as a bar whose segments match the rates", () => {
+    const j = job();
+    mockHooks({ jobs: [j], detail: j });
+    render(<ShadowEvalSection accessToken="token" />);
+    // 48% router wins, 22% ties, 30% current-model wins
+    expect(screen.getByText(/Router won/)).toBeInTheDocument();
+    expect(screen.getByText(/Tie 22.0%/)).toBeInTheDocument();
+    expect(screen.getByText(/Current model won 30.0%/)).toBeInTheDocument();
+    expect(screen.getByTestId("verdict-segment-Router won")).toHaveStyle({ width: "48%" });
+  });
+
+  it("explains the mechanism behind a 'How this works' toggle", async () => {
+    const user = userEvent.setup();
+    mockHooks({ jobs: [] });
+    render(<ShadowEvalSection accessToken="token" />);
+
+    expect(screen.queryByText(/LLM judge compares the two answers blind/)).not.toBeInTheDocument();
+    await user.click(screen.getByText("How this works"));
+    expect(screen.getByText(/LLM judge compares the two answers blind/)).toBeInTheDocument();
+  });
+
+  it("flags low-sample rows", () => {
+    const j = job();
+    mockHooks({ jobs: [j], detail: j });
+    render(<ShadowEvalSection accessToken="token" />);
+    // my-finetune has 12 turns < 30
+    expect(screen.getAllByText("(low sample)")).toHaveLength(1);
+  });
+
+  it("falls back to the tier table when results predate the by-model slice", () => {
     const j = job();
     const results = j.results!;
-    const single = job({ results: { ...results, by_current_model: [results.by_current_model![0]] } });
-    mockHooks({ jobs: [single], detail: single });
+    const legacy = job({ results: { ...results, by_current_model: [] } });
+    mockHooks({ jobs: [legacy], detail: legacy });
     render(<ShadowEvalSection accessToken="token" />);
-    expect(screen.queryByText("By current model")).not.toBeInTheDocument();
+    expect(screen.getByText("SIMPLE")).toBeInTheDocument();
+    expect(screen.queryByText("Compared against")).not.toBeInTheDocument();
+    expect(screen.queryByText(/By prompt difficulty/)).not.toBeInTheDocument();
   });
 
   it("shows a stop button for running jobs but not completed ones", () => {
@@ -321,5 +358,18 @@ describe("ShadowEvalSection", () => {
 
     expect(await screen.findByText("SIMPLE")).toBeInTheDocument();
     expect(screen.getByText("REASONING")).toBeInTheDocument();
+  });
+
+  it("labels an unexpanded previous job as viewable, not verdictless", async () => {
+    const user = userEvent.setup();
+    const current = job({ job_id: "job-new" });
+    const older = job({ job_id: "job-old", status: "completed", results: null });
+    mockHooks({ jobs: [current, older], detailsById: { "job-new": current } });
+    render(<ShadowEvalSection accessToken="token" />);
+
+    await user.click(screen.getByRole("button", { name: /Previous evaluations \(1\)/ }));
+
+    expect(screen.getByText("view results")).toBeInTheDocument();
+    expect(screen.queryByText("no verdicts")).not.toBeInTheDocument();
   });
 });
