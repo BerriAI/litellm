@@ -132,6 +132,36 @@ class TestCostCalculatorReadsDurationFromHiddenParams:
         assert kwargs["duration"] == 42.7
 
     @patch("litellm.cost_calculator.openai_cost_per_second")
+    def test_completion_cost_falls_back_to_usage_seconds(self, mock_cost_fn):
+        """Duration-based transcription usage should be used for cost calculation."""
+        mock_cost_fn.return_value = (0.0027, 0.0)
+        response = convert_to_model_response_object(
+            response_object={
+                "text": "test",
+                "usage": {"type": "duration", "seconds": 27},
+            },
+            model_response_object=TranscriptionResponse(),
+            hidden_params={
+                "model": "whisper-1",
+                "custom_llm_provider": "openai",
+            },
+            response_type="audio_transcription",
+        )
+        response_body = response.model_dump()
+
+        completion_cost(
+            completion_response=response,
+            model="whisper-1",
+            call_type="atranscription",
+        )
+
+        mock_cost_fn.assert_called_once()
+        _, kwargs = mock_cost_fn.call_args
+        assert kwargs["duration"] == 27
+        assert response.model_dump() == response_body
+        assert "duration" not in response_body
+
+    @patch("litellm.cost_calculator.openai_cost_per_second")
     def test_completion_cost_defaults_to_zero_duration(self, mock_cost_fn):
         """When neither hidden params nor response has duration, use 0.0."""
         mock_cost_fn.return_value = (0.0, 0.0)
