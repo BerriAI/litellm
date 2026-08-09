@@ -2,7 +2,7 @@ import React from "react";
 import { NumberInput } from "@tremor/react";
 
 interface NumericalInputProps {
-  step?: number;
+  step?: number | "any";
   style?: React.CSSProperties;
   placeholder?: string;
   min?: number;
