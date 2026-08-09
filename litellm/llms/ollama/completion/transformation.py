@@ -401,7 +401,9 @@ class OllamaConfig(BaseConfig):
 
     def sign_request(
         self,
-        headers: dict[str, str],  # mutable-ok: returned unchanged, must stay assignable to BaseConfig's dict return type
+        headers: dict[
+            str, str
+        ],  # mutable-ok: returned unchanged, must stay assignable to BaseConfig's dict return type
         optional_params: Mapping[str, object],
         request_data: Mapping[str, object],
         api_base: str,
