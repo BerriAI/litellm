@@ -416,7 +416,7 @@ def test_output_item_done_events_arrive_in_output_index_order():
         responses_api_request={},
     )
     iterator.litellm_model_response = ModelResponse(
-        id="resp-1",
+        id="resp-done-order",
         created=123,
         model="test-model",
         object="chat.completion",
@@ -429,7 +429,7 @@ def test_output_item_done_events_arrive_in_output_index_order():
                     "content": "calling a tool",
                     "tool_calls": [
                         {
-                            "id": "call_1",
+                            "id": "call_done_order",
                             "type": "function",
                             "function": {"name": "do_thing", "arguments": '{"y":2}'},
                             "index": 0,
