@@ -118,9 +118,7 @@ def _iter_sse_events(text: str) -> Iterator[Mapping[str, object]]:
     progress notifications before the JSON-RPC response.
     """
     for chunk in _SSE_EVENT_SEPARATOR.split(text):
-        payload = "\n".join(
-            line[len("data:") :].lstrip() for line in chunk.splitlines() if line.startswith("data:")
-        )
+        payload = "\n".join(line[len("data:") :].lstrip() for line in chunk.splitlines() if line.startswith("data:"))
         if not payload:
             continue
         try:
