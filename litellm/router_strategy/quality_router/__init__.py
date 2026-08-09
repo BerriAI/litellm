@@ -14,8 +14,8 @@ from .config import (
 from .quality_router import QualityRouter
 
 __all__ = [
+    "DEFAULT_COMPLEXITY_TO_QUALITY",
     "QualityRouter",
     "QualityRouterConfig",
     "RoutingPreferences",
-    "DEFAULT_COMPLEXITY_TO_QUALITY",
 ]

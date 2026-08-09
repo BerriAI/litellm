@@ -35,6 +35,17 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
+import {
+  computeTeamModelBadges,
+  normalizeTeamModelSelection,
+  TeamAccessGroupModelGrant,
+  TeamModelBadgeKind,
+} from "./teamModelAccess";
+import MetadataKeyValueFields, {
+  metadataObjectToPairs,
+  metadataPairsToObject,
+} from "../common_components/MetadataKeyValueFields";
+import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import ModelAliasManager from "../common_components/ModelAliasManager";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -47,7 +58,6 @@ import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { ModelSelect } from "../ModelSelect/ModelSelect";
 import NotificationsManager from "../molecules/notifications_manager";
-import { fetchMCPAccessGroups } from "../networking";
 import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
@@ -65,6 +75,25 @@ import {
 } from "./tabVisibilityUtils";
 import TeamMembersComponent from "./TeamMemberTab";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
+
+const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
+  "logging",
+  "secret_manager_settings",
+  "soft_budget_alerting_emails",
+  "model_tpm_limit",
+  "model_rpm_limit",
+  "allowed_passthrough_routes",
+  "guardrails",
+  "opted_out_global_guardrails",
+  "disable_global_guardrails",
+]);
+
+const TEAM_MODEL_BADGE_COLORS: Record<TeamModelBadgeKind, "red" | "gray" | "blue" | "green"> = {
+  "all-proxy": "red",
+  "no-default": "gray",
+  direct: "blue",
+  "access-group": "green",
+};
 
 export interface TeamMembership {
   user_id: string;
@@ -116,6 +145,7 @@ export interface TeamData {
     access_group_models?: string[];
     access_group_mcp_server_ids?: string[];
     access_group_agent_ids?: string[];
+    access_group_details?: TeamAccessGroupModelGrant[];
     router_settings?: Record<string, any>;
     guardrails?: string[];
     policies?: string[];
@@ -144,29 +174,6 @@ export interface TeamInfoProps {
   premiumUser?: boolean;
 }
 
-const getOrganizationModels = (organization: Organization | null, userModels: string[]) => {
-  let tempModelsToPick = [];
-
-  if (organization) {
-    // Check if organization has "all-proxy-models" in its models array
-    if (organization.models.includes("all-proxy-models")) {
-      // Treat as all-proxy-models (use userModels)
-      tempModelsToPick = userModels;
-    } else if (organization.models.length > 0) {
-      // Organization has specific models
-      tempModelsToPick = organization.models;
-    } else {
-      // Empty array [] is treated as all-proxy-models
-      tempModelsToPick = userModels;
-    }
-  } else {
-    // No organization, show all available models
-    tempModelsToPick = userModels;
-  }
-
-  return unfurlWildcardModelsInList(tempModelsToPick, userModels);
-};
-
 const TeamInfoView: React.FC<TeamInfoProps> = ({
   teamId,
   onClose,
@@ -186,8 +193,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
-  const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const { data: guardrailsData, isLoading: isGuardrailsLoading } = useGuardrails();
   const globalGuardrailNames = guardrailsData?.globalGuardrailNames ?? new Set<string>();
@@ -203,6 +208,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [organization, setOrganization] = useState<Organization | null>(null);
   const { userRole, userId } = useAuthorized();
   const { data: userOrganizations = [] } = useOrganizations();
+  const { data: teamMetadataSchemaFields = [], isLoading: isTeamMetadataSchemaLoading } = useTeamMetadataSchema();
   const queryClient = useQueryClient();
 
   // Check if user is org admin for this team's organization
@@ -274,23 +280,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
     fetchOrganization();
   }, [accessToken, teamData?.team_info?.organization_id]);
-
-  // Compute modelsToPick based on organization and userModels
-  const modelsToPick = useMemo(() => {
-    return getOrganizationModels(organization, userModels);
-  }, [organization, userModels]);
-
-  const fetchMcpAccessGroups = async () => {
-    if (!accessToken) return;
-    if (mcpAccessGroupsLoaded) return;
-    try {
-      const groups = await fetchMCPAccessGroups(accessToken);
-      setMcpAccessGroups(groups);
-      setMcpAccessGroupsLoaded(true);
-    } catch (error) {
-      console.error("Failed to fetch MCP access groups:", error);
-    }
-  };
 
   useEffect(() => {
     const fetchPolicies = async () => {
@@ -461,16 +450,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       if (!accessToken) return;
       setIsTeamSaving(true);
 
-      let parsedMetadata = {};
-      try {
-        const rawMetadata = values.metadata ? JSON.parse(values.metadata) : {};
-        // Exclude soft_budget_alerting_emails from parsed metadata since it's handled separately
-        const { soft_budget_alerting_emails, ...rest } = rawMetadata;
-        parsedMetadata = rest;
-      } catch (e) {
-        NotificationsManager.fromBackend("Invalid JSON in metadata field");
-        return;
-      }
+      const parsedMetadata = metadataPairsToObject(values.metadata);
 
       let secretManagerSettings: Record<string, any> | undefined;
       if (typeof values.secret_manager_settings === "string") {
@@ -517,7 +497,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       const updateData: any = {
         team_id: teamId,
         team_alias: values.team_alias,
-        models: values.models,
+        models: normalizeTeamModelSelection(values.models),
         tpm_limit: sanitizeNumeric(values.tpm_limit),
         rpm_limit: sanitizeNumeric(values.rpm_limit),
         model_tpm_limit: modelTpmLimit,
@@ -644,7 +624,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         }
       }
 
-      const response = await teamUpdateCall(accessToken, updateData);
+      await teamUpdateCall(accessToken, updateData);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
 
       NotificationsManager.success("Team settings updated successfully");
@@ -798,21 +778,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <Card>
                   <Text>Models</Text>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {info.models.length === 0 || info.models.includes("all-proxy-models") ? (
-                      <Badge color="red">All proxy models</Badge>
-                    ) : (
-                      <>
-                        {info.models.map((model: string, index: number) => (
-                          <Badge key={`direct-${index}`} color="blue">
-                            {model}
-                          </Badge>
-                        ))}
-                        {(info.access_group_models || []).map((model: string, index: number) => (
-                          <Badge key={`ag-${index}`} color="green" title="From access group">
-                            {model}
-                          </Badge>
-                        ))}
-                      </>
+                    {computeTeamModelBadges(info.models, info.access_group_models || [], info.access_group_details).map(
+                      (badge, index) => (
+                        <Tooltip key={`${badge.kind}-${badge.label}-${index}`} title={badge.tooltip}>
+                          <span>
+                            <Badge color={TEAM_MODEL_BADGE_COLORS[badge.kind]}>{badge.label}</Badge>
+                          </span>
+                        </Tooltip>
+                      ),
                     )}
                   </div>
                 </Card>
@@ -980,21 +953,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       soft_budget_alerting_emails: Array.isArray(info.metadata?.soft_budget_alerting_emails)
                         ? info.metadata.soft_budget_alerting_emails.join(", ")
                         : "",
-                      metadata: info.metadata
-                        ? JSON.stringify(
-                            (({
-                              logging,
-                              secret_manager_settings,
-                              soft_budget_alerting_emails,
-                              model_tpm_limit,
-                              model_rpm_limit,
-                              allowed_passthrough_routes,
-                              ...rest
-                            }) => rest)(info.metadata),
-                            null,
-                            2,
-                          )
-                        : "",
+                      metadata: metadataObjectToPairs(info.metadata, UI_MANAGED_METADATA_KEYS),
                       logging_settings: info.metadata?.logging || [],
                       secret_manager_settings: info.metadata?.secret_manager_settings
                         ? JSON.stringify(info.metadata.secret_manager_settings, null, 2)
@@ -1030,7 +989,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Form.Item
                       label="Models"
                       name="models"
-                      rules={[{ required: true, message: "Please select at least one model" }]}
+                      extra="Leave empty to grant no models directly. The team keeps any models granted through its access groups"
                     >
                       <ModelSelect
                         value={form.getFieldValue("models") || []}
@@ -1171,6 +1130,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </Form.Item>
 
                     <Form.Item
+                      label="Metadata"
+                      help='Values are saved as text. Enter JSON for typed values, e.g. 3, true, or {"region": "us"}.'
+                    >
+                      <MetadataKeyValueFields
+                        form={form}
+                        schemaFields={teamMetadataSchemaFields}
+                        schemaLoading={isTeamMetadataSchemaLoading}
+                      />
+                    </Form.Item>
+
+                    <Form.Item
                       label="Model-Specific Rate Limits"
                       tooltip="Set per-model TPM/RPM limits that apply across the whole team."
                     >
@@ -1245,6 +1215,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <RouterSettingsAccordion
                         ref={routerSettingsRef}
                         accessToken={accessToken || ""}
+                        teamId={teamId}
                         value={info.router_settings ? { router_settings: info.router_settings } : undefined}
                       />
                     </Form.Item>
@@ -1361,25 +1332,22 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       />
                     </Form.Item>
 
-                    <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">
-                      <Tooltip
-                        title={
-                          !premiumUser
-                            ? "Premium feature - Upgrade to set allowed pass through routes"
-                            : !is_proxy_admin
-                              ? "Only proxy admins can set allowed pass through routes"
-                              : ""
-                        }
-                        placement="top"
-                      >
-                        <PassThroughRoutesSelector
-                          onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
-                          value={form.getFieldValue("allowed_passthrough_routes")}
-                          accessToken={accessToken || ""}
-                          placeholder="Select pass through routes"
-                          disabled={!premiumUser || !is_proxy_admin}
-                        />
-                      </Tooltip>
+                    <Form.Item
+                      label="Allowed Pass Through Routes"
+                      name="allowed_passthrough_routes"
+                      tooltip={
+                        !premiumUser
+                          ? "Premium feature - Upgrade to set allowed pass through routes"
+                          : !is_proxy_admin
+                            ? "Only proxy admins can set allowed pass through routes"
+                            : undefined
+                      }
+                    >
+                      <PassThroughRoutesSelector
+                        accessToken={accessToken || ""}
+                        placeholder="Select pass through routes"
+                        disabled={!premiumUser || !is_proxy_admin}
+                      />
                     </Form.Item>
 
                     <Form.Item label="MCP Servers / Access Groups" name="mcp_servers_and_groups">
@@ -1494,10 +1462,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         placeholder='{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
                         disabled={!premiumUser}
                       />
-                    </Form.Item>
-
-                    <Form.Item label="Metadata" name="metadata">
-                      <Input.TextArea rows={10} />
                     </Form.Item>
 
                     <div className="sticky z-10 bg-white p-4 pr-0 border-t border-gray-200 -bottom-6 -inset-x-6">
