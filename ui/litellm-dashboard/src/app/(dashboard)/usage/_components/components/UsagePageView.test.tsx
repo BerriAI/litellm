@@ -863,8 +863,6 @@ describe("UsagePage", () => {
     });
   });
 
-  // The select hides both views from a non-admin, so this drives the section
-  // gate directly through the mocked select, which always offers every option.
   it.each(["organization", "agent"])("should not render the %s usage view for an internal user", async (usageView) => {
     mockUseAuthorized.mockReturnValue(nonAdminSession);
 
