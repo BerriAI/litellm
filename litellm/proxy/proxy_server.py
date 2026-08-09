@@ -2267,9 +2267,9 @@ async def get_current_spend(
     that survived a Redis restart can return a stale-low value loaded from an
     older RDB snapshot; that read is a hit (not a clean miss), so step 3 never
     runs and a key can leak spend past ``max_budget`` indefinitely. The
-    authoritative source depends on the counter: primary key/team/user/org
+    authoritative source depends on the counter: primary key/team/user/org/tag
     counters read the DB row; per-window counters (``window_start`` supplied)
-    aggregate spend logs; end-user/tag counters have no DB row, so the caller's
+    aggregate spend logs; end-user counters have no DB row, so the caller's
     ``fallback_spend`` (loaded fresh in auth) is authoritative. The DB read is
     skipped for healthy primary counters (counter at or above recorded spend)
     and cached in-process for a few seconds, so a persistently stale counter
@@ -2302,7 +2302,7 @@ async def get_current_spend(
                 await _repair_stale_spend_counter(counter_key=counter_key, db_spend=authoritative)
                 return authoritative
         elif fallback_spend > current:
-            # end-user / tag counters have no DB row; fallback_spend is the
+            # end-user counters have no DB row; fallback_spend is the
             # authoritative recorded value loaded in auth.
             return fallback_spend
 
@@ -2362,7 +2362,7 @@ async def reseed_spend_counter_from_db(counter_key: str) -> None:
     the read-time floor (_authoritative_floor_spend) converges to the true total
     as the buffer flushes. The point is to restore enforcement to a real floor
     rather than leave the counter deleted and unenforced (the prior fail-open).
-    Counters with no DB row (window/end-user/tag) are left untouched rather than
+    Counters with no DB row (window/end-user) are left untouched rather than
     deleted, so enforcement keeps reading whatever value they hold.
     """
     db_spend: Final = await SpendCounterReseed.from_db(prisma_client=prisma_client, counter_key=counter_key)
