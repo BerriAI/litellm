@@ -1996,19 +1996,19 @@ class Router:
     @overload
     async def acompletion(
         self, model: str, messages: list[AllMessageValues], stream: Literal[True], **kwargs
-    ) -> CustomStreamWrapper: 
+    ) -> CustomStreamWrapper:
         ...
 
     @overload
     async def acompletion(
         self, model: str, messages: list[AllMessageValues], stream: Literal[False] = False, **kwargs
-    ) -> ModelResponse: 
+    ) -> ModelResponse:
         ...
 
     @overload
     async def acompletion(
         self, model: str, messages: list[AllMessageValues], stream: Literal[True, False] = False, **kwargs
-    ) -> CustomStreamWrapper | ModelResponse: 
+    ) -> CustomStreamWrapper | ModelResponse:
         ...
 
     # fmt: on
@@ -3473,13 +3473,13 @@ class Router:
     @overload
     async def schedule_acompletion(
         self, model: str, messages: list[AllMessageValues], priority: int, stream: Literal[False] = False, **kwargs
-    ) -> ModelResponse: 
+    ) -> ModelResponse:
         ...
 
     @overload
     async def schedule_acompletion(
         self, model: str, messages: list[AllMessageValues], priority: int, stream: Literal[True], **kwargs
-    ) -> CustomStreamWrapper: 
+    ) -> CustomStreamWrapper:
         ...
 
     # fmt: on
@@ -7002,7 +7002,7 @@ class Router:
 
         except Exception as e:
             verbose_router_logger.debug(
-                "litellm.router.Router::deployment_callback_on_success(): Exception occured - %s", e
+                "litellm.router.Router::deployment_callback_on_success(): Exception occurred - %s", e
             )
 
     def sync_deployment_callback_on_success(

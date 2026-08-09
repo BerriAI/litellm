@@ -69,7 +69,7 @@ class DynamicRateLimiterCache:
             await self.cache.async_set_cache_sadd(key=key_name, value=value, ttl=self.ttl)
         except Exception as e:
             verbose_proxy_logger.exception(
-                "litellm.proxy.hooks.dynamic_rate_limiter.py::async_set_cache_sadd(): Exception occured - %s", e
+                "litellm.proxy.hooks.dynamic_rate_limiter.py::async_set_cache_sadd(): Exception occurred - %s", e
             )
             raise e
 
@@ -266,6 +266,6 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             )
         except Exception as e:
             verbose_proxy_logger.exception(
-                "litellm.proxy.hooks.dynamic_rate_limiter.py::async_post_call_success_hook(): Exception occured - %s", e
+                "litellm.proxy.hooks.dynamic_rate_limiter.py::async_post_call_success_hook(): Exception occurred - %s", e
             )
             return response

@@ -1499,7 +1499,7 @@ async def add_new_model(
         return model_response
 
     except Exception as e:
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.add_new_model(): Exception occured - %s", e)
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.add_new_model(): Exception occurred - %s", e)
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({e})"),
@@ -1652,7 +1652,7 @@ async def update_model(
 
             return model_response
     except Exception as e:
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_model(): Exception occured - %s", e)
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_model(): Exception occurred - %s", e)
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({e})"),

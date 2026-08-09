@@ -124,7 +124,7 @@ class _PROXY_AzureContentSafety(
             raise e
         except Exception as e:
             verbose_proxy_logger.error(
-                "litellm.proxy.hooks.azure_content_safety.py::async_pre_call_hook(): Exception occured - %s", e
+                "litellm.proxy.hooks.azure_content_safety.py::async_pre_call_hook(): Exception occurred - %s", e
             )
             verbose_proxy_logger.debug(traceback.format_exc())
 

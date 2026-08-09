@@ -1034,7 +1034,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             callback_func=callback,
                         )
                 except Exception as e:
-                    verbose_logger.exception("litellm.Logging.pre_call(): Exception occured - %s", e)
+                    verbose_logger.exception("litellm.Logging.pre_call(): Exception occurred - %s", e)
                     verbose_logger.debug(
                         "LiteLLM.Logging: is sentry capture exception initialized %s", capture_exception
                     )

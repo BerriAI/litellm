@@ -967,7 +967,7 @@ def _log_llm_api_exception(e: Exception) -> None:
             "litellm.proxy.proxy_server._handle_llm_api_exception(): client disconnected, upstream LLM request cancelled"
         )
         return
-    verbose_proxy_logger.exception("litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - %s", e)
+    verbose_proxy_logger.exception("litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occurred - %s", e)
 
 
 async def _cancel_llm_call_on_client_disconnect(
@@ -2977,7 +2977,7 @@ class ProxyBaseLLMRequestProcessing:
             raise
         except Exception as e:
             verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e
+                "litellm.proxy.proxy_server.async_data_generator(): Exception occurred - %s", e
             )
             transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,

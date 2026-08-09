@@ -471,7 +471,7 @@ async def health_services_endpoint(
             }
 
     except Exception as e:
-        verbose_proxy_logger.error("litellm.proxy.proxy_server.health_services_endpoint(): Exception occured - %s", e)
+        verbose_proxy_logger.error("litellm.proxy.proxy_server.health_services_endpoint(): Exception occurred - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
@@ -1115,7 +1115,7 @@ async def health_endpoint(
             )
             return _post_process(router_result)
     except Exception as e:
-        verbose_proxy_logger.error("litellm.proxy.proxy_server.py::health_endpoint(): Exception occured - %s", e)
+        verbose_proxy_logger.error("litellm.proxy.proxy_server.py::health_endpoint(): Exception occurred - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
 

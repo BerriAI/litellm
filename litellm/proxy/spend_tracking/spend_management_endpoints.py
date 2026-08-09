@@ -3748,7 +3748,7 @@ async def provider_budgets() -> ProviderBudgetResponse:
             provider_budget_response_dict[_provider] = provider_budget_response_object
         return ProviderBudgetResponse(providers=provider_budget_response_dict)
     except Exception as e:
-        verbose_proxy_logger.exception("/provider/budgets: Exception occured - %s", e)
+        verbose_proxy_logger.exception("/provider/budgets: Exception occurred - %s", e)
         raise handle_exception_on_proxy(e)
 
 

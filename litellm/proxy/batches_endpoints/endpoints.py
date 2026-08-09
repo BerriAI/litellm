@@ -350,7 +350,7 @@ async def create_batch(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.create_batch(): Exception occured - %s", e)
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.create_batch(): Exception occurred - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -620,7 +620,7 @@ async def retrieve_batch(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.retrieve_batch(): Exception occured - %s", e)
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.retrieve_batch(): Exception occurred - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -801,7 +801,7 @@ async def list_batches(
             original_exception=e,
             request_data={"after": after, "limit": limit},
         )
-        verbose_proxy_logger.error("litellm.proxy.proxy_server.retrieve_batch(): Exception occured - %s", e)
+        verbose_proxy_logger.error("litellm.proxy.proxy_server.retrieve_batch(): Exception occurred - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -1018,7 +1018,7 @@ async def cancel_batch(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.create_batch(): Exception occured - %s", e)
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.create_batch(): Exception occurred - %s", e)
         raise handle_exception_on_proxy(e)
 
 

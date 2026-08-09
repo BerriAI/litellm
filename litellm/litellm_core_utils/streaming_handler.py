@@ -614,7 +614,7 @@ class CustomStreamWrapper:
             else:
                 return ""
         except Exception as e:
-            verbose_logger.exception("litellm.CustomStreamWrapper.handle_baseten_chunk(): Exception occured - %s", e)
+            verbose_logger.exception("litellm.CustomStreamWrapper.handle_baseten_chunk(): Exception occurred - %s", e)
             return ""
 
     def handle_triton_stream(self, chunk):
@@ -1421,7 +1421,7 @@ class CustomStreamWrapper:
                             model_response.choices[0].delta = Delta(**_json_delta)
                         except Exception as e:
                             verbose_logger.exception(
-                                "litellm.CustomStreamWrapper.chunk_creator(): Exception occured - %s", e
+                                "litellm.CustomStreamWrapper.chunk_creator(): Exception occurred - %s", e
                             )
                             model_response.choices[0].delta = Delta()
                     elif self._has_any_special_delta_attributes(delta):

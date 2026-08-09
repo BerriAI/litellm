@@ -2128,7 +2128,7 @@ class PrometheusLogger(CustomLogger):
                 response_cost=0,
             )
         except Exception as e:
-            verbose_logger.exception("prometheus Layer Error(): Exception occured - %s", e)
+            verbose_logger.exception("prometheus Layer Error(): Exception occurred - %s", e)
 
     def _extract_status_code(
         self,
@@ -2380,7 +2380,7 @@ class PrometheusLogger(CustomLogger):
             )
 
         except Exception as e:
-            verbose_logger.exception("prometheus Layer Error(): Exception occured - %s", e)
+            verbose_logger.exception("prometheus Layer Error(): Exception occurred - %s", e)
 
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         """
@@ -2605,7 +2605,7 @@ class PrometheusLogger(CustomLogger):
             )
 
         except Exception as e:
-            verbose_logger.debug("Prometheus Error: set_llm_deployment_failure_metrics. Exception occured - %s", e)
+            verbose_logger.debug("Prometheus Error: set_llm_deployment_failure_metrics. Exception occurred - %s", e)
 
     def _set_deployment_tpm_rpm_limit_metrics(
         self,
@@ -2719,7 +2719,7 @@ class PrometheusLogger(CustomLogger):
                 )
                 self.litellm_remaining_requests_metric.labels(**_labels).set(remaining_requests)
         except Exception as e:
-            verbose_logger.exception("Prometheus Error: _async_set_router_remaining_metrics. Exception occured - %s", e)
+            verbose_logger.exception("Prometheus Error: _async_set_router_remaining_metrics. Exception occurred - %s", e)
 
     def set_llm_deployment_success_metrics(
         self,
@@ -2862,7 +2862,7 @@ class PrometheusLogger(CustomLogger):
                 self.litellm_deployment_latency_per_output_token.labels(**_labels).observe(latency_per_token)
 
         except Exception as e:
-            verbose_logger.exception("Prometheus Error: set_llm_deployment_success_metrics. Exception occured - %s", e)
+            verbose_logger.exception("Prometheus Error: set_llm_deployment_success_metrics. Exception occurred - %s", e)
             return
 
     def _record_guardrail_metrics(

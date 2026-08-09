@@ -5780,8 +5780,8 @@ def function_to_dict(input_function) -> dict:
 
     Returns
     -------
-    dictionnary
-        A dictionnary to add to the list passed to `functions` parameter of `litellm.completion`
+    dictionary
+        A dictionary to add to the list passed to `functions` parameter of `litellm.completion`
     """
     # Get function name and docstring
     try:

@@ -326,7 +326,7 @@ class LangFuseLogger:
 
             return {"trace_id": trace_id, "generation_id": generation_id}
         except Exception as e:
-            verbose_logger.exception("Langfuse Layer Error(): Exception occured - %s", e)
+            verbose_logger.exception("Langfuse Layer Error(): Exception occurred - %s", e)
             return {"trace_id": None, "generation_id": None}
 
     def _get_langfuse_input_output_content(

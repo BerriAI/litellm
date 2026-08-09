@@ -245,7 +245,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 self.logged_success += 1
         except Exception as e:
             verbose_logger.exception(
-                "litellm.proxy.hooks.lowest_tpm_rpm_v2.py::log_success_event(): Exception occured - %s", e
+                "litellm.proxy.hooks.lowest_tpm_rpm_v2.py::log_success_event(): Exception occurred - %s", e
             )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -289,7 +289,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 self.logged_success += 1
         except Exception as e:
             verbose_logger.exception(
-                "litellm.proxy.hooks.lowest_tpm_rpm_v2.py::async_log_success_event(): Exception occured - %s", e
+                "litellm.proxy.hooks.lowest_tpm_rpm_v2.py::async_log_success_event(): Exception occurred - %s", e
             )
 
     def _return_potential_deployments(

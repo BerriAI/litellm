@@ -607,7 +607,7 @@ async def new_user(
 
         return new_user_response
     except Exception as e:
-        verbose_proxy_logger.exception("/user/new: Exception occured - %s", e)
+        verbose_proxy_logger.exception("/user/new: Exception occurred - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -901,7 +901,7 @@ async def user_info(
 
         return response_data
     except Exception as e:
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.user_info(): Exception occured - %s", e)
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.user_info(): Exception occurred - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -1051,7 +1051,7 @@ async def user_info_v2(
             object_permission=user_data.get("object_permission"),
         )
     except Exception as e:
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.user_info_v2(): Exception occured - %s", e)
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.user_info_v2(): Exception occurred - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -1570,7 +1570,7 @@ async def user_update(
         )
         return response
     except Exception as e:
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.user_update(): Exception occured - %s", e)
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.user_update(): Exception occurred - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
@@ -2725,7 +2725,7 @@ async def get_user_daily_activity(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception("/spend/daily/analytics: Exception occured - %s", e)
+        verbose_proxy_logger.exception("/spend/daily/analytics: Exception occurred - %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": f"Failed to fetch analytics: {e}"},
@@ -2817,7 +2817,7 @@ async def get_user_daily_activity_aggregated(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception("/user/daily/activity/aggregated: Exception occured - %s", e)
+        verbose_proxy_logger.exception("/user/daily/activity/aggregated: Exception occurred - %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": f"Failed to fetch analytics: {e}"},

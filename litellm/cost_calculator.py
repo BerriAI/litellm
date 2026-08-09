@@ -1686,7 +1686,7 @@ def completion_cost(
                 )
                 if idx == len(potential_model_names) - 1:
                     raise e
-        raise Exception(f"Unable to calculat cost for received potential model names - {potential_model_names}")
+        raise Exception(f"Unable to calculate cost for received potential model names - {potential_model_names}")
     except Exception as e:
         raise e
 

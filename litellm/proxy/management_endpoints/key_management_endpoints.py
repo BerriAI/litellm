@@ -1744,7 +1744,7 @@ async def generate_key_fn(
         )
 
     except Exception as e:
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.generate_key_fn(): Exception occured - %s", e)
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.generate_key_fn(): Exception occurred - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -1948,7 +1948,7 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
 
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.prepare_metadata_fields(): Exception occured - %s", e
+            "litellm.proxy.proxy_server.prepare_metadata_fields(): Exception occurred - %s", e
         )
 
     non_default_values["metadata"] = encrypt_callback_vars(casted_metadata)
@@ -2813,7 +2813,7 @@ async def update_key_fn(
         return {"key": key, **response["data"]}
         # update based on remaining passed in values
     except Exception as e:
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_key_fn(): Exception occured - %s", e)
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_key_fn(): Exception occurred - %s", e)
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({e})"),
@@ -3382,7 +3382,7 @@ async def delete_key_fn(
 
         return {"deleted_keys": deleted_keys}
     except Exception as e:
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.delete_key_fn(): Exception occured - %s", e)
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.delete_key_fn(): Exception occurred - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -3945,7 +3945,7 @@ async def generate_key_helper_fn(
                     # If it's not valid JSON/YAML, keep as is or set to empty dict
                     key_data["router_settings"] = {}
     except Exception as e:
-        verbose_proxy_logger.error("litellm.proxy.proxy_server.generate_key_helper_fn(): Exception occured - %s", e)
+        verbose_proxy_logger.error("litellm.proxy.proxy_server.generate_key_helper_fn(): Exception occurred - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise e
@@ -4153,7 +4153,7 @@ async def delete_verification_tokens(
             raise Exception("DB not connected. prisma_client is None")
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.delete_verification_tokens(): Exception occured - %s", e
+            "litellm.proxy.proxy_server.delete_verification_tokens(): Exception occurred - %s", e
         )
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
