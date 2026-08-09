@@ -17,7 +17,7 @@ concurrency:
 jobs:
   check-sync:
     name: Verify schema.prisma copies match root
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Checkout PR

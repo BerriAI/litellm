@@ -35,7 +35,7 @@ jobs:
     if: |
       github.repository == 'BerriAI/litellm'
       && contains(github.event.comment.body, '@agent-shin reconsider')
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Authorize commenter
         # Only the PR/issue author OR an internal collaborator may trigger

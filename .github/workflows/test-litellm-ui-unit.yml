@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   ui-unit-tests:
-    runs-on: ubuntu-latest-16-cores
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     defaults:
       run:
