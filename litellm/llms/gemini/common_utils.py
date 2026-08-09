@@ -359,9 +359,7 @@ def assert_gemini_video_download_url(download_url: str, api_base: str) -> str:
         )
 
     resolved: Final = (
-        download_url
-        if urlparse(download_url).scheme
-        else urljoin(api_base.rstrip("/") + "/", download_url.lstrip("/"))
+        download_url if urlparse(download_url).scheme else urljoin(api_base.rstrip("/") + "/", download_url.lstrip("/"))
     )
     try:
         assert_same_origin(resolved, api_base)
