@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import traceback
+from typing import Final
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -2819,7 +2820,7 @@ def _resolve_route_name(method: str, path: str) -> str | None:
 
     from litellm.proxy.proxy_server import app
 
-    scope = {
+    scope: Final = {
         "type": "http",
         "method": method,
         "path": path,
