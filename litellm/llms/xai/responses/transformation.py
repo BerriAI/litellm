@@ -79,7 +79,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage, which
         drops non-standard fields unless usage is already a chat Usage instance.
         """
-        response = super().transform_response_api_response(
+        response: Final = super().transform_response_api_response(
             model=model, raw_response=raw_response, logging_obj=logging_obj
         )
         self._attach_server_side_tool_usage_details_to_usage(response)
@@ -88,7 +88,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def transform_streaming_response(
         self,
         model: str,
-        parsed_chunk: dict,
+        parsed_chunk: dict,  # mutable-ok: OpenAIResponsesAPIConfig override keeps dict signature
         logging_obj: LiteLLMLoggingObj,
     ) -> ResponsesAPIStreamingResponse:
         """
@@ -98,12 +98,14 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         attaching server_side_tool_usage_details here, stream=true web_search usage is
         dropped when usage is normalized for billing.
         """
-        event = super().transform_streaming_response(model=model, parsed_chunk=parsed_chunk, logging_obj=logging_obj)
+        event: Final = super().transform_streaming_response(
+            model=model, parsed_chunk=parsed_chunk, logging_obj=logging_obj
+        )
         if isinstance(
             event,
             (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent),
         ):
-            embedded_response = getattr(event, "response", None)
+            embedded_response: Final = getattr(event, "response", None)
             if isinstance(embedded_response, ResponsesAPIResponse):
                 self._attach_server_side_tool_usage_details_to_usage(embedded_response)
         return event
@@ -115,16 +117,16 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if usage is None:
             return None
         if isinstance(usage, Mapping):
-            details = usage.get("server_side_tool_usage_details")
-        else:
-            details = getattr(usage, "server_side_tool_usage_details", None)
-            if details is None:
-                model_extra = getattr(usage, "model_extra", None) or getattr(usage, "__pydantic_extra__", None)
-                if isinstance(model_extra, Mapping):
-                    details = model_extra.get("server_side_tool_usage_details")
-        if not isinstance(details, Mapping):
+            mapping_details: Final = usage.get("server_side_tool_usage_details")
+            return mapping_details if isinstance(mapping_details, Mapping) else None
+        attr_details: Final = getattr(usage, "server_side_tool_usage_details", None)
+        if isinstance(attr_details, Mapping):
+            return attr_details
+        model_extra: Final = getattr(usage, "model_extra", None) or getattr(usage, "__pydantic_extra__", None)
+        if not isinstance(model_extra, Mapping):
             return None
-        return details
+        extra_details: Final = model_extra.get("server_side_tool_usage_details")
+        return extra_details if isinstance(extra_details, Mapping) else None
 
     @staticmethod
     def _attach_server_side_tool_usage_details_to_usage(
@@ -133,7 +135,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if response.usage is None:
             return
 
-        details = XAIResponsesAPIConfig._server_side_tool_usage_details_from_usage(response.usage)
+        details: Final = XAIResponsesAPIConfig._server_side_tool_usage_details_from_usage(response.usage)
         if details is None:
             return
 
@@ -143,7 +145,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         chat_usage: Final = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(response.usage)
         apply_server_side_tool_usage_details_to_usage(chat_usage, details)
-        response.usage = chat_usage  # type: ignore[assignment]
+        setattr(response, "usage", chat_usage)
 
     def _transform_web_search_tool(self, tool: dict[str, Any]) -> XAIWebSearchTool | dict[str, Any]:
         """

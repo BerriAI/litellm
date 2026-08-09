@@ -1033,7 +1033,7 @@ class ResponseAPILoggingUtils:
 
     @staticmethod
     def _transform_response_api_usage_to_chat_usage(
-        usage_input: dict | ResponseAPIUsage | Usage | None,
+        usage_input: Mapping[str, object] | ResponseAPIUsage | Usage | None,
     ) -> Usage:
         """
         Transforms ResponseAPIUsage or ImageUsage to a Usage object.
