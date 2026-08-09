@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { indexesListCall } from "@/components/networking";
+import { VectorStore } from "@/components/vector_store_management/types";
 
 import IndexesTable from "./IndexesTable";
 
@@ -23,11 +24,25 @@ export interface VectorStoreIndex {
 
 interface IndexesTabProps {
   accessToken: string | null;
+  vectorStores: VectorStore[];
+  onViewVectorStore: (vectorStoreId: string) => void;
 }
 
-const IndexesTab: React.FC<IndexesTabProps> = ({ accessToken }) => {
+const IndexesTab: React.FC<IndexesTabProps> = ({ accessToken, vectorStores, onViewVectorStore }) => {
   const [indexes, setIndexes] = useState<VectorStoreIndex[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+
+  const vectorStoreIdsByName = useMemo(
+    () =>
+      new Map(
+        vectorStores.flatMap((store) =>
+          store.vector_store_name ? [[store.vector_store_name, store.vector_store_id] as const] : [],
+        ),
+      ),
+    [vectorStores],
+  );
+
+  const resolveVectorStoreId = useCallback((name: string) => vectorStoreIdsByName.get(name), [vectorStoreIdsByName]);
 
   useEffect(() => {
     const fetchIndexes = async () => {
@@ -54,7 +69,12 @@ const IndexesTab: React.FC<IndexesTabProps> = ({ accessToken }) => {
         Vector store indexes registered on this proxy via the <code>/v1/indexes</code> API.
       </p>
       <div className="grid grid-cols-1 gap-2 pt-2 pb-2 w-full">
-        <IndexesTable data={indexes} isLoading={isLoading} />
+        <IndexesTable
+          data={indexes}
+          isLoading={isLoading}
+          resolveVectorStoreId={resolveVectorStoreId}
+          onViewVectorStore={onViewVectorStore}
+        />
       </div>
     </div>
   );

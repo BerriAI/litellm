@@ -21,7 +21,12 @@ vi.mock("./VectorStoreTable", () => ({
 }));
 
 vi.mock("./VectorStoreForm", () => ({ __esModule: true, default: () => null }));
-vi.mock("./vector_store_info", () => ({ __esModule: true, default: () => null }));
+vi.mock("./vector_store_info", () => ({
+  __esModule: true,
+  default: ({ vectorStoreId }: { vectorStoreId: string }) => (
+    <div data-testid="vector-store-info-view">{vectorStoreId}</div>
+  ),
+}));
 vi.mock("./CreateVectorStore", () => ({ __esModule: true, default: () => null }));
 vi.mock("./TestVectorStoreTab", () => ({ __esModule: true, default: () => null }));
 
@@ -95,6 +100,36 @@ describe("VectorStoreManagement Indexes tab", () => {
     await waitFor(() => expect(mockVectorStoreListCall).toHaveBeenCalledWith("sk-test"));
     expect(screen.getByRole("tab", { name: "Manage Vector Stores" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Indexes" })).not.toBeInTheDocument();
+  });
+
+  it("should swap to the vector store info view when an index's vector store name is clicked", async () => {
+    const user = userEvent.setup();
+    mockVectorStoreListCall.mockResolvedValue({
+      data: [
+        {
+          vector_store_id: "vs-1",
+          vector_store_name: "support-docs-store",
+          custom_llm_provider: "bedrock",
+          created_at: "2024-01-01T00:00:00Z",
+          updated_at: "2024-01-01T00:00:00Z",
+        },
+      ],
+    });
+    mockIndexesListCall.mockResolvedValue({
+      object: "list",
+      data: [
+        {
+          id: "idx-1",
+          index_name: "support-docs-index",
+          litellm_params: { vector_store_index: "pinecone-support-docs", vector_store_name: "support-docs-store" },
+        },
+      ],
+    });
+    render(<VectorStoreManagement accessToken="sk-test" userID="user-1" userRole="Admin" />);
+    await user.click(screen.getByRole("tab", { name: "Indexes" }));
+    await user.click(await screen.findByRole("button", { name: "support-docs-store" }));
+    expect(await screen.findByTestId("vector-store-info-view")).toHaveTextContent("vs-1");
+    expect(screen.queryByText("Vector Store Management")).not.toBeInTheDocument();
   });
 
   it("should not call indexesListCall until the Indexes tab is clicked", async () => {

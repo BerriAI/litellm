@@ -11,6 +11,8 @@ import { getIndexesTableColumns } from "./IndexesTableColumns";
 
 interface IndexesTableProps {
   data: VectorStoreIndex[];
+  resolveVectorStoreId: (name: string) => string | undefined;
+  onViewVectorStore: (vectorStoreId: string) => void;
   isLoading?: boolean;
 }
 
@@ -28,10 +30,18 @@ function EmptyState() {
   );
 }
 
-const IndexesTable: React.FC<IndexesTableProps> = ({ data, isLoading = false }) => {
+const IndexesTable: React.FC<IndexesTableProps> = ({
+  data,
+  resolveVectorStoreId,
+  onViewVectorStore,
+  isLoading = false,
+}) => {
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
 
-  const columns = useMemo(() => getIndexesTableColumns(), []);
+  const columns = useMemo(
+    () => getIndexesTableColumns({ resolveVectorStoreId, onViewVectorStore }),
+    [resolveVectorStoreId, onViewVectorStore],
+  );
 
   return (
     <DataTable

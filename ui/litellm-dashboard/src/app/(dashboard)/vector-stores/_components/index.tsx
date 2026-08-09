@@ -197,7 +197,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
 
           {isProxyAdminRole(userRole || "") && (
             <TabsContent keepMounted={hasVisited("indexes")} value="indexes">
-              <IndexesTab accessToken={accessToken} />
+              <IndexesTab accessToken={accessToken} vectorStores={vectorStores} onViewVectorStore={handleView} />
             </TabsContent>
           )}
         </Tabs>

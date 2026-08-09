@@ -3,11 +3,20 @@
 import { ColumnDef } from "@tanstack/react-table";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
-import { DateCell } from "@/components/shared/table_cells";
+import { DateCell, IdentityCell } from "@/components/shared/table_cells";
+import { userDetailHref } from "@/utils/entityLinks";
 
 import type { VectorStoreIndex } from "./IndexesTab";
 
-export const getIndexesTableColumns = (): ColumnDef<VectorStoreIndex>[] => [
+interface IndexesTableColumnsDeps {
+  resolveVectorStoreId: (name: string) => string | undefined;
+  onViewVectorStore: (vectorStoreId: string) => void;
+}
+
+export const getIndexesTableColumns = ({
+  resolveVectorStoreId,
+  onViewVectorStore,
+}: IndexesTableColumnsDeps): ColumnDef<VectorStoreIndex>[] => [
   {
     id: "index_name",
     accessorKey: "index_name",
@@ -28,11 +37,25 @@ export const getIndexesTableColumns = (): ColumnDef<VectorStoreIndex>[] => [
     header: ({ column }) => <DataTableSortHeader column={column} title="Vector Store" />,
     size: 200,
     enableSorting: true,
-    cell: ({ row }) => (
-      <span className="block max-w-60 truncate text-sm" title={row.original.litellm_params.vector_store_name}>
-        {row.original.litellm_params.vector_store_name || "-"}
-      </span>
-    ),
+    cell: ({ row }) => {
+      const name = row.original.litellm_params.vector_store_name;
+      const vectorStoreId = name ? resolveVectorStoreId(name) : undefined;
+      if (vectorStoreId) {
+        return (
+          <IdentityCell
+            title={name}
+            titleClassName="font-normal"
+            className="max-w-60"
+            onClick={() => onViewVectorStore(vectorStoreId)}
+          />
+        );
+      }
+      return (
+        <span className="block max-w-60 truncate text-sm" title={name}>
+          {name || "-"}
+        </span>
+      );
+    },
   },
   {
     id: "vector_store_index",
@@ -57,11 +80,20 @@ export const getIndexesTableColumns = (): ColumnDef<VectorStoreIndex>[] => [
     header: "Created By",
     size: 160,
     enableSorting: false,
-    cell: ({ row }) => (
-      <span className="block max-w-48 truncate text-sm" title={row.original.created_by ?? undefined}>
-        {row.original.created_by || "-"}
-      </span>
-    ),
+    cell: ({ row }) => {
+      const createdBy = row.original.created_by;
+      if (createdBy) {
+        return (
+          <IdentityCell
+            title={createdBy}
+            titleClassName="font-normal"
+            className="max-w-48"
+            href={userDetailHref(createdBy)}
+          />
+        );
+      }
+      return <span className="block max-w-48 truncate text-sm">-</span>;
+    },
   },
   {
     id: "created_at",
