@@ -93,8 +93,8 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def merge_client_forwarded_headers(
-        extra_headers: dict[str, Any] | None,
-        client_headers: dict[str, str] | None,
+        extra_headers: Mapping[str, Any] | None,
+        client_headers: Mapping[str, str] | None,
     ) -> dict[str, Any] | None:
         """
         Merge headers forwarded by the proxy (`headers` kwarg, set when
@@ -104,7 +104,7 @@ class ResponsesAPIRequestUtils:
         Header names are compared case-insensitively, as HTTP defines them.
         """
         if not client_headers:
-            return extra_headers
+            return dict(extra_headers) if extra_headers is not None else None
         if not extra_headers:
             return dict(client_headers)
         explicit_names: Final = frozenset(name.lower() for name in extra_headers)
