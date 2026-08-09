@@ -244,6 +244,13 @@ class ResponsesSessionHandler:
         return False
 
     @staticmethod
+    def _get_prisma_client() -> Any:
+        """Return the proxy Prisma client used for spend-log lookups."""
+        from litellm.proxy.proxy_server import prisma_client
+
+        return prisma_client
+
+    @staticmethod
     async def get_all_spend_logs_for_previous_response_id(
         previous_response_id: str,
     ) -> list[SpendLogsPayload]:
@@ -255,12 +262,12 @@ class ResponsesSessionHandler:
 
         SELECT session_id FROM spend_logs WHERE response_id = previous_response_id, SELECT * FROM spend_logs WHERE session_id = session_id
         """
-        from litellm.proxy.proxy_server import prisma_client
-
         verbose_proxy_logger.debug("decoding response id=%s", previous_response_id)
 
-        decoded_response_id: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(previous_response_id)
-        previous_response_id = decoded_response_id.get("response_id", previous_response_id)
+        previous_response_id = ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
+            previous_response_id
+        )
+        prisma_client = ResponsesSessionHandler._get_prisma_client()
         if prisma_client is None:
             return []
 

@@ -590,8 +590,38 @@ class ResponsesAPIRequestUtils:
         Returns:
             The original previous_response_id
         """
+        previous_response_id = ResponsesAPIRequestUtils._decrypt_proxy_encrypted_previous_response_id(
+            previous_response_id
+        )
         decoded_response_id: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(previous_response_id)
         return decoded_response_id.get("response_id", previous_response_id)
+
+    @staticmethod
+    def _decrypt_proxy_encrypted_previous_response_id(previous_response_id: str) -> str:
+        """
+        Resolve a proxy-encrypted Responses API ID to the wrapped managed ID.
+
+        ``ResponsesIDSecurity`` encrypts the LiteLLM-managed response ID before
+        it reaches the client (``resp_<ciphertext>``). Decrypt that layer first
+        so the managed-ID decode can resolve it to the request_id stored in
+        spend logs. If decryption is unavailable or the ID is not encrypted,
+        the original value is returned unchanged.
+        """
+        try:
+            from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity
+
+            responses_id_security = ResponsesIDSecurity()
+            if responses_id_security._is_encrypted_response_id(previous_response_id):
+                decrypted_id, _, _ = responses_id_security._decrypt_response_id(previous_response_id)
+                if decrypted_id:
+                    return decrypted_id
+        except Exception as e:
+            verbose_logger.debug(
+                "Failed to decrypt previous_response_id=%s for session lookup: %s",
+                previous_response_id,
+                e,
+            )
+        return previous_response_id
 
     @staticmethod
     def _build_container_id(

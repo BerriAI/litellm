@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -15,6 +15,26 @@ from litellm.responses.litellm_completion_transformation import session_handler
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
+
+
+@pytest.mark.asyncio
+async def test_get_all_spend_logs_for_previous_response_id_decrypts_encrypted_id():
+    """Encrypted proxy response IDs are resolved before the spend-log query."""
+    original_response_id = "resp_abc123"
+    encrypted_id = f"resp_{'encrypted' * 20}"
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.query_raw = AsyncMock(return_value=[])
+
+    with patch.object(
+        ResponsesSessionHandler, "_get_prisma_client", return_value=fake_prisma
+    ), patch(
+        "litellm.responses.utils.ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id",
+        return_value=original_response_id,
+    ):
+        await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(encrypted_id)
+
+    assert fake_prisma.db.query_raw.call_args[0][1] == original_response_id
 
 
 @pytest.mark.asyncio

@@ -146,6 +146,31 @@ class TestResponsesAPIRequestUtils:
         result_plain = ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(plain_id)
         assert result_plain == plain_id
 
+    def test_decode_previous_response_id_to_original_previous_response_id_decrypts_proxy_id(self):
+        """A proxy-encrypted response ID is decrypted then decoded to the original request ID."""
+        test_provider = "openai"
+        test_model_id = "gpt-4o"
+        original_response_id = "resp_abc123"
+
+        managed_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider=test_provider,
+            model_id=test_model_id,
+            response_id=original_response_id,
+        )
+        encrypted_id = f"resp_{'encrypted' * 20}"
+
+        with patch(
+            "litellm.responses.utils.ResponsesAPIRequestUtils._decrypt_proxy_encrypted_previous_response_id",
+            return_value=managed_id,
+        ):
+            result = (
+                ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
+                    encrypted_id
+                )
+            )
+
+        assert result == original_response_id
+
     def test_update_responses_api_response_id_with_model_id_handles_dict(self):
         """Ensure _update_responses_api_response_id_with_model_id works with dict input"""
         responses_api_response = {"id": "resp_abc123"}
