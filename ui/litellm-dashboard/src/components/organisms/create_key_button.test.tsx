@@ -812,11 +812,7 @@ describe("CreateKey", () => {
 
       openModal();
 
-      // The modal still renders the rest of the advanced settings, so a missing
-      // selector is a real omission rather than an un-rendered tree.
-      await waitFor(() => {
-        expect(screen.getByTestId("org-dropdown")).toBeInTheDocument();
-      });
+      expect(await screen.findByTestId("org-dropdown")).toBeInTheDocument();
 
       expect(getPoliciesList).not.toHaveBeenCalled();
       expect(getPromptsList).not.toHaveBeenCalled();

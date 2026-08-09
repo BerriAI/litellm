@@ -637,6 +637,8 @@ describe("TeamInfoView", () => {
   });
 
   describe("settings and editing", () => {
+    const policiesFormFieldLabel = () => screen.queryByText("Policies", { selector: "span" });
+
     it("should offer the policies field and load it for a caller with the viewPolicies capability", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
@@ -651,10 +653,8 @@ describe("TeamInfoView", () => {
       await user.click(screen.getByRole("tab", { name: "Settings" }));
       await user.click(await screen.findByRole("button", { name: /edit settings/i }));
 
-      // `selector` skips the read-only Policies card, which renders the team's own
-      // policy names from team info and needs no admin list.
       await waitFor(() => {
-        expect(screen.getByText("Policies", { selector: "span" })).toBeInTheDocument();
+        expect(policiesFormFieldLabel()).toBeInTheDocument();
       });
     });
 
@@ -668,13 +668,10 @@ describe("TeamInfoView", () => {
       await user.click(await screen.findByRole("tab", { name: "Settings" }));
       await user.click(await screen.findByRole("button", { name: /edit settings/i }));
 
-      // Team Name proves the edit form rendered, so a missing Policies field is a real omission.
-      await waitFor(() => {
-        expect(screen.getByLabelText("Team Name")).toBeInTheDocument();
-      });
+      expect(await screen.findByLabelText("Team Name")).toBeInTheDocument();
 
       expect(networking.getPoliciesList).not.toHaveBeenCalled();
-      expect(screen.queryByText("Policies", { selector: "span" })).not.toBeInTheDocument();
+      expect(policiesFormFieldLabel()).not.toBeInTheDocument();
     });
 
     it("should open edit mode when edit button is clicked", async () => {

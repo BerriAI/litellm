@@ -6,9 +6,6 @@ import { KeyResponse } from "../key_team_helpers/key_list";
 import { getPoliciesList, getPromptsList, modelAvailableCall } from "../networking";
 import { KeyEditView } from "./key_edit_view";
 
-// PolicySelector gates itself on the session capability; in this bare template
-// render there is no session, so stub the hook to an admin to keep the selector
-// mounted and prove the gate under test is KeyEditView's own.
 const can = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
   default: (...args: unknown[]) => can(...args),
@@ -250,7 +247,6 @@ describe("KeyEditView", () => {
     it("should omit both fields and fire neither admin-only request for an internal user", async () => {
       renderAs("Internal User");
 
-      // Models still loads, so the form really rendered and the fields are absent by gate.
       await waitFor(() => {
         expect(modelAvailableCall).toHaveBeenCalled();
       });
