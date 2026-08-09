@@ -4863,3 +4863,17 @@ def test_is_prompt_caching_valid_prompt_explicit_min_token_count_overrides_model
         is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=PROMPT_CACHE_MESSAGES, min_token_count=8192)
         is False
     )
+
+
+class TestValidateEnvironmentMorphKey:
+    def test_morph_reports_key_present(self):
+        with patch.dict(os.environ, {"MORPH_API_KEY": "test-key"}, clear=True):
+            result = litellm.validate_environment(model="morph/test-model")
+        assert result["keys_in_environment"] is True
+        assert "MORPH_API_KEY" not in result["missing_keys"]
+
+    def test_morph_reports_key_missing(self):
+        with patch.dict(os.environ, {}, clear=True):
+            result = litellm.validate_environment(model="morph/test-model")
+        assert result["keys_in_environment"] is False
+        assert "MORPH_API_KEY" in result["missing_keys"]
