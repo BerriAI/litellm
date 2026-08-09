@@ -10,6 +10,7 @@ import sys
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 
 sys.path.insert(0, os.path.abspath("../.."))
 
@@ -815,3 +816,14 @@ def test_unbuildable_group_selector_keeps_previous_groups():
     assert router._model_to_group == {"filtered-model": "g1"}
     assert router._group_selectors["g1"]["latency-based-routing"] is selector
     assert sum(1 for cb in litellm.callbacks if type(cb) is type(selector)) == 1
+    assert isinstance(
+        router._try_build_group_selector(
+            RoutingGroup(
+                group_name="g2",
+                models=["other-model"],
+                routing_strategy="latency-based-routing",
+                routing_strategy_args={"ttl": "not-a-number"},
+            )
+        ),
+        ValidationError,
+    )
