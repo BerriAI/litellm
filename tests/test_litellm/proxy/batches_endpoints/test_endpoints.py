@@ -1476,11 +1476,9 @@ async def test_list__managed_files_path(list_harness):
         user=user,
         limit=7,
         after="batch-cursor",
-        provider="openai",
-        target_model_names="m1,m2",
     )
 
-    # DISPATCH - managed-files seam fired, neither provider seam did.
+    # DISPATCH - managed-files seam fired, no provider/model filters present.
     list_user_batches.assert_called_once_with(
         user_api_key_dict=user,
         limit=7,
