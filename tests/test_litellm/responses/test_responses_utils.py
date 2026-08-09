@@ -1,6 +1,8 @@
+import builtins
 import base64
 import os
 import sys
+import types
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -188,6 +190,33 @@ class TestResponsesAPIRequestUtils:
             encrypted_id,
             responses_id_security=mock_security,
         )
+
+        assert result == managed_id
+
+    def test_decrypt_proxy_encrypted_previous_response_id_instantiates_security_hook(self):
+        """The lazy import path instantiates ResponsesIDSecurity when no hook is injected."""
+        managed_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai",
+            model_id="gpt-4o",
+            response_id="resp_abc123",
+        )
+        encrypted_id = f"resp_{'encrypted' * 20}"
+
+        mock_security = MagicMock()
+        mock_security._is_encrypted_response_id.return_value = True
+        mock_security._decrypt_response_id.return_value = (managed_id, "user-1", "team-1")
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "litellm.proxy.hooks.responses_id_security":
+                module = types.ModuleType(name)
+                module.ResponsesIDSecurity = lambda: mock_security
+                return module
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=fake_import):
+            result = ResponsesAPIRequestUtils._decrypt_proxy_encrypted_previous_response_id(encrypted_id)
 
         assert result == managed_id
 

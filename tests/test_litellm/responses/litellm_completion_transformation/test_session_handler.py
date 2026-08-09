@@ -1,6 +1,8 @@
+import builtins
 import json
 import os
 import sys
+import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -35,6 +37,36 @@ async def test_get_all_spend_logs_for_previous_response_id_decrypts_encrypted_id
         await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(encrypted_id)
 
     assert fake_prisma.db.query_raw.call_args[0][1] == original_response_id
+
+
+def test_get_prisma_client_imports_proxy_server():
+    """The Prisma client seam returns the proxy module's prisma_client."""
+    fake_prisma = MagicMock()
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "litellm.proxy.proxy_server":
+            module = types.ModuleType(name)
+            module.prisma_client = fake_prisma
+            return module
+        return real_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=fake_import):
+        assert ResponsesSessionHandler._get_prisma_client() is fake_prisma
+
+
+@pytest.mark.asyncio
+async def test_get_all_spend_logs_for_previous_response_id_returns_empty_without_prisma():
+    """When no Prisma client is configured, the spend-log lookup returns []."""
+    with patch.object(
+        ResponsesSessionHandler, "_get_prisma_client", return_value=None
+    ), patch(
+        "litellm.responses.utils.ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id",
+        return_value="resp_abc123",
+    ):
+        result = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id("resp_abc123")
+
+    assert result == []
 
 
 @pytest.mark.asyncio
