@@ -2,7 +2,9 @@
 Modern Email Templates for LiteLLM Email Service with professional styling
 """
 
-USER_INVITATION_EMAIL_TEMPLATE = """
+from typing import Final
+
+USER_INVITATION_EMAIL_TEMPLATE: Final = """
 <!DOCTYPE html>
 <html lang="en">
 <head>

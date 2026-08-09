@@ -23,7 +23,7 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
     AnthropicMessagesConfig,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
-from litellm.types.utils import ServerToolUse
+from litellm.types.utils import ServerToolUse, Usage
 
 
 def test_response_format_transformation_unit_test():
@@ -957,15 +957,15 @@ def test_anthropic_structured_output_beta_header():
 @pytest.mark.parametrize(
     "model_name",
     [
-        "claude-opus-4-6-20250918",
-        "claude-opus-4.6-20250918",
+        "claude-opus-4-8",
+        "claude-opus-4-6-20260205",
         "claude-opus-4-5-20251101",
         "claude-opus-4.5-20251101",
     ],
 )
 def test_opus_uses_native_structured_output(model_name):
     """
-    Test that Opus 4.5 and 4.6 models use native Anthropic structured outputs
+    Test that supported Opus models use native Anthropic structured outputs
     (output_format) rather than the tool-based workaround.
     """
     config = AnthropicConfig()
@@ -1003,6 +1003,43 @@ def test_opus_uses_native_structured_output(model_name):
 
     # Should set json_mode
     assert optional_params.get("json_mode") is True
+
+
+def test_native_structured_output_uses_bundled_capability_when_remote_map_lags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = "claude-opus-4-8"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {model: {"supports_response_schema": True}},
+    )
+    litellm.get_model_info.cache_clear()
+
+    try:
+        optional_params = AnthropicConfig().map_openai_params(
+            non_default_params={
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "answer",
+                        "schema": {
+                            "type": "object",
+                            "properties": {"answer": {"type": "string"}},
+                            "required": ["answer"],
+                        },
+                    },
+                }
+            },
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+    finally:
+        litellm.get_model_info.cache_clear()
+
+    assert "output_format" in optional_params
+    assert "tools" not in optional_params
 
 
 def test_non_structured_output_model_uses_tool_workaround():
@@ -5808,3 +5845,41 @@ def test_top_k_forwarded_at_transform_on_models_that_accept_it():
     )
 
     assert result["top_k"] == 40
+
+
+def test_is_anthropic_usage_object_distinguishes_chat_usage():
+    """Chat-shaped Usage mirrors cache_read_input_tokens alongside prompt_tokens that already
+    include the cache tokens, so treating it as Anthropic usage would re-add them and
+    double-count the prompt. Only the Anthropic shape, where input_tokens excludes cache
+    tokens, may take the Anthropic mapping."""
+    assert AnthropicConfig.is_anthropic_usage_object(
+        {"input_tokens": 3, "output_tokens": 5, "cache_read_input_tokens": 4014}
+    )
+    assert AnthropicConfig.is_anthropic_usage_object(
+        {"input_tokens": 3, "output_tokens": 5, "cache_creation_input_tokens": 10}
+    )
+    assert not AnthropicConfig.is_anthropic_usage_object(
+        Usage(
+            prompt_tokens=4017,
+            completion_tokens=5,
+            total_tokens=4022,
+            cache_read_input_tokens=4014,
+        ).model_dump()
+    )
+    assert not AnthropicConfig.is_anthropic_usage_object({"input_tokens": 3, "output_tokens": 5})
+
+
+def test_is_anthropic_usage_object_rejects_responses_api_usage():
+    """completion_cost checks the Anthropic shape before the Responses API shape, so a
+    Responses API usage payload, whose cache reads live in nested input_tokens_details,
+    must never match; matching would route it past the converter that reads the nested
+    field and its cache reads would be billed at the full input rate."""
+    assert not AnthropicConfig.is_anthropic_usage_object(
+        {
+            "input_tokens": 4017,
+            "output_tokens": 5,
+            "total_tokens": 4022,
+            "input_tokens_details": {"cached_tokens": 4014},
+            "output_tokens_details": {"reasoning_tokens": 0},
+        }
+    )

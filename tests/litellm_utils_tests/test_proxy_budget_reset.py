@@ -30,6 +30,7 @@ def _attrify(d: dict):
     None)` (et al), which returns None for plain dicts — that would silently
     skip the row.
     """
+
     class _AttrDict(dict):
         def __getattr__(self, k):
             try:
@@ -120,9 +121,11 @@ async def test_reset_budget_keys_partial_failure():
     key1, key2, key3, key4, key5, key6 = (
         _attrify(k) for k in [key1, key2, key3, key4, key5, key6]
     )
-    prisma_client.get_data = AsyncMock(return_value=[key1, key2, key3, key4, key5, key6])
+    prisma_client.get_data = AsyncMock(
+        return_value=[key1, key2, key3, key4, key5, key6]
+    )
 
-    async def fake_reset_key(key, current_time):
+    async def fake_reset_key(key, current_time, reset_settings=None):
         if key["id"] == "key1":
             # Simulate a failure on key1 (for example, this might be due to an invariant check)
             raise Exception("Simulated failure for key1")
@@ -207,9 +210,11 @@ async def test_reset_budget_users_partial_failure():
     user1, user2, user3, user4, user5, user6 = (
         _attrify(u) for u in [user1, user2, user3, user4, user5, user6]
     )
-    prisma_client.get_data = AsyncMock(return_value=[user1, user2, user3, user4, user5, user6])
+    prisma_client.get_data = AsyncMock(
+        return_value=[user1, user2, user3, user4, user5, user6]
+    )
 
-    async def fake_reset_user(user, current_time):
+    async def fake_reset_user(user, current_time, reset_settings=None):
         if user["id"] == "user1":
             raise Exception("Simulated failure for user1")
         else:
@@ -397,7 +402,7 @@ async def test_reset_budget_teams_partial_failure():
     team1, team2 = _attrify(team1), _attrify(team2)
     prisma_client.get_data = AsyncMock(return_value=[team1, team2])
 
-    async def fake_reset_team(team, current_time):
+    async def fake_reset_team(team, current_time, reset_settings=None):
         if team["id"] == "team1":
             raise Exception("Simulated failure for team1")
         else:
@@ -513,14 +518,14 @@ async def test_reset_budget_continues_other_categories_on_failure():
 
     job = ResetBudgetJob(proxy_logging_obj, prisma_client)
 
-    async def fake_reset_key(key, current_time):
+    async def fake_reset_key(key, current_time, reset_settings=None):
         key["spend"] = 0.0
         key["budget_reset_at"] = (
             current_time + timedelta(seconds=key["budget_duration"])
         ).isoformat()
         return key
 
-    async def fake_reset_user(user, current_time):
+    async def fake_reset_user(user, current_time, reset_settings=None):
         if user["id"] == "user1":
             raise Exception("Simulated failure for user1")
         user["spend"] = 0.0
@@ -529,7 +534,7 @@ async def test_reset_budget_continues_other_categories_on_failure():
         ).isoformat()
         return user
 
-    async def fake_reset_team(team, current_time):
+    async def fake_reset_team(team, current_time, reset_settings=None):
         team["spend"] = 0.0
         team["budget_reset_at"] = (
             current_time + timedelta(seconds=team["budget_duration"])
@@ -617,8 +622,12 @@ async def test_service_logger_keys_success():
     logger success hook is called with the correct event metadata and no exception is logged.
     """
     keys = [
-        {"id": "key1", "spend": 10.0, "budget_duration": 60, "token": "key1"},
-        {"id": "key2", "spend": 15.0, "budget_duration": 60, "token": "key2"},
+        _attrify(
+            {"id": "key1", "spend": 10.0, "budget_duration": 60, "token": "key1"}
+        ),
+        _attrify(
+            {"id": "key2", "spend": 15.0, "budget_duration": 60, "token": "key2"}
+        ),
     ]
     prisma_client = MagicMock()
     prisma_client.get_data = AsyncMock(return_value=keys)
@@ -632,7 +641,7 @@ async def test_service_logger_keys_success():
 
     job = ResetBudgetJob(proxy_logging_obj, prisma_client)
 
-    async def fake_reset_key(key, current_time):
+    async def fake_reset_key(key, current_time, reset_settings=None):
         key["spend"] = 0.0
         key["budget_reset_at"] = (
             current_time + timedelta(seconds=key["budget_duration"])
@@ -688,7 +697,7 @@ async def test_service_logger_keys_failure():
 
     job = ResetBudgetJob(proxy_logging_obj, prisma_client)
 
-    async def fake_reset_key(key, current_time):
+    async def fake_reset_key(key, current_time, reset_settings=None):
         if key["id"] == "key1":
             raise Exception("Simulated failure for key1")
         key["spend"] = 0.0
@@ -735,8 +744,12 @@ async def test_service_logger_users_success():
     the correct metadata and no exception is logged.
     """
     users = [
-        {"id": "user1", "spend": 20.0, "budget_duration": 120, "user_id": "user1"},
-        {"id": "user2", "spend": 25.0, "budget_duration": 120, "user_id": "user2"},
+        _attrify(
+            {"id": "user1", "spend": 20.0, "budget_duration": 120, "user_id": "user1"}
+        ),
+        _attrify(
+            {"id": "user2", "spend": 25.0, "budget_duration": 120, "user_id": "user2"}
+        ),
     ]
     prisma_client = MagicMock()
     prisma_client.get_data = AsyncMock(return_value=users)
@@ -750,7 +763,7 @@ async def test_service_logger_users_success():
 
     job = ResetBudgetJob(proxy_logging_obj, prisma_client)
 
-    async def fake_reset_user(user, current_time):
+    async def fake_reset_user(user, current_time, reset_settings=None):
         user["spend"] = 0.0
         user["budget_reset_at"] = (
             current_time + timedelta(seconds=user["budget_duration"])
@@ -802,7 +815,7 @@ async def test_service_logger_users_failure():
 
     job = ResetBudgetJob(proxy_logging_obj, prisma_client)
 
-    async def fake_reset_user(user, current_time):
+    async def fake_reset_user(user, current_time, reset_settings=None):
         if user["id"] == "user1":
             raise Exception("Simulated failure for user1")
         user["spend"] = 0.0
@@ -848,8 +861,12 @@ async def test_service_logger_teams_success():
     the proper metadata and nothing is logged as an exception.
     """
     teams = [
-        {"id": "team1", "spend": 30.0, "budget_duration": 180, "team_id": "team1"},
-        {"id": "team2", "spend": 35.0, "budget_duration": 180, "team_id": "team2"},
+        _attrify(
+            {"id": "team1", "spend": 30.0, "budget_duration": 180, "team_id": "team1"}
+        ),
+        _attrify(
+            {"id": "team2", "spend": 35.0, "budget_duration": 180, "team_id": "team2"}
+        ),
     ]
     prisma_client = MagicMock()
     prisma_client.get_data = AsyncMock(return_value=teams)
@@ -863,7 +880,7 @@ async def test_service_logger_teams_success():
 
     job = ResetBudgetJob(proxy_logging_obj, prisma_client)
 
-    async def fake_reset_team(team, current_time):
+    async def fake_reset_team(team, current_time, reset_settings=None):
         team["spend"] = 0.0
         team["budget_reset_at"] = (
             current_time + timedelta(seconds=team["budget_duration"])
@@ -915,7 +932,7 @@ async def test_service_logger_teams_failure():
 
     job = ResetBudgetJob(proxy_logging_obj, prisma_client)
 
-    async def fake_reset_team(team, current_time):
+    async def fake_reset_team(team, current_time, reset_settings=None):
         if team["id"] == "team1":
             raise Exception("Simulated failure for team1")
         team["spend"] = 0.0

@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import {
   SearchIcon,
   PlusIcon,
@@ -25,6 +27,8 @@ import {
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import TeamDropdown from "@/components/common_components/team_dropdown";
 import { useRegisterGuardrail } from "@/app/(dashboard)/hooks/guardrails/useRegisterGuardrail";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { isProxyAdminRole } from "@/utils/roles";
 
 type GuardrailStatus = "active" | "pending" | "rejected";
 
@@ -186,16 +190,25 @@ function StatCard({ label, value, color }: { label: string; value: number; color
   );
 }
 
-function Toggle({ enabled, onToggle }: { enabled: boolean; onToggle: () => void }) {
+function Toggle({
+  enabled,
+  onToggle,
+  disabled = false,
+}: {
+  enabled: boolean;
+  onToggle: () => void;
+  disabled?: boolean;
+}) {
   return (
     <button
       type="button"
       onClick={onToggle}
       role="switch"
       aria-checked={enabled}
+      disabled={disabled}
       className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 ${
         enabled ? "bg-blue-500" : "bg-gray-200"
-      }`}
+      } ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
     >
       <span
         className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
@@ -210,6 +223,7 @@ type GuardrailCardProps = {
   guardrail: TeamGuardrail;
   isSelected: boolean;
   isHeadersExpanded: boolean;
+  isAdmin: boolean;
   onSelect: () => void;
   onToggleForwardKey: () => void;
   onToggleHeaders: () => void;
@@ -221,6 +235,7 @@ function GuardrailCard({
   guardrail: g,
   isSelected,
   isHeadersExpanded,
+  isAdmin,
   onSelect,
   onToggleForwardKey,
   onToggleHeaders,
@@ -264,7 +279,7 @@ function GuardrailCard({
         <div className="flex flex-col items-end gap-2 shrink-0">
           <div className="flex items-center gap-2">
             <span className="text-xs text-gray-500 whitespace-nowrap">Forward API Key</span>
-            <Toggle enabled={g.forwardKey} onToggle={onToggleForwardKey} />
+            <Toggle enabled={g.forwardKey} onToggle={onToggleForwardKey} disabled={!isAdmin} />
           </div>
           <div className="flex items-center gap-2 mt-1">
             <button
@@ -274,7 +289,7 @@ function GuardrailCard({
             >
               {isSelected ? "Close" : "Review"}
             </button>
-            {g.status === "pending" && (
+            {isAdmin && g.status === "pending" && (
               <>
                 <button
                   type="button"
@@ -346,6 +361,7 @@ function ConfigRow({ label, children }: { label: string; children: React.ReactNo
 
 type DetailPanelProps = {
   guardrail: TeamGuardrail;
+  isAdmin: boolean;
   onClose: () => void;
   onApprove: () => void;
   onReject: () => void;
@@ -356,6 +372,7 @@ type DetailPanelProps = {
 
 function DetailPanel({
   guardrail: g,
+  isAdmin,
   onClose,
   onApprove,
   onReject,
@@ -423,7 +440,7 @@ function DetailPanel({
                 <KeyIcon className="h-3.5 w-3.5 text-blue-500" />
                 <span className="text-xs font-semibold text-blue-800">Forward LiteLLM API Key</span>
               </div>
-              <Toggle enabled={g.forwardKey} onToggle={onToggleForwardKey} />
+              <Toggle enabled={g.forwardKey} onToggle={onToggleForwardKey} disabled={!isAdmin} />
             </div>
             <p className="text-xs text-blue-700 leading-relaxed">
               When enabled, the caller&apos;s LiteLLM API key is forwarded as an{" "}
@@ -454,28 +471,63 @@ function DetailPanel({
                     <span className="text-gray-700 truncate">
                       {h.key}: {h.value}
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => onUpdateCustomHeaders(g.customHeaders.filter((_, idx) => idx !== i))}
-                      className="text-gray-400 hover:text-red-600 shrink-0"
-                      aria-label={`Remove ${h.key}`}
-                    >
-                      <XIcon className="h-3.5 w-3.5" />
-                    </button>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => onUpdateCustomHeaders(g.customHeaders.filter((_, idx) => idx !== i))}
+                        className="text-gray-400 hover:text-red-600 shrink-0"
+                        aria-label={`Remove ${h.key}`}
+                      >
+                        <XIcon className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
             )}
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-              <input
-                type="text"
-                value={newStaticHeaderKey}
-                onChange={(e) => setNewStaticHeaderKey(e.target.value)}
-                placeholder="Header name (e.g. X-API-Key)"
-                className="flex-1 min-w-0 text-xs font-mono border border-gray-200 rounded-sm px-2 py-1.5 text-gray-700 placeholder-gray-400 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
+            {isAdmin && (
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                <input
+                  type="text"
+                  value={newStaticHeaderKey}
+                  onChange={(e) => setNewStaticHeaderKey(e.target.value)}
+                  placeholder="Header name (e.g. X-API-Key)"
+                  className="flex-1 min-w-0 text-xs font-mono border border-gray-200 rounded-sm px-2 py-1.5 text-gray-700 placeholder-gray-400 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      const key = newStaticHeaderKey.trim();
+                      const value = newStaticHeaderValue.trim();
+                      if (key && !g.customHeaders.some((h) => h.key.toLowerCase() === key.toLowerCase())) {
+                        onUpdateCustomHeaders([...g.customHeaders, { key, value }]);
+                        setNewStaticHeaderKey("");
+                        setNewStaticHeaderValue("");
+                      }
+                    }
+                  }}
+                />
+                <input
+                  type="text"
+                  value={newStaticHeaderValue}
+                  onChange={(e) => setNewStaticHeaderValue(e.target.value)}
+                  placeholder="Value"
+                  className="flex-1 min-w-0 text-xs font-mono border border-gray-200 rounded-sm px-2 py-1.5 text-gray-700 placeholder-gray-400 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      const key = newStaticHeaderKey.trim();
+                      const value = newStaticHeaderValue.trim();
+                      if (key && !g.customHeaders.some((h) => h.key.toLowerCase() === key.toLowerCase())) {
+                        onUpdateCustomHeaders([...g.customHeaders, { key, value }]);
+                        setNewStaticHeaderKey("");
+                        setNewStaticHeaderValue("");
+                      }
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
                     const key = newStaticHeaderKey.trim();
                     const value = newStaticHeaderValue.trim();
                     if (key && !g.customHeaders.some((h) => h.key.toLowerCase() === key.toLowerCase())) {
@@ -483,44 +535,13 @@ function DetailPanel({
                       setNewStaticHeaderKey("");
                       setNewStaticHeaderValue("");
                     }
-                  }
-                }}
-              />
-              <input
-                type="text"
-                value={newStaticHeaderValue}
-                onChange={(e) => setNewStaticHeaderValue(e.target.value)}
-                placeholder="Value"
-                className="flex-1 min-w-0 text-xs font-mono border border-gray-200 rounded-sm px-2 py-1.5 text-gray-700 placeholder-gray-400 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    const key = newStaticHeaderKey.trim();
-                    const value = newStaticHeaderValue.trim();
-                    if (key && !g.customHeaders.some((h) => h.key.toLowerCase() === key.toLowerCase())) {
-                      onUpdateCustomHeaders([...g.customHeaders, { key, value }]);
-                      setNewStaticHeaderKey("");
-                      setNewStaticHeaderValue("");
-                    }
-                  }
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  const key = newStaticHeaderKey.trim();
-                  const value = newStaticHeaderValue.trim();
-                  if (key && !g.customHeaders.some((h) => h.key.toLowerCase() === key.toLowerCase())) {
-                    onUpdateCustomHeaders([...g.customHeaders, { key, value }]);
-                    setNewStaticHeaderKey("");
-                    setNewStaticHeaderValue("");
-                  }
-                }}
-                className="text-xs font-medium text-blue-600 hover:text-blue-700 border border-blue-200 bg-blue-50 hover:bg-blue-100 px-2 py-1.5 rounded-sm transition-colors shrink-0"
-              >
-                Add
-              </button>
-            </div>
+                  }}
+                  className="text-xs font-medium text-blue-600 hover:text-blue-700 border border-blue-200 bg-blue-50 hover:bg-blue-100 px-2 py-1.5 rounded-sm transition-colors shrink-0"
+                >
+                  Add
+                </button>
+              </div>
+            )}
           </div>
           <div>
             <div className="flex items-center gap-1.5 mb-2">
@@ -544,50 +565,54 @@ function DetailPanel({
                     className="flex items-center justify-between gap-2 text-xs font-mono bg-gray-50 border border-gray-200 rounded-sm px-2 py-1.5"
                   >
                     <span className="text-gray-700 truncate">{name}</span>
-                    <button
-                      type="button"
-                      onClick={() => onUpdateExtraHeaders(g.extraHeaders.filter((_, idx) => idx !== i))}
-                      className="text-gray-400 hover:text-red-600 shrink-0"
-                      aria-label={`Remove ${name}`}
-                    >
-                      <XIcon className="h-3.5 w-3.5" />
-                    </button>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => onUpdateExtraHeaders(g.extraHeaders.filter((_, idx) => idx !== i))}
+                        className="text-gray-400 hover:text-red-600 shrink-0"
+                        aria-label={`Remove ${name}`}
+                      >
+                        <XIcon className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
             )}
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={newExtraHeader}
-                onChange={(e) => setNewExtraHeader(e.target.value)}
-                placeholder="e.g. x-request-id"
-                className="flex-1 min-w-0 text-xs font-mono border border-gray-200 rounded-sm px-2 py-1.5 text-gray-700 placeholder-gray-400 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
+            {isAdmin && (
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newExtraHeader}
+                  onChange={(e) => setNewExtraHeader(e.target.value)}
+                  placeholder="e.g. x-request-id"
+                  className="flex-1 min-w-0 text-xs font-mono border border-gray-200 rounded-sm px-2 py-1.5 text-gray-700 placeholder-gray-400 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      const name = newExtraHeader.trim().toLowerCase();
+                      if (name && !g.extraHeaders.map((h) => h.toLowerCase()).includes(name)) {
+                        onUpdateExtraHeaders([...g.extraHeaders, name]);
+                        setNewExtraHeader("");
+                      }
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
                     const name = newExtraHeader.trim().toLowerCase();
                     if (name && !g.extraHeaders.map((h) => h.toLowerCase()).includes(name)) {
                       onUpdateExtraHeaders([...g.extraHeaders, name]);
                       setNewExtraHeader("");
                     }
-                  }
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  const name = newExtraHeader.trim().toLowerCase();
-                  if (name && !g.extraHeaders.map((h) => h.toLowerCase()).includes(name)) {
-                    onUpdateExtraHeaders([...g.extraHeaders, name]);
-                    setNewExtraHeader("");
-                  }
-                }}
-                className="text-xs font-medium text-blue-600 hover:text-blue-700 border border-blue-200 bg-blue-50 hover:bg-blue-100 px-2 py-1.5 rounded-sm transition-colors"
-              >
-                Add
-              </button>
-            </div>
+                  }}
+                  className="text-xs font-medium text-blue-600 hover:text-blue-700 border border-blue-200 bg-blue-50 hover:bg-blue-100 px-2 py-1.5 rounded-sm transition-colors"
+                >
+                  Add
+                </button>
+              </div>
+            )}
           </div>
           <div className="border border-gray-200 rounded-lg overflow-hidden">
             <button
@@ -633,7 +658,7 @@ function DetailPanel({
             <ExternalLinkIcon className="h-4 w-4" />
             Test Endpoint
           </button>
-          {g.status === "pending" && (
+          {isAdmin && g.status === "pending" && (
             <div className="flex gap-2">
               <button
                 type="button"
@@ -720,6 +745,8 @@ interface TeamGuardrailsTabProps {
 }
 
 export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
+  const { userRole } = useAuthorized();
+  const isAdmin = userRole ? isProxyAdminRole(userRole) : false;
   const [guardrails, setGuardrails] = useState<TeamGuardrail[]>([]);
   const [summary, setSummary] = useState({
     total: 0,
@@ -728,6 +755,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
     rejected: 0,
   });
   const [search, setSearch] = useState("");
+  const [searchDebounced] = useDebouncedValue(search, { wait: DEBOUNCE_WAIT_MS });
   const [statusFilter, setStatusFilter] = useState<"all" | GuardrailStatus>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expandedHeaders, setExpandedHeaders] = useState<Set<string>>(new Set());
@@ -737,15 +765,9 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
   } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [searchDebounced, setSearchDebounced] = useState("");
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
   const [submitForm] = Form.useForm();
   const registerGuardrail = useRegisterGuardrail();
-
-  useEffect(() => {
-    const t = setTimeout(() => setSearchDebounced(search), 300);
-    return () => clearTimeout(t);
-  }, [search]);
 
   const fetchSubmissions = useCallback(async () => {
     if (!accessToken) {
@@ -925,6 +947,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
                 guardrail={g}
                 isSelected={selectedId === g.id}
                 isHeadersExpanded={expandedHeaders.has(g.id)}
+                isAdmin={isAdmin}
                 onSelect={() => setSelectedId(selectedId === g.id ? null : g.id)}
                 onToggleForwardKey={() => toggleForwardKey(g.id)}
                 onToggleHeaders={() => toggleHeaders(g.id)}
@@ -937,6 +960,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
       {selected && (
         <DetailPanel
           guardrail={selected}
+          isAdmin={isAdmin}
           onClose={() => setSelectedId(null)}
           onApprove={() => setConfirmAction({ id: selected.id, action: "approve" })}
           onReject={() => setConfirmAction({ id: selected.id, action: "reject" })}

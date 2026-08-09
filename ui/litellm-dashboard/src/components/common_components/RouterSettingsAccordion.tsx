@@ -1,11 +1,13 @@
 import React, { useEffect, useState, useImperativeHandle, forwardRef, useRef } from "react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
+import { useQuery } from "@tanstack/react-query";
+import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { getRouterSettingsCall } from "../networking";
 import RouterSettingsForm, { RouterSettingsFormValue } from "../router_settings/RouterSettingsForm";
 import { Fallbacks } from "../Settings/RouterSettings/Fallbacks/AddFallbacks";
 import { FallbackSelectionForm } from "../Settings/RouterSettings/Fallbacks/FallbackSelectionForm";
 import { FallbackGroup } from "../Settings/RouterSettings/Fallbacks/FallbackGroupConfig";
-import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
+import { fetchAvailableModels, fetchAvailableModelsForTeam, ModelGroup } from "@/components/llm_calls/fetch_models";
 
 export interface RouterSettingsAccordionValue {
   router_settings: {
@@ -29,14 +31,17 @@ interface RouterSettingsAccordionProps {
   value?: RouterSettingsAccordionValue;
   onChange?: (value: RouterSettingsAccordionValue) => void;
   modelData?: any;
+  teamId?: string | null;
 }
 
 export interface RouterSettingsAccordionRef {
   getValue: () => RouterSettingsAccordionValue;
 }
 
+const PROPAGATE_WAIT_MS = 100;
+
 const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSettingsAccordionProps>(
-  ({ accessToken, value, onChange, modelData }, ref) => {
+  ({ accessToken, value, onChange, modelData, teamId }, ref) => {
     const [formValue, setFormValue] = useState<RouterSettingsFormValue>({
       routerSettings: {},
       selectedStrategy: null,
@@ -44,7 +49,6 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
     });
     const [fallbacks, setFallbacks] = useState<Fallbacks>([]);
     const [fallbackGroups, setFallbackGroups] = useState<FallbackGroup[]>([]);
-    const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
     const [availableRoutingStrategies, setAvailableRoutingStrategies] = useState<string[]>([]);
     const [routerFieldsMetadata, setRouterFieldsMetadata] = useState<{ [key: string]: any }>({});
     const [routingStrategyDescriptions, setRoutingStrategyDescriptions] = useState<{ [key: string]: string }>({});
@@ -172,21 +176,11 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
       });
     }, [accessToken]);
 
-    // Fetch available models for fallbacks
-    useEffect(() => {
-      if (!accessToken) {
-        return;
-      }
-      const loadModels = async () => {
-        try {
-          const uniqueModels = await fetchAvailableModels(accessToken);
-          setModelInfo(uniqueModels);
-        } catch (error) {
-          console.error("Error fetching model info for fallbacks:", error);
-        }
-      };
-      loadModels();
-    }, [accessToken]);
+    const { data: modelInfo = [] } = useQuery<ModelGroup[]>({
+      queryKey: ["fallbackAvailableModels", accessToken, teamId ?? null],
+      queryFn: () => (teamId ? fetchAvailableModelsForTeam(accessToken, teamId) : fetchAvailableModels(accessToken)),
+      enabled: Boolean(accessToken),
+    });
 
     // Helper function to build router_settings from current state
     const buildRouterSettings = (): RouterSettingsAccordionValue["router_settings"] => {
@@ -304,21 +298,26 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
       };
     };
 
-    // Update parent when form values change (with debounce to avoid infinite loops)
-    useEffect(() => {
-      if (!onChange) {
-        return;
-      }
-
-      const timeoutId = setTimeout(() => {
+    const debouncedPropagate = useDebouncedCallback(
+      () => {
+        if (!onChange) {
+          return;
+        }
         isInternalUpdateRef.current = true;
         const finalRouterSettings = buildRouterSettings();
         onChange({
           router_settings: finalRouterSettings,
         });
-      }, 100);
+      },
+      { wait: PROPAGATE_WAIT_MS },
+    );
 
-      return () => clearTimeout(timeoutId);
+    // Update parent when form values change (with debounce to avoid infinite loops)
+    useEffect(() => {
+      if (!onChange) {
+        return;
+      }
+      debouncedPropagate();
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [formValue, fallbacks]);
 
