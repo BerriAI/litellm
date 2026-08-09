@@ -1,7 +1,7 @@
 import time
 import uuid
 from itertools import count
-from typing import Any, Final, cast
+from typing import Any, Final, Protocol, cast
 
 import litellm
 from litellm.main import stream_chunk_builder
@@ -47,6 +47,10 @@ from litellm.types.utils import (
     StreamingChoices,
     TextCompletionResponse,
 )
+
+
+class _SequenceNumberedEvent(Protocol):
+    sequence_number: int
 
 
 class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
@@ -116,8 +120,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
     def _emit_event(self, event: BaseLiteLLMOpenAIResponseObject) -> BaseLiteLLMOpenAIResponseObject:
         self._sequence_number += 1
-        event_dict: Final = cast(dict[str, object], event.__dict__)
-        event_dict["sequence_number"] = self._sequence_number
+        sequence_event: Final = cast(_SequenceNumberedEvent, event)
+        sequence_event.sequence_number = self._sequence_number
         return event
 
     def _get_or_assign_tool_output_index(self, call_id: str) -> int:

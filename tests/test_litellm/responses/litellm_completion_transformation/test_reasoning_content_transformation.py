@@ -252,7 +252,7 @@ def _assert_mixed_reasoning_content_events(events: list[BaseLiteLLMOpenAIRespons
     assert events.index(reasoning_item_done) < events.index(message_item_added)
     assert events.index(message_item_added) < events.index(content_part_added)
     assert events.index(content_part_added) < events.index(text_delta)
-    sequence_numbers: Final = tuple(event.__dict__["sequence_number"] for event in events)
+    sequence_numbers: Final = tuple(event.model_dump()["sequence_number"] for event in events)
     assert sequence_numbers == tuple(range(1, len(events) + 1))
     _assert_completed_output_alignment(events)
 

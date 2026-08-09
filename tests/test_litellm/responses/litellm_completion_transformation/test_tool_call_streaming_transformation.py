@@ -122,7 +122,7 @@ def test_tool_calls_present_only_in_final_response_are_emitted_before_completed(
         )
         for done in done_events
     )
-    assert [event.__dict__["sequence_number"] for event in events] == list(range(1, len(events) + 1))
+    assert [event.model_dump()["sequence_number"] for event in events] == list(range(1, len(events) + 1))
     assert events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
 
 
@@ -179,7 +179,7 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
     assert evt is not None
     assert evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
     assert evt.output_index == 1
-    assert hasattr(evt, "__dict__") and "sequence_number" in evt.__dict__
+    assert "sequence_number" in evt.model_dump()
 
     # Collect all remaining delta events from the pending queue by creating empty chunks
     delta_events = []
@@ -213,14 +213,14 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
         assert len(evt.delta) <= 10
         assert evt.item_id == "call_test"
         assert evt.output_index == 1
-        assert hasattr(evt, "__dict__") and "sequence_number" in evt.__dict__
+        assert "sequence_number" in evt.model_dump()
 
     # Verify all deltas concatenated equal the original arguments
     concatenated = "".join(evt.delta for evt in delta_events)
     assert concatenated == large_arguments
 
     # Verify sequence numbers are increasing
-    sequence_numbers = [evt.__dict__["sequence_number"] for evt in delta_events]
+    sequence_numbers = [evt.model_dump()["sequence_number"] for evt in delta_events]
     assert sequence_numbers == sorted(sequence_numbers)
     assert len(set(sequence_numbers)) == len(sequence_numbers)  # All unique
 
