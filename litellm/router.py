@@ -28,6 +28,7 @@ import anyio
 import httpx
 import openai
 from openai import AsyncOpenAI
+from pydantic import ValidationError
 from typing_extensions import overload
 
 import litellm
@@ -1030,6 +1031,12 @@ class Router:
             known_model_names=known_model_names,
         )
 
+        built: Final = tuple((group, self._try_build_group_selector(group)) for group in groups)
+        failures: Final = tuple(outcome for _, outcome in built if isinstance(outcome, Exception))
+        if failures:
+            self._unregister_router_selectors([outcome for _, outcome in built if not isinstance(outcome, Exception)])
+            raise failures[0]
+
         self._unregister_router_selectors(
             [sel for selectors in getattr(self, "_group_selectors", {}).values() for sel in selectors.values()]
         )
@@ -1040,18 +1047,19 @@ class Router:
         }
         self._group_selectors: dict[str, dict[str, Any]] = {
             group.group_name: (
-                {}
-                if (
-                    selector := self._build_strategy_selector(
-                        strategy=group.routing_strategy,
-                        routing_strategy_args=group.routing_strategy_args or {},
-                    )
-                )
-                is None
-                else {self._normalize_strategy(group.routing_strategy) or "": selector}
+                {} if selector is None else {self._normalize_strategy(group.routing_strategy) or "": selector}
             )
-            for group in groups
+            for group, selector in built
         }
+
+    def _try_build_group_selector(self, group: RoutingGroup) -> object | None:
+        try:
+            return self._build_strategy_selector(
+                strategy=group.routing_strategy,
+                routing_strategy_args=group.routing_strategy_args or {},
+            )
+        except ValidationError as build_error:
+            return build_error
 
     _OVERRIDABLE_ROUTING_STRATEGIES: frozenset[str] = frozenset({"simple-shuffle", *_DEFAULT_SELECTOR_ATTR_BY_STRATEGY})
 

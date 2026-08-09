@@ -788,3 +788,30 @@ def test_invalid_group_strategy_does_not_leak_a_selector():
 
     assert list(router._routing_groups) == ["g1"]
     assert any(id(cb) == id(selector) for cb in litellm.callbacks)
+
+
+def test_unbuildable_group_selector_keeps_previous_groups():
+    router = _build_router(
+        routing_groups=[
+            {"group_name": "g1", "models": ["filtered-model"], "routing_strategy": "latency-based-routing"},
+        ],
+    )
+    selector = router._group_selectors["g1"]["latency-based-routing"]
+
+    with pytest.raises(Exception):
+        router.update_settings(
+            routing_groups=[
+                {"group_name": "g1", "models": ["filtered-model"], "routing_strategy": "latency-based-routing"},
+                {
+                    "group_name": "g2",
+                    "models": ["other-model"],
+                    "routing_strategy": "latency-based-routing",
+                    "routing_strategy_args": {"ttl": "not-a-number"},
+                },
+            ],
+        )
+
+    assert list(router._routing_groups) == ["g1"]
+    assert router._model_to_group == {"filtered-model": "g1"}
+    assert router._group_selectors["g1"]["latency-based-routing"] is selector
+    assert sum(1 for cb in litellm.callbacks if type(cb) is type(selector)) == 1
