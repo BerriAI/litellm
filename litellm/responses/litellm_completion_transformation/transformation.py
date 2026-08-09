@@ -557,7 +557,108 @@ class LiteLLMCompletionResponsesConfig:
                     continue
 
                 messages.extend(chat_completion_messages)
-        return messages
+        return LiteLLMCompletionResponsesConfig._merge_reasoning_only_assistant_messages(messages)
+
+    @staticmethod
+    def _merge_reasoning_only_assistant_messages(
+        messages: list[
+            AllMessageValues
+            | GenericChatCompletionMessage
+            | ChatCompletionMessageToolCall
+            | ChatCompletionResponseMessage
+        ],
+    ) -> list[
+        AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall | ChatCompletionResponseMessage
+    ]:
+        """
+        Responses API emits prior-turn reasoning as its own ``reasoning`` input
+        item, which becomes a standalone assistant message with
+        ``content=None`` + ``reasoning_content``. Chat-completions providers
+        (e.g. DeepSeek V4, Kimi K2.6) expect the chain-of-thought on the
+        assistant message that carries the answer or tool calls. This pass
+        merges standalone reasoning-only assistant messages into the
+        immediately following assistant message.
+
+        If the reasoning item is not followed by an assistant message (e.g. a
+        stateless chain replays ``reasoning`` + ``user``), the standalone
+        reasoning message is preserved so the reasoning is still passed back.
+        """
+
+        def _role(msg: Any) -> str:
+            if isinstance(msg, dict):
+                return str(msg.get("role") or "")
+            return str(getattr(msg, "role", "") or "")
+
+        def _reasoning_text(msg: Any) -> str | None:
+            if isinstance(msg, dict):
+                value = msg.get("reasoning_content")
+            else:
+                value = getattr(msg, "reasoning_content", None)
+            return value if isinstance(value, str) and value else None
+
+        def _content(msg: Any) -> Any:
+            if isinstance(msg, dict):
+                return msg.get("content")
+            return getattr(msg, "content", None)
+
+        def _tool_calls(msg: Any) -> Any:
+            if isinstance(msg, dict):
+                return msg.get("tool_calls")
+            return getattr(msg, "tool_calls", None)
+
+        merged: list[
+            AllMessageValues
+            | GenericChatCompletionMessage
+            | ChatCompletionMessageToolCall
+            | ChatCompletionResponseMessage
+        ] = []
+        pending_reasoning: list[str] = []
+
+        for msg in messages:
+            if (
+                _role(msg) == "assistant"
+                and _content(msg) is None
+                and not _tool_calls(msg)
+                and _reasoning_text(msg) is not None
+            ):
+                pending_reasoning.append(_reasoning_text(msg) or "")
+                continue
+
+            if pending_reasoning and _role(msg) == "assistant":
+                combined = "\n".join(pending_reasoning)
+                existing = _reasoning_text(msg)
+                if existing:
+                    combined = existing + "\n" + combined
+                if isinstance(msg, dict):
+                    msg["reasoning_content"] = combined
+                else:
+                    setattr(msg, "reasoning_content", combined)
+                pending_reasoning = []
+            elif pending_reasoning:
+                # Not followed by an assistant message — keep the reasoning
+                # standalone instead of dropping it.
+                for text in pending_reasoning:
+                    merged.append(
+                        ChatCompletionResponseMessage(
+                            role="assistant",
+                            content=None,
+                            reasoning_content=text,
+                        )
+                    )
+                pending_reasoning = []
+
+            merged.append(msg)
+
+        for text in pending_reasoning:
+            merged.append(
+                ChatCompletionResponseMessage(
+                    role="assistant",
+                    content=None,
+                    reasoning_content=text,
+                )
+            )
+
+        return merged
 
     @staticmethod
     def _merged_trailing_assistant_message(
@@ -1026,6 +1127,25 @@ class LiteLLMCompletionResponsesConfig:
             return LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
                 function_call=input_item
             )
+        elif input_item.get("type") == "reasoning":
+            # A ResponseReasoningItemParam carries the prior-turn chain-of-thought.
+            # Chat-completions providers (DeepSeek V4, Kimi K2.6, ...) expect this
+            # to be replayed as `reasoning_content` on an assistant message, not as
+            # visible `content` (prompt pollution) and not dropped (DeepSeek V4
+            # rejects multi-turn requests with a missing `reasoning_content`).
+            reasoning_text = LiteLLMCompletionResponsesConfig._extract_reasoning_text_from_input_item(input_item)
+            if not reasoning_text:
+                # No plaintext reasoning is available (e.g. encrypted_content only).
+                # Chat-completions providers cannot consume opaque encrypted blobs,
+                # so skip the item instead of polluting the prompt.
+                return []
+            return [
+                ChatCompletionResponseMessage(
+                    role="assistant",
+                    content=None,
+                    reasoning_content=reasoning_text,
+                )
+            ]
         else:
             content: Final[object] = input_item.get("content")
             # Handle None content: Responses API allows None content, but GenericChatCompletionMessage requires content
@@ -1040,6 +1160,48 @@ class LiteLLMCompletionResponsesConfig:
                     ),
                 )
             ]
+
+    @staticmethod
+    def _extract_reasoning_text_from_input_item(input_item: Mapping[str, object]) -> str | None:
+        """
+        Extract plaintext reasoning from a ResponseReasoningItemParam.
+
+        Handles:
+        - content as a string
+        - content as a list of blocks (output_text / summary_text / text)
+        - summary as a list of summary_text blocks (fallback)
+
+        Returns None when only opaque forms (e.g. encrypted_content) are present.
+        """
+        content: Final[object] = input_item.get("content")
+        if isinstance(content, str) and content.strip():
+            return content
+        if isinstance(content, list):
+            text_parts: list[str] = []
+            for block in content:
+                if not isinstance(block, Mapping):
+                    continue
+                block_type = block.get("type")
+                if block_type in ("encrypted_content", "redacted_thinking"):
+                    continue
+                text = block.get("text")
+                if isinstance(text, str) and text.strip():
+                    text_parts.append(text.strip())
+            if text_parts:
+                return "\n".join(text_parts)
+
+        summary: Final[object] = input_item.get("summary")
+        if isinstance(summary, list):
+            text_parts = []
+            for block in summary:
+                if not isinstance(block, Mapping):
+                    continue
+                text = block.get("text")
+                if isinstance(text, str) and text.strip():
+                    text_parts.append(text.strip())
+            if text_parts:
+                return "\n".join(text_parts)
+        return None
 
     @staticmethod
     def _is_input_item_tool_call_output(input_item: Mapping[str, object]) -> bool:
