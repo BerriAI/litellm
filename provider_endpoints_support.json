@@ -2423,6 +2423,13 @@
         "search": true
       }
     },
+    "nimble": {
+      "display_name": "Nimble (`nimble`)",
+      "url": "https://docs.nimbleway.com/api-reference/search/search",
+      "endpoints": {
+        "search": true
+      }
+    },
     "triton": {
       "display_name": "Triton (`triton`)",
       "url": "https://docs.litellm.ai/docs/providers/triton-inference-server",

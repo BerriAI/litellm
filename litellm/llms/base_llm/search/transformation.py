@@ -18,6 +18,16 @@ else:
     LiteLLMLoggingObj = Any
 
 
+_PERPLEXITY_UNIFIED_PARAMS: Final[frozenset[str]] = frozenset(
+    (
+        "max_results",
+        "search_domain_filter",
+        "country",
+        "max_tokens_per_page",
+    )
+)
+
+
 def _search_host(url: str) -> str:
     return urlsplit(url).netloc.lower()
 
@@ -96,7 +106,7 @@ class BaseSearchConfig:
         return "POST"
 
     @staticmethod
-    def get_supported_perplexity_optional_params() -> set:
+    def get_supported_perplexity_optional_params() -> frozenset[str]:
         """
         Get the set of Perplexity unified search parameters.
         These are the standard parameters that providers should transform from.
@@ -104,12 +114,7 @@ class BaseSearchConfig:
         Returns:
             Set of parameter names that are part of the unified spec
         """
-        return {
-            "max_results",
-            "search_domain_filter",
-            "country",
-            "max_tokens_per_page",
-        }
+        return _PERPLEXITY_UNIFIED_PARAMS
 
     def _assert_trusted_api_base_for_server_credential(
         self,
