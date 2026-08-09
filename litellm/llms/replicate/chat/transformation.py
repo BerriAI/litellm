@@ -7,6 +7,7 @@ from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
+from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
 from litellm.litellm_core_utils.prompt_templates.factory import (
     custom_prompt,
     prompt_factory,
@@ -284,6 +285,10 @@ class ReplicateConfig(BaseConfig):
         ...,
         "urls":{"cancel":"https://api.replicate.com/v1/predictions/gqsmqmp1pdrj00cknr08dgmvb4/cancel","get":"https://api.replicate.com/v1/predictions/gqsmqmp1pdrj00cknr08dgmvb4","stream":"https://stream-b.svc.rno2.c.replicate.net/v1/streams/eot4gbydowuin4snhncydwxt57dfwgsc3w3snycx5nid7oef7jga"}
         }
+
+        The ``urls.get`` value is polled with the operator's Replicate token.
+        Reject off-origin URLs so a poisoned create response cannot turn the
+        proxy into credentialed SSRF (same class as Azure operation-location).
         """
         response_json: Final = response.json()
         prediction_url: Final = response_json.get("urls", {}).get("get")
@@ -291,6 +296,19 @@ class ReplicateConfig(BaseConfig):
             raise ReplicateError(
                 status_code=400,
                 message=f"LiteLLM Error - prediction url is None - {response_json}",
+                headers=response.headers,
+            )
+        expected_origin = (
+            str(response.request.url)
+            if response.request is not None
+            else "https://api.replicate.com"
+        )
+        try:
+            assert_same_origin(prediction_url, expected_origin)
+        except SSRFError as ssrf_err:
+            raise ReplicateError(
+                status_code=502,
+                message=f"Rejected prediction URL: {ssrf_err}",
                 headers=response.headers,
             )
         return prediction_url
