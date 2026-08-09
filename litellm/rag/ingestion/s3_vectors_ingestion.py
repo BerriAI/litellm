@@ -67,6 +67,9 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         # Extract config
         self.vector_bucket_name = self.vector_store_config["vector_bucket_name"]
+        embedding_model = self.vector_store_config.get("embedding_model")
+        if not self.embedding_config and embedding_model:
+            self.embedding_config = {"model": embedding_model}
         self.index_name = self.vector_store_config.get("index_name")
         self.distance_metric = self.vector_store_config.get("distance_metric", S3_VECTORS_DEFAULT_DISTANCE_METRIC)
         self.non_filterable_metadata_keys = self.vector_store_config.get(
