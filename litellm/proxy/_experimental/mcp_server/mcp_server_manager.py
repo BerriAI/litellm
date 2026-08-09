@@ -3193,12 +3193,25 @@ class MCPServerManager:
         # arbitrary bearer upstream, so we keep the v2 spec and ignore the override for these; the
         # REST tools preview supplies its not-yet-persisted token through the resolver
         # (cred_provider), never this path.
+        #
+        # dcr_bridge is a different origin, not a caller override: for a client-forwarded-token
+        # server admitted through the gateway-DCR bridge, `_admit_dcr_bridge_delegate` has already
+        # opened the caller's signed envelope and injected the real upstream credential it sealed —
+        # `mcp_auth_header` here IS that unsealed credential, not an arbitrary bearer the caller
+        # attached. Keeping `spec` for PassthroughConfig in this case discards that credential and
+        # falls through to the v2 resolver's own passthrough headers, which the DCR caller has no
+        # way to populate (it only ever presents the one envelope bearer, which admission already
+        # strips before egress). So a dcr_bridge server always takes the v1 path here regardless of
+        # spec.config, same as the non-exempted modes above.
         if (
             spec is not None
             and mcp_auth_header
-            and not isinstance(
-                spec.config,
-                (AuthorizationCodeConfig, IdJagConfig, PassthroughConfig, TokenExchangeConfig),
+            and (
+                server.is_dcr_bridge
+                or not isinstance(
+                    spec.config,
+                    (AuthorizationCodeConfig, IdJagConfig, PassthroughConfig, TokenExchangeConfig),
+                )
             )
         ):
             spec = None
