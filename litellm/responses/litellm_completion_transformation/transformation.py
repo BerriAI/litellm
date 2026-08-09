@@ -628,7 +628,7 @@ class LiteLLMCompletionResponsesConfig:
                 combined = "\n".join(pending_reasoning)
                 existing = _reasoning_text(msg)
                 if existing:
-                    combined = existing + "\n" + combined
+                    combined = combined + "\n" + existing
                 if isinstance(msg, dict):
                     msg["reasoning_content"] = combined
                 else:
