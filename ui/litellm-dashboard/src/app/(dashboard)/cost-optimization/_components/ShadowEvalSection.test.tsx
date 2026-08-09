@@ -139,8 +139,37 @@ describe("ShadowEvalSection", () => {
     expect(screen.getByText("SIMPLE")).toBeInTheDocument();
     expect(screen.getByText("REASONING")).toBeInTheDocument();
     expect(screen.getByText("55.0%")).toBeInTheDocument();
-    // Overall good-or-better = shadow wins + ties = 70%
+    // Overall matched-or-beat = shadow wins + ties = 70%
     expect(screen.getByText("70.0%")).toBeInTheDocument();
+  });
+
+  it("states the metric's denominator next to the headline number", () => {
+    const j = job();
+    mockHooks({ jobs: [j], detail: j });
+    render(<ShadowEvalSection accessToken="token" />);
+    expect(screen.getByText("Router matched or beat your current model")).toBeInTheDocument();
+    expect(screen.getByText("of 42 judged responses")).toBeInTheDocument();
+  });
+
+  it("shows the win/tie/loss split as a bar whose segments match the rates", () => {
+    const j = job();
+    mockHooks({ jobs: [j], detail: j });
+    render(<ShadowEvalSection accessToken="token" />);
+    // 48% router wins, 22% ties, 30% current-model wins
+    expect(screen.getByText(/Router won/)).toBeInTheDocument();
+    expect(screen.getByText(/Tie 22.0%/)).toBeInTheDocument();
+    expect(screen.getByText(/Current model won 30.0%/)).toBeInTheDocument();
+    expect(screen.getByTestId("verdict-segment-Router won")).toHaveStyle({ width: "48%" });
+  });
+
+  it("explains the mechanism behind a 'How this works' toggle", async () => {
+    const user = userEvent.setup();
+    mockHooks({ jobs: [] });
+    render(<ShadowEvalSection accessToken="token" />);
+
+    expect(screen.queryByText(/LLM judge compares the two answers blind/)).not.toBeInTheDocument();
+    await user.click(screen.getByText("How this works"));
+    expect(screen.getByText(/LLM judge compares the two answers blind/)).toBeInTheDocument();
   });
 
   it("flags low-sample tiers", () => {
