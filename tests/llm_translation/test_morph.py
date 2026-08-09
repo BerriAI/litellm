@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
-from unittest.mock import patch
 
 from pydantic import TypeAdapter
 from typing_extensions import NotRequired, TypedDict
@@ -15,7 +14,7 @@ from typing_extensions import NotRequired, TypedDict
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import litellm
-from litellm import MorphChatConfig, get_llm_provider
+from litellm import get_llm_provider
 
 
 class MorphModelInfo(TypedDict):
@@ -79,27 +78,6 @@ def _load_morph_model_cost(path: Path) -> Mapping[str, MorphModelInfo]:
 
 # Force model loading
 litellm.add_known_models()
-
-
-def test_morph_config_get_provider_info():
-    """Test that MorphChatConfig returns correct provider info."""
-    config = MorphChatConfig()
-
-    # Test with environment variable
-    with patch.dict(os.environ, {"MORPH_API_KEY": "test-key-from-env"}):
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
-        assert api_base == "https://api.morphllm.com/v1"
-        assert api_key == "test-key-from-env"
-
-    # Test with passed api_key
-    api_base, api_key = config._get_openai_compatible_provider_info(None, "direct-key")
-    assert api_base == "https://api.morphllm.com/v1"
-    assert api_key == "direct-key"
-
-    # Test with custom api_base
-    api_base, api_key = config._get_openai_compatible_provider_info("https://custom.morph.com", "key")
-    assert api_base == "https://custom.morph.com"
-    assert api_key == "key"
 
 
 def test_morph_get_llm_provider():
@@ -173,9 +151,3 @@ def test_morph_model_info_matches_backup():
 
     for model in MORPH_MODELS:
         assert backup_model_cost[f"morph/{model.model_id}"] == model_cost[f"morph/{model.model_id}"]
-
-
-def test_morph_custom_llm_provider():
-    """Test that morph models are correctly identified."""
-    config = MorphChatConfig()
-    assert config.custom_llm_provider == "morph"

@@ -1,6 +1,27 @@
+import os
 from typing import Final
+from unittest.mock import patch
 
 from litellm import MorphChatConfig
+
+
+def test_morph_provider_info():
+    config: Final = MorphChatConfig()
+
+    with patch.dict(os.environ, MORPH_API_KEY="test-key-from-env"):
+        environment_provider_info: Final = config._get_openai_compatible_provider_info(None, None)
+        assert environment_provider_info == ("https://api.morphllm.com/v1", "test-key-from-env")
+
+    direct_provider_info: Final = config._get_openai_compatible_provider_info(None, "direct-key")
+    assert direct_provider_info == ("https://api.morphllm.com/v1", "direct-key")
+
+    custom_provider_info: Final = config._get_openai_compatible_provider_info("https://custom.morph.com", "key")
+    assert custom_provider_info == ("https://custom.morph.com", "key")
+
+
+def test_morph_custom_llm_provider():
+    config: Final = MorphChatConfig()
+    assert config.custom_llm_provider == "morph"
 
 
 def test_morph_supported_params():
