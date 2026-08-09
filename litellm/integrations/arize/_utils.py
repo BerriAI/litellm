@@ -1,6 +1,7 @@
 import json
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import BaseModel
 from typing_extensions import override
 
 from litellm._logging import verbose_logger
@@ -538,9 +539,12 @@ def _set_request_attributes(
     if optional_params.get("user"):
         safe_set_attribute(span, "llm.user", optional_params.get("user"))
 
-    if response_obj and response_obj.get("id"):
+    if not hasattr(response_obj, "get"):
+        return
+
+    if response_obj.get("id"):
         safe_set_attribute(span, "llm.response.id", response_obj.get("id"))
-    if response_obj and response_obj.get("model"):
+    if response_obj.get("model"):
         safe_set_attribute(span, "llm.response.model", response_obj.get("model"))
 
 
@@ -588,6 +592,8 @@ def _coerce_response_obj_for_attrs(response_obj):
     - dicts and Pydantic models that already expose `.get` are returned
       unchanged (preserves all current behavior, including the Responses API
       flow which relies on Pydantic attribute access).
+    - Pydantic models without `.get` (e.g. the MCP SDK's `CallToolResult`,
+      logged for `call_mcp_tool` spans) are dumped to a dict.
     - `httpx.Response` and other text-only responses (passthrough routes)
       are JSON-decoded so the standard extraction paths can read fields like
       `id`, `model`, and `usage`. On failure the original object is returned
@@ -595,6 +601,11 @@ def _coerce_response_obj_for_attrs(response_obj):
     """
     if response_obj is None or hasattr(response_obj, "get"):
         return response_obj
+    if isinstance(response_obj, BaseModel):
+        try:
+            return response_obj.model_dump()
+        except Exception:
+            return response_obj
     text: Final = getattr(response_obj, "text", None)
     if isinstance(text, str) and text:
         try:
