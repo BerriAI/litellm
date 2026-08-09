@@ -1073,8 +1073,8 @@ def _parse_passthrough_response(raw_response_obj, coerced_response_obj, kwargs):
 def _maybe_set_mcp_tool_attrs(
     span: "Span",
     kwargs: dict,
-    standard_logging_payload,
-    coerced_response_obj,
+    standard_logging_payload: StandardLoggingPayload | None,
+    coerced_response_obj: object,
 ) -> None:
     """Render `call_mcp_tool` spans as OpenInference TOOL spans.
 
@@ -1108,7 +1108,7 @@ def _maybe_set_mcp_tool_attrs(
     _set_mcp_tool_output(span, coerced_response_obj)
 
 
-def _set_mcp_tool_output(span: "Span", coerced_response_obj) -> None:
+def _set_mcp_tool_output(span: "Span", coerced_response_obj: object) -> None:
     if not isinstance(coerced_response_obj, dict):
         return
 
