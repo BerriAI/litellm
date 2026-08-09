@@ -2,7 +2,10 @@
 Test reasoning content preservation in Responses API transformation
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
+
+import pytest
 
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
@@ -262,6 +265,110 @@ class TestReasoningContentFinalResponse:
         ]
         assert len(reasoning_items) == 1, "Should have exactly one reasoning item"
         assert reasoning_items[0].content[0].text == "Reasoning for first answer"
+
+
+class _FakeChatCompletionStream:
+    """Minimal CustomStreamWrapper stand-in that replays pre-built chunks."""
+
+    def __init__(self, chunks):
+        self._chunks = list(chunks)
+        self.logging_obj = SimpleNamespace(
+            _response_cost_calculator=lambda result: 0.0,
+            model_call_details={},
+        )
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._chunks:
+            raise StopAsyncIteration
+        return self._chunks.pop(0)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if not self._chunks:
+            raise StopIteration
+        return self._chunks.pop(0)
+
+
+def _reasoning_and_text_chunks():
+    def make(content=None, reasoning=None, finish_reason=None):
+        return ModelResponseStream(
+            id="chatcmpl-combined",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=finish_reason,
+                    index=0,
+                    delta=Delta(content=content, role="assistant", reasoning_content=reasoning),
+                )
+            ],
+        )
+
+    return [
+        make(reasoning="Thinking hard"),
+        make(
+            reasoning=" done thinking.",
+            content="MARKER_ALPHA begin middle end",
+            finish_reason="stop",
+        ),
+    ]
+
+
+def _new_iterator(chunks):
+    return LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=_FakeChatCompletionStream(chunks),
+        request_input="Test input",
+        responses_api_request={},
+    )
+
+
+@pytest.mark.asyncio
+async def test_combined_reasoning_and_content_chunk_emits_both_deltas_async():
+    """A chunk carrying reasoning_content and content must yield both deltas, in source order."""
+    iterator = _new_iterator(_reasoning_and_text_chunks())
+
+    types = []
+    reasoning_deltas = []
+    text_deltas = []
+    done_text = None
+    async for event in iterator:
+        types.append(event.type)
+        if event.type == "response.reasoning_summary_text.delta":
+            reasoning_deltas.append(event.delta)
+        elif event.type == "response.output_text.delta":
+            text_deltas.append(event.delta)
+        elif event.type == "response.output_text.done":
+            done_text = event.text
+
+    assert "".join(reasoning_deltas) == "Thinking hard done thinking."
+    assert "".join(text_deltas) == "MARKER_ALPHA begin middle end"
+    assert "".join(text_deltas) == done_text
+    assert types.index("response.reasoning_summary_text.delta") < types.index(
+        "response.output_text.delta"
+    )
+    assert types.index("response.reasoning_summary_text.done") < types.index(
+        "response.output_text.delta"
+    )
+
+
+def test_combined_reasoning_and_content_chunk_emits_both_deltas_sync():
+    """Same guarantee on the sync iterator path."""
+    iterator = _new_iterator(_reasoning_and_text_chunks())
+
+    text_deltas = [
+        event.delta
+        for event in iterator
+        if getattr(event, "type", None) == "response.output_text.delta"
+    ]
+
+    assert "".join(text_deltas) == "MARKER_ALPHA begin middle end"
 
 
 def test_streaming_chunk_id_raw():
