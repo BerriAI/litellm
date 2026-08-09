@@ -852,6 +852,36 @@ describe("useAllTeams", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("omits user_id for admins so every team is returned", async () => {
+    fetchMock.mockResolvedValue(pageResponse(mockTeams, 1, 1));
+
+    const { result } = renderHook(() => useAllTeams(), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(new URLSearchParams(url.split("?")[1]).get("user_id")).toBeNull();
+  });
+
+  it("scopes to the caller's user_id for non-admins so /v2/team/list does not 401", async () => {
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "test-access-token",
+      userId: "test-user-id",
+      userRole: "Internal User",
+      token: "test-token",
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+    fetchMock.mockResolvedValue(pageResponse(mockTeams, 1, 1));
+
+    const { result } = renderHook(() => useAllTeams(), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(new URLSearchParams(url.split("?")[1]).get("user_id")).toBe("test-user-id");
+  });
+
   it("does not execute when accessToken is missing", () => {
     mockUseAuthorized.mockReturnValue({
       accessToken: null,
