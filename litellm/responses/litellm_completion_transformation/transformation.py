@@ -561,13 +561,13 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _merge_reasoning_only_assistant_messages(
-        messages: list[
+        messages: list[  # mutable-ok: input sequence
             AllMessageValues
             | GenericChatCompletionMessage
             | ChatCompletionMessageToolCall
             | ChatCompletionResponseMessage
         ],
-    ) -> list[
+    ) -> list[  # mutable-ok: fresh merged list
         AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall | ChatCompletionResponseMessage
     ]:
         """
@@ -591,9 +591,9 @@ class LiteLLMCompletionResponsesConfig:
 
         def _reasoning_text(msg: object) -> str | None:
             if isinstance(msg, dict):
-                value = msg.get("reasoning_content")
+                value = msg.get("reasoning_content")  # rebind-ok: branch lookup
             else:
-                value = getattr(msg, "reasoning_content", None)
+                value = getattr(msg, "reasoning_content", None)  # rebind-ok: branch lookup
             return value if isinstance(value, str) and value else None
 
         def _content(msg: object) -> object | None:
@@ -606,13 +606,13 @@ class LiteLLMCompletionResponsesConfig:
                 return msg.get("tool_calls")
             return getattr(msg, "tool_calls", None)
 
-        merged: list[
+        merged: list[  # mutable-ok: accumulator  # rebind-ok: accumulator
             AllMessageValues
             | GenericChatCompletionMessage
             | ChatCompletionMessageToolCall
             | ChatCompletionResponseMessage
-        ] = []
-        pending_reasoning: list[str] = []
+        ] = []  # mutable-ok: accumulator
+        pending_reasoning: list[str] = []  # mutable-ok: accumulator  # rebind-ok: accumulator
 
         for msg in messages:
             if (
@@ -633,11 +633,11 @@ class LiteLLMCompletionResponsesConfig:
                     msg["reasoning_content"] = combined
                 else:
                     setattr(msg, "reasoning_content", combined)  # noqa: B010
-                pending_reasoning = []
+                pending_reasoning = []  # mutable-ok: reset accumulator
             elif pending_reasoning:
                 # Not followed by an assistant message — keep the reasoning
                 # standalone instead of dropping it.
-                merged.extend(
+                merged.extend(  # mutable-ok: append reasoning messages
                     [
                         ChatCompletionResponseMessage(
                             role="assistant",
@@ -647,11 +647,11 @@ class LiteLLMCompletionResponsesConfig:
                         for text in pending_reasoning
                     ]
                 )
-                pending_reasoning = []
+                pending_reasoning = []  # mutable-ok: reset accumulator
 
             merged.append(msg)
 
-        merged.extend(
+        merged.extend(  # mutable-ok: append trailing reasoning
             [
                 ChatCompletionResponseMessage(
                     role="assistant",
@@ -1137,13 +1137,15 @@ class LiteLLMCompletionResponsesConfig:
             # to be replayed as `reasoning_content` on an assistant message, not as
             # visible `content` (prompt pollution) and not dropped (DeepSeek V4
             # rejects multi-turn requests with a missing `reasoning_content`).
-            reasoning_text = LiteLLMCompletionResponsesConfig._extract_reasoning_text_from_input_item(input_item)
+            reasoning_text = LiteLLMCompletionResponsesConfig._extract_reasoning_text_from_input_item(  # rebind-ok: extraction result
+                input_item
+            )
             if not reasoning_text:
                 # No plaintext reasoning is available (e.g. encrypted_content only).
                 # Chat-completions providers cannot consume opaque encrypted blobs,
                 # so skip the item instead of polluting the prompt.
-                return []
-            return [
+                return []  # mutable-ok: empty drop result
+            return [  # mutable-ok: single message result
                 ChatCompletionResponseMessage(
                     role="assistant",
                     content=None,
@@ -1181,7 +1183,7 @@ class LiteLLMCompletionResponsesConfig:
         if isinstance(content, str) and content.strip():
             return content
         if isinstance(content, list):
-            text_parts: list[str] = []
+            text_parts: list[str] = []  # mutable-ok: text accumulator  # rebind-ok: text accumulator
             for block in content:
                 if not isinstance(block, Mapping):
                     continue
@@ -1196,7 +1198,7 @@ class LiteLLMCompletionResponsesConfig:
 
         summary: Final[object] = input_item.get("summary")
         if isinstance(summary, list):
-            text_parts = []
+            text_parts = []  # mutable-ok: text accumulator  # rebind-ok: text accumulator
             for block in summary:
                 if not isinstance(block, Mapping):
                     continue
