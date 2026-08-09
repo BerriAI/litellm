@@ -127,8 +127,6 @@ describe("UsageViewSelect", () => {
     expect(screen.getByRole("option", { name: optionName })).toBeInTheDocument();
   });
 
-  // Neither /organization/daily/activity nor /agent/daily/activity admits an
-  // internal user, so the option that fires them must not be selectable.
   it.each(["Organization Usage", "Agent Usage (A2A)"])("should hide %s from an internal user", (optionName) => {
     render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" canViewTagUsage={true} />);
 
