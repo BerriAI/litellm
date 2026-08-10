@@ -314,6 +314,26 @@ describe("AllModelsTab", () => {
     expect(screen.getByTestId("model-settings-modal")).toBeInTheDocument();
   });
 
+  it.each(["Internal User", "Internal Viewer", "Org Admin"])(
+    "hides the model settings trigger from %s, who cannot read /config/list",
+    (userRole) => {
+      vi.spyOn(useAuthorizedModule, "default").mockReturnValue({ ...MOCK_AUTHORIZED, userRole });
+
+      render(<AllModelsTab {...defaultProps} />);
+
+      expect(screen.queryByTestId("models-settings-trigger")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("model-settings-modal")).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(["Admin", "Admin Viewer"])("keeps the model settings trigger for %s", (userRole) => {
+    vi.spyOn(useAuthorizedModule, "default").mockReturnValue({ ...MOCK_AUTHORIZED, userRole });
+
+    render(<AllModelsTab {...defaultProps} />);
+
+    expect(screen.getByTestId("models-settings-trigger")).toBeInTheDocument();
+  });
+
   it("opens the model detail view from the model ID cell", async () => {
     const user = userEvent.setup();
     render(<AllModelsTab {...defaultProps} />);

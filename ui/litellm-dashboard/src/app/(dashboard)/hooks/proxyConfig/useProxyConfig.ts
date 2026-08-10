@@ -1,6 +1,7 @@
 import { useQuery, useMutation, UseMutationResult, useQueryClient } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 import useAuthorized from "../useAuthorized";
+import useCan from "../useCan";
 import { proxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 
 /**
@@ -147,6 +148,7 @@ export const deleteProxyConfigFieldCall = async (
  */
 export const useProxyConfig = (configType: ConfigType) => {
   const { accessToken } = useAuthorized();
+  const canViewProxyConfig = useCan("viewProxyConfig");
   return useQuery<ProxyConfigResponse>({
     queryKey: proxyConfigKeys.list({
       filters: {
@@ -154,7 +156,7 @@ export const useProxyConfig = (configType: ConfigType) => {
       },
     }),
     queryFn: async () => await getProxyConfigCall(accessToken!, configType),
-    enabled: Boolean(accessToken),
+    enabled: Boolean(accessToken) && canViewProxyConfig,
   });
 };
 

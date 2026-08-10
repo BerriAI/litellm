@@ -19,7 +19,8 @@ interface VectorStoreFormProps {
   onCancel: () => void;
   onSuccess: () => void;
   accessToken: string | null;
-  credentials: CredentialItem[];
+  /** `null` when the caller may not read stored credentials, which hides the reuse picker entirely. */
+  credentials: CredentialItem[] | null;
 }
 
 const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
@@ -353,32 +354,34 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
           <Input.TextArea rows={4} />
         </Form.Item>
 
-        <Form.Item
-          label={
-            <span>
-              Existing Credentials{" "}
-              <Tooltip title="Optionally select API provider credentials for this vector store eg. Bedrock API KEY">
-                <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-              </Tooltip>
-            </span>
-          }
-          name="litellm_credential_name"
-        >
-          <Select
-            showSearch
-            placeholder="Select or search for existing credentials"
-            optionFilterProp="children"
-            filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
-            options={[
-              { value: null, label: "None" },
-              ...credentials.map((credential) => ({
-                value: credential.credential_name,
-                label: credential.credential_name,
-              })),
-            ]}
-            allowClear
-          />
-        </Form.Item>
+        {credentials !== null && (
+          <Form.Item
+            label={
+              <span>
+                Existing Credentials{" "}
+                <Tooltip title="Optionally select API provider credentials for this vector store eg. Bedrock API KEY">
+                  <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                </Tooltip>
+              </span>
+            }
+            name="litellm_credential_name"
+          >
+            <Select
+              showSearch
+              placeholder="Select or search for existing credentials"
+              optionFilterProp="children"
+              filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
+              options={[
+                { value: null, label: "None" },
+                ...credentials.map((credential) => ({
+                  value: credential.credential_name,
+                  label: credential.credential_name,
+                })),
+              ]}
+              allowClear
+            />
+          </Form.Item>
+        )}
 
         <Form.Item
           label={

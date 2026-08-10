@@ -156,6 +156,58 @@ describe("useProxyConfig", () => {
     expect(result.current.isLoading).toBe(true);
   });
 
+  it.each(["Internal User", "Internal Viewer", "Org Admin", "internal_user", "org_admin"])(
+    "should not call GET /config/list for %s",
+    (userRole) => {
+      mockUseAuthorized.mockReturnValue({
+        accessToken: mockAccessToken,
+        userId: "test-user-id",
+        userRole,
+        token: "test-token",
+        userEmail: "test@example.com",
+        premiumUser: false,
+        disabledPersonalKeyCreation: null,
+        showSSOBanner: false,
+      });
+
+      const { result } = renderHook(() => useProxyConfig(ConfigType.GENERAL_SETTINGS), { wrapper });
+
+      expect(result.current.isLoading).toBe(false);
+      expect(result.current.isFetched).toBe(false);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer"])(
+    "should call GET /config/list for %s",
+    async (userRole) => {
+      (fetchSpy as any).mockResolvedValue({
+        ok: true,
+        json: async () => mockProxyConfigResponse,
+      });
+      mockUseAuthorized.mockReturnValue({
+        accessToken: mockAccessToken,
+        userId: "test-user-id",
+        userRole,
+        token: "test-token",
+        userEmail: "test@example.com",
+        premiumUser: false,
+        disabledPersonalKeyCreation: null,
+        showSSOBanner: false,
+      });
+
+      const { result } = renderHook(() => useProxyConfig(ConfigType.GENERAL_SETTINGS), { wrapper });
+
+      await waitFor(() => {
+        expect(result.current.isSuccess).toBe(true);
+      });
+      expect(fetchSpy).toHaveBeenCalledWith(
+        `${mockProxyBaseUrl}/config/list?config_type=${ConfigType.GENERAL_SETTINGS}`,
+        expect.objectContaining({ method: "GET" }),
+      );
+    },
+  );
+
   it("should return proxy config data when query is successful", async () => {
     (fetchSpy as any).mockResolvedValue({
       ok: true,

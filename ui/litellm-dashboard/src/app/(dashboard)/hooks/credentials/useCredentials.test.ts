@@ -176,6 +176,52 @@ describe("useCredentials", () => {
     expect(result.current.data).toBeUndefined();
   });
 
+  it.each(["Internal User", "Internal Viewer", "Org Admin", "internal_user", "org_admin"])(
+    "should not call GET /credentials for %s",
+    async (userRole) => {
+      mockUseAuthorized.mockReturnValue({
+        accessToken: "test-access-token",
+        userRole,
+        userId: "test-user-id",
+        token: "test-token",
+        userEmail: "test@example.com",
+        premiumUser: false,
+        disabledPersonalKeyCreation: null,
+        showSSOBanner: false,
+      });
+
+      const { result } = renderHook(() => useCredentials(), { wrapper });
+
+      expect(result.current.isLoading).toBe(false);
+      expect(result.current.isFetched).toBe(false);
+      expect(credentialListCall).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer"])(
+    "should call GET /credentials for %s",
+    async (userRole) => {
+      (credentialListCall as any).mockResolvedValue(mockCredentialsResponse);
+      mockUseAuthorized.mockReturnValue({
+        accessToken: "test-access-token",
+        userRole,
+        userId: "test-user-id",
+        token: "test-token",
+        userEmail: "test@example.com",
+        premiumUser: false,
+        disabledPersonalKeyCreation: null,
+        showSSOBanner: false,
+      });
+
+      const { result } = renderHook(() => useCredentials(), { wrapper });
+
+      await waitFor(() => {
+        expect(result.current.isSuccess).toBe(true);
+      });
+      expect(credentialListCall).toHaveBeenCalledWith("test-access-token");
+    },
+  );
+
   it("should execute query when accessToken is present", async () => {
     // Mock successful API call
     (credentialListCall as any).mockResolvedValue(mockCredentialsResponse);

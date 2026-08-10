@@ -3,8 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
 
-vi.mock("../utils/roles", () => {
+vi.mock("../utils/roles", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../utils/roles")>();
   return {
+    ...actual,
     all_admin_roles: ["admin", "admin_viewer"],
     internalUserRoles: ["internal"],
     rolesWithWriteAccess: ["admin", "internal"],

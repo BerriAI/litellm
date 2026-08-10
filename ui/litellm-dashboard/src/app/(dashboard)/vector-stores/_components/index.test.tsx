@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { vectorStoreListCall } from "@/components/networking";
+import { credentialListCall, vectorStoreListCall } from "@/components/networking";
 
 import VectorStoreManagement from "./index";
 
@@ -25,6 +25,7 @@ vi.mock("./CreateVectorStore", () => ({ __esModule: true, default: () => null })
 vi.mock("./TestVectorStoreTab", () => ({ __esModule: true, default: () => null }));
 
 const mockVectorStoreListCall = vi.mocked(vectorStoreListCall);
+const mockCredentialListCall = vi.mocked(credentialListCall);
 
 const openManageTab = async (user: ReturnType<typeof userEvent.setup>) => {
   await user.click(screen.getByRole("tab", { name: "Manage Vector Stores" }));
@@ -58,5 +59,35 @@ describe("VectorStoreManagement loading state", () => {
     resolveFetch({ data: [] });
     expect(await screen.findByText("table-loaded")).toBeInTheDocument();
     expect(mockVectorStoreListCall).toHaveBeenCalledWith("sk-test");
+  });
+});
+
+describe("VectorStoreManagement credential access", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockVectorStoreListCall.mockResolvedValue({ data: [] });
+    mockCredentialListCall.mockResolvedValue({ credentials: [] });
+  });
+
+  it.each(["Internal User", "Internal Viewer", "Org Admin"])(
+    "should not call GET /credentials for %s",
+    async (userRole) => {
+      const user = userEvent.setup();
+      render(<VectorStoreManagement accessToken="sk-test" userID="user-1" userRole={userRole} />);
+      await openManageTab(user);
+
+      expect(await screen.findByText("table-loaded")).toBeInTheDocument();
+      expect(mockVectorStoreListCall).toHaveBeenCalledWith("sk-test");
+      expect(mockCredentialListCall).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["Admin", "Admin Viewer"])("should call GET /credentials for %s", async (userRole) => {
+    const user = userEvent.setup();
+    render(<VectorStoreManagement accessToken="sk-test" userID="user-1" userRole={userRole} />);
+    await openManageTab(user);
+
+    expect(await screen.findByText("table-loaded")).toBeInTheDocument();
+    expect(mockCredentialListCall).toHaveBeenCalledWith("sk-test");
   });
 });

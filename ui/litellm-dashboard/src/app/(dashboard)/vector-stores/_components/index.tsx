@@ -14,6 +14,7 @@ import VectorStoreInfoView from "./vector_store_info";
 import CreateVectorStore from "./CreateVectorStore";
 import TestVectorStoreTab from "./TestVectorStoreTab";
 import { isAdminRole } from "@/utils/roles";
+import { hasCapability } from "@/utils/capabilities";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -26,6 +27,7 @@ interface VectorStoreProps {
 }
 
 const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID, userRole }) => {
+  const canViewCredentials = hasCapability(userRole, "viewCredentials");
   const [vectorStores, setVectorStores] = useState<VectorStore[]>([]);
   const [isLoadingVectorStores, setIsLoadingVectorStores] = useState(true);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
@@ -55,7 +57,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
   };
 
   const fetchCredentials = async () => {
-    if (!accessToken) return;
+    if (!accessToken || !canViewCredentials) return;
     try {
       const response = await credentialListCall(accessToken);
       setCredentials(response.credentials || []);
@@ -132,6 +134,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
         onClose={handleCloseInfo}
         accessToken={accessToken}
         is_admin={isAdminRole(userRole || "")}
+        canViewCredentials={canViewCredentials}
         editVectorStore={editVectorStore}
       />
     </div>
@@ -196,7 +199,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
           onCancel={() => setIsCreateModalVisible(false)}
           onSuccess={handleCreateSuccess}
           accessToken={accessToken}
-          credentials={credentials}
+          credentials={canViewCredentials ? credentials : null}
         />
 
         {/* Delete Confirmation Modal */}
