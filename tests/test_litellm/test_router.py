@@ -7740,6 +7740,20 @@ def test_count_pre_call_check_tokens_counts_embedding_batches():
     assert router._count_pre_call_check_tokens(messages=[{"role": "user", "content": "hi"}], input=None) > 0
 
 
+def test_count_pre_call_check_tokens_counts_pre_tokenized_embedding_input():
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "embed-test", "litellm_params": {"model": "vertex_ai/text-embedding-005"}}
+        ]
+    )
+
+    assert router._count_pre_call_check_tokens(messages=None, input=[15496, 2159, 0]) == 3
+    assert router._count_pre_call_check_tokens(messages=None, input=[[15496, 2159], [0, 1, 2]]) == 5
+    assert router._count_pre_call_check_tokens(messages=None, input=[]) == 0
+
+
 def test_pre_call_checks_filters_embedding_over_context_window():
     from litellm.router import Router
 
