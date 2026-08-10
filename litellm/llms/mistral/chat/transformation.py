@@ -182,17 +182,18 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["extra_body"] = {"random_seed": value}
             if param == "response_format":
                 optional_params["response_format"] = value
-            if param == "reasoning_effort" and value is not None:
-                if self._is_magistral_model(model):
-                    optional_params["_add_reasoning_prompt"] = True
-                elif self._supports_native_reasoning_effort(model):
-                    optional_params["reasoning_effort"] = value
-            if param == "thinking" and self._is_magistral_model(model):
-                # Flag that we need to add reasoning system prompt
-                optional_params["_add_reasoning_prompt"] = True
+            if param in ("reasoning_effort", "thinking"):
+                optional_params.update(self._map_reasoning_param(param=param, value=value, model=model))
             if param == "parallel_tool_calls":
                 optional_params["parallel_tool_calls"] = value
         return optional_params
+
+    def _map_reasoning_param(self, param: str, value: object, model: str) -> dict:
+        if self._is_magistral_model(model):
+            return {"_add_reasoning_prompt": True}
+        if param == "reasoning_effort" and value is not None and self._supports_native_reasoning_effort(model):
+            return {"reasoning_effort": value}
+        return {}
 
     def _get_openai_compatible_provider_info(self, api_base: str | None, api_key: str | None) -> tuple[str, str | None]:
         # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
