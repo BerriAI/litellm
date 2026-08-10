@@ -144,6 +144,147 @@ async def test_run_async_fallback_skips_original_model_group():
     assert response._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"] == 1
 
 
+class AttemptRecordingRouter:
+    def __init__(self):
+        self.attempted_model_groups = []
+        self.received_kwargs = None
+
+    def log_retry(self, kwargs, e):
+        return kwargs
+
+    async def async_function_with_fallbacks(self, *args, **kwargs):
+        self.attempted_model_groups.append(kwargs.get("model"))
+        self.received_kwargs = kwargs
+        return StreamingWrapper()
+
+
+async def _acreate_batch(*args, **kwargs):
+    raise AssertionError("only used for its __name__")
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_keeps_uploaded_file_requests_in_their_model_group():
+    """An input_file_id only exists under the credentials of the group it was uploaded
+    to, so a cross-group fallback can only fail with the wrong provider's error."""
+    router = AttemptRecordingRouter()
+    owning_provider_error = RuntimeError("openai connection error")
+
+    with pytest.raises(RuntimeError, match="openai connection error"):
+        await run_async_fallback(
+            litellm_router=router,
+            fallback_model_group=["azure-group"],
+            original_model_group="openai-group",
+            original_exception=owning_provider_error,
+            max_fallbacks=3,
+            fallback_depth=0,
+            model="openai-group",
+            input_file_id="file-owned-by-openai",
+            original_function=_acreate_batch,
+        )
+
+    assert router.attempted_model_groups == []
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_keeps_fine_tuning_requests_in_their_model_group():
+    router = AttemptRecordingRouter()
+
+    with pytest.raises(RuntimeError, match="openai connection error"):
+        await run_async_fallback(
+            litellm_router=router,
+            fallback_model_group=["azure-group"],
+            original_model_group="openai-group",
+            original_exception=RuntimeError("openai connection error"),
+            max_fallbacks=3,
+            fallback_depth=0,
+            model="openai-group",
+            training_file="file-owned-by-openai",
+        )
+
+    assert router.attempted_model_groups == []
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_allows_same_model_group_retry_for_uploaded_file_requests():
+    """Order-based fallbacks stay inside the owning group, so they must still run."""
+    router = AttemptRecordingRouter()
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=[{"model": "openai-group", "_target_order": 2}],
+        original_model_group="openai-group",
+        original_exception=RuntimeError("first deployment failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="openai-group",
+        input_file_id="file-owned-by-openai",
+        original_function=_acreate_batch,
+    )
+
+    assert router.attempted_model_groups == ["openai-group"]
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_still_crosses_model_groups_without_an_uploaded_file():
+    router = AttemptRecordingRouter()
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["azure-group"],
+        original_model_group="openai-group",
+        original_exception=RuntimeError("openai connection error"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="openai-group",
+    )
+
+    assert router.attempted_model_groups == ["azure-group"]
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_handles_explicitly_none_metadata():
+    """/v1/batches always sets `metadata`, and sets it to None when the caller sent
+    none, so setdefault() on it hands back None instead of a dict."""
+    router = AttemptRecordingRouter()
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["azure-group"],
+        original_model_group="openai-group",
+        original_exception=RuntimeError("openai connection error"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="openai-group",
+        metadata=None,
+    )
+
+    assert router.received_kwargs["metadata"] == {"model_group": "azure-group"}
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_records_batch_model_group_outside_provider_metadata():
+    """`metadata` on a batch request is forwarded to the provider and stored on the
+    batch, so the router's own model_group belongs in litellm_metadata."""
+    router = AttemptRecordingRouter()
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=[{"model": "openai-group", "_target_order": 2}],
+        original_model_group="openai-group",
+        original_exception=RuntimeError("first deployment failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="openai-group",
+        input_file_id="file-owned-by-openai",
+        metadata={"caller": "nightly-job"},
+        litellm_metadata={"model_group": "openai-group"},
+        original_function=_acreate_batch,
+    )
+
+    assert router.received_kwargs["metadata"] == {"caller": "nightly-job"}
+    assert router.received_kwargs["litellm_metadata"]["model_group"] == "openai-group"
+
+
 class RecordingFailRouter:
     def __init__(self):
         self.attempted_models = []
