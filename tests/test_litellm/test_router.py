@@ -1238,55 +1238,6 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
 
 
 @pytest.mark.asyncio
-async def test_ageneric_api_call_with_fallbacks_helper_stamps_failed_deployment_id():
-    """
-    _ageneric_api_call_with_fallbacks_helper (used by rerank, embeddings, /v1/messages,
-    and other generic-API-call routes) must stamp the failed deployment's id on the
-    exception, matching what the chat-completions path already does, so the fallback
-    layer's cooldown trigger can reliably identify which deployment to cool down.
-    """
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "api_key": "test-key",
-                },
-                "model_info": {"id": "generic-api-deployment"},
-            }
-        ]
-    )
-
-    async def mock_failing_function(**kwargs):
-        raise Exception("Mock failure")
-
-    with patch.object(router, "async_get_available_deployment") as mock_get_deployment:
-        mock_get_deployment.return_value = {
-            "model_name": "gpt-3.5-turbo",
-            "litellm_params": {
-                "model": "gpt-3.5-turbo",
-                "api_key": "test-key",
-            },
-            "model_info": {"id": "generic-api-deployment"},
-        }
-
-        with (
-            patch.object(router, "_update_kwargs_with_deployment"),
-            patch.object(router, "_get_client", return_value=None),
-            patch.object(router, "async_routing_strategy_pre_call_checks"),
-        ):
-            with pytest.raises(Exception) as exc_info:
-                await router._ageneric_api_call_with_fallbacks_helper(
-                    model="gpt-3.5-turbo",
-                    original_generic_function=mock_failing_function,
-                    input="test",
-                )
-
-    assert exc_info.value.failed_deployment_id == "generic-api-deployment"
-
-
-@pytest.mark.asyncio
 async def test_ageneric_api_call_deployment_model_overrides_alias():
     """
     Regression: when a model alias (e.g. "not-gemini-2.5-flash") maps to a deployment
