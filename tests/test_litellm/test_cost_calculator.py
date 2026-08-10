@@ -3549,3 +3549,26 @@ def test_cost_per_token_unknown_model_with_explicit_provider():
         completion_tokens=5,
     )
     assert result == (0.0, 0.0), f"Expected (0.0, 0.0) for unknown model, got {result}"
+
+
+def test_cost_per_token_openai_non_model_error_propagates():
+    """
+    Test: cost_per_token() with openai provider re-raises exceptions that are
+    NOT about unknown models (e.g. real pricing calculation failures).
+    Ensures the narrow except only swallows model-not-found errors.
+    """
+    from unittest.mock import patch
+    import pytest
+    from litellm import cost_per_token
+
+    with patch(
+        "litellm.cost_calculator.openai_cost_per_token",
+        side_effect=Exception("Some unrelated pricing error"),
+    ):
+        with pytest.raises(Exception, match="Some unrelated pricing error"):
+            cost_per_token(
+                model="gpt-4o",
+                custom_llm_provider="openai",
+                prompt_tokens=10,
+                completion_tokens=5,
+            )
