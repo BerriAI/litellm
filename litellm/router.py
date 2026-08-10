@@ -527,11 +527,16 @@ class Router:
         ### CACHING ###
         cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = "local"  # default to an in-memory cache
         redis_cache = None
-        cache_config: Final[dict[str, Any]] = {}
+        cache_config: dict[str, Any] = {}  # mutable-ok: built incrementally from cache_kwargs, then passed to litellm.Cache()
+
+        # Apply cache_kwargs so they're available regardless of Redis presence.
+        # "type" is extracted to avoid duplicate keyword arg in litellm.Cache() below.
+        cache_config.update(cache_kwargs)
+        cache_type = cache_config.pop("type", cache_type)  # rebind-ok: cache_type may be overridden to "redis" below
 
         self.client_ttl = client_ttl
         if redis_url is not None or (redis_host is not None and redis_port is not None):
-            cache_type = "redis"
+            cache_type = "redis"  # rebind-ok: switch to Redis when Redis params are provided
 
             if redis_url is not None:
                 cache_config["url"] = redis_url
@@ -551,8 +556,6 @@ class Router:
                 )
                 cache_config["db"] = str(redis_db)
 
-            # Add additional key-value pairs from cache_kwargs
-            cache_config.update(cache_kwargs)
             redis_cache = self._create_redis_cache(cache_config)
 
         if cache_responses:
