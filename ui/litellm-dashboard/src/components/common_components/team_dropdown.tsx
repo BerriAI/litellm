@@ -17,6 +17,8 @@ interface TeamDropdownProps {
   /** Filter teams by organization. */
   organizationId?: string | null;
   pageSize?: number;
+  placeholder?: string;
+  emptyLabel?: string;
 }
 
 const SCROLL_THRESHOLD = 0.8;
@@ -28,6 +30,8 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
   disabled,
   organizationId,
   pageSize = 20,
+  placeholder = "Search or select a team",
+  emptyLabel = "No teams found",
 }) => {
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useDebouncedState("", {
@@ -78,7 +82,7 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
   return (
     <Select
       showSearch
-      placeholder="Search or select a team"
+      placeholder={placeholder}
       value={value || undefined}
       onChange={handleChange}
       disabled={disabled}
@@ -88,7 +92,7 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
       searchValue={searchInput}
       onPopupScroll={handlePopupScroll}
       loading={isLoading}
-      notFoundContent={isLoading ? <LoadingOutlined spin /> : "No teams found"}
+      notFoundContent={isLoading ? <LoadingOutlined spin /> : emptyLabel}
       data-testid="team-dropdown"
       popupRender={(menu) => (
         <>

@@ -19,6 +19,18 @@ interface RateLimitTypeFormItemProps {
   form?: any;
   /** Custom onChange handler */
   onChange?: (value: string) => void;
+  labels?: {
+    fieldLabel: string;
+    tooltip: string;
+    placeholder: string;
+    defaultLabel: string;
+    defaultDescription: string;
+    guaranteedLabel: string;
+    guaranteedDescription: string;
+    dynamicLabel: string;
+    dynamicDescription: string;
+    bestEffortLabel: string;
+  };
 }
 
 export const RateLimitTypeFormItem: React.FC<RateLimitTypeFormItemProps> = ({
@@ -29,6 +41,7 @@ export const RateLimitTypeFormItem: React.FC<RateLimitTypeFormItemProps> = ({
   initialValue = null,
   form,
   onChange,
+  labels,
 }) => {
   const limitTypeUpper = type.toUpperCase();
   const limitTypeLower = type.toLowerCase();
@@ -42,13 +55,15 @@ export const RateLimitTypeFormItem: React.FC<RateLimitTypeFormItemProps> = ({
     }
   };
 
-  const tooltipTitle = `Select 'guaranteed_throughput' to prevent overallocating ${limitTypeUpper} limit when the key belongs to a Team with specific ${limitTypeUpper} limits.`;
+  const tooltipTitle =
+    labels?.tooltip ??
+    `Select 'guaranteed_throughput' to prevent overallocating ${limitTypeUpper} limit when the key belongs to a Team with specific ${limitTypeUpper} limits.`;
 
   return (
     <Form.Item
       label={
         <span>
-          {limitTypeUpper} Rate Limit Type{" "}
+          {labels?.fieldLabel ?? `${limitTypeUpper} Rate Limit Type`}{" "}
           <Tooltip title={tooltipTitle}>
             <InfoCircleOutlined style={{ marginLeft: "4px" }} />
           </Tooltip>
@@ -60,46 +75,58 @@ export const RateLimitTypeFormItem: React.FC<RateLimitTypeFormItemProps> = ({
     >
       <Select
         defaultValue={showDetailedDescriptions ? "default" : undefined}
-        placeholder="Select rate limit type"
+        placeholder={labels?.placeholder ?? "Select rate limit type"}
         style={{ width: "100%" }}
         optionLabelProp={showDetailedDescriptions ? "label" : undefined}
         onChange={handleChange}
       >
         {showDetailedDescriptions ? (
           <>
-            <Option value="best_effort_throughput" label="Default">
+            <Option value="best_effort_throughput" label={labels?.defaultLabel ?? "Default"}>
               <div style={{ padding: "4px 0" }}>
-                <div style={{ fontWeight: 500 }}>Default</div>
+                <div style={{ fontWeight: 500 }}>{labels?.defaultLabel ?? "Default"}</div>
                 <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                  Best effort throughput - no error if we&apos;re overallocating {limitTypeLower} (Team/Key Limits
-                  checked at runtime).
+                  {labels?.defaultDescription ?? (
+                    <>
+                      Best effort throughput - no error if we&apos;re overallocating {limitTypeLower} (Team/Key Limits
+                      checked at runtime).
+                    </>
+                  )}
                 </div>
               </div>
             </Option>
-            <Option value="guaranteed_throughput" label="Guaranteed throughput">
+            <Option value="guaranteed_throughput" label={labels?.guaranteedLabel ?? "Guaranteed throughput"}>
               <div style={{ padding: "4px 0" }}>
-                <div style={{ fontWeight: 500 }}>Guaranteed throughput</div>
+                <div style={{ fontWeight: 500 }}>{labels?.guaranteedLabel ?? "Guaranteed throughput"}</div>
                 <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                  Guaranteed throughput - raise an error if we&apos;re overallocating {limitTypeLower} (also checks
-                  model-specific limits)
+                  {labels?.guaranteedDescription ?? (
+                    <>
+                      Guaranteed throughput - raise an error if we&apos;re overallocating {limitTypeLower} (also checks
+                      model-specific limits)
+                    </>
+                  )}
                 </div>
               </div>
             </Option>
-            <Option value="dynamic" label="Dynamic">
+            <Option value="dynamic" label={labels?.dynamicLabel ?? "Dynamic"}>
               <div style={{ padding: "4px 0" }}>
-                <div style={{ fontWeight: 500 }}>Dynamic</div>
+                <div style={{ fontWeight: 500 }}>{labels?.dynamicLabel ?? "Dynamic"}</div>
                 <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                  If the key has a set {limitTypeUpper} (e.g. 2 {limitTypeUpper}) and there are no 429 errors, it can
-                  dynamically exceed the limit when the model being called is not erroring.
+                  {labels?.dynamicDescription ?? (
+                    <>
+                      If the key has a set {limitTypeUpper} (e.g. 2 {limitTypeUpper}) and there are no 429 errors, it
+                      can dynamically exceed the limit when the model being called is not erroring.
+                    </>
+                  )}
                 </div>
               </div>
             </Option>
           </>
         ) : (
           <>
-            <Option value="best_effort_throughput">Best effort throughput</Option>
-            <Option value="guaranteed_throughput">Guaranteed throughput</Option>
-            <Option value="dynamic">Dynamic</Option>
+            <Option value="best_effort_throughput">{labels?.bestEffortLabel ?? "Best effort throughput"}</Option>
+            <Option value="guaranteed_throughput">{labels?.guaranteedLabel ?? "Guaranteed throughput"}</Option>
+            <Option value="dynamic">{labels?.dynamicLabel ?? "Dynamic"}</Option>
           </>
         )}
       </Select>

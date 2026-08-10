@@ -9,6 +9,24 @@ interface ModelAliasManagerProps {
   initialModelAliases?: { [key: string]: string };
   onAliasUpdate?: (updatedAliases: { [key: string]: string }) => void;
   showExampleConfig?: boolean;
+  labels?: {
+    addNew: string;
+    aliasName: string;
+    targetModel: string;
+    aliasPlaceholder: string;
+    selectTarget: string;
+    add: string;
+    manage: string;
+    actions: string;
+    empty: string;
+    save: string;
+    cancel: string;
+    requiredError: string;
+    duplicateError: string;
+    added: string;
+    updated: string;
+    deleted: string;
+  };
 }
 
 interface AliasItem {
@@ -22,7 +40,26 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
   initialModelAliases = {},
   onAliasUpdate,
   showExampleConfig = true,
+  labels,
 }) => {
+  const text = {
+    addNew: labels?.addNew ?? "Add New Alias",
+    aliasName: labels?.aliasName ?? "Alias Name",
+    targetModel: labels?.targetModel ?? "Target Model",
+    aliasPlaceholder: labels?.aliasPlaceholder ?? "e.g., gpt-4o",
+    selectTarget: labels?.selectTarget ?? "Select target model",
+    add: labels?.add ?? "Add Alias",
+    manage: labels?.manage ?? "Manage Existing Aliases",
+    actions: labels?.actions ?? "Actions",
+    empty: labels?.empty ?? "No aliases added yet. Add a new alias above.",
+    save: labels?.save ?? "Save",
+    cancel: labels?.cancel ?? "Cancel",
+    requiredError: labels?.requiredError ?? "Please provide both alias name and target model",
+    duplicateError: labels?.duplicateError ?? "An alias with this name already exists",
+    added: labels?.added ?? "Alias added successfully",
+    updated: labels?.updated ?? "Alias updated successfully",
+    deleted: labels?.deleted ?? "Alias deleted successfully",
+  };
   const [aliases, setAliases] = useState<AliasItem[]>([]);
   const [newAlias, setNewAlias] = useState({ aliasName: "", targetModel: "" });
   const [editingAlias, setEditingAlias] = useState<AliasItem | null>(null);
@@ -39,13 +76,13 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
 
   const handleAddAlias = () => {
     if (!newAlias.aliasName || !newAlias.targetModel) {
-      NotificationsManager.fromBackend("Please provide both alias name and target model");
+      NotificationsManager.fromBackend(text.requiredError);
       return;
     }
 
     // Check for duplicate alias names
     if (aliases.some((alias) => alias.aliasName === newAlias.aliasName)) {
-      NotificationsManager.fromBackend("An alias with this name already exists");
+      NotificationsManager.fromBackend(text.duplicateError);
       return;
     }
 
@@ -69,7 +106,7 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
       onAliasUpdate(aliasObject);
     }
 
-    NotificationsManager.success("Alias added successfully");
+    NotificationsManager.success(text.added);
   };
 
   const handleEditAlias = (alias: AliasItem) => {
@@ -80,13 +117,13 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
     if (!editingAlias) return;
 
     if (!editingAlias.aliasName || !editingAlias.targetModel) {
-      NotificationsManager.fromBackend("Please provide both alias name and target model");
+      NotificationsManager.fromBackend(text.requiredError);
       return;
     }
 
     // Check for duplicate alias names (excluding current alias)
     if (aliases.some((alias) => alias.id !== editingAlias.id && alias.aliasName === editingAlias.aliasName)) {
-      NotificationsManager.fromBackend("An alias with this name already exists");
+      NotificationsManager.fromBackend(text.duplicateError);
       return;
     }
 
@@ -105,7 +142,7 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
       onAliasUpdate(aliasObject);
     }
 
-    NotificationsManager.success("Alias updated successfully");
+    NotificationsManager.success(text.updated);
   };
 
   const handleCancelEdit = () => {
@@ -126,7 +163,7 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
       onAliasUpdate(aliasObject);
     }
 
-    NotificationsManager.success("Alias deleted successfully");
+    NotificationsManager.success(text.deleted);
   };
 
   // Convert current aliases to object for config example
@@ -141,10 +178,10 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
   return (
     <div className="mt-4">
       <div className="mb-6">
-        <Text className="text-sm font-medium text-gray-700 mb-2">Add New Alias</Text>
+        <Text className="text-sm font-medium text-gray-700 mb-2">{text.addNew}</Text>
         <div className="grid grid-cols-3 gap-4">
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Alias Name</label>
+            <label className="block text-xs text-gray-500 mb-1">{text.aliasName}</label>
             <input
               type="text"
               value={newAlias.aliasName}
@@ -154,16 +191,16 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
                   aliasName: e.target.value,
                 })
               }
-              placeholder="e.g., gpt-4o"
+              placeholder={text.aliasPlaceholder}
               className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
             />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Target Model</label>
+            <label className="block text-xs text-gray-500 mb-1">{text.targetModel}</label>
             <ModelSelector
               accessToken={accessToken}
               value={newAlias.targetModel}
-              placeholder="Select target model"
+              placeholder={text.selectTarget}
               onChange={(value) =>
                 setNewAlias({
                   ...newAlias,
@@ -180,21 +217,21 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
               className={`flex items-center px-4 py-2 rounded-md text-sm ${!newAlias.aliasName || !newAlias.targetModel ? "bg-gray-300 text-gray-500 cursor-not-allowed" : "bg-green-600 text-white hover:bg-green-700"}`}
             >
               <PlusCircleIcon className="w-4 h-4 mr-1" />
-              Add Alias
+              {text.add}
             </button>
           </div>
         </div>
       </div>
 
-      <Text className="text-sm font-medium text-gray-700 mb-2">Manage Existing Aliases</Text>
+      <Text className="text-sm font-medium text-gray-700 mb-2">{text.manage}</Text>
       <div className="rounded-lg custom-border relative mb-6">
         <div className="overflow-x-auto">
           <Table className="[&_td]:py-0.5 [&_th]:py-1">
             <TableHead>
               <TableRow>
-                <TableHeaderCell className="py-1 h-8">Alias Name</TableHeaderCell>
-                <TableHeaderCell className="py-1 h-8">Target Model</TableHeaderCell>
-                <TableHeaderCell className="py-1 h-8">Actions</TableHeaderCell>
+                <TableHeaderCell className="py-1 h-8">{text.aliasName}</TableHeaderCell>
+                <TableHeaderCell className="py-1 h-8">{text.targetModel}</TableHeaderCell>
+                <TableHeaderCell className="py-1 h-8">{text.actions}</TableHeaderCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -235,13 +272,13 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
                             onClick={handleUpdateAlias}
                             className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-sm hover:bg-blue-100"
                           >
-                            Save
+                            {text.save}
                           </button>
                           <button
                             onClick={handleCancelEdit}
                             className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded-sm hover:bg-gray-100"
                           >
-                            Cancel
+                            {text.cancel}
                           </button>
                         </div>
                       </TableCell>
@@ -273,7 +310,7 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
               {aliases.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={3} className="py-0.5 text-sm text-gray-500 text-center">
-                    No aliases added yet. Add a new alias above.
+                    {text.empty}
                   </TableCell>
                 </TableRow>
               )}

@@ -9,7 +9,7 @@ import { Tabs } from "antd";
 import { Plus } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import MessageManager from "@/components/molecules/message_manager";
-import { FallbackGroup, FallbackGroupConfig } from "./FallbackGroupConfig";
+import { FallbackGroup, FallbackGroupConfig, FallbackLabels } from "./FallbackGroupConfig";
 
 interface FallbackSelectionFormProps {
   groups: FallbackGroup[];
@@ -17,6 +17,7 @@ interface FallbackSelectionFormProps {
   availableModels: string[];
   maxFallbacks?: number;
   maxGroups?: number;
+  labels?: FallbackLabels;
 }
 
 export function FallbackSelectionForm({
@@ -25,6 +26,7 @@ export function FallbackSelectionForm({
   availableModels,
   maxFallbacks = 10,
   maxGroups = 5,
+  labels,
 }: FallbackSelectionFormProps) {
   const [activeKey, setActiveKey] = useState(groups.length > 0 ? groups[0].id : "1");
 
@@ -61,7 +63,7 @@ export function FallbackSelectionForm({
 
   const handleRemoveGroup = (targetId: string) => {
     if (groups.length === 1) {
-      MessageManager.warning("At least one group is required");
+      MessageManager.warning(labels?.atLeastOne ?? "At least one group is required");
       return;
     }
     const newGroups = groups.filter((g) => g.id !== targetId);
@@ -78,7 +80,7 @@ export function FallbackSelectionForm({
 
   // Generate tab items
   const items = groups.map((group, index) => {
-    const label = group.primaryModel ? group.primaryModel : `Group ${index + 1}`;
+    const label = group.primaryModel ? group.primaryModel : `${labels?.group ?? "Group"} ${index + 1}`;
     return {
       key: group.id,
       label: label,
@@ -89,6 +91,7 @@ export function FallbackSelectionForm({
           onChange={handleGroupUpdate}
           availableModels={availableModels}
           maxFallbacks={maxFallbacks}
+          labels={labels}
         />
       ),
     };
@@ -97,9 +100,9 @@ export function FallbackSelectionForm({
   if (groups.length === 0) {
     return (
       <div className="text-center py-12 bg-gray-50 rounded-lg border border-dashed border-gray-300">
-        <p className="text-gray-500 mb-4">No fallback groups configured</p>
+        <p className="text-gray-500 mb-4">{labels?.empty ?? "No fallback groups configured"}</p>
         <Button variant="primary" onClick={handleAddGroup} icon={() => <Plus className="w-4 h-4" />}>
-          Create First Group
+          {labels?.createFirst ?? "Create First Group"}
         </Button>
       </div>
     );

@@ -16,6 +16,19 @@ interface RouterSettingsFormProps {
   routerFieldsMetadata: { [key: string]: any };
   availableRoutingStrategies: string[];
   routingStrategyDescriptions: { [key: string]: string };
+  labels?: {
+    routingSettings: string;
+    routingDescription: string;
+    routingStrategy: string;
+    routingStrategyDescription: string;
+    tagFiltering: string;
+    tagFilteringDescription: string;
+    learnMore: string;
+    reliability: string;
+    reliabilityDescription: string;
+    fieldLabels: Record<string, string>;
+    fieldDescriptions: Record<string, string>;
+  };
 }
 
 const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
@@ -24,6 +37,7 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
   routerFieldsMetadata,
   availableRoutingStrategies,
   routingStrategyDescriptions,
+  labels,
 }) => {
   const handleStrategyChange = (strategy: string) => {
     onChange({
@@ -44,8 +58,10 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
       {/* Routing Settings Section */}
       <div className="space-y-6">
         <div className="max-w-3xl">
-          <h3 className="text-sm font-medium text-gray-900">Routing Settings</h3>
-          <p className="text-xs text-gray-500 mt-1">Configure how requests are routed to deployments</p>
+          <h3 className="text-sm font-medium text-gray-900">{labels?.routingSettings ?? "Routing Settings"}</h3>
+          <p className="text-xs text-gray-500 mt-1">
+            {labels?.routingDescription ?? "Configure how requests are routed to deployments"}
+          </p>
         </div>
 
         {/* Routing Strategy */}
@@ -56,6 +72,8 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
             routingStrategyDescriptions={routingStrategyDescriptions}
             routerFieldsMetadata={routerFieldsMetadata}
             onStrategyChange={handleStrategyChange}
+            label={labels?.routingStrategy}
+            description={labels?.routingStrategyDescription}
           />
         )}
 
@@ -64,6 +82,9 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
           enabled={value.enableTagFiltering}
           routerFieldsMetadata={routerFieldsMetadata}
           onToggle={handleTagFilteringToggle}
+          label={labels?.tagFiltering}
+          description={labels?.tagFilteringDescription}
+          learnMoreLabel={labels?.learnMore}
         />
       </div>
 
@@ -76,7 +97,14 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
       )}
 
       {/* Other Settings */}
-      <ReliabilityRetriesSection routerSettings={value.routerSettings} routerFieldsMetadata={routerFieldsMetadata} />
+      <ReliabilityRetriesSection
+        routerSettings={value.routerSettings}
+        routerFieldsMetadata={routerFieldsMetadata}
+        title={labels?.reliability}
+        description={labels?.reliabilityDescription}
+        fieldLabels={labels?.fieldLabels}
+        fieldDescriptions={labels?.fieldDescriptions}
+      />
     </div>
   );
 };

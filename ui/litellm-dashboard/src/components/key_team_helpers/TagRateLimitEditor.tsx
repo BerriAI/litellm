@@ -52,9 +52,15 @@ export const tagLimitsToRows = (tagRpmLimit?: unknown): TagRateLimitEntry[] => {
 interface TagRateLimitEditorProps {
   value: TagRateLimitEntry[];
   onChange: (v: TagRateLimitEntry[]) => void;
+  labels?: {
+    tagPlaceholder: string;
+    rpmPlaceholder: string;
+    addLimit: string;
+    removeLimit: string;
+  };
 }
 
-export function TagRateLimitEditor({ value, onChange }: TagRateLimitEditorProps) {
+export function TagRateLimitEditor({ value, onChange, labels }: TagRateLimitEditorProps) {
   const addRow = () => {
     onChange([...value, { id: newRowId(), tag: "", rpm_limit: null }]);
   };
@@ -74,17 +80,24 @@ export function TagRateLimitEditor({ value, onChange }: TagRateLimitEditorProps)
           <Input
             value={row.tag}
             onChange={(e) => updateRow(idx, "tag", e.target.value)}
-            placeholder="Tag (e.g. cell-1)"
+            placeholder={labels?.tagPlaceholder ?? "Tag (e.g. cell-1)"}
             style={{ width: 180 }}
           />
           <InputNumber
             min={0}
             value={row.rpm_limit ?? undefined}
             onChange={(v) => updateRow(idx, "rpm_limit", v ?? null)}
-            placeholder="RPM"
+            placeholder={labels?.rpmPlaceholder ?? "RPM"}
             style={{ width: 120 }}
           />
-          <Button type="text" danger size="small" onClick={() => removeRow(idx)} style={{ padding: "0 4px" }}>
+          <Button
+            type="text"
+            danger
+            size="small"
+            aria-label={labels?.removeLimit ?? "Remove tag limit"}
+            onClick={() => removeRow(idx)}
+            style={{ padding: "0 4px" }}
+          >
             ✕
           </Button>
         </div>
@@ -96,7 +109,7 @@ export function TagRateLimitEditor({ value, onChange }: TagRateLimitEditorProps)
           addRow();
         }}
       >
-        + Add Tag Limit
+        {labels?.addLimit ?? "+ Add Tag Limit"}
       </Button>
     </div>
   );

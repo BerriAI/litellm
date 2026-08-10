@@ -16,9 +16,29 @@ export const BUDGET_WINDOW_OPTIONS = [
 interface BudgetWindowsEditorProps {
   value: BudgetWindowEntry[];
   onChange: (v: BudgetWindowEntry[]) => void;
+  labels?: {
+    hourly: string;
+    hourlyHint: string;
+    daily: string;
+    dailyHint: string;
+    weekly: string;
+    weeklyHint: string;
+    monthly: string;
+    monthlyHint: string;
+    maxSpend: string;
+    addWindow: string;
+  };
 }
 
-export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProps) {
+export function BudgetWindowsEditor({ value, onChange, labels }: BudgetWindowsEditorProps) {
+  const options = labels
+    ? [
+        { value: "1h", label: labels.hourly, resetHint: labels.hourlyHint },
+        { value: "24h", label: labels.daily, resetHint: labels.dailyHint },
+        { value: "7d", label: labels.weekly, resetHint: labels.weeklyHint },
+        { value: "30d", label: labels.monthly, resetHint: labels.monthlyHint },
+      ]
+    : BUDGET_WINDOW_OPTIONS;
   const addWindow = () => {
     onChange([...value, { budget_duration: "24h", max_budget: null }]);
   };
@@ -35,7 +55,7 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
   return (
     <div>
       {value.map((window, idx) => {
-        const hint = BUDGET_WINDOW_OPTIONS.find((o) => o.value === window.budget_duration)?.resetHint;
+        const hint = options.find((o) => o.value === window.budget_duration)?.resetHint;
         return (
           <div key={idx} style={{ marginBottom: 12 }}>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -43,7 +63,7 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
                 value={window.budget_duration}
                 onChange={(v) => updateWindow(idx, "budget_duration", v)}
                 style={{ width: 130 }}
-                options={BUDGET_WINDOW_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                options={options.map((o) => ({ value: o.value, label: o.label }))}
               />
               <InputNumber
                 step={0.01}
@@ -51,7 +71,7 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
                 precision={2}
                 value={window.max_budget ?? undefined}
                 onChange={(v) => updateWindow(idx, "max_budget", v ?? null)}
-                placeholder="Max spend ($)"
+                placeholder={labels?.maxSpend ?? "Max spend ($)"}
                 style={{ width: 160 }}
                 prefix="$"
               />
@@ -70,7 +90,7 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
           addWindow();
         }}
       >
-        + Add Budget Window
+        {labels?.addWindow ?? "+ Add Budget Window"}
       </Button>
     </div>
   );

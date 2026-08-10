@@ -7,6 +7,8 @@ interface RoutingStrategySelectorProps {
   routingStrategyDescriptions: { [key: string]: string };
   routerFieldsMetadata: { [key: string]: any };
   onStrategyChange: (strategy: string) => void;
+  label?: string;
+  description?: string;
 }
 
 const RoutingStrategySelector: React.FC<RoutingStrategySelectorProps> = ({
@@ -15,15 +17,17 @@ const RoutingStrategySelector: React.FC<RoutingStrategySelectorProps> = ({
   routingStrategyDescriptions,
   routerFieldsMetadata,
   onStrategyChange,
+  label,
+  description,
 }) => {
   return (
     <div className="space-y-2 max-w-3xl">
       <div>
         <label className="text-xs font-medium text-gray-700 uppercase tracking-wide">
-          {routerFieldsMetadata["routing_strategy"]?.ui_field_name || "Routing Strategy"}
+          {label || routerFieldsMetadata["routing_strategy"]?.ui_field_name || "Routing Strategy"}
         </label>
         <p className="text-xs text-gray-500 mt-0.5 mb-2">
-          {routerFieldsMetadata["routing_strategy"]?.field_description || ""}
+          {description || routerFieldsMetadata["routing_strategy"]?.field_description || ""}
         </p>
       </div>
       <div className="routing-strategy-select max-w-3xl">
