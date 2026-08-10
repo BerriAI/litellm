@@ -32,6 +32,8 @@ import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_r
 import AutoRouterConnectionTest from "./auto_router_connection_test";
 import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
 import NotificationManager from "../molecules/notifications_manager";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import {
   getAllPresets,
   getPresetByKey,
@@ -67,16 +69,16 @@ type PresetAvailability =
 
 // Every non-"available" state disables the option. Selection derives from this same function
 // (see presetAvailability below), so an option a caller can click is always one that can be applied.
-const presetDisabledHint = (availability: PresetAvailability): string | null => {
+const presetDisabledHint = (availability: PresetAvailability, t: TFunction<"gateway">): string | null => {
   switch (availability.kind) {
     case "available":
       return null;
     case "loading":
-      return "Checking model availability...";
+      return t("models.autoRouters.form.checkingModels");
     case "unverifiable":
-      return "Cannot verify these models are available";
+      return t("models.autoRouters.form.unverifiableModels");
     case "missing_models":
-      return `Missing: ${availability.models.join(", ")}`;
+      return t("models.autoRouters.form.missingModels", { models: availability.models.join(", ") });
   }
 };
 
@@ -93,18 +95,18 @@ const resolveDefaultModel = (tiers: ComplexityTiers): string | undefined =>
 
 // A one-line summary of what's configured, shown when the detailed section is collapsed so a
 // caller can see the shape of the config without opening it.
-const tierConfigSummary = (tiers: ComplexityTiers): string => {
+const tierConfigSummary = (tiers: ComplexityTiers, t: TFunction<"gateway">): string => {
   const parts = (
     [
-      ["Simple", tiers.SIMPLE],
-      ["Medium", tiers.MEDIUM],
-      ["Complex", tiers.COMPLEX],
-      ["Reasoning", tiers.REASONING],
+      [t("models.autoRouters.form.tierLabels.simple"), tiers.SIMPLE],
+      [t("models.autoRouters.form.tierLabels.medium"), tiers.MEDIUM],
+      [t("models.autoRouters.form.tierLabels.complex"), tiers.COMPLEX],
+      [t("models.autoRouters.form.tierLabels.reasoning"), tiers.REASONING],
     ] as const
   )
     .filter(([, models]) => models.length > 0)
-    .map(([label, models]) => `${label}: ${models.join(", ")}`);
-  return parts.length > 0 ? parts.join(" · ") : "No tiers configured yet";
+    .map(([label, models]) => t("models.autoRouters.form.tierSummary", { label, models: models.join(", ") }));
+  return parts.length > 0 ? parts.join(" · ") : t("models.autoRouters.form.noTiers");
 };
 
 // Why the submit is unavailable, or null when it is available. The button reads this to disable
@@ -129,6 +131,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   userId,
   createScope = "unscoped-ok",
 }) => {
+  const { t } = useTranslation("gateway");
   const requiresTeamScope = createScope === "team-required";
   const [form] = Form.useForm();
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
@@ -322,7 +325,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
     if (classifierType === "llm" && !classifierLlmConfig?.model) {
       setShowValidationErrors(true);
-      NotificationManager.fromBackend("Please select a classifier model, or switch back to Heuristic");
+      NotificationManager.fromBackend(t("models.autoRouters.form.classifierRequired"));
       return;
     }
 
@@ -376,7 +379,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       })
       .catch((error) => {
         console.error("Validation failed:", error);
-        NotificationManager.fromBackend("Please fill in all required fields");
+        NotificationManager.fromBackend(t("models.autoRouters.form.requiredFields"));
       });
   };
 
@@ -385,7 +388,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     if (!name) {
       setShowValidationErrors(true);
       form.validateFields(["auto_router_name"]).catch(() => undefined);
-      NotificationManager.fromBackend("Please enter an Auto Router Name");
+      NotificationManager.fromBackend(t("models.autoRouters.form.enterName"));
       return;
     }
 
@@ -400,7 +403,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     });
 
     if (targets.length === 0) {
-      NotificationManager.fromBackend("Please select at least one model for a complexity tier");
+      NotificationManager.fromBackend(t("models.autoRouters.form.selectTierModel"));
       return;
     }
 
@@ -421,62 +424,72 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
           labelAlign="left"
         >
           <Form.Item
-            rules={[{ required: true, message: "Auto router name is required" }]}
-            label="Auto Router Name"
+            rules={[{ required: true, message: t("models.autoRouters.form.nameRequired") }]}
+            label={t("models.autoRouters.form.name")}
             name="auto_router_name"
-            tooltip="Unique name for this auto router configuration"
+            tooltip={t("models.autoRouters.form.nameTooltip")}
             labelCol={{ span: 10 }}
             labelAlign="left"
           >
-            <TextInput placeholder="e.g., smart_router, auto_router_1" />
+            <TextInput placeholder={t("models.autoRouters.form.namePlaceholder")} />
           </Form.Item>
 
           <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-900 mb-2">Template</label>
+            <label className="block text-sm font-medium text-gray-900 mb-2">
+              {t("models.autoRouters.form.template")}
+            </label>
             <AntdSelect
               value={selectedPreset}
               onChange={handlePresetChange}
-              placeholder="Choose a template or select Custom to define your own"
+              placeholder={t("models.autoRouters.form.templatePlaceholder")}
               className="w-full"
               optionLabelProp="label"
               data-testid="template-selector"
             >
               {sortedPresetOptions.map(({ preset, availability: presetState }) => {
-                const disabledHint = presetDisabledHint(presetState);
+                const disabledHint = presetDisabledHint(presetState, t);
                 const isDisabled = disabledHint !== null;
                 const hintClass = isPresetHintAlarming(presetState) ? "text-red-500" : "text-gray-400";
                 const matchedHint =
-                  presetState.kind === "available" && presetState.viaDeployments ? "Matches your deployments" : null;
+                  presetState.kind === "available" && presetState.viaDeployments
+                    ? t("models.autoRouters.form.matchedDeployments")
+                    : null;
+                const presetLabel = t(`models.autoRouters.presets.${preset.key}.label`, {
+                  defaultValue: preset.label,
+                });
+                const presetDescription = t(`models.autoRouters.presets.${preset.key}.description`, {
+                  defaultValue: preset.description,
+                });
 
                 return (
                   <AntdSelect.Option
                     key={preset.key}
                     value={preset.key}
-                    label={preset.label}
+                    label={presetLabel}
                     disabled={isDisabled}
-                    title={disabledHint ?? preset.description}
+                    title={disabledHint ?? presetDescription}
                   >
                     <div>
-                      <div className="font-medium">{preset.label}</div>
-                      <div className="text-xs text-gray-500">{preset.description}</div>
+                      <div className="font-medium">{presetLabel}</div>
+                      <div className="text-xs text-gray-500">{presetDescription}</div>
                       {disabledHint && <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>}
                       {matchedHint && <div className="text-xs mt-1 text-green-600">{matchedHint}</div>}
                     </div>
                   </AntdSelect.Option>
                 );
               })}
-              <AntdSelect.Option value="custom" label="Custom Configuration">
+              <AntdSelect.Option value="custom" label={t("models.autoRouters.form.customTemplate")}>
                 <div>
-                  <div className="font-medium">Custom Configuration</div>
-                  <div className="text-xs text-gray-500">Define your auto router from scratch</div>
+                  <div className="font-medium">{t("models.autoRouters.form.customTemplate")}</div>
+                  <div className="text-xs text-gray-500">{t("models.autoRouters.form.customDescription")}</div>
                 </div>
               </AntdSelect.Option>
             </AntdSelect>
             {modelsUnverifiable && (
               <div className="text-xs mt-1 text-red-500">
-                Could not load available models.{" "}
+                {t("models.autoRouters.form.loadModelsFailed")}{" "}
                 <button type="button" className="underline" onClick={() => refetchModels()}>
-                  Retry
+                  {t("models.autoRouters.form.retry")}
                 </button>
               </div>
             )}
@@ -484,14 +497,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
           {requiresTeamScope && (
             <Form.Item
-              label="Select Team"
+              label={t("models.autoRouters.form.selectTeam")}
               name="team_id"
-              rules={[{ required: true, message: "Please select a team to continue" }]}
-              tooltip="Select the team this auto router belongs to. Only keys for this team will be able to call it."
+              rules={[{ required: true, message: t("models.autoRouters.form.selectTeamRequired") }]}
+              tooltip={t("models.autoRouters.form.selectTeamTooltip")}
               labelCol={{ span: 10 }}
               labelAlign="left"
             >
-              <TeamDropdown />
+              <TeamDropdown placeholder={t("models.autoRouters.form.selectTeam")} />
             </Form.Item>
           )}
 
@@ -508,11 +521,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 ) : (
                   <RightOutlined className="text-xs text-gray-500" />
                 )}
-                Detailed Configuration
+                {t("models.autoRouters.form.detailed")}
               </span>
               {!detailsExpanded && (
                 <span className="text-xs text-gray-500 line-clamp-2">
-                  {tierConfigSummary(complexityRouterConfig.tiers)}
+                  {tierConfigSummary(complexityRouterConfig.tiers, t)}
                 </span>
               )}
             </button>
@@ -543,15 +556,15 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
           {/* Model Access Groups - Admin only */}
           {isAdmin && (
             <Form.Item
-              label="Model Access Group"
+              label={t("models.autoRouters.form.accessGroup")}
               name="model_access_group"
               className="mb-4"
-              tooltip="Use model access groups to control who can access this auto router"
+              tooltip={t("models.autoRouters.form.accessGroupTooltip")}
             >
               <AntdSelect
                 mode="tags"
                 showSearch
-                placeholder="Select existing groups or type to create new ones"
+                placeholder={t("models.autoRouters.form.accessGroupPlaceholder")}
                 optionFilterProp="children"
                 tokenSeparators={[","]}
                 options={modelAccessGroups.map((group) => ({
@@ -565,8 +578,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
           )}
 
           <div className="flex justify-between items-center mb-4">
-            <Tooltip title="Get help on our github">
-              <Typography.Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Typography.Link>
+            <Tooltip title={t("models.autoRouters.form.helpTooltip")}>
+              <Typography.Link href="https://github.com/BerriAI/litellm/issues">
+                {t("models.autoRouters.form.help")}
+              </Typography.Link>
             </Tooltip>
             <div className="space-x-2">
               <Tooltip title={submitBlockedReason}>
@@ -575,7 +590,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   disabled={submitBlockedReason !== null}
                   onClick={() => setIsRoutingTestVisible(true)}
                 >
-                  Test Routing
+                  {t("models.autoRouters.form.testRouting")}
                 </Button>
               </Tooltip>
               {
@@ -584,7 +599,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   onClick={handleTestConnection}
                   loading={isTestingConnection}
                 >
-                  Test Connection
+                  {t("models.autoRouters.form.testConnection")}
                 </Button>
               }
               <Tooltip title={submitBlockedReason}>
@@ -595,7 +610,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                     handleAutoRouterSubmit();
                   }}
                 >
-                  Add Auto Router
+                  {t("models.autoRouters.form.submit")}
                 </Button>
               </Tooltip>
             </div>
@@ -604,13 +619,13 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       </Card>
 
       <Modal
-        title="Test Routing"
+        title={t("models.autoRouters.form.testRouting")}
         open={isRoutingTestVisible}
         destroyOnHidden
         onCancel={() => setIsRoutingTestVisible(false)}
         footer={[
           <Button key="close" onClick={() => setIsRoutingTestVisible(false)}>
-            Close
+            {t("models.autoRouters.form.close")}
           </Button>,
         ]}
         width={760}
@@ -627,7 +642,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       </Modal>
 
       <Modal
-        title="Connection Test Results"
+        title={t("models.autoRouters.form.connectionResults")}
         open={isTestModalVisible}
         onCancel={() => {
           setIsTestModalVisible(false);
@@ -641,7 +656,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
               setIsTestingConnection(false);
             }}
           >
-            Close
+            {t("models.autoRouters.form.close")}
           </Button>,
         ]}
         width={700}

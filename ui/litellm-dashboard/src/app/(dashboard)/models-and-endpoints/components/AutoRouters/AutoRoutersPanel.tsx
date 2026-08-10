@@ -16,6 +16,7 @@ import { Team } from "@/components/networking";
 
 import { AutoRoutersTable } from "./AutoRoutersTable";
 import { AutoRouterRow, toAutoRouterRows } from "./autoRouterRows";
+import { useTranslation } from "react-i18next";
 
 interface AutoRoutersPanelProps {
   accessToken: string;
@@ -27,6 +28,7 @@ interface AutoRoutersPanelProps {
 }
 
 export function AutoRoutersPanel({ accessToken, userRole, userID, teams, createScope }: AutoRoutersPanelProps) {
+  const { t } = useTranslation("gateway");
   const canCreate = createScope !== "forbidden";
   const { data: deployments, isLoading } = useAutoRouters();
   const invalidateAutoRouters = useInvalidateAutoRouters();
@@ -53,11 +55,11 @@ export function AutoRoutersPanel({ accessToken, userRole, userID, teams, createS
     setIsDeleting(true);
     try {
       await modelDeleteCall(accessToken, deletingRouter.id);
-      NotificationsManager.success(`Deleted auto router: ${deletingRouter.name}`);
+      NotificationsManager.success(t("models.autoRouters.deleted", { name: deletingRouter.name }));
       setDeletingRouter(null);
       await invalidateAutoRouters();
     } catch (error) {
-      NotificationsManager.fromBackend(`Failed to delete auto router: ${error}`);
+      NotificationsManager.fromBackend(t("models.autoRouters.deleteFailed", { error: String(error) }));
     } finally {
       setIsDeleting(false);
     }
@@ -67,16 +69,13 @@ export function AutoRoutersPanel({ accessToken, userRole, userID, teams, createS
     <div className="w-full space-y-4">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-base font-semibold text-foreground">Auto routers</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Auto routers sit above your deployments and pick a model per request. They are called like any other model,
-            so clients keep using a single model name.
-          </p>
+          <h2 className="text-base font-semibold text-foreground">{t("models.autoRouters.title")}</h2>
+          <p className="mt-1 text-sm text-muted-foreground">{t("models.autoRouters.description")}</p>
         </div>
         {canCreate && (
           <Button onClick={() => setIsCreating(true)} className="shrink-0">
             <Plus />
-            Add Auto Router
+            {t("models.autoRouters.add")}
           </Button>
         )}
       </div>
@@ -94,11 +93,8 @@ export function AutoRoutersPanel({ accessToken, userRole, userID, teams, createS
             growing past the viewport. */}
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
           <DialogHeader>
-            <DialogTitle>Add Auto Router</DialogTitle>
-            <DialogDescription>
-              Routes each request to a model by classifying its complexity. Called like any other model, so clients keep
-              using a single model name.
-            </DialogDescription>
+            <DialogTitle>{t("models.autoRouters.add")}</DialogTitle>
+            <DialogDescription>{t("models.autoRouters.dialogDescription")}</DialogDescription>
           </DialogHeader>
           <AddAutoRouterTab
             handleOk={handleCreated}
@@ -113,13 +109,25 @@ export function AutoRoutersPanel({ accessToken, userRole, userID, teams, createS
       {deletingRouter && (
         <DeleteResourceModal
           isOpen
-          title="Delete Auto Router"
-          message={`Are you sure you want to delete "${deletingRouter.name}"? Any client still calling this model name will start failing.`}
-          resourceInformationTitle="Auto router"
+          title={t("models.autoRouters.deleteDialog.title")}
+          message={t("models.autoRouters.deleteDialog.message", { name: deletingRouter.name })}
+          resourceInformationTitle={t("models.autoRouters.deleteDialog.information")}
           resourceInformation={[
-            { label: "Name", value: deletingRouter.name },
-            { label: "Type", value: deletingRouter.typeLabel },
-            { label: "ID", value: deletingRouter.id },
+            { label: t("models.autoRouters.columns.name"), value: deletingRouter.name },
+            {
+              label: t("models.autoRouters.columns.type"),
+              value: t(
+                `models.autoRouters.typeLabels.${
+                  deletingRouter.typeLabel === "LLM Classifier"
+                    ? "llm"
+                    : deletingRouter.typeLabel === "Heuristic"
+                      ? "heuristic"
+                      : deletingRouter.kind
+                }`,
+                { defaultValue: deletingRouter.typeLabel },
+              ),
+            },
+            { label: t("models.autoRouters.deleteDialog.id"), value: deletingRouter.id },
           ]}
           onCancel={() => setDeletingRouter(null)}
           onOk={handleConfirmDelete}
