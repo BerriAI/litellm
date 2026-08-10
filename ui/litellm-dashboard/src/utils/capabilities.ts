@@ -6,6 +6,8 @@ const CAPABILITY_ROLES = {
   viewDeletedTeams: all_admin_roles,
   viewPolicies: all_admin_roles,
   viewPrompts: all_admin_roles,
+  viewOrganizationUsage: all_admin_roles,
+  viewAgentUsage: all_admin_roles,
   viewWorkflowRuns: all_admin_roles,
   viewMemory: all_admin_roles,
   viewGuardrailUsage: all_admin_roles,

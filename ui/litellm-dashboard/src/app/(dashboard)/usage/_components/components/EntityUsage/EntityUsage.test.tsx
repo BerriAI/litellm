@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
 import EntityUsage from "./EntityUsage";
@@ -39,11 +39,21 @@ vi.mock("../EndpointUsage/EndpointUsage", () => ({
 }));
 
 vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
-  default: () => <div>Top Keys</div>,
+  default: ({ topKeys }: { topKeys: { api_key: string; spend: number }[] }) => (
+    <div>
+      <span>Top Keys</span>
+      <span>{`top-keys:${topKeys.map((row) => `${row.api_key}=${row.spend}`).join("|")}`}</span>
+    </div>
+  ),
 }));
 
 vi.mock("./TopModelView", () => ({
-  default: () => <div>Top Models</div>,
+  default: ({ topModels }: { topModels: { key: string; spend: number }[] }) => (
+    <div>
+      <span>Top Models</span>
+      <span>{`top-models:${topModels.map((row) => `${row.key}=${row.spend}`).join("|")}`}</span>
+    </div>
+  ),
 }));
 
 vi.mock("@/components/EntityUsageExport/EntityUsageExportModal", () => ({
@@ -856,6 +866,47 @@ describe("EntityUsage", () => {
     expect(logo.getAttribute("src")).toContain("openai_small");
   });
 
+  describe("capability gating", () => {
+    it.each([
+      ["organization", () => mockOrganizationDailyActivityCall, "Organization Spend Overview"],
+      ["agent", () => mockAgentDailyActivityCall, "Agent Spend Overview"],
+    ] as const)("fetches %s activity for an admin but not for an internal user", async (entityType, call, heading) => {
+      render(<EntityUsage {...defaultProps} entityType={entityType} />);
+      await waitFor(() => {
+        expect(call()).toHaveBeenCalled();
+      });
+
+      cleanup();
+      call().mockClear();
+
+      render(<EntityUsage {...defaultProps} entityType={entityType} userRole="Internal User" />);
+      expect(await screen.findByText(heading)).toBeInTheDocument();
+      expect(call()).not.toHaveBeenCalled();
+    });
+
+    it("keeps the team breakdown but drops its agent sub-fetch for an internal user", async () => {
+      render(<EntityUsage {...defaultProps} entityType="team" userRole="Internal User" />);
+
+      await waitFor(() => {
+        expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+      });
+      expect(screen.getByText("Team Spend Overview")).toBeInTheDocument();
+
+      expect(mockAgentDailyActivityCall).not.toHaveBeenCalled();
+      expect(screen.queryByText("Agent Activity")).not.toBeInTheDocument();
+      expect(screen.queryByText("Top Agents Driving Spend")).not.toBeInTheDocument();
+    });
+
+    it("keeps the tag breakdown for an internal user", async () => {
+      render(<EntityUsage {...defaultProps} entityType="tag" userRole="Internal User" />);
+
+      await waitFor(() => {
+        expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      });
+      expect(screen.getByText("Tag Spend Overview")).toBeInTheDocument();
+    });
+  });
+
   it("renders a letter avatar instead of an img for an unknown provider slug", async () => {
     const spendDataUnknownProvider = {
       ...mockSpendData,
@@ -880,5 +931,40 @@ describe("EntityUsage", () => {
     });
     expect(screen.queryByAltText("zzz-internal logo")).not.toBeInTheDocument();
     expect(screen.getByText("z")).toBeInTheDocument();
+  });
+
+  it("feeds the key, model and agent tables from their own breakdowns", async () => {
+    const usageMetrics = {
+      spend: 30.75,
+      api_requests: 300,
+      successful_requests: 290,
+      failed_requests: 10,
+      total_tokens: 15000,
+      prompt_tokens: 9000,
+      completion_tokens: 6000,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    };
+    mockTeamDailyActivityCall.mockResolvedValue({
+      ...mockSpendData,
+      results: [
+        {
+          ...mockSpendData.results[0],
+          breakdown: {
+            ...mockSpendData.results[0].breakdown,
+            model_groups: { "gpt-4o": { metrics: { ...usageMetrics, spend: 70.25 }, metadata: {} } },
+            api_keys: { "sk-abc": { metrics: usageMetrics, metadata: { key_alias: "prod-key", team_id: null } } },
+          },
+        },
+      ],
+    });
+
+    render(<EntityUsage {...defaultProps} entityType="team" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("top-keys:sk-abc=30.75")).toBeInTheDocument();
+    });
+    expect(screen.getByText("top-models:gpt-4o=70.25")).toBeInTheDocument();
+    expect(screen.getByText(/^top-models:Code Review Agent=/)).toBeInTheDocument();
   });
 });
