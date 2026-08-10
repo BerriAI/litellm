@@ -2857,7 +2857,7 @@ if MCP_AVAILABLE:
                 else:
                     auth_header_value = f"Bearer {mcp_auth_header}"
 
-            forwarded_headers: Final = _openapi_forwarded_extra_headers(
+            initial_forwarded_headers: Final = _openapi_forwarded_extra_headers(
                 mcp_server=mcp_server,
                 raw_headers=raw_headers,
                 user_api_key_auth=user_api_key_auth,
@@ -2867,15 +2867,19 @@ if MCP_AVAILABLE:
             if mcp_server:
                 (
                     resolved_auth_headers,
-                    forwarded_headers,
+                    resolved_forwarded_headers,
                 ) = await global_mcp_server_manager.resolve_openapi_upstream_auth(
                     mcp_server=mcp_server,
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
                     mcp_auth_header=mcp_auth_header,
                     user_api_key_auth=user_api_key_auth,
-                    forwarded_headers=forwarded_headers,
+                    forwarded_headers=initial_forwarded_headers,
                 )
+            else:
+                resolved_forwarded_headers = initial_forwarded_headers
+
+            forwarded_headers: Final = resolved_forwarded_headers
 
             _auth_token: Final = _request_auth_header.set(auth_header_value)
             _extra_token: Final = _request_extra_headers.set(forwarded_headers)
