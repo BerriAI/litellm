@@ -117,7 +117,14 @@ async def test_mcp_server_tool_call_body_contains_request_data():
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_tool_call_uses_canonical_request_tags_header():
+@pytest.mark.parametrize(
+    ("raw_headers", "expected_tags"),
+    [
+        ({"X-LiteLLM-Tags": "application:orders, service:checkout"}, ["application:orders", "service:checkout"]),
+        (None, None),
+    ],
+)
+async def test_mcp_server_tool_call_uses_canonical_request_tags_header(raw_headers, expected_tags):
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             mcp_server_tool_call,
@@ -129,7 +136,7 @@ async def test_mcp_server_tool_call_uses_canonical_request_tags_header():
 
     set_auth_context(
         UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
-        raw_headers={"X-LiteLLM-Tags": "application:orders, service:checkout"},
+        raw_headers=raw_headers,
     )
     captured_tags = {}
 
@@ -139,6 +146,7 @@ async def test_mcp_server_tool_call_uses_canonical_request_tags_header():
             headers=dict(request.headers),
             data={},
         )
+        captured_tags["headers"] = dict(request.headers)
         return data
 
     with patch(
@@ -152,7 +160,11 @@ async def test_mcp_server_tool_call_uses_canonical_request_tags_header():
             with patch("litellm.proxy.proxy_server.proxy_config", MagicMock()):
                 await mcp_server_tool_call("test_tool", {"value": "test"})
 
-    assert captured_tags["tags"] == ["application:orders", "service:checkout"]
+    assert captured_tags["tags"] == expected_tags
+    if raw_headers is None:
+        assert "x-litellm-tags" not in captured_tags["headers"]
+    else:
+        assert captured_tags["headers"]["x-litellm-tags"] == raw_headers["X-LiteLLM-Tags"]
 
 
 @pytest.mark.asyncio
