@@ -46447,6 +46447,553 @@
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
+    "quicksilverpro/deepseek-v4-flash": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 1.12e-07,
+        "output_cost_per_token": 2.24e-07,
+        "cache_read_input_token_cost": 1.44e-08,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/deepseek-v4-pro": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 3.48e-07,
+        "output_cost_per_token": 6.96e-07,
+        "cache_read_input_token_cost": 2.784e-09,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/qwen3.8-max": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "max_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 6e-06,
+        "cache_read_input_token_cost": 2.5e-07,
+        "cache_creation_input_token_cost": 2.5e-06,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/qwen3.7-max": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 1.25e-06,
+        "output_cost_per_token": 3.75e-06,
+        "cache_read_input_token_cost": 2.5e-07,
+        "cache_creation_input_token_cost": 1.5625e-06,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/qwen3.7-plus": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 2.56e-07,
+        "output_cost_per_token": 1.024e-06,
+        "cache_read_input_token_cost": 5.12e-08,
+        "cache_creation_input_token_cost": 3.2e-07,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/qwen3.7-flash": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 2.4e-08,
+        "output_cost_per_token": 1.04e-07,
+        "cache_read_input_token_cost": 4.8e-09,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/qwen3.6-plus": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 2.6e-07,
+        "output_cost_per_token": 1.56e-06,
+        "cache_creation_input_token_cost": 3.25e-07,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/qwen3.6-35b": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 262144,
+        "input_cost_per_token": 1.12e-07,
+        "output_cost_per_token": 8e-07,
+        "cache_read_input_token_cost": 4e-08,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/kimi-k2.6": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 256000,
+        "input_cost_per_token": 5.472e-07,
+        "output_cost_per_token": 2.728e-06,
+        "cache_read_input_token_cost": 2.92e-07,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/kimi-k2.7-code": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 256000,
+        "input_cost_per_token": 5.84e-07,
+        "output_cost_per_token": 2.8e-06,
+        "cache_read_input_token_cost": 1.278e-07,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/kimi-k3": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 2.4e-06,
+        "output_cost_per_token": 1.2e-05,
+        "cache_read_input_token_cost": 2.4e-07,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/glm-5.2": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 1.12e-06,
+        "output_cost_per_token": 3.52e-06,
+        "cache_read_input_token_cost": 2.08e-07,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/gpt-5.6-luna": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "max_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 8e-08,
+        "output_cost_per_token": 4.8e-07,
+        "cache_read_input_token_cost": 8e-09,
+        "cache_creation_input_token_cost": 1e-07,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/gpt-5.6-terra": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "max_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 8e-07,
+        "output_cost_per_token": 4.8e-06,
+        "cache_read_input_token_cost": 8e-08,
+        "cache_creation_input_token_cost": 1e-06,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/gpt-5.6-sol": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "max_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 4e-06,
+        "output_cost_per_token": 2.4e-05,
+        "cache_read_input_token_cost": 4e-07,
+        "cache_creation_input_token_cost": 5e-06,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/grok-4.5": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 500000,
+        "input_cost_per_token": 1.6e-06,
+        "output_cost_per_token": 4.8e-06,
+        "cache_read_input_token_cost": 4e-07,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/minimax-m3": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 2.4e-07,
+        "output_cost_per_token": 9.6e-07,
+        "cache_read_input_token_cost": 4.8e-08,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/mimo-v2.5": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 1.12e-07,
+        "output_cost_per_token": 2.24e-07,
+        "cache_read_input_token_cost": 2.24e-09,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/hy3": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 262144,
+        "input_cost_per_token": 1.056e-07,
+        "output_cost_per_token": 4.224e-07,
+        "cache_read_input_token_cost": 2.64e-08,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/claude-opus-5": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1000000,
+        "max_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 4e-06,
+        "output_cost_per_token": 2e-05,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/claude-fable-5": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1000000,
+        "max_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 8e-06,
+        "output_cost_per_token": 4e-05,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/claude-opus-4-8": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1000000,
+        "input_cost_per_token": 4e-06,
+        "output_cost_per_token": 2e-05,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/claude-opus-4-6": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1000000,
+        "input_cost_per_token": 4e-06,
+        "output_cost_per_token": 2e-05,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/claude-sonnet-4-6": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1000000,
+        "input_cost_per_token": 2.4e-06,
+        "output_cost_per_token": 1.2e-05,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/claude-haiku-4-5": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 200000,
+        "input_cost_per_token": 8e-07,
+        "output_cost_per_token": 4e-06,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/gemini-3.6-flash": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 1.275e-06,
+        "output_cost_per_token": 6.375e-06,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/gemini-3.5-flash-lite": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 2.55e-07,
+        "output_cost_per_token": 2.125e-06,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/gemini-3.5-flash": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 1.275e-06,
+        "output_cost_per_token": 7.65e-06,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/gemini-3.1-pro-preview": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 1.7e-06,
+        "output_cost_per_token": 1.02e-05,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/gemini-3-pro-image": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 1.7e-06,
+        "output_cost_per_token": 0.000102,
+        "supports_vision": true,
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/gemini-3-flash-preview": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 4.25e-07,
+        "output_cost_per_token": 2.55e-06,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
+    "quicksilverpro/gemini-3.1-flash-lite": {
+        "litellm_provider": "quicksilverpro",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 2.125e-07,
+        "output_cost_per_token": 1.275e-06,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "source": "https://quicksilverpro.io/docs/models/"
+    },
     "fallback_generalizations": {
         "rules": [
             {

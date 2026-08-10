@@ -183,5 +183,11 @@
       "max_completion_tokens": "max_tokens"
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
+  },
+  "quicksilverpro": {
+    "base_url": "https://api.quicksilverpro.io/v1",
+    "api_key_env": "QUICKSILVERPRO_API_KEY",
+    "api_base_env": "QUICKSILVERPRO_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   }
 }
