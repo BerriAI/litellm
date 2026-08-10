@@ -773,6 +773,10 @@ def _without_authorization(
     return filtered or None
 
 
+def _is_gateway_attribution_header(header_name: str) -> bool:
+    return header_name.lower() in {"x-litellm-tags", "x-litellm-end-user-id"}
+
+
 def _format_byok_openapi_auth_header(mcp_server: MCPServer, mcp_auth_header: str) -> str:
     """Format a raw BYOK credential for OpenAPI tool ``Authorization`` injection."""
     if mcp_server.auth_type == MCPAuth.api_key:
@@ -798,6 +802,8 @@ def _openapi_forwarded_extra_headers(
     forwarded: Final[dict[str, str]] = {}
     for header_name in mcp_server.extra_headers:
         if not isinstance(header_name, str):
+            continue
+        if _is_gateway_attribution_header(header_name):
             continue
         if skip_caller_authorization and header_name.lower() == "authorization":
             continue
@@ -4840,6 +4846,8 @@ class MCPServerManager:
 
             for header in mcp_server.extra_headers:
                 if not isinstance(header, str):
+                    continue
+                if _is_gateway_attribution_header(header):
                     continue
                 if header.lower() == "authorization" and strip_caller_authorization:
                     continue

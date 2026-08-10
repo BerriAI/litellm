@@ -428,6 +428,7 @@ if MCP_AVAILABLE:
         MCPServerManager,
         _caller_authorization_fans_out,
         _client_forwarded_authorization_headers,
+        _is_gateway_attribution_header,
         _should_strip_caller_authorization,
         _without_authorization,
         global_mcp_server_manager,
@@ -1765,7 +1766,7 @@ if MCP_AVAILABLE:
             for header in server.extra_headers:
                 if not isinstance(header, str):
                     continue
-                if header.lower() in {"x-litellm-tags", "x-litellm-end-user-id"}:
+                if _is_gateway_attribution_header(header):
                     continue
                 if header.lower() == "authorization" and (
                     strip_caller_authorization or withhold_forwarded_authorization

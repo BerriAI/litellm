@@ -37,6 +37,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_json_dict,
     _flow_endpoints_missing,
+    _openapi_forwarded_extra_headers,
     _oauth_endpoints_unresolved,
     _deserialize_json_list,
     _normalize_mcp_server_cost_info,
@@ -912,7 +913,7 @@ class TestMCPServerManager:
 
         async def capture_create_mcp_client(
             server, mcp_auth_header, extra_headers, stdio_env, **kwargs
-        ):  # pragma: no cover - helper
+        ):
             nonlocal captured_extra_headers
             captured_extra_headers = extra_headers
             return mock_client
@@ -933,6 +934,70 @@ class TestMCPServerManager:
 
         assert captured_extra_headers == {"Authorization": "Bearer token"}
         assert isinstance(result, CallToolResult)
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_does_not_forward_gateway_attribution_headers(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-attribution-call",
+            name="attribution-call-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.authorization,
+            extra_headers=["x-request-id", "X-LiteLLM-Tags", "X-LiteLLM-End-User-Id"],
+        )
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+        captured_extra_headers = None
+
+        async def capture_create_mcp_client(
+            server, mcp_auth_header, extra_headers, stdio_env, **kwargs
+        ):  # pragma: no cover - helper
+            nonlocal captured_extra_headers
+            captured_extra_headers = extra_headers
+            return mock_client
+
+        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+
+        await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers={
+                "x-request-id": "request-123",
+                "x-litellm-tags": "application:orders,service:checkout",
+                "x-litellm-end-user-id": "user-123",
+            },
+            proxy_logging_obj=None,
+        )
+
+        assert captured_extra_headers == {"x-request-id": "request-123"}
+
+    def test_openapi_forwarded_extra_headers_excludes_gateway_attribution_headers(self):
+        server = MCPServer(
+            server_id="server-attribution-openapi",
+            name="attribution-openapi-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.authorization,
+            extra_headers=["x-request-id", "X-LiteLLM-Tags", "X-LiteLLM-End-User-Id"],
+        )
+
+        forwarded_headers = _openapi_forwarded_extra_headers(
+            mcp_server=server,
+            raw_headers={
+                "x-request-id": "request-123",
+                "x-litellm-tags": "application:orders,service:checkout",
+                "x-litellm-end-user-id": "user-123",
+            },
+            user_api_key_auth=None,
+        )
+
+        assert forwarded_headers == {"x-request-id": "request-123"}
 
     async def _capture_list_subject_token(self, server, oauth2_headers, raw_headers=None):
         """Run _get_tools_from_server and return the subject_token it threaded to _create_mcp_client."""
