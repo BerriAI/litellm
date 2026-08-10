@@ -53,6 +53,10 @@ spec:
             - name: LITELLM_BACKEND_URL
               value: {{ .Values.ui.backendUrl | quote }}
             {{- end }}
+            {{- with .Values.ui.listenIPv6 }}
+            - name: NGINX_LISTEN_IPV6
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.ui.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

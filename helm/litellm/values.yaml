@@ -347,6 +347,11 @@ backend:
 ui:
   enabled: true
   logLevel: INFO
+  # IPv6 listener for the ui nginx, rendered as NGINX_LISTEN_IPV6 on the
+  # container: "auto" listens on [::]:3000 when the pod has an IPv6 stack
+  # (dual-stack clusters), "true" forces it, "false"/empty keeps today's
+  # IPv4-only bind. Leave empty unless kubelet probes reach the pod over IPv6.
+  listenIPv6: ""
   extraEnv: []
   envConfigMaps: []
   envSecrets: []
