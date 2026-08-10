@@ -255,6 +255,31 @@ def test_zero_cache_write_price_is_read_as_unpublished():
     assert result.prompt_caching == pytest.approx(0.0)
 
 
+def test_zero_cache_read_price_stays_literal():
+    """The read leg must NOT copy the write leg's falsy fall-open.
+
+    The two zeros mean opposite things. A free cache *write* is unpublished pricing, so
+    it falls open to input. A free cache *read* is real and is the largest discount
+    available -- 15 models charge for input and serve reads for nothing. Falling that
+    open to the input cost would zero out their savings entirely.
+    """
+    model = "gemini-robotics-er-1.5-preview"
+    info = litellm.get_model_info(model=model)
+    input_cost = info["input_cost_per_token"]
+    assert info.get("cache_read_input_token_cost") == 0.0 and input_cost > 0, (
+        "fixture drifted: this test needs a model with paid input and free cache reads"
+    )
+
+    result = compute_savings_spend(
+        model=model,
+        custom_llm_provider=None,
+        compression_saved_tokens=0,
+        usage_object=_caching_usage(read=10000, written=0),
+    )
+    # free reads => the whole input rate is saved, not zero
+    assert result.prompt_caching == pytest.approx(10000 * input_cost)
+
+
 def test_sub_input_cache_write_price_is_an_extra_saving(monkeypatch):
     """A few models price writes below input; there the premium is a real credit.
 
