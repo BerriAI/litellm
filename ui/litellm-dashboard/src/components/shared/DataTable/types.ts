@@ -21,10 +21,6 @@ export type DataTableSize = "compact" | "default";
 export type ColumnPinnedSide = "left" | "right";
 export type DataTableSkeletonShape = "text" | "twoLine" | "badge" | "chips" | "meter";
 
-/**
- * The flat shape the component reads internally. Every member of the public
- * `DataTableProps` union is assignable to it, so the component body needs no narrowing.
- */
 export interface DataTableResolvedProps<TData extends RowData, TValue> {
   data: TData[];
   columns: ColumnDef<TData, TValue>[];
