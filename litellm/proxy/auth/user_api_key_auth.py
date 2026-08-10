@@ -2385,9 +2385,7 @@ def _request_matches_unauthenticated_pass_through(endpoint: object, route: str) 
     if route == path:
         return True
     if endpoint_data.get("include_subpath", False) is True:
-        return route.startswith(
-            path.rstrip(_PASS_THROUGH_SUBPATH_SEPARATOR) + _PASS_THROUGH_SUBPATH_SEPARATOR
-        )
+        return route.startswith(path.rstrip(_PASS_THROUGH_SUBPATH_SEPARATOR) + _PASS_THROUGH_SUBPATH_SEPARATOR)
     return False
 
 
