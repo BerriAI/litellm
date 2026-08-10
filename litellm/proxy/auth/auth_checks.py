@@ -13,6 +13,7 @@ import asyncio
 import math
 import re
 import time
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 
 from fastapi import HTTPException, Request, status
@@ -648,28 +649,29 @@ async def common_checks(
             )
 
         async def _user_max_budget_check() -> None:
-            # 4.1 personal budget, if personal key
-            if (
-                (team_object is None or team_object.team_id is None)
-                and user_object is not None
-                and user_object.max_budget is not None
-            ):
-                from litellm.proxy.proxy_server import get_current_spend
+            # 4.1 personal budget
+            if user_object is None or user_object.max_budget is None:
+                return
+            is_team_key: Final = team_object is not None and team_object.team_id is not None
+            if is_team_key and general_settings.get("apply_user_budget_to_team_keys") is not True:
+                return
 
-                user_budget: Final = user_object.max_budget
-                user_spend: Final = await get_current_spend(
-                    counter_key=f"spend:user:{user_object.user_id}",
-                    fallback_spend=user_object.spend or 0.0,
+            from litellm.proxy.proxy_server import get_current_spend
+
+            user_budget: Final = user_object.max_budget
+            user_spend: Final = await get_current_spend(
+                counter_key=f"spend:user:{user_object.user_id}",
+                fallback_spend=user_object.spend or 0.0,
+                max_budget=user_budget,
+            )
+            if math.isfinite(user_budget) and user_spend >= user_budget:
+                raise litellm.BudgetExceededError(
+                    current_cost=user_spend,
                     max_budget=user_budget,
+                    message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
+                    entity_type=Litellm_EntityType.USER.value,
+                    entity_id=user_object.user_id,
                 )
-                if math.isfinite(user_budget) and user_spend >= user_budget:
-                    raise litellm.BudgetExceededError(
-                        current_cost=user_spend,
-                        max_budget=user_budget,
-                        message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
-                        entity_type=Litellm_EntityType.USER.value,
-                        entity_id=user_object.user_id,
-                    )
 
         # Each scope reads a distinct counter key with no cross-scope ordering
         # dependency, so the per-scope Redis-first reads run concurrently instead
@@ -2833,7 +2835,7 @@ async def get_org_object(
 
 
 async def _get_resources_from_access_groups(
-    access_group_ids: list[str],
+    access_group_ids: Sequence[str],
     resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids"],
     prisma_client: PrismaClient | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
@@ -2892,7 +2894,7 @@ async def _get_resources_from_access_groups(
 
 
 async def _get_models_from_access_groups(
-    access_group_ids: list[str],
+    access_group_ids: Sequence[str],
     prisma_client: PrismaClient | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
@@ -4262,6 +4264,10 @@ async def _project_soft_budget_check(
             )
 
 
+def _project_cache_key(project_id: str) -> str:
+    return f"project_id:{project_id}"
+
+
 async def get_project_object(
     project_id: str,
     prisma_client: PrismaClient | None,
@@ -4279,7 +4285,7 @@ async def get_project_object(
         return None
 
     # Check cache first
-    cache_key: Final = f"project_id:{project_id}"
+    cache_key: Final = _project_cache_key(project_id)
     deserialized_project: Final = await user_api_key_cache.async_get_cache(
         key=cache_key,
         model_type=LiteLLM_ProjectTableCachedObj,
@@ -4308,6 +4314,32 @@ async def get_project_object(
     )
 
     return project_obj
+
+
+async def delete_cached_project_object(
+    project_id: str,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    """
+    Every endpoint that mutates litellm_projecttable must call this: get_project_object
+    serves auth cache-first with no freshness check, so without invalidation a stale
+    project (e.g. a pre-update empty model allowlist) keeps being enforced until the
+    TTL expires (LIT-3803). Best-effort on both steps: the DB write has already
+    committed, so a cache backend error must not fail the endpoint; the stale entry
+    then expires via TTL.
+    """
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
+
+    cache_key: Final = _project_cache_key(project_id)
+    try:
+        await user_api_key_cache.async_delete_cache(key=cache_key)
+    except Exception as e:  # noqa: BLE001  # best-effort eviction: any cache backend error must not fail the mutation
+        verbose_proxy_logger.warning(
+            "Failed to evict cached project entry %s; a stale project may be served until its TTL expires: %s",
+            cache_key,
+            e,
+        )
+    await publish_auth_cache_invalidation(cache_key=cache_key)
 
 
 async def _organization_max_budget_check(

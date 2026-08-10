@@ -15,7 +15,7 @@ import {
   Tooltip,
   Typography,
 } from "antd";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import BulkCreateUsers from "./bulk_create_users_button";
 import TeamDropdown from "./common_components/team_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
@@ -29,7 +29,7 @@ import {
 } from "./networking";
 import OnboardingModal, { InvitationLink } from "./onboarding_link";
 const { Option } = Select;
-const { Text, Link, Title } = Typography;
+const { Text, Link } = Typography;
 // Helper function to generate UUID compatible across all environments
 const generateUUID = (): string => {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
@@ -80,11 +80,6 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   const { data: organizations = [] } = useOrganizations();
 
   // Derive teams from the user's organizations, falling back to the teams prop
-  const availableTeams = useMemo(() => {
-    const orgTeams = organizations.flatMap((org) => org.teams || []);
-    if (orgTeams.length > 0) return orgTeams;
-    return teams || [];
-  }, [organizations, teams]);
 
   useEffect(() => {
     const fetchData = async () => {
