@@ -6,7 +6,9 @@ import { StyleProvider } from "@ant-design/cssinjs";
 import { setNotificationInstance } from "@/components/molecules/notifications_manager";
 import { setMessageInstance } from "@/components/molecules/message_manager";
 import { useDashboardLanguage } from "@/i18n/I18nProvider";
+// eslint-disable-next-line no-restricted-imports -- locale data is required while the existing antd UI remains in service
 import enUS from "antd/locale/en_US";
+// eslint-disable-next-line no-restricted-imports -- locale data is required while the existing antd UI remains in service
 import ruRU from "antd/locale/ru_RU";
 
 export default function AntdGlobalProvider({ children }: { children: React.ReactNode }) {

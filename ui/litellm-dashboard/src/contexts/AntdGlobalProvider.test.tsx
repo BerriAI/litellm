@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n/I18nProvider";
 import { LANGUAGE_STORAGE_KEY } from "@/i18n/language";
+// eslint-disable-next-line no-restricted-imports -- verifies that the compatibility provider receives the real Russian antd locale
 import ruRU from "antd/locale/ru_RU";
 import AntdGlobalProvider from "./AntdGlobalProvider";
 
