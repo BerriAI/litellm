@@ -478,7 +478,11 @@ def test_azure_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_fl
     )
     with open(cost_map_path) as f:
         cost_map = json.load(f)
-    rules = cost_map["fallback_generalizations"]["rules"]
+    from litellm.litellm_core_utils.get_fallback_generalizations import (
+        load_local_fallback_generalizations,
+    )
+
+    rules = load_local_fallback_generalizations()
     rule_pattern = next(
         (r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),
         None,
