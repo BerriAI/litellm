@@ -77,6 +77,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-uv-
 
+      # Without this cache, `prisma generate` runs `npm install prisma@<ver>`
+      # plus engine downloads on every job; a slow npm fetch once took 5+ min
+      # and pushed a shard past its job timeout with all tests passing.
+      # prisma-client-py versions its binaries under this dir, and uv.lock pins
+      # the prisma package, so keying on uv.lock rotates the cache exactly when
+      # the binaries can change.
+      - name: Cache Prisma binaries
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/prisma-python
+          key: ${{ runner.os }}-prisma-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-prisma-
+
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
         run: |
@@ -84,8 +98,6 @@ jobs:
 
       - name: Generate Prisma client
         if: steps.changes.outputs.decision != 'skip'
-        env:
-          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
         run: |
           uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 

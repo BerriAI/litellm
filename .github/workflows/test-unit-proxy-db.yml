@@ -24,10 +24,13 @@ concurrency:
 # to whichever group it belongs to, not reshuffling slices.
 #
 # Design targets:
-#   * Every shard runs in <= 7 minutes of wall-clock on the default runner.
-#     Most of a shard's time is pytest plugin load + xdist worker imports +
-#     pytest-cov instrumentation, not the tests themselves. Keeping per-shard
-#     work low and matching worker count to runner cores is what controls it.
+#   * Shards take 7-13 minutes of job wall-clock on the default runner, mostly
+#     setup + pytest plugin load + xdist worker imports + pytest-cov
+#     instrumentation rather than the tests themselves. Keeping per-shard work
+#     low and matching worker count to runner cores is what controls it.
+#     Shards inherit the base workflow's 20-minute default timeout; tighter
+#     per-shard ceilings have killed healthy runs on runner/network variance,
+#     so don't add them back.
 #   * workers: 4 matches the 4-core ubuntu-latest runner. -n 8 on 4 cores
 #     oversubscribes 2x and workers fight for CPU during their cold-start
 #     imports (measured ~441% CPU for -n 8 locally, i.e. ~55% effective).
@@ -81,7 +84,7 @@ jobs:
   proxy-db:
     needs: assert-shard-coverage
     # Display only the semantic shard name in the checks UI instead of GHA's
-    # default "proxy-db (key-generation, tests/proxy_unit_tests/…, 0, loadscope, 20)"
+    # default "proxy-db (key-generation, tests/proxy_unit_tests/…, 0, loadscope)"
     # which includes every matrix field and gets truncated past the test-path.
     name: ${{ matrix.test-group }}
     permissions:
@@ -97,7 +100,6 @@ jobs:
             test-path: "tests/proxy_unit_tests/test_key_generate_prisma.py"
             workers: 0
             dist: loadscope
-            timeout: 20
 
           # ---- auth: split into 2 shards ----
           - test-group: auth-checks
@@ -107,7 +109,6 @@ jobs:
               tests/proxy_unit_tests/test_deprecated_key_grace_period.py
             workers: 4
             dist: loadscope
-            timeout: 15
           - test-group: jwt-and-keys
             test-path: >-
               tests/proxy_unit_tests/test_jwt.py
@@ -117,14 +118,12 @@ jobs:
               tests/proxy_unit_tests/test_deployed_proxy_keygen.py
             workers: 4
             dist: loadscope
-            timeout: 15
 
           # ---- test_proxy_utils.py, single shard, worksteal distribution ----
           - test-group: proxy-utils
             test-path: "tests/proxy_unit_tests/test_proxy_utils.py"
             workers: 4
             dist: worksteal
-            timeout: 15
 
           # ---- proxy server: split into 2 shards ----
           - test-group: proxy-server-core
@@ -137,7 +136,6 @@ jobs:
               tests/proxy_unit_tests/test_aproxy_startup.py
             workers: 4
             dist: loadscope
-            timeout: 15
           - test-group: proxy-runtime
             test-path: >-
               tests/proxy_unit_tests/test_proxy_config_unit_test.py
@@ -150,7 +148,6 @@ jobs:
               tests/proxy_unit_tests/test_multipart_bypass_repro.py
             workers: 4
             dist: loadscope
-            timeout: 15
 
           # ---- logging: split into 2 shards ----
           - test-group: custom-logging
@@ -160,7 +157,6 @@ jobs:
               tests/proxy_unit_tests/test_proxy_custom_logger.py
             workers: 4
             dist: loadscope
-            timeout: 15
           - test-group: logging-misc
             test-path: >-
               tests/proxy_unit_tests/test_proxy_reject_logging.py
@@ -168,7 +164,6 @@ jobs:
               tests/proxy_unit_tests/test_search_api_logging.py
             workers: 4
             dist: loadscope
-            timeout: 15
 
           - test-group: db-and-spend
             test-path: >-
@@ -181,7 +176,6 @@ jobs:
               tests/proxy_unit_tests/test_proxy_encrypt_decrypt.py
             workers: 4
             dist: loadscope
-            timeout: 15
 
           # ---- guardrails + budget + hooks: split into 2 ----
           - test-group: guardrails-hooks
@@ -191,7 +185,6 @@ jobs:
               tests/proxy_unit_tests/test_unit_test_proxy_hooks.py
             workers: 4
             dist: loadscope
-            timeout: 15
           - test-group: budgets
             test-path: >-
               tests/proxy_unit_tests/test_default_end_user_budget_simple.py
@@ -199,7 +192,6 @@ jobs:
               tests/proxy_unit_tests/test_zero_cost_model_budget_bypass.py
             workers: 4
             dist: loadscope
-            timeout: 15
 
           - test-group: endpoints-and-responses
             test-path: >-
@@ -223,12 +215,10 @@ jobs:
               tests/proxy_unit_tests/test_model_response_typing
             workers: 4
             dist: loadscope
-            timeout: 15
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: ${{ matrix.test-path }}
       workers: ${{ matrix.workers }}
       reruns: 2
-      timeout-minutes: ${{ matrix.timeout }}
       dist: ${{ matrix.dist }}
       artifact-name: proxy-db-${{ matrix.test-group }}
