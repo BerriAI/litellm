@@ -828,6 +828,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         import litellm
         from litellm import Choices, Message, ModelResponse
+        from litellm.litellm_core_utils.redact_messages import redacted_mcp_tool_call_metadata
 
         turn_off_message_logging: Final[bool] = getattr(self, "turn_off_message_logging", False)
         excluded_fields: Final[list[str] | None] = getattr(litellm, "standard_logging_payload_excluded_fields", None)
@@ -858,6 +859,12 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
             if "messages" not in (excluded_fields or []) and standard_logging_object_copy.get("messages") is not None:
                 standard_logging_object_copy["messages"] = [Message(content=redacted_str).model_dump()]
+
+            if "metadata" not in (excluded_fields or []):
+                metadata: Final = standard_logging_object_copy.get("metadata")
+                redacted_metadata: Final = redacted_mcp_tool_call_metadata(metadata, redacted_str)
+                if redacted_metadata is not metadata:
+                    standard_logging_object_copy["metadata"] = redacted_metadata
 
             if "response" not in (excluded_fields or []) and standard_logging_object_copy.get("response") is not None:
                 response: Final = standard_logging_object_copy["response"]

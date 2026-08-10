@@ -720,3 +720,102 @@ class TestRedactStreamingResponsesForCustomLogger:
 
         assert result_details is model_call_details
         assert response_obj.choices[0].message.content == "secret content"
+
+
+class TestRedactMcpToolCallMetadata:
+    """MCP tool arguments and results ride in metadata rather than in
+    messages/response, so they need their own redaction pass."""
+
+    def _slp(self):
+        return {
+            "standard_logging_object": {
+                "messages": [{"role": "user", "content": "secret prompt"}],
+                "metadata": {
+                    "user_api_key_hash": "abc",
+                    "mcp_tool_call_metadata": {
+                        "name": "get_weather",
+                        "arguments": {"city": "TOPSECRETCITY"},
+                        "result": {"text": "sensitive"},
+                    },
+                },
+            }
+        }
+
+    def test_global_redaction_strips_mcp_arguments_and_result(self):
+        from litellm.litellm_core_utils.redact_messages import _redact_standard_logging_object
+
+        model_call_details = self._slp()
+        _redact_standard_logging_object(model_call_details)
+
+        mcp_meta = model_call_details["standard_logging_object"]["metadata"]["mcp_tool_call_metadata"]
+        assert mcp_meta["arguments"] == "redacted-by-litellm"
+        assert mcp_meta["result"] == "redacted-by-litellm"
+        assert mcp_meta["name"] == "get_weather"
+        assert model_call_details["standard_logging_object"]["metadata"]["user_api_key_hash"] == "abc"
+
+    def test_callback_level_redaction_strips_mcp_arguments(self):
+        opted_out_logger = CustomLogger(turn_off_message_logging=True)
+
+        redacted = opted_out_logger.redact_standard_logging_payload_from_model_call_details(self._slp())
+
+        mcp_meta = redacted["standard_logging_object"]["metadata"]["mcp_tool_call_metadata"]
+        assert mcp_meta["arguments"] == "redacted-by-litellm"
+        assert mcp_meta["result"] == "redacted-by-litellm"
+
+    def test_callback_level_redaction_does_not_mutate_the_original(self):
+        model_call_details = self._slp()
+        opted_out_logger = CustomLogger(turn_off_message_logging=True)
+
+        opted_out_logger.redact_standard_logging_payload_from_model_call_details(model_call_details)
+
+        original = model_call_details["standard_logging_object"]["metadata"]["mcp_tool_call_metadata"]
+        assert original["arguments"] == {"city": "TOPSECRETCITY"}
+
+    def test_metadata_without_mcp_tool_call_is_untouched(self):
+        from litellm.litellm_core_utils.redact_messages import redacted_mcp_tool_call_metadata
+
+        metadata = {"user_api_key_hash": "abc"}
+
+        assert redacted_mcp_tool_call_metadata(metadata, "redacted-by-litellm") is metadata
+
+    def test_global_redaction_also_strips_the_raw_call_details_copy(self):
+        from litellm.litellm_core_utils.redact_messages import perform_redaction
+
+        model_call_details = {
+            "messages": [{"role": "user", "content": "secret prompt"}],
+            "mcp_tool_call_metadata": {
+                "name": "get_weather",
+                "arguments": {"city": "TOPSECRETCITY"},
+                "result": {"text": "sensitive"},
+            },
+            "standard_logging_object": {"messages": [], "metadata": {}},
+        }
+
+        perform_redaction(model_call_details, result=None)
+
+        raw = model_call_details["mcp_tool_call_metadata"]
+        assert raw["arguments"] == "redacted-by-litellm"
+        assert raw["result"] == "redacted-by-litellm"
+        assert raw["name"] == "get_weather"
+
+    def test_payload_without_metadata_does_not_gain_a_metadata_key(self):
+        """The callback-logs replay endpoint seeds a payload from an unvalidated
+        POST body, so `metadata` can legitimately be absent. Consumers that do
+        `payload.get("metadata", {}).get(...)` break on an explicit None."""
+        from litellm.litellm_core_utils.redact_messages import _redact_standard_logging_object
+
+        model_call_details = {"standard_logging_object": {"messages": [{"role": "user", "content": "x"}]}}
+
+        _redact_standard_logging_object(model_call_details)
+
+        assert "metadata" not in model_call_details["standard_logging_object"]
+
+    def test_metadata_without_mcp_tool_call_keeps_its_identity(self):
+        from litellm.litellm_core_utils.redact_messages import _redact_standard_logging_object
+
+        metadata = {"user_api_key_hash": "abc"}
+        model_call_details = {"standard_logging_object": {"messages": [], "metadata": metadata}}
+
+        _redact_standard_logging_object(model_call_details)
+
+        assert model_call_details["standard_logging_object"]["metadata"] is metadata

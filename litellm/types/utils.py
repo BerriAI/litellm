@@ -2637,13 +2637,13 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     """
     Name of the tool to call
     """
-    arguments: dict
+    arguments: dict | str
     """
-    Arguments to pass to the tool
+    Arguments to pass to the tool, or the redaction marker when message logging is off
     """
-    result: dict
+    result: dict | str
     """
-    Result of the tool call
+    Result of the tool call, or the redaction marker when message logging is off
     """
 
     mcp_server_name: str | None
