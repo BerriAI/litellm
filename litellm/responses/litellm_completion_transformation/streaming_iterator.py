@@ -1,6 +1,5 @@
 import time
 import uuid
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Final, Literal, cast
 
@@ -142,41 +141,54 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._cached_reasoning_item_id = f"rs_{uuid.uuid4()}"
         return self._cached_reasoning_item_id
 
-    def _open_output_item(
-        self,
-        kind: Literal["message", "reasoning"],
-        item_id: str,
-        item: Mapping[str, Any],
-    ) -> None:
-        """Announce an item, after closing whichever item was open before it.
+    def _open_message_item(self, item_id: str) -> None:
+        """Announce a message item, after closing whichever item was open before it.
 
-        A message item is followed by ``content_part.added``, which the spec requires
+        The added event is followed by ``content_part.added``, which the spec requires
         before any ``output_text.delta``.
         """
         self._close_open_output_item()
         self._open_item = _OpenOutputItem(
             index=self._allocate_output_index(),
             id=item_id,
-            kind=kind,
+            kind="message",
         )
-        if kind == "message":
-            self._emitted_message_item = True
-            self._pending_response_events.append(self.create_output_item_added_event())
-            self.sent_content_part_added_event = True
-            self._pending_response_events.append(self.create_content_part_added_event())
-            return
+        self._emitted_message_item = True
+        self._pending_response_events.append(self.create_output_item_added_event())
+        self.sent_content_part_added_event = True
+        self._pending_response_events.append(self.create_content_part_added_event())
 
+    def _open_reasoning_item(self, item_id: str) -> None:
+        """Announce a reasoning item, after closing whichever item was open before it."""
+        self._close_open_output_item()
+        self._open_item = _OpenOutputItem(
+            index=self._allocate_output_index(),
+            id=item_id,
+            kind="reasoning",
+        )
         self._sequence_number += 1
         event: Final = OutputItemAddedEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
             output_index=self._open_item.index,
-            item=BaseLiteLLMOpenAIResponseObject(**item),
+            item=self._reasoning_item_payload(item_id),
         )
         event.__dict__["sequence_number"] = self._sequence_number
         self._pending_response_events.append(event)
+        self._pending_response_events.append(self.create_reasoning_summary_part_added_event())
 
-        if kind == "reasoning":
-            self._pending_response_events.append(self.create_reasoning_summary_part_added_event())
+    @staticmethod
+    def _reasoning_item_payload(item_id: str) -> BaseLiteLLMOpenAIResponseObject:
+        """The announced reasoning item.
+
+        ``summary`` is an empty array rather than null: a client whose reasoning item requires
+        a summary list drops the whole item when the field is null or absent.
+        """
+        return BaseLiteLLMOpenAIResponseObject(
+            id=item_id,
+            type="reasoning",
+            status="in_progress",
+            summary=(),
+        )
 
     def create_reasoning_summary_part_added_event(self) -> ResponsePartAddedEvent:
         """Announce the summary part the reasoning deltas that follow belong to.
@@ -909,18 +921,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             item_id = f"rs_{uuid.uuid4()}"
             if self._cached_reasoning_item_id is None:
                 self._cached_reasoning_item_id = item_id
-            self._open_output_item(
-                "reasoning",
-                item_id,
-                {
-                    "id": item_id,
-                    "type": "reasoning",
-                    "status": "in_progress",
-                    # An empty array, never null: a client whose reasoning item requires a
-                    # summary list drops the whole item when the field is null or absent.
-                    "summary": [],
-                },
-            )
+            self._open_reasoning_item(item_id)
             self._accumulated_reasoning_content_parts = []
             return
 
@@ -941,17 +942,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if self._cached_item_id is None and chunk.id:
             self._cached_item_id = chunk.id
         item_id = f"msg_{uuid.uuid4()}" if self._emitted_message_item else self._message_item_id()
-        self._open_output_item(
-            "message",
-            item_id,
-            {
-                "id": item_id,
-                "type": "message",
-                "role": "assistant",
-                "status": "in_progress",
-                "content": [],
-            },
-        )
+        self._open_message_item(item_id)
 
     def _handle_reasoning_content_for_chunk(self, chunk: ModelResponseStream) -> None:
         """Accumulate the open reasoning item's content, and close it when it ends."""

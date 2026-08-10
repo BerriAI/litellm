@@ -183,8 +183,9 @@ def analyse(events: Sequence[BaseLiteLLMOpenAIResponseObject]) -> Lifecycle:
         if name == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED.value:
             added_indexes.append(output_index)
             open_items[output_index] = getattr(event.item, "id", None)
-            if getattr(event.item, "type", None) == "reasoning" and not isinstance(
-                getattr(event.item, "summary", None), list
+            summary = getattr(event.item, "summary", None)
+            if getattr(event.item, "type", None) == "reasoning" and (
+                not isinstance(summary, Sequence) or isinstance(summary, (str, bytes))
             ):
                 missing_fields.append(
                     "a reasoning output_item.added carries no summary array, so the item fails to deserialise"
@@ -501,5 +502,3 @@ async def test_completed_response_holds_no_item_the_stream_never_announced(drive
     completed = [event for event in events if event_type(event) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value]
     assert len(completed) == 1
     assert [str(item.type) for item in completed[0].response.output] == ["function_call"]
-
-
