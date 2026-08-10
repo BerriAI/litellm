@@ -4,6 +4,7 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import Layout from "./layout";
 
 const { replaceMock } = vi.hoisted(() => ({ replaceMock: vi.fn() }));
+const { i18nProviderMock } = vi.hoisted(() => ({ i18nProviderMock: vi.fn() }));
 
 let searchParamsValue = new URLSearchParams();
 
@@ -41,6 +42,13 @@ vi.mock("@/components/common_components/LoadingScreen", () => ({
   default: () => <div data-testid="loading-screen" />,
 }));
 
+vi.mock("@/i18n/I18nProvider", () => ({
+  I18nProvider: ({ children }: { children: React.ReactNode }) => {
+    i18nProviderMock();
+    return <>{children}</>;
+  },
+}));
+
 type Deferred = { promise: Promise<void>; resolve: () => void };
 
 const createDeferred = (): Deferred => {
@@ -67,6 +75,21 @@ describe("(dashboard) Layout", () => {
     vi.clearAllMocks();
     pendingUiConfig = createDeferred();
     searchParamsValue = new URLSearchParams();
+  });
+
+  it("does not create a second localization provider inside the dashboard", async () => {
+    render(
+      <AuthProvider>
+        <Layout>
+          <div data-testid="page-content" />
+        </Layout>
+      </AuthProvider>,
+    );
+
+    pendingUiConfig.resolve();
+    await screen.findByTestId("page-content");
+
+    expect(i18nProviderMock).not.toHaveBeenCalled();
   });
 
   it("does not mount route content until getUiConfig has resolved", async () => {

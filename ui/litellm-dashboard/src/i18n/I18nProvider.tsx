@@ -6,7 +6,7 @@ import { createInstance } from "i18next";
 import { createContext, PropsWithChildren, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { I18nextProvider, initReactI18next } from "react-i18next";
 import { LANGUAGE_STORAGE_KEY, resolveLanguage, SupportedLanguage } from "./language";
-import { resources } from "./resources";
+import { resources, TRANSLATION_NAMESPACES } from "./catalog";
 
 interface DashboardLanguageContextValue {
   language: SupportedLanguage;
@@ -24,8 +24,11 @@ export const I18nProvider = ({ children }: PropsWithChildren) => {
     const initialLanguage = resolveLanguage(getLocalStorageItem(LANGUAGE_STORAGE_KEY), navigator.language);
     const initializationOptions = {
       resources,
+      ns: TRANSLATION_NAMESPACES,
+      defaultNS: "common",
       lng: initialLanguage,
       fallbackLng: "en",
+      fallbackNS: "common",
       interpolation: { escapeValue: false },
     };
 

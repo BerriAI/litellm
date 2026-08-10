@@ -15,7 +15,6 @@ import { MIGRATED_PAGES, migratedHref, legacyPageHref, legacyKeyForPathname } fr
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
 import { createApiClient } from "@/lib/http/client";
 import { getProxyBaseUrl } from "@/components/networking";
-import { I18nProvider } from "@/i18n/I18nProvider";
 
 const pluginApiClient = createApiClient({ getBaseUrl: () => getProxyBaseUrl() ?? "" });
 
@@ -172,9 +171,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
 
   return (
     <ThemeProvider accessToken={accessToken}>
-      <I18nProvider>
-        <DashboardShell>{children}</DashboardShell>
-      </I18nProvider>
+      <DashboardShell>{children}</DashboardShell>
     </ThemeProvider>
   );
 }
