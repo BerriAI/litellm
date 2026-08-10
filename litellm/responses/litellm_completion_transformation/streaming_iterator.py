@@ -1,7 +1,7 @@
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Final, Literal, cast
+from typing import Any, Final, Literal, TypeAlias, cast
 
 import litellm
 from litellm.main import stream_chunk_builder
@@ -47,6 +47,9 @@ from litellm.types.utils import (
     StreamingChoices,
     TextCompletionResponse,
 )
+
+# An item the stream closed, paired with the output_index it was announced at.
+_StreamedItem: TypeAlias = tuple[int, "BaseLiteLLMOpenAIResponseObject"]
 
 
 @dataclass(slots=True)
@@ -104,6 +107,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         # message and tool call alike.
         self._next_output_index: int = 0
         self._open_item: _OpenOutputItem | None = None
+        # The items whose done events the stream emitted, in order. response.completed
+        # is built from these so the final output is exactly what was streamed.
+        self._streamed_items: list[_StreamedItem] = []  # mutable-ok: appended as each item closes
         self._emitted_message_item: bool = False
         self._final_tool_events_queued: bool = False
         self._sequence_number: int = 0
@@ -258,6 +264,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 }
             ),
         )
+        self._streamed_items.append((item.index, item_done.item))
         self._pending_response_events.extend((text_done, part_done, item_done))
 
     def _queue_reasoning_done_events(self, item: _OpenOutputItem) -> None:
@@ -286,6 +293,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             sequence_number=self._sequence_number,
             output_index=item.index,
         )
+        self._streamed_items.append((item.index, item_done_event.item))
         self._pending_response_events.extend((text_done_event, part_done_event, item_done_event))
 
     def _normalize_tool_call_index(self, tool_call: object) -> int | None:
@@ -481,6 +489,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 sequence_number=self._sequence_number,
                 item=BaseLiteLLMOpenAIResponseObject(**item_kwargs),
             )
+            self._streamed_items.append((output_index, item_done_event.item))
             self._pending_tool_events.append(item_done_event)
 
     def _default_response_created_event_data(self) -> dict:
@@ -838,7 +847,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return self.create_output_content_part_done_event(litellm_complete_object)
         if self.sent_output_item_done_event is False:
             self.sent_output_item_done_event = True
-            event = self.create_output_item_done_event(litellm_complete_object)
+            event: Final = self.create_output_item_done_event(litellm_complete_object)
+            self._streamed_items.append((event.output_index, event.item))
             self._open_item = None
             return event
         return None
@@ -1196,6 +1206,17 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     reasoning_item_id=self._cached_reasoning_item_id,
                 )
             )
+
+            # The completed response lists exactly the items the stream announced and closed,
+            # in that order. Rebuilding it from the merged chat completion instead would give
+            # one item per content kind, which disagrees with the stream whenever a turn's
+            # content kinds repeat or interleave.
+            # Ordered by output_index rather than by close time: a tool item is announced
+            # mid-stream but closed at the end, so close order is not the turn's order.
+            if self._streamed_items:
+                responses_api_response.output = [
+                    item for _, item in sorted(self._streamed_items, key=lambda pair: pair[0])
+                ]
 
             # Use the cached response ID to ensure consistency across all events
             if self._cached_response_id:

@@ -158,6 +158,7 @@ class Lifecycle(NamedTuple):
     id_mismatches: list[str]
     unclosed: list[int]
     missing_fields: list[str]
+    unreconciled: list[str]
 
 
 def event_type(event: BaseLiteLLMOpenAIResponseObject) -> str:
@@ -172,6 +173,8 @@ def analyse(events: Sequence[BaseLiteLLMOpenAIResponseObject]) -> Lifecycle:
     orphans: list[str] = []
     id_mismatches: list[str] = []
     missing_fields: list[str] = []
+    announced_ids: list[str] = []
+    completed_ids: list[str] = []
 
     for event in events:
         name = event_type(event)
@@ -183,6 +186,7 @@ def analyse(events: Sequence[BaseLiteLLMOpenAIResponseObject]) -> Lifecycle:
         if name == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED.value:
             added_indexes.append(output_index)
             open_items[output_index] = getattr(event.item, "id", None)
+            announced_ids.append(str(getattr(event.item, "id", None)))
             summary = getattr(event.item, "summary", None)
             if getattr(event.item, "type", None) == "reasoning" and (
                 not isinstance(summary, Sequence) or isinstance(summary, (str, bytes))
@@ -191,6 +195,9 @@ def analyse(events: Sequence[BaseLiteLLMOpenAIResponseObject]) -> Lifecycle:
                     "a reasoning output_item.added carries no summary array, so the item fails to deserialise"
                 )
             continue
+
+        if name == ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value:
+            completed_ids.extend(str(getattr(item, "id", None)) for item in event.response.output)
 
         if name == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE.value:
             done_indexes.append(output_index)
@@ -211,6 +218,10 @@ def analyse(events: Sequence[BaseLiteLLMOpenAIResponseObject]) -> Lifecycle:
                 f"but output_index {output_index} was announced as {open_items[output_index]!r}"
             )
 
+    unreconciled: list[str] = []
+    if completed_ids and completed_ids != announced_ids:
+        unreconciled.append(f"response.completed lists {completed_ids} but the stream announced {announced_ids}")
+
     return Lifecycle(
         added_indexes=added_indexes,
         done_indexes=done_indexes,
@@ -218,6 +229,7 @@ def analyse(events: Sequence[BaseLiteLLMOpenAIResponseObject]) -> Lifecycle:
         id_mismatches=id_mismatches,
         unclosed=sorted(open_items),
         missing_fields=missing_fields,
+        unreconciled=unreconciled,
     )
 
 
@@ -227,6 +239,7 @@ def assert_well_formed(events: Sequence[BaseLiteLLMOpenAIResponseObject], expect
     assert lifecycle.id_mismatches == []
     assert lifecycle.unclosed == []
     assert lifecycle.missing_fields == []
+    assert lifecycle.unreconciled == []
     assert sorted(lifecycle.added_indexes) == list(range(expected_items))
     assert sorted(lifecycle.done_indexes) == list(range(expected_items))
 
