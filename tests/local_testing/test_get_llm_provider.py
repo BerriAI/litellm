@@ -500,7 +500,7 @@ def shipped_generalizations():
     )
 
     previous = list(get_fallback_generalization_rules())
-    rules = load_local_fallback_generalizations()
+    rules = list(load_local_fallback_generalizations())
     set_fallback_generalizations(rules)
     try:
         yield rules

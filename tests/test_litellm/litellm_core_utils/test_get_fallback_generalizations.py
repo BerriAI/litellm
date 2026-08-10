@@ -1,6 +1,6 @@
 """
-Tests for loading the standalone fallback generalizations file: remote wins when it is
-usable, the bundled copy covers every failure, and the local-only env flags skip HTTP.
+Tests for loading the standalone fallback generalizations file: the remote copy wins when
+it is usable, the bundled copy covers every failure, and the local-only env flags skip HTTP.
 """
 
 import json
@@ -12,7 +12,6 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
-import litellm
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
     match_routing_generalization,
@@ -26,13 +25,13 @@ from litellm.litellm_core_utils.get_fallback_generalizations import (
 
 _URL = "https://example.invalid/fallback_generalizations.json"
 
-_REMOTE_RULES = [
+_REMOTE_RULES = (
     {
         "name": "remote-only",
         "pattern": r"^widget-",
         "model_info": {"litellm_provider": "openai"},
-    }
-]
+    },
+)
 
 
 @pytest.fixture(autouse=True)
@@ -51,48 +50,59 @@ def restore_generalizations():
         set_fallback_generalizations(previous)
 
 
-def _serve(monkeypatch, response: httpx.Response | Exception) -> dict:
-    """Point httpx.get at a canned response and count the calls made to it."""
-    calls = {"count": 0}
+def _serving(payload: object):
+    """A fetcher returning ``payload``, or raising it when it is an exception."""
 
-    def fake_get(url, timeout=None):
-        calls["count"] += 1
-        if isinstance(response, Exception):
-            raise response
-        return response
+    def fetch(url: str) -> object:
+        if isinstance(payload, Exception):
+            raise payload
+        return payload
 
-    monkeypatch.setattr(
-        "litellm.litellm_core_utils.get_fallback_generalizations.httpx.get", fake_get
-    )
-    return calls
+    return fetch
 
 
-def test_remote_rules_are_used_when_the_fetch_succeeds(monkeypatch):
-    _serve(monkeypatch, httpx.Response(200, json={"rules": _REMOTE_RULES}, request=httpx.Request("GET", _URL)))
-    assert get_fallback_generalizations(url=_URL) == _REMOTE_RULES
+def _never_called(url: str) -> object:
+    raise AssertionError(f"fetched {url} while in local-only mode")
 
 
-def test_network_failure_falls_back_to_the_bundled_file(monkeypatch):
+def test_remote_rules_are_used_when_the_fetch_succeeds():
+    rules = get_fallback_generalizations(url=_URL, fetch=_serving({"rules": list(_REMOTE_RULES)}))
+    assert rules == _REMOTE_RULES
+
+
+def test_network_failure_falls_back_to_the_bundled_file():
     """A rules fetch must never take routing down: an unreachable host keeps the shipped rules."""
-    _serve(monkeypatch, httpx.ConnectError("connection refused"))
-    assert get_fallback_generalizations(url=_URL) == load_local_fallback_generalizations()
+    rules = get_fallback_generalizations(url=_URL, fetch=_serving(httpx.ConnectError("connection refused")))
+    assert rules == load_local_fallback_generalizations()
 
 
-def test_http_error_falls_back_to_the_bundled_file(monkeypatch):
-    """The file is 404 on older branches until this lands, so a 404 must not wipe the rules."""
-    _serve(monkeypatch, httpx.Response(404, request=httpx.Request("GET", _URL)))
-    assert get_fallback_generalizations(url=_URL) == load_local_fallback_generalizations()
+def test_http_error_falls_back_to_the_bundled_file():
+    """The URL 404s on every branch that predates this file, so a 404 must not wipe the rules."""
+    error = httpx.HTTPStatusError(
+        "404", request=httpx.Request("GET", _URL), response=httpx.Response(404)
+    )
+    rules = get_fallback_generalizations(url=_URL, fetch=_serving(error))
+    assert rules == load_local_fallback_generalizations()
+
+
+def test_unparseable_remote_body_falls_back_to_the_bundled_file():
+    rules = get_fallback_generalizations(url=_URL, fetch=_serving(json.JSONDecodeError("boom", "", 0)))
+    assert rules == load_local_fallback_generalizations()
 
 
 @pytest.mark.parametrize(
     "payload",
-    [{"rules": {}}, {}, []],
-    ids=["rules_not_a_list", "no_rules_key", "not_an_object"],
+    [{"rules": {}}, {"rules": []}, {}, [], "rules"],
+    ids=["rules_not_a_list", "rules_empty", "no_rules_key", "not_an_object", "not_json_object"],
 )
-def test_malformed_remote_payload_falls_back_to_the_bundled_file(monkeypatch, payload):
+def test_malformed_remote_payload_falls_back_to_the_bundled_file(payload):
     """A truncated or reshaped remote file must not silently disable every rule."""
-    _serve(monkeypatch, httpx.Response(200, json=payload, request=httpx.Request("GET", _URL)))
-    assert get_fallback_generalizations(url=_URL) == load_local_fallback_generalizations()
+    assert get_fallback_generalizations(url=_URL, fetch=_serving(payload)) == load_local_fallback_generalizations()
+
+
+def test_non_object_rules_are_skipped_without_dropping_the_valid_ones():
+    payload = {"rules": ["nonsense", *_REMOTE_RULES]}
+    assert get_fallback_generalizations(url=_URL, fetch=_serving(payload)) == _REMOTE_RULES
 
 
 @pytest.mark.parametrize(
@@ -100,21 +110,15 @@ def test_malformed_remote_payload_falls_back_to_the_bundled_file(monkeypatch, pa
     ["LITELLM_LOCAL_FALLBACK_GENERALIZATIONS", "LITELLM_LOCAL_MODEL_COST_MAP"],
 )
 def test_local_only_env_skips_the_fetch(monkeypatch, env_name):
-    """Both flags mean "no registry network calls", so neither may issue an HTTP request."""
+    """Both flags mean "no registry network calls", so neither may issue a request."""
     monkeypatch.setenv(env_name, "True")
-    calls = _serve(monkeypatch, httpx.Response(200, json={"rules": _REMOTE_RULES}, request=httpx.Request("GET", _URL)))
-
-    assert get_fallback_generalizations(url=_URL) == load_local_fallback_generalizations()
-    assert calls["count"] == 0
+    assert get_fallback_generalizations(url=_URL, fetch=_never_called) == load_local_fallback_generalizations()
 
 
-def test_install_uses_the_configured_url_and_compiles_the_rules(
-    monkeypatch, restore_generalizations
-):
-    monkeypatch.setattr(litellm, "fallback_generalizations_url", _URL)
-    _serve(monkeypatch, httpx.Response(200, json={"rules": _REMOTE_RULES}, request=httpx.Request("GET", _URL)))
+def test_install_compiles_the_loaded_rules(restore_generalizations):
+    installed = install_fallback_generalizations(url=_URL, fetch=_serving({"rules": list(_REMOTE_RULES)}))
 
-    assert install_fallback_generalizations() == _REMOTE_RULES
+    assert installed == _REMOTE_RULES
     assert match_routing_generalization("widget-9") == "openai"
 
 

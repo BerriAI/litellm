@@ -2174,7 +2174,7 @@ def test_bedrock_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_
         load_local_fallback_generalizations,
     )
 
-    rules = load_local_fallback_generalizations()
+    rules = list(load_local_fallback_generalizations())
     pattern = re.compile(
         next(r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),
         re.IGNORECASE,

@@ -482,7 +482,7 @@ def test_azure_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_fl
         load_local_fallback_generalizations,
     )
 
-    rules = load_local_fallback_generalizations()
+    rules = list(load_local_fallback_generalizations())
     rule_pattern = next(
         (r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),
         None,

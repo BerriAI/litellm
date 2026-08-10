@@ -118,7 +118,7 @@ def test_finalize_drops_a_stale_block_and_installs_the_standalone_rules(monkeypa
 
         assert FALLBACK_GENERALIZATIONS_KEY not in finalized
         assert match_routing_generalization("widget-9") is None
-        assert get_fallback_generalization_rules() == load_local_fallback_generalizations()
+        assert tuple(get_fallback_generalization_rules()) == load_local_fallback_generalizations()
     finally:
         set_fallback_generalizations(previous)
 
@@ -142,7 +142,7 @@ def test_shipped_backup_carries_the_claude_routing_rules():
     """The bundled rules file must ship the Claude routing rules so a fresh install
     (or an offline fallback) routes unknown Claude models without code changes.
     Bedrock-syntax ids must hit the bedrock rule before the bare-id Anthropic rule."""
-    rules = load_local_fallback_generalizations()
+    rules = list(load_local_fallback_generalizations())
     names = [r.get("name") for r in rules]
     assert names.index("bedrock-claude-ids") < names.index("anthropic-claude-ids")
 
@@ -163,7 +163,7 @@ def test_shipped_routing_rules_never_match_through_an_unrecognized_namespace():
     ``bedrockz/anthropic.claude-...`` resolve to bedrock and slip through a
     ``bedrock/*`` key, so every shipped routing rule must anchor to the start of
     the name and never match an id carrying an unrecognized namespace prefix."""
-    rules = load_local_fallback_generalizations()
+    rules = list(load_local_fallback_generalizations())
 
     routing_rules = [r for r in rules if "litellm_provider" in r["model_info"]]
     assert routing_rules
@@ -202,7 +202,7 @@ def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
     baseline block is never duplicated across rules and no rule needs ``extends``."""
     backup = GetModelCostMap.load_local_model_cost_map()
 
-    rules = load_local_fallback_generalizations()
+    rules = list(load_local_fallback_generalizations())
     baseline_rule = next(r for r in rules if r.get("name") == "claude-family-baseline")
     adaptive_rule = next(r for r in rules if r.get("name") == "claude-adaptive-thinking")
     assert "supports_adaptive_thinking" not in baseline_rule["model_info"]
