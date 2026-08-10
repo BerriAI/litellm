@@ -3,6 +3,7 @@ Unit tests for tag-scoped token/request/dollar rate limiting.
 """
 
 import asyncio
+import uuid
 from datetime import datetime, timedelta
 
 import pytest
@@ -535,3 +536,168 @@ async def test_concurrency_slot_released_on_failure_frees_capacity(time_controll
         model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
     )
     assert result == healthy
+
+
+# ---------------------------------------------------------------------------
+# tokens / dollars -- read-then-account-on-success rejection path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_token_limit_rejects_once_bucket_is_seeded_at_limit(time_controller):
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {"token_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1000, "period_seconds": 86400}]}},
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    now = time_controller.now().timestamp()
+    key = f"{{tag_rl:grp:tokens:daily:chain:u1}}:{int(now) // 86400}"
+    await limiter.internal_usage_cache.async_set_cache(key=key, value=1000, ttl=86400, litellm_parent_otel_span=None)
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        )
+    assert exc_info.value.detail["type"] == "tokens"
+    assert exc_info.value.detail["limit_name"] == "daily"
+
+
+@pytest.mark.asyncio
+async def test_dollar_limit_rejects_once_bucket_is_seeded_at_limit(time_controller):
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {"dollar_limits": {"limits": [{"name": "monthly", "tag_id": "team_id", "limit": 50.0, "period_seconds": 2592000}]}},
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    now = time_controller.now().timestamp()
+    key = f"{{tag_rl:grp:dollars:monthly:chain:t1}}:{int(now) // 2592000}"
+    await limiter.internal_usage_cache.async_set_cache(key=key, value=50.0, ttl=2592000, litellm_parent_otel_span=None)
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["team_id:t1"]}}
+        )
+    assert exc_info.value.detail["type"] == "dollars"
+    assert exc_info.value.detail["tag_value"] == "t1"
+
+
+# ---------------------------------------------------------------------------
+# Real Redis -- the atomic Lua path, not just the in-memory fallback
+# ---------------------------------------------------------------------------
+
+
+def _redis_limiter(time_controller: TimeController):
+    import os
+
+    from litellm.caching.redis_cache import RedisCache
+
+    redis_host = os.getenv("REDIS_HOST")
+    redis_port = os.getenv("REDIS_PORT")
+    if not redis_host or not redis_port:
+        pytest.skip("Redis environment variables (REDIS_HOST, REDIS_PORT) not set")
+    redis_cache = RedisCache(host=redis_host, port=int(redis_port), password=os.getenv("REDIS_PASSWORD"))
+    dual_cache = DualCache(redis_cache=redis_cache)
+    return _PROXY_TagRateLimiter(internal_usage_cache=dual_cache, time_provider=time_controller.now), redis_cache
+
+
+@pytest.mark.asyncio
+async def test_redis_backed_requests_admission_is_race_free_under_genuine_concurrency(time_controller):
+    """
+    Same race-freedom guarantee as the in-memory test, but against a real
+    Redis instance so the Lua script path (not just the asyncio.Lock
+    fallback) is exercised -- this is the code path every multi-instance
+    proxy deployment actually runs.
+    """
+    limiter, redis_cache = _redis_limiter(time_controller)
+    try:
+        await redis_cache.ping()
+    except Exception as e:
+        pytest.skip(f"Redis connection failed: {str(e)}")
+
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {"request_limits": {"limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 5, "period_seconds": 60}]}},
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+    tag = f"redis-race-{uuid.uuid4().hex}"
+
+    async def attempt():
+        try:
+            await limiter.async_filter_deployments(
+                model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": [f"end_user_id:{tag}"]}}
+            )
+            return True
+        except ProxyRateLimitError:
+            return False
+
+    results = await asyncio.gather(*(attempt() for _ in range(20)))
+    assert sum(results) == 5
+
+
+@pytest.mark.asyncio
+async def test_redis_backed_cross_unit_rejection_does_not_leave_a_phantom_increment(time_controller):
+    """Redis-Lua-script equivalent of the in-memory phantom-increment regression test."""
+    limiter, redis_cache = _redis_limiter(time_controller)
+    try:
+        await redis_cache.ping()
+    except Exception as e:
+        pytest.skip(f"Redis connection failed: {str(e)}")
+
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "request_limits": {
+                        "limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 10, "period_seconds": 60}]
+                    },
+                    "concurrency_limits": {
+                        "limits": [{"name": "inflight", "tag_id": "end_user_id", "limit": 1, "period_seconds": 300}]
+                    },
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+    tag = f"redis-phantom-check-{uuid.uuid4().hex}"
+
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": [f"end_user_id:{tag}"]}}
+    )
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": [f"end_user_id:{tag}"]}}
+        )
+    assert exc_info.value.detail["type"] == "concurrency"
+
+    now = time_controller.now().timestamp()
+    request_key = f"{{tag_rl:grp:requests:per_minute:chain:{tag}}}:{int(now) // 60}"
+    requests_value = await limiter.internal_usage_cache.async_get_cache(key=request_key, litellm_parent_otel_span=None)
+    assert (float(requests_value) if requests_value is not None else 0.0) == 1.0
+
+    # cleanup: this key persists in the shared scratch Redis instance beyond the test's TTL otherwise
+    await redis_cache.async_delete_cache(key=request_key)
