@@ -16,6 +16,11 @@ terraform {
 provider "litellm" {
   api_base = "https://your-litellm-proxy.com"
   api_key  = var.litellm_api_key
+
+  # Optional: extra headers on every API request (e.g. proxy / gateway auth)
+  custom_headers = {
+    "X-Proxy-Auth" = var.proxy_token
+  }
 }
 
 # Basic model configuration
@@ -94,6 +99,8 @@ The following arguments are supported in the provider block:
 
 * `api_base` - (Required) The base URL of your LiteLLM instance. This can also be provided via the `LITELLM_API_BASE` environment variable.
 * `api_key` - (Required) The API key used to authenticate with LiteLLM. This can also be provided via the `LITELLM_API_KEY` environment variable.
+* `custom_headers` - (Optional) Map of HTTP headers to include on every request to the LiteLLM API. Useful for proxy or gateway authentication headers. Marked sensitive.
+* `insecure_skip_verify` - (Optional) Skip TLS certificate verification. Defaults to `false`. Can also be set via `LITELLM_INSECURE_SKIP_VERIFY`.
 
 ## Getting Started
 

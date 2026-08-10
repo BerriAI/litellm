@@ -17,6 +17,7 @@ type Client struct {
 	APIKey             string
 	httpClient         *http.Client
 	InsecureSkipVerify bool
+	CustomHeaders      map[string]string
 }
 
 func NewClient(apiBase, apiKey string, insecureSkipVerify bool) *Client {
@@ -29,6 +30,7 @@ func NewClient(apiBase, apiKey string, insecureSkipVerify bool) *Client {
 		APIKey:             apiKey,
 		httpClient:         &http.Client{Transport: tr},
 		InsecureSkipVerify: insecureSkipVerify,
+		CustomHeaders:      map[string]string{},
 	}
 }
 
@@ -280,8 +282,11 @@ func (c *Client) sendRequest(method, path string, body interface{}) (map[string]
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.APIKey)
 	req.Header.Set("accept", "application/json")
+	for k, v := range c.CustomHeaders {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("x-api-key", c.APIKey)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

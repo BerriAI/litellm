@@ -5,6 +5,7 @@ type ProviderConfig struct {
 	APIBase            string
 	APIKey             string
 	InsecureSkipVerify bool
+	CustomHeaders      map[string]string
 }
 
 // ErrorResponse represents an error response from the API.

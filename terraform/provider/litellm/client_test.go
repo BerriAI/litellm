@@ -1,9 +1,40 @@
 package litellm
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestSendRequestCustomHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Proxy-Auth"); got != "proxy-token" {
+			t.Errorf("X-Proxy-Auth = %q, want %q", got, "proxy-token")
+		}
+		if got := r.Header.Get("X-Request-Source"); got != "terraform" {
+			t.Errorf("X-Request-Source = %q, want %q", got, "terraform")
+		}
+		if got := r.Header.Get("x-api-key"); got != "sk-real-key" {
+			t.Errorf("x-api-key = %q, want configured API key (must not be overridden)", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "sk-real-key", false)
+	client.CustomHeaders = map[string]string{
+		"X-Proxy-Auth":     "proxy-token",
+		"X-Request-Source": "terraform",
+		"x-api-key":        "should-not-win",
+	}
+
+	if _, err := client.sendRequest("GET", "/health", nil); err != nil {
+		t.Fatalf("sendRequest: %v", err)
+	}
+}
 
 func TestRedactSensitiveDataNestedCredentialValues(t *testing.T) {
 	c := NewClient("http://localhost:4000", "sk-test", false)
