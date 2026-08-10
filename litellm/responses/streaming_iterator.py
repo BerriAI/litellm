@@ -368,18 +368,7 @@ class BaseResponsesAPIStreamingIterator:
         if self._persist_completed_response_before_logging:
             self._persist_completed_response_to_cache(is_async=is_async)
 
-        # Create a copy for logging to avoid modifying the response object that will be returned to the user
-        # The logging handlers may transform usage from Responses API format (input_tokens/output_tokens)
-        # to chat completion format (prompt_tokens/completion_tokens) for internal logging
-        # Use model_dump + model_validate instead of deepcopy to avoid pickle errors with
-        # Pydantic ValidatorIterator when response contains tool_choice with allowed_tools (fixes #17192)
-        logging_response = self.completed_response
-        if self.completed_response is not None and hasattr(self.completed_response, "model_dump"):
-            try:
-                logging_response = type(self.completed_response).model_validate(self.completed_response.model_dump())
-            except Exception:
-                # Fallback to original if serialization fails
-                pass
+        logging_response: Final = self._response_for_success_logging()
 
         end_time: Final = datetime.now()
         if is_async:
@@ -408,6 +397,32 @@ class BaseResponsesAPIStreamingIterator:
                 end_time=end_time,
             )
         self._run_post_success_hooks(end_time=end_time)
+
+    def _response_for_success_logging(self) -> ResponsesAPIStreamingResponse | ResponsesAPIResponse | None:
+        """A copy of the completed response, so the handlers' usage transforms (Responses API
+        input_tokens/output_tokens to chat completion prompt_tokens/completion_tokens) don't touch
+        what the caller gets back. model_dump + model_validate instead of deepcopy avoids pickle
+        errors with Pydantic ValidatorIterator on tool_choice with allowed_tools (fixes #17192).
+
+        The handlers only unwrap the completion event in their assembled-stream branch, which a
+        non-streaming caller draining this iterator never reaches, so unwrap it here instead."""
+        completed: Final = self.completed_response
+        copied: Final = self._model_copy_for_logging(completed)
+        unwrapped: Final = getattr(copied, "response", None)
+        if getattr(self.logging_obj, "stream", None) is not True and isinstance(unwrapped, ResponsesAPIResponse):
+            return unwrapped
+        return copied
+
+    @staticmethod
+    def _model_copy_for_logging(
+        completed: ResponsesAPIStreamingResponse | None,
+    ) -> ResponsesAPIStreamingResponse | None:
+        if completed is None or not hasattr(completed, "model_dump"):
+            return completed
+        try:
+            return type(completed).model_validate(completed.model_dump())
+        except Exception:
+            return completed
 
     def _handle_logging_completed_response(self):
         """Base implementation - should be overridden by subclasses"""
