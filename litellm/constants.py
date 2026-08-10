@@ -374,10 +374,10 @@ MAX_STRING_LENGTH_PROMPT_IN_DB: Final = int(os.getenv("MAX_STRING_LENGTH_PROMPT_
 BEDROCK_MAX_POLICY_SIZE: Final = int(os.getenv("BEDROCK_MAX_POLICY_SIZE", 75))
 # One entry per distinct AWS credential-argument set. Per-user cost attribution passes the attributed
 # identity as aws_session_name, so this bounds how many attributed identities keep a cached STS session.
-BEDROCK_IAM_CACHE_MAX_ENTRIES: Final = 1000
+BEDROCK_IAM_CACHE_MAX_ENTRIES: Final = int(os.getenv("BEDROCK_IAM_CACHE_MAX_ENTRIES", 1000))
 # Single-flight lock stripes over that cache. Only keys landing on the same stripe wait for each
 # other, so a burst of distinct identities still resolves its credentials in parallel.
-BEDROCK_IAM_CACHE_FETCH_LOCK_STRIPES: Final = 64
+BEDROCK_IAM_CACHE_FETCH_LOCK_STRIPES: Final = int(os.getenv("BEDROCK_IAM_CACHE_FETCH_LOCK_STRIPES", 64))
 # Retire a cached STS credential this many seconds before AWS expires it, so a request that reads it
 # still has a usable credential for the whole call.
 STS_CREDENTIAL_EXPIRY_SAFETY_MARGIN_SECONDS: Final = 60

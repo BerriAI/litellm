@@ -71,3 +71,36 @@ def _build_constant_env_var_map() -> dict[str, str]:
             env_var_map[constant_name] = env_var_name
 
     return env_var_map
+
+
+@pytest.mark.parametrize(
+    "constant_name, override",
+    [
+        ("BEDROCK_IAM_CACHE_MAX_ENTRIES", 4096),
+        ("BEDROCK_IAM_CACHE_FETCH_LOCK_STRIPES", 128),
+    ],
+)
+def test_bedrock_iam_cache_bounds_are_env_overridable(constant_name: str, override: int) -> None:
+    try:
+        with mock.patch.dict(os.environ, {constant_name: str(override)}):
+            reloaded = importlib.reload(constants)
+            assert getattr(reloaded, constant_name) == override
+    finally:
+        importlib.reload(constants)
+
+
+@pytest.mark.parametrize(
+    "constant_name, expected_default",
+    [
+        ("BEDROCK_IAM_CACHE_MAX_ENTRIES", 1000),
+        ("BEDROCK_IAM_CACHE_FETCH_LOCK_STRIPES", 64),
+    ],
+)
+def test_bedrock_iam_cache_bounds_keep_their_defaults(constant_name: str, expected_default: int) -> None:
+    try:
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(constant_name, None)
+            reloaded = importlib.reload(constants)
+            assert getattr(reloaded, constant_name) == expected_default
+    finally:
+        importlib.reload(constants)
