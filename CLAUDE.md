@@ -1,4 +1,4 @@
-Do not write comments unless they are:
+Do not write comments unless they are any of:
 - absolutely necessary to explain some very complex business logic (in which case, keep it concise and clear)
 - used as an input for tools to read and act on. For example:
   - entries in `.git-blame-ignore-revs` saying which commit is excluded from git blame
