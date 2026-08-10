@@ -3,6 +3,7 @@ import { Form, Select as AntSelect } from "antd";
 import { TextInput, Text } from "@tremor/react";
 import { Row, Col } from "antd";
 import { Providers } from "../provider_info_helpers";
+import { useTranslation } from "react-i18next";
 
 interface LiteLLMModelNameFieldProps {
   selectedProvider: Providers;
@@ -15,6 +16,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
   providerModels,
   getPlaceholder,
 }) => {
+  const { t } = useTranslation("gateway");
   const form = Form.useFormInstance();
 
   const handleModelChange = (value: string | string[]) => {
@@ -101,8 +103,8 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
   return (
     <>
       <Form.Item
-        label="LiteLLM Model Name(s)"
-        tooltip="The model name LiteLLM will send to the LLM API"
+        label={t("models.addModel.modelName")}
+        tooltip={t("models.addModel.modelNameTooltip")}
         className="mb-0"
       >
         <Form.Item
@@ -110,7 +112,10 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
           rules={[
             {
               required: true,
-              message: `Please enter ${selectedProvider === Providers.Azure ? "a deployment name" : "at least one model"}.`,
+              message:
+                selectedProvider === Providers.Azure
+                  ? t("models.addModel.deploymentRequired")
+                  : t("models.addModel.modelRequired"),
             },
           ]}
           noStyle
@@ -130,17 +135,17 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
               mode="multiple"
               allowClear
               showSearch
-              placeholder="Select models"
+              placeholder={t("models.addModel.selectModels")}
               onChange={handleModelChange}
               optionFilterProp="children"
               filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
               options={[
                 {
-                  label: "Custom Model Name (Enter below)",
+                  label: t("models.addModel.customModel"),
                   value: "custom",
                 },
                 {
-                  label: `All ${selectedProvider} Models (Wildcard)`,
+                  label: t("models.addModel.allProviderModels", { provider: selectedProvider }),
                   value: "all-wildcard",
                 },
                 ...providerModels.map((model) => ({
@@ -164,12 +169,14 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
               modelArray.includes("custom") && (
                 <Form.Item
                   name="custom_model_name"
-                  rules={[{ required: true, message: "Please enter a custom model name." }]}
+                  rules={[{ required: true, message: t("models.addModel.customModelRequired") }]}
                   className="mt-2"
                 >
                   <TextInput
                     placeholder={
-                      selectedProvider === Providers.Azure ? "Enter Azure deployment name" : "Enter custom model name"
+                      selectedProvider === Providers.Azure
+                        ? t("models.addModel.azureDeploymentPlaceholder")
+                        : t("models.addModel.customModelPlaceholder")
                     }
                     onChange={handleCustomModelNameChange}
                   />
@@ -184,8 +191,8 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
         <Col span={14}>
           <Text className="mb-3 mt-1">
             {selectedProvider === Providers.Azure
-              ? "Your deployment name will be saved as the public model name, and LiteLLM will use 'azure/deployment-name' internally"
-              : "The model name LiteLLM will send to the LLM API"}
+              ? t("models.addModel.azureModelHint")
+              : t("models.addModel.modelNameTooltip")}
           </Text>
         </Col>
       </Row>

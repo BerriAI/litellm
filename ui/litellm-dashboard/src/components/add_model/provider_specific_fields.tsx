@@ -5,6 +5,7 @@ import { Button as Button2, Col, Form, Input, Row, Select, Typography, Upload, U
 import React from "react";
 import { CredentialItem, ProviderCredentialFieldMetadata } from "../networking";
 import { provider_map, Providers } from "../provider_info_helpers";
+import { useTranslation } from "react-i18next";
 const { Link } = Typography;
 
 interface ProviderSpecificFieldsProps {
@@ -99,6 +100,7 @@ export const createCredentialFromModel = (provider: string, modelData: any): Cre
 };
 
 const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider, uploadProps }) => {
+  const { t } = useTranslation("gateway");
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
   const form = Form.useFormInstance(); // Get form instance from context
 
@@ -221,7 +223,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
       {isLoading && allFields.length === 0 && (
         <Row>
           <Col span={24}>
-            <Text className="mb-2">Loading provider fields...</Text>
+            <Text className="mb-2">{t("models.addModel.providerFields.loading")}</Text>
           </Col>
         </Row>
       )}
@@ -229,7 +231,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
         <Row>
           <Col span={24}>
             <Text className="mb-2 text-red-500">
-              {loadError instanceof Error ? loadError.message : "Failed to load provider credential fields"}
+              {loadError instanceof Error ? loadError.message : t("models.addModel.providerFields.failed")}
             </Text>
           </Col>
         </Row>
@@ -237,9 +239,11 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
       {allFields.map((field) => (
         <React.Fragment key={field.key}>
           <Form.Item
-            label={field.label}
+            label={t(`models.addModel.providerFields.labels.${field.key}`, { defaultValue: field.label })}
             name={field.key}
-            rules={field.required ? [{ required: true, message: "Required" }] : undefined}
+            rules={
+              field.required ? [{ required: true, message: t("models.addModel.providerFields.required") }] : undefined
+            }
             tooltip={field.tooltip}
             className={field.key === "vertex_credentials" ? "mb-0" : undefined}
           >
@@ -260,7 +264,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
                   }
                 }}
               >
-                <Button2 icon={<UploadOutlined />}>Click to Upload</Button2>
+                <Button2 icon={<UploadOutlined />}>{t("models.addModel.providerFields.upload")}</Button2>
               </Upload>
             ) : field.type === "textarea" ? (
               <Input.TextArea
@@ -269,10 +273,12 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
                 rows={6}
                 style={{ fontFamily: "monospace", fontSize: "12px" }}
               />
+            ) : field.type === "password" ? (
+              <Input.Password placeholder={field.placeholder} defaultValue={field.defaultValue} />
             ) : (
               <TextInput
                 placeholder={field.placeholder}
-                type={field.type === "password" ? "password" : "text"}
+                type="text"
                 defaultValue={field.defaultValue}
                 onChange={field.key === "api_base" ? handleApiBaseChange : undefined}
               />
@@ -283,7 +289,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
           {field.key === "vertex_credentials" && (
             <Row>
               <Col>
-                <Text className="mb-3 mt-1">Give a gcp service account(.json file)</Text>
+                <Text className="mb-3 mt-1">{t("models.addModel.providerFields.gcpCredentials")}</Text>
               </Col>
             </Row>
           )}
@@ -294,12 +300,12 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
               <Col span={10}></Col>
               <Col span={10}>
                 <Text className="mb-2">
-                  The actual model your azure deployment uses. Used for accurate cost tracking. Select name from{" "}
+                  {t("models.addModel.providerFields.azureBaseModel")}{" "}
                   <Link
                     href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
                     target="_blank"
                   >
-                    here
+                    {t("models.addModel.providerFields.here")}
                   </Link>
                 </Text>
               </Col>
