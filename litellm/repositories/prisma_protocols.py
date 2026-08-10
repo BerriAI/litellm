@@ -232,6 +232,8 @@ class ObjectPermissionWriteTable(Protocol):
 class BatchTable(Protocol):
     def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> None: ...
 
+    def update_many(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> None: ...
+
 
 class PrismaBatch(Protocol):
     @property
@@ -242,5 +244,20 @@ class PrismaBatch(Protocol):
 
     @property
     def litellm_teamtable(self) -> BatchTable: ...
+
+    @property
+    def litellm_budgettable(self) -> BatchTable: ...
+
+    @property
+    def litellm_teammembership(self) -> BatchTable: ...
+
+    @property
+    def litellm_organizationtable(self) -> BatchTable: ...
+
+    @property
+    def litellm_tagtable(self) -> BatchTable: ...
+
+    @property
+    def litellm_endusertable(self) -> BatchTable: ...
 
     async def commit(self) -> None: ...

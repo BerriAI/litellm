@@ -1,14 +1,4 @@
 [[IgnoredVulns]]
-id = "GHSA-fwg2-594c-jp42"
-ignoreUntil = 2026-08-12
-reason = "pypdf 6.15.0 (the fix) published 2026-08-06 and is still inside the P3D exclude-newer window, so uv cannot lock it yet; bump and drop this entry from 2026-08-09"
-
-[[IgnoredVulns]]
-id = "GHSA-fp3f-mc75-235c"
-ignoreUntil = 2026-08-12
-reason = "second pypdf advisory with the same 6.15.0 fix, published 2026-08-07 after the first; drop alongside GHSA-fwg2-594c-jp42 in the same bump"
-
-[[IgnoredVulns]]
 id = "GHSA-w8v5-vhqr-4h9v"
 ignoreUntil = 2026-09-09
 reason = "diskcache has no fixed release published; remove this entry once one exists"

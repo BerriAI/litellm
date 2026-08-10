@@ -1,14 +1,21 @@
 import asyncio
 import json
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Final, Literal, Protocol, TypeVar
+from types import MappingProxyType
+from typing import Final, Literal, Protocol, TypeVar, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import GLOBAL_PROXY_SPEND_CACHE_KEY, LITELLM_PROXY_BUDGET_NAME
+from litellm.constants import (
+    GLOBAL_PROXY_SPEND_CACHE_KEY,
+    LITELLM_PROXY_BUDGET_NAME,
+    RESET_BUDGET_JOB_BATCH_SIZE,
+    RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN,
+)
 from litellm.proxy._types import (
     LiteLLM_BudgetTableFull,
     LiteLLM_EndUserTable,
@@ -30,13 +37,19 @@ from litellm.repositories.table_repositories import (
     TeamMembershipRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.unit_of_work import spend_reset_unit_of_work
+from litellm.repositories.unit_of_work import (
+    budget_cascade_unit_of_work,
+    spend_reset_unit_of_work,
+)
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.services import ServiceTypes
 
 _RowT = TypeVar("_RowT")
+
+_LINKED_KEYS_WHERE: Final[Mapping[str, object]] = MappingProxyType({"budget_duration": None, "spend": {"gt": 0}})
+_SPENT_ROWS_WHERE: Final[Mapping[str, object]] = MappingProxyType({"spend": {"gt": 0}})
 
 
 class _TeamMembershipRow(Protocol):
@@ -62,39 +75,130 @@ class _TagRow(Protocol):
     def tag_name(self) -> str: ...
 
 
+class _EndUserRow(Protocol):
+    @property
+    def user_id(self) -> str: ...
+
+
 def _team_membership_counter_key(row: _TeamMembershipRow) -> str:
     return f"spend:team_member:{row.user_id}:{row.team_id}"
 
 
-def _team_membership_cache_key(row: _TeamMembershipRow) -> str:
-    return f"{row.team_id}_{row.user_id}"
+def _team_membership_cache_keys(row: _TeamMembershipRow) -> tuple[str, ...]:
+    return (f"{row.team_id}_{row.user_id}",)
 
 
 def _key_counter_key(row: _KeyRow) -> str:
     return f"spend:key:{row.token}"
 
 
-def _key_cache_key(row: _KeyRow) -> str:
-    return row.token
+def _key_cache_keys(row: _KeyRow) -> tuple[str, ...]:
+    return (row.token,)
 
 
 def _org_counter_key(row: _OrgRow) -> str:
     return f"spend:org:{row.organization_id}"
 
 
-def _org_cache_keys(row: _OrgRow) -> Sequence[str]:
-    return [
+def _org_cache_keys(row: _OrgRow) -> tuple[str, ...]:
+    return (
         f"org_id:{row.organization_id}",
         f"org_id:{row.organization_id}:with_budget",
-    ]
+    )
 
 
 def _tag_counter_key(row: _TagRow) -> str:
     return f"spend:tag:{row.tag_name}"
 
 
-def _tag_cache_key(row: _TagRow) -> str:
-    return f"tag:{row.tag_name}"
+def _tag_cache_keys(row: _TagRow) -> tuple[str, ...]:
+    return (f"tag:{row.tag_name}",)
+
+
+def _budget_link_where(
+    budget_ids: Sequence[str],
+    extra: Mapping[str, object] = MappingProxyType({}),
+) -> dict[str, object]:
+    return {"budget_id": {"in": list(budget_ids)}, **extra}
+
+
+@dataclass(frozen=True, slots=True)
+class _BudgetCascade:
+    """Everything one budget-tier reset touches, resolved before any write."""
+
+    budgets: tuple[LiteLLM_BudgetTableFull, ...] = ()
+    budget_ids: tuple[str, ...] = ()
+    budget_resets: tuple[tuple[str, datetime], ...] = ()
+    endusers: tuple[_EndUserRow, ...] = ()
+    counter_keys: tuple[str, ...] = ()
+    cache_keys: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _BudgetCascadeCommitted:
+    cascade: _BudgetCascade
+    advanced: int
+
+
+@dataclass(frozen=True, slots=True)
+class _BudgetCascadeFailed:
+    cascade: _BudgetCascade
+    error: Exception
+
+
+_EMPTY_CASCADE: Final = _BudgetCascade()
+
+
+@dataclass(frozen=True, slots=True)
+class _ChunkOutcome:
+    """One chunk of a reset phase: rows read, and rows whose new budget_reset_at
+    cleared the due cutoff. Anything else is still due and would come straight
+    back on the next fetch, so it is not progress."""
+
+    fetched: int
+    advanced: int
+
+
+_NO_PROGRESS: Final = _ChunkOutcome(fetched=0, advanced=0)
+
+
+def _as_utc(moment: datetime) -> datetime:
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+def _count_advanced(reset_ats: Iterable[object], cutoff: datetime) -> int:
+    """How many rows the write actually moved past the due cutoff.
+
+    A budget_duration of "0s" (or one the parser cannot read) resolves to the
+    current time, so the row is written and stays due. Counting it as progress
+    would re-read the same chunk until the per-run cap on every tick.
+    """
+    utc_cutoff: Final = _as_utc(cutoff)
+    return sum(1 for reset_at in reset_ats if isinstance(reset_at, datetime) and _as_utc(reset_at) > utc_cutoff)
+
+
+def _phase_is_drained(outcome: _ChunkOutcome) -> bool:
+    """A short chunk means the due rows ran out. A full chunk that advanced
+    nothing would be re-read unchanged forever, so it ends the phase too and
+    those rows wait for the next tick."""
+    return outcome.fetched < RESET_BUDGET_JOB_BATCH_SIZE or outcome.advanced == 0
+
+
+async def _run_phase_in_chunks(process_chunk: Callable[[], Awaitable[_ChunkOutcome]]) -> None:
+    """Drive one reset phase a chunk at a time, capped so a single run cannot
+    spin unbounded: leftovers are picked up by the next tick."""
+    for _ in range(RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN):
+        if _phase_is_drained(await process_chunk()):
+            return
+
+
+def _budget_cascade_event_metadata(cascade: _BudgetCascade) -> dict[str, object]:
+    return {
+        "num_budgets_found": len(cascade.budgets),
+        "budgets_found": json.dumps(cascade.budgets, indent=4, default=str),
+        "num_endusers_found": len(cascade.endusers),
+        "endusers_found": json.dumps(cascade.endusers, indent=4, default=str),
+    }
 
 
 class ResetBudgetJob:
@@ -122,21 +226,14 @@ class ResetBudgetJob:
 
         Updates db
         """
-        if self.prisma_client is not None:
-            ### RESET KEY BUDGET ###
-            await self.reset_budget_for_litellm_keys()
+        if self.prisma_client is None:
+            return
 
-            ### RESET USER BUDGET ###
-            await self.reset_budget_for_litellm_users()
-
-            ## Reset Team Budget
-            await self.reset_budget_for_litellm_teams()
-
-            ### RESET ENDUSER (Customer) BUDGET and corresponding Budget duration ###
-            await self.reset_budget_for_litellm_budget_table()
-
-            ### RESET MULTI-WINDOW BUDGETS ###
-            await self.reset_budget_windows()
+        await self.reset_budget_for_litellm_keys()
+        await self.reset_budget_for_litellm_users()
+        await self.reset_budget_for_litellm_teams()
+        await self.reset_budget_for_litellm_budget_table()
+        await self.reset_budget_windows()
 
     @staticmethod
     async def _invalidate_spend_counter(counter_key: str) -> None:
@@ -194,238 +291,195 @@ class ResetBudgetJob:
                 e,
             )
 
-    async def _cascade_reset_spend_for_budget_link(
+    async def _fetch_linked_rows(
         self,
-        budgets_to_reset: list[LiteLLM_BudgetTableFull],
         table: SpendLinkedTable[_RowT],
-        counter_key_fn: Callable[[_RowT], str],
+        where: Mapping[str, object],
         log_subject: str,
-        extra_where: dict[str, object] | None = None,
-        cache_key_fn: Callable[[_RowT], str | Sequence[str]] | None = None,
-    ):
-        """
-        Generic cascade: zero spend on rows whose budget_id is in the reset set.
+    ) -> tuple[_RowT, ...]:
+        """Read the rows the cascade will zero, so their counters can be
+        invalidated once the transaction commits."""
+        try:
+            return tuple(await table.find_many(where=where))
+        except Exception as e:
+            verbose_proxy_logger.warning("Failed to fetch %s for counter invalidation: %s", log_subject, e)
+            return ()
 
-        ``cache_key_fn`` is optional: when provided, after the DB update each
-        matching row's entry or entries in ``user_api_key_cache`` are dropped so
-        cached spend cannot stay pinned above the zeroed DB row after a reset.
+    async def _collect_endusers_to_reset(self, budget_ids: Sequence[str]) -> tuple[_EndUserRow, ...]:
+        linked: Final[Sequence[_EndUserRow] | None] = await self.prisma_client.get_data(
+            table_name="enduser",
+            query_type="find_all",
+            budget_id_list=list(budget_ids),
+        )
+        if litellm.max_end_user_budget_id is None or litellm.max_end_user_budget_id not in budget_ids:
+            return tuple(linked or ())
+        return (*(linked or ()), *await self._get_endusers_with_no_budget_id())
+
+    async def _collect_budget_cascade(self, budgets_to_reset: Sequence[LiteLLM_BudgetTableFull]) -> _BudgetCascade:
+        """Resolve every row the expiring budget tiers gate, before any write.
+
+        Keys carrying their own budget_duration are left out: they run on their
+        own schedule via reset_budget_for_litellm_keys(), so sweeping them here
+        would reset them twice.
         """
-        budget_ids: Final = [b.budget_id for b in budgets_to_reset if b.budget_id is not None]
+        budget_ids: Final = tuple(b.budget_id for b in budgets_to_reset if b.budget_id is not None)
         if not budget_ids:
+            return _EMPTY_CASCADE
+
+        team_memberships: Final[tuple[_TeamMembershipRow, ...]] = await self._fetch_linked_rows(
+            table=TeamMembershipRepository(self.prisma_client).table,
+            where=_budget_link_where(budget_ids),
+            log_subject="team memberships",
+        )
+        keys: Final[tuple[_KeyRow, ...]] = await self._fetch_linked_rows(
+            table=VerificationTokenRepository(self.prisma_client).table,
+            where=_budget_link_where(budget_ids, _LINKED_KEYS_WHERE),
+            log_subject="keys",
+        )
+        orgs: Final[tuple[_OrgRow, ...]] = await self._fetch_linked_rows(
+            table=OrganizationRepository(self.prisma_client).table,
+            where=_budget_link_where(budget_ids, _SPENT_ROWS_WHERE),
+            log_subject="orgs",
+        )
+        tags: Final[tuple[_TagRow, ...]] = await self._fetch_linked_rows(
+            table=TagRepository(self.prisma_client).table,
+            where=_budget_link_where(budget_ids, _SPENT_ROWS_WHERE),
+            log_subject="tags",
+        )
+        return _BudgetCascade(
+            budgets=tuple(budgets_to_reset),
+            budget_ids=budget_ids,
+            budget_resets=tuple(
+                (
+                    b.budget_id,
+                    compute_budget_reset_at(budget_duration=b.budget_duration, settings=self.reset_settings),
+                )
+                for b in budgets_to_reset
+                if b.budget_id is not None and b.budget_duration is not None
+            ),
+            endusers=await self._collect_endusers_to_reset(budget_ids),
+            counter_keys=(
+                *(_team_membership_counter_key(row) for row in team_memberships),
+                *(_key_counter_key(row) for row in keys),
+                *(_org_counter_key(row) for row in orgs),
+                *(_tag_counter_key(row) for row in tags),
+            ),
+            cache_keys=(
+                *(key for row in team_memberships for key in _team_membership_cache_keys(row)),
+                *(key for row in keys for key in _key_cache_keys(row)),
+                *(key for row in orgs for key in _org_cache_keys(row)),
+                *(key for row in tags for key in _tag_cache_keys(row)),
+            ),
+        )
+
+    async def _commit_budget_cascade(self, cascade: _BudgetCascade) -> None:
+        """Zero the gated spend and advance ``budget_reset_at`` in one transaction.
+
+        Advancing the window on its own hides the tier from every later tick
+        while its dependents stay pinned at the cap for the whole window;
+        batching both means a mid-cascade failure persists nothing and the rows
+        stay due for the next run.
+        """
+        if not cascade.budget_ids:
             return
 
-        where: Final[dict[str, object]] = {"budget_id": {"in": budget_ids}}
-        if extra_where:
-            where.update(extra_where)
+        enduser_ids: Final = tuple(row.user_id for row in cascade.endusers)
+        async with budget_cascade_unit_of_work(self.prisma_client.db.batch_) as uow:
+            uow.team_memberships.queue_spend_zero(where=_budget_link_where(cascade.budget_ids))
+            uow.keys.queue_spend_zero(where=_budget_link_where(cascade.budget_ids, _LINKED_KEYS_WHERE))
+            uow.organizations.queue_spend_zero(where=_budget_link_where(cascade.budget_ids, _SPENT_ROWS_WHERE))
+            uow.tags.queue_spend_zero(where=_budget_link_where(cascade.budget_ids, _SPENT_ROWS_WHERE))
+            if enduser_ids:
+                uow.endusers.queue_spend_zero(where={"user_id": {"in": list(enduser_ids)}})
+            for budget_id, budget_reset_at in cascade.budget_resets:
+                uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)
 
-        try:
-            rows: Sequence[_RowT] = await table.find_many(where=where)
-        except Exception as e:
-            rows = ()
-            verbose_proxy_logger.warning("Failed to fetch %s for counter invalidation: %s", log_subject, e)
+    async def _invalidate_budget_cascade_caches(self, cascade: _BudgetCascade) -> None:
+        for counter_key in cascade.counter_keys:
+            await self._invalidate_spend_counter(counter_key)
+        for cache_key in cascade.cache_keys:
+            await self._invalidate_user_api_key_cache_entry(cache_key)
 
-        update_result: Final = await table.update_many(where=where, data={"spend": 0})
-
-        for row in rows:
-            await self._invalidate_spend_counter(counter_key_fn(row))
-            if cache_key_fn is not None:
-                cache_keys = cache_key_fn(row)
-                if isinstance(cache_keys, str):
-                    cache_keys = [cache_keys]
-                for cache_key in cache_keys:
-                    await self._invalidate_user_api_key_cache_entry(cache_key)
-
-        return update_result
-
-    async def reset_budget_for_litellm_team_members(self, budgets_to_reset: list[LiteLLM_BudgetTableFull]):
-        """
-        Resets the budget for all LiteLLM Team Members if their budget has expired
-        """
-        return await self._cascade_reset_spend_for_budget_link(
-            budgets_to_reset=budgets_to_reset,
-            table=TeamMembershipRepository(self.prisma_client).table,
-            counter_key_fn=_team_membership_counter_key,
-            log_subject="team memberships",
-            cache_key_fn=_team_membership_cache_key,
-        )
-
-    async def reset_budget_for_keys_linked_to_budgets(self, budgets_to_reset: list[LiteLLM_BudgetTableFull]):
-        """
-        Resets the spend for keys linked to budget tiers that are being reset.
-
-        Excludes keys with their own budget_duration; those are reset by
-        reset_budget_for_litellm_keys() to avoid double-resetting.
-        """
-        return await self._cascade_reset_spend_for_budget_link(
-            budgets_to_reset=budgets_to_reset,
-            table=VerificationTokenRepository(self.prisma_client).table,
-            counter_key_fn=_key_counter_key,
-            log_subject="keys",
-            extra_where={"budget_duration": None, "spend": {"gt": 0}},
-            cache_key_fn=_key_cache_key,
-        )
-
-    async def reset_budget_for_orgs_linked_to_budgets(self, budgets_to_reset: list[LiteLLM_BudgetTableFull]):
-        """
-        Resets the spend for orgs linked to budget tiers that are being reset.
-        """
-        return await self._cascade_reset_spend_for_budget_link(
-            budgets_to_reset=budgets_to_reset,
-            table=OrganizationRepository(self.prisma_client).table,
-            counter_key_fn=_org_counter_key,
-            log_subject="orgs",
-            extra_where={"spend": {"gt": 0}},
-            cache_key_fn=_org_cache_keys,
-        )
-
-    async def reset_budget_for_tags_linked_to_budgets(self, budgets_to_reset: list[LiteLLM_BudgetTableFull]):
-        """
-        Resets the spend for tags linked to budget tiers that are being reset.
-
-        Also drops each tag's ``user_api_key_cache`` entry so the next
-        ``_tag_max_budget_check`` reloads the zeroed row from the DB.
-        ``SpendCounterReseed.from_db`` intentionally returns ``None`` for
-        tags, so the budget check falls back to the cached
-        ``LiteLLM_TagTable.spend`` once the spend counter expires; without
-        this invalidation, that stale ``.spend`` keeps the tag over-budget
-        indefinitely.
-        """
-        return await self._cascade_reset_spend_for_budget_link(
-            budgets_to_reset=budgets_to_reset,
-            table=TagRepository(self.prisma_client).table,
-            counter_key_fn=_tag_counter_key,
-            log_subject="tags",
-            extra_where={"spend": {"gt": 0}},
-            cache_key_fn=_tag_cache_key,
-        )
-
-    async def reset_budget_for_litellm_budget_table(self):
-        """
-        Resets the budget for all LiteLLM End-Users (Customers), and Team Members if their budget has expired
-        The corresponding Budget duration is also updated.
-        """
-
+    async def _reset_expired_budget_cascade(self) -> _BudgetCascadeCommitted | _BudgetCascadeFailed:
         now: Final = datetime.now(timezone.utc)
-        start_time: Final = time.time()
-        endusers_to_reset: list[LiteLLM_EndUserTable] | None = None
-        budgets_to_reset: list[LiteLLM_BudgetTableFull] | None = None
-        updated_endusers: Final[list[LiteLLM_EndUserTable]] = []
-        failed_endusers: Final = []
         try:
-            budgets_to_reset = await self.prisma_client.get_data(
-                table_name="budget", query_type="find_all", reset_at=now
+            budgets_to_reset: Final[Sequence[LiteLLM_BudgetTableFull] | None] = await self.prisma_client.get_data(
+                table_name="budget",
+                query_type="find_all",
+                reset_at=now,
+                limit=RESET_BUDGET_JOB_BATCH_SIZE,
             )
-
-            if budgets_to_reset is not None and len(budgets_to_reset) > 0:
-                for budget in budgets_to_reset:
-                    budget = await ResetBudgetJob._reset_budget_reset_at_date(budget, now, self.reset_settings)
-
-                await self.prisma_client.update_data(
-                    query_type="update_many",
-                    data_list=budgets_to_reset,
-                    table_name="budget",
-                )
-
-                budget_ids_to_reset = [budget.budget_id for budget in budgets_to_reset if budget.budget_id is not None]
-
-                endusers_to_reset = await self.prisma_client.get_data(
-                    table_name="enduser",
-                    query_type="find_all",
-                    budget_id_list=budget_ids_to_reset,
-                )
-
-                # Also reset end users with no budget_id (NULL) who use the
-                # default budget via litellm.max_end_user_budget_id.  These
-                # users are enforced in-memory but never had budget_id
-                # persisted, so the query above misses them.
-                if litellm.max_end_user_budget_id is not None and litellm.max_end_user_budget_id in budget_ids_to_reset:
-                    default_budget_endusers: Final = await self._get_endusers_with_no_budget_id()
-                    if default_budget_endusers:
-                        if endusers_to_reset is None:
-                            endusers_to_reset = default_budget_endusers
-                        else:
-                            endusers_to_reset.extend(default_budget_endusers)
-
-                await self.reset_budget_for_litellm_team_members(budgets_to_reset=budgets_to_reset)
-
-                await self.reset_budget_for_keys_linked_to_budgets(budgets_to_reset=budgets_to_reset)
-
-                await self.reset_budget_for_orgs_linked_to_budgets(budgets_to_reset=budgets_to_reset)
-
-                await self.reset_budget_for_tags_linked_to_budgets(budgets_to_reset=budgets_to_reset)
-
-            if endusers_to_reset is not None and len(endusers_to_reset) > 0:
-                for enduser in endusers_to_reset:
-                    try:
-                        updated_enduser = await ResetBudgetJob._reset_budget_for_enduser(enduser=enduser)
-                        if updated_enduser is not None:
-                            updated_endusers.append(updated_enduser)
-                        else:
-                            failed_endusers.append(
-                                {
-                                    "enduser": enduser,
-                                    "error": "Returned None without exception",
-                                }
-                            )
-                    except Exception as e:
-                        failed_endusers.append({"enduser": enduser, "error": str(e)})
-                        verbose_proxy_logger.exception("Failed to reset budget for enduser: %s", enduser)
-
-                verbose_proxy_logger.debug(
-                    "Updated users %s",
-                    json.dumps(updated_endusers, indent=4, default=str),
-                )
-
-                await self.prisma_client.update_data(
-                    query_type="update_many",
-                    data_list=updated_endusers,
-                    table_name="enduser",
-                )
-
-            end_time = time.time()
-            if len(failed_endusers) > 0:  # If any endusers failed to reset
-                raise Exception(
-                    f"Failed to reset {len(failed_endusers)} endusers: {json.dumps(failed_endusers, default=str)}"
-                )
-
-            asyncio.create_task(
-                self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
-                    service=ServiceTypes.RESET_BUDGET_JOB,
-                    duration=end_time - start_time,
-                    call_type="reset_budget_budget_table",
-                    start_time=start_time,
-                    end_time=end_time,
-                    event_metadata={
-                        "num_budgets_found": (len(budgets_to_reset) if budgets_to_reset else 0),
-                        "budgets_found": json.dumps(budgets_to_reset, indent=4, default=str),
-                        "num_endusers_found": (len(endusers_to_reset) if endusers_to_reset else 0),
-                        "endusers_found": json.dumps(endusers_to_reset, indent=4, default=str),
-                        "num_endusers_updated": len(updated_endusers),
-                        "endusers_updated": json.dumps(updated_endusers, indent=4, default=str),
-                        "num_endusers_failed": len(failed_endusers),
-                        "endusers_failed": json.dumps(failed_endusers, indent=4, default=str),
-                    },
-                )
-            )
+            cascade: Final = await self._collect_budget_cascade(budgets_to_reset or ())
         except Exception as e:
-            end_time = time.time()
-            asyncio.create_task(
-                self.proxy_logging_obj.service_logging_obj.async_service_failure_hook(
-                    service=ServiceTypes.RESET_BUDGET_JOB,
-                    duration=end_time - start_time,
-                    error=e,
-                    call_type="reset_budget_endusers",
-                    start_time=start_time,
-                    end_time=end_time,
-                    event_metadata={
-                        "num_budgets_found": (len(budgets_to_reset) if budgets_to_reset else 0),
-                        "budgets_found": json.dumps(budgets_to_reset, indent=4, default=str),
-                        "num_endusers_found": (len(endusers_to_reset) if endusers_to_reset else 0),
-                        "endusers_found": json.dumps(endusers_to_reset, indent=4, default=str),
-                    },
+            return _BudgetCascadeFailed(cascade=_EMPTY_CASCADE, error=e)
+
+        try:
+            await self._commit_budget_cascade(cascade)
+        except Exception as e:
+            return _BudgetCascadeFailed(cascade=cascade, error=e)
+
+        await self._invalidate_budget_cascade_caches(cascade)
+        return _BudgetCascadeCommitted(
+            cascade=cascade,
+            advanced=_count_advanced(
+                (reset_at for _, reset_at in cascade.budget_resets),
+                cutoff=datetime.now(timezone.utc),
+            ),
+        )
+
+    async def reset_budget_for_litellm_budget_table(self) -> None:
+        """
+        Resets the spend a budget tier gates (end users, team members, keys,
+        orgs, tags) and advances the tier's budget_reset_at, atomically.
+
+        Caches are invalidated only after the transaction commits, so a failed
+        run cannot leave a zeroed counter in front of an un-reset DB row.
+        """
+        await _run_phase_in_chunks(self._reset_budget_for_litellm_budget_table_chunk)
+
+    async def _reset_budget_for_litellm_budget_table_chunk(self) -> _ChunkOutcome:
+        start_time: Final = time.time()
+        outcome: Final = await self._reset_expired_budget_cascade()
+        end_time: Final = time.time()
+
+        match outcome:
+            case _BudgetCascadeCommitted(cascade=cascade, advanced=advanced):
+                asyncio.create_task(
+                    self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
+                        service=ServiceTypes.RESET_BUDGET_JOB,
+                        duration=end_time - start_time,
+                        call_type="reset_budget_budget_table",
+                        start_time=start_time,
+                        end_time=end_time,
+                        event_metadata={
+                            **_budget_cascade_event_metadata(cascade),
+                            "num_endusers_updated": len(cascade.endusers),
+                            "num_endusers_failed": 0,
+                        },
+                    )
                 )
-            )
-            verbose_proxy_logger.exception("Failed to reset budget for endusers: %s", e)
+                return _ChunkOutcome(fetched=len(cascade.budgets), advanced=advanced)
+            case _BudgetCascadeFailed(cascade=cascade, error=error):
+                verbose_proxy_logger.exception(
+                    "Failed to reset the budget table cascade (team member, enduser, org and tag spend, plus "
+                    "budget_reset_at); nothing was committed and the budgets stay due for the next run: %s",
+                    error,
+                    exc_info=error,
+                )
+                asyncio.create_task(
+                    self.proxy_logging_obj.service_logging_obj.async_service_failure_hook(
+                        service=ServiceTypes.RESET_BUDGET_JOB,
+                        duration=end_time - start_time,
+                        error=error,
+                        call_type="reset_budget_endusers",
+                        start_time=start_time,
+                        end_time=end_time,
+                        event_metadata=_budget_cascade_event_metadata(cascade),
+                    )
+                )
+                return _NO_PROGRESS
+            case _:
+                assert_never(outcome)
 
     async def _get_endusers_with_no_budget_id(
         self,
@@ -486,18 +540,50 @@ class ResetBudgetJob:
             for t in updated_teams:
                 uow.teams.queue_spend_reset(team_id=t.team_id, budget_reset_at=t.budget_reset_at)
 
-    async def reset_budget_for_litellm_keys(self):
+    def _emit_phase_failure(
+        self,
+        call_type: str,
+        error: Exception,
+        start_time: float,
+        end_time: float,
+        event_metadata: dict[str, object],
+    ) -> None:
+        """Report rows that could not be reset without failing the chunk: the
+        rows that did reset are already committed, and raising here would cost
+        the phase every remaining chunk this tick.
+        """
+        verbose_proxy_logger.error("%s: %s", call_type, error)
+        asyncio.create_task(
+            self.proxy_logging_obj.service_logging_obj.async_service_failure_hook(
+                service=ServiceTypes.RESET_BUDGET_JOB,
+                duration=end_time - start_time,
+                error=error,
+                call_type=call_type,
+                start_time=start_time,
+                end_time=end_time,
+                event_metadata=event_metadata,
+            )
+        )
+
+    async def reset_budget_for_litellm_keys(self) -> None:
         """
         Resets the budget for all the litellm keys
 
         Catches Exceptions and logs them
         """
+        await _run_phase_in_chunks(self._reset_budget_for_litellm_keys_chunk)
+
+    async def _reset_budget_for_litellm_keys_chunk(self) -> _ChunkOutcome:
         now: Final = datetime.utcnow()
         start_time: Final = time.time()
         keys_to_reset: list[LiteLLM_VerificationToken] | None = None
         try:
             keys_to_reset = await self.prisma_client.get_data(
-                table_name="key", query_type="find_all", expires=now, reset_at=now
+                table_name="key",
+                query_type="find_all",
+                expires=now,
+                reset_at=now,
+                limit=RESET_BUDGET_JOB_BATCH_SIZE,
             )
             verbose_proxy_logger.debug("Keys to reset %s", json.dumps(keys_to_reset, indent=4, default=str))
             updated_keys: Final[list[LiteLLM_VerificationToken]] = []
@@ -528,8 +614,25 @@ class ResetBudgetJob:
                             await self._invalidate_spend_counter(f"spend:key:{token}")
 
             end_time = time.time()
-            if len(failed_keys) > 0:  # If any keys failed to reset
-                raise Exception(f"Failed to reset {len(failed_keys)} keys: {json.dumps(failed_keys, default=str)}")
+            outcome: Final = _ChunkOutcome(
+                fetched=len(keys_to_reset) if keys_to_reset else 0,
+                advanced=_count_advanced(
+                    (k.budget_reset_at for k in updated_keys),
+                    cutoff=datetime.now(timezone.utc),
+                ),
+            )
+            if len(failed_keys) > 0:
+                self._emit_phase_failure(
+                    call_type="reset_budget_keys",
+                    error=Exception(f"Failed to reset {len(failed_keys)} keys: {json.dumps(failed_keys, default=str)}"),
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata={
+                        "num_keys_found": len(keys_to_reset) if keys_to_reset else 0,
+                        "keys_found": json.dumps(keys_to_reset, indent=4, default=str),
+                    },
+                )
+                return outcome
 
             asyncio.create_task(
                 self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
@@ -565,16 +668,27 @@ class ResetBudgetJob:
                 )
             )
             verbose_proxy_logger.exception("Failed to reset budget for keys: %s", e)
+            return _NO_PROGRESS
+        else:
+            return outcome
 
-    async def reset_budget_for_litellm_users(self):
+    async def reset_budget_for_litellm_users(self) -> None:
         """
         Resets the budget for all LiteLLM Internal Users if their budget has expired
         """
+        await _run_phase_in_chunks(self._reset_budget_for_litellm_users_chunk)
+
+    async def _reset_budget_for_litellm_users_chunk(self) -> _ChunkOutcome:
         now: Final = datetime.utcnow()
         start_time: Final = time.time()
         users_to_reset: list[LiteLLM_UserTable] | None = None
         try:
-            users_to_reset = await self.prisma_client.get_data(table_name="user", query_type="find_all", reset_at=now)
+            users_to_reset = await self.prisma_client.get_data(
+                table_name="user",
+                query_type="find_all",
+                reset_at=now,
+                limit=RESET_BUDGET_JOB_BATCH_SIZE,
+            )
             updated_users: Final[list[LiteLLM_UserTable]] = []
             failed_users: Final = []
             if users_to_reset is not None and len(users_to_reset) > 0:
@@ -609,8 +723,27 @@ class ResetBudgetJob:
                             await self._invalidate_global_proxy_spend_cache()
 
             end_time = time.time()
-            if len(failed_users) > 0:  # If any users failed to reset
-                raise Exception(f"Failed to reset {len(failed_users)} users: {json.dumps(failed_users, default=str)}")
+            outcome: Final = _ChunkOutcome(
+                fetched=len(users_to_reset) if users_to_reset else 0,
+                advanced=_count_advanced(
+                    (u.budget_reset_at for u in updated_users),
+                    cutoff=datetime.now(timezone.utc),
+                ),
+            )
+            if len(failed_users) > 0:
+                self._emit_phase_failure(
+                    call_type="reset_budget_users",
+                    error=Exception(
+                        f"Failed to reset {len(failed_users)} users: {json.dumps(failed_users, default=str)}"
+                    ),
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata={
+                        "num_users_found": len(users_to_reset) if users_to_reset else 0,
+                        "users_found": json.dumps(users_to_reset, indent=4, default=str),
+                    },
+                )
+                return outcome
 
             asyncio.create_task(
                 self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
@@ -646,16 +779,27 @@ class ResetBudgetJob:
                 )
             )
             verbose_proxy_logger.exception("Failed to reset budget for users: %s", e)
+            return _NO_PROGRESS
+        else:
+            return outcome
 
-    async def reset_budget_for_litellm_teams(self):
+    async def reset_budget_for_litellm_teams(self) -> None:
         """
         Resets the budget for all LiteLLM Internal Teams if their budget has expired
         """
+        await _run_phase_in_chunks(self._reset_budget_for_litellm_teams_chunk)
+
+    async def _reset_budget_for_litellm_teams_chunk(self) -> _ChunkOutcome:
         now: Final = datetime.utcnow()
         start_time: Final = time.time()
         teams_to_reset: list[LiteLLM_TeamTable] | None = None
         try:
-            teams_to_reset = await self.prisma_client.get_data(table_name="team", query_type="find_all", reset_at=now)
+            teams_to_reset = await self.prisma_client.get_data(
+                table_name="team",
+                query_type="find_all",
+                reset_at=now,
+                limit=RESET_BUDGET_JOB_BATCH_SIZE,
+            )
             updated_teams: Final[list[LiteLLM_TeamTable]] = []
             failed_teams: Final = []
             if teams_to_reset is not None and len(teams_to_reset) > 0:
@@ -688,8 +832,27 @@ class ResetBudgetJob:
                             await self._invalidate_spend_counter(f"spend:team:{team_id}")
 
             end_time = time.time()
-            if len(failed_teams) > 0:  # If any teams failed to reset
-                raise Exception(f"Failed to reset {len(failed_teams)} teams: {json.dumps(failed_teams, default=str)}")
+            outcome: Final = _ChunkOutcome(
+                fetched=len(teams_to_reset) if teams_to_reset else 0,
+                advanced=_count_advanced(
+                    (t.budget_reset_at for t in updated_teams),
+                    cutoff=datetime.now(timezone.utc),
+                ),
+            )
+            if len(failed_teams) > 0:
+                self._emit_phase_failure(
+                    call_type="reset_budget_teams",
+                    error=Exception(
+                        f"Failed to reset {len(failed_teams)} teams: {json.dumps(failed_teams, default=str)}"
+                    ),
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata={
+                        "num_teams_found": len(teams_to_reset) if teams_to_reset else 0,
+                        "teams_found": json.dumps(teams_to_reset, indent=4, default=str),
+                    },
+                )
+                return outcome
 
             asyncio.create_task(
                 self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
@@ -725,6 +888,9 @@ class ResetBudgetJob:
                 )
             )
             verbose_proxy_logger.exception("Failed to reset budget for teams: %s", e)
+            return _NO_PROGRESS
+        else:
+            return outcome
 
     @staticmethod
     async def _reset_expired_window(
@@ -881,33 +1047,6 @@ class ResetBudgetJob:
             reset_settings=reset_settings,
         )
         return user
-
-    @staticmethod
-    async def _reset_budget_for_enduser(
-        enduser: LiteLLM_EndUserTable,
-    ) -> LiteLLM_EndUserTable | None:
-        try:
-            enduser.spend = 0.0
-        except Exception as e:
-            verbose_proxy_logger.exception("Error resetting budget for enduser: %s. Item: %s", e, enduser)
-            raise e
-        return enduser
-
-    @staticmethod
-    async def _reset_budget_reset_at_date(
-        budget: LiteLLM_BudgetTableFull,
-        current_time: datetime,
-        reset_settings: BudgetResetSettings,
-    ) -> LiteLLM_BudgetTableFull:
-        try:
-            if budget.budget_duration is not None:
-                budget.budget_reset_at = compute_budget_reset_at(
-                    budget_duration=budget.budget_duration, settings=reset_settings
-                )
-        except Exception as e:
-            verbose_proxy_logger.exception("Error resetting budget_reset_at for budget: %s. Item: %s", e, budget)
-            raise e
-        return budget
 
     @staticmethod
     async def _reset_budget_for_key(
