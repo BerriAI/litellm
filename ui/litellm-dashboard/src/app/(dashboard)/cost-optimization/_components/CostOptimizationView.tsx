@@ -4,6 +4,7 @@ import React from "react";
 import { PiggyBank } from "lucide-react";
 import { Alert, Tabs } from "antd";
 
+import useCan from "@/app/(dashboard)/hooks/useCan";
 import UsageTab from "./UsageTab";
 import PromptCompressionTab from "./PromptCompressionTab";
 import PromptCachingTab from "./PromptCachingTab";
@@ -18,6 +19,7 @@ interface CostOptimizationViewProps {
 
 const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken, userId, userRole }) => {
   const activity = useDailyActivityRange(accessToken, userId, userRole);
+  const canViewProxyWideCostData = useCan("viewProxyWideCostData");
 
   const items = [
     {
@@ -25,21 +27,25 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
       label: "Overall",
       children: <UsageTab accessToken={accessToken} activity={activity} />,
     },
-    {
-      key: "compression",
-      label: "Prompt Compression",
-      children: <PromptCompressionTab accessToken={accessToken} />,
-    },
-    {
-      key: "caching",
-      label: "Prompt Caching",
-      children: <PromptCachingTab accessToken={accessToken} activity={activity} />,
-    },
-    {
-      key: "autorouter-usage",
-      label: "Auto-Router",
-      children: <AutoRouterBenchmarksTab accessToken={accessToken} />,
-    },
+    ...(canViewProxyWideCostData
+      ? [
+          {
+            key: "compression",
+            label: "Prompt Compression",
+            children: <PromptCompressionTab accessToken={accessToken} />,
+          },
+          {
+            key: "caching",
+            label: "Prompt Caching",
+            children: <PromptCachingTab accessToken={accessToken} activity={activity} />,
+          },
+          {
+            key: "autorouter-usage",
+            label: "Auto-Router",
+            children: <AutoRouterBenchmarksTab accessToken={accessToken} />,
+          },
+        ]
+      : []),
   ];
 
   return (
