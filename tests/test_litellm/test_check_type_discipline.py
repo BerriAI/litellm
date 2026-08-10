@@ -238,10 +238,48 @@ def test_typed_args_is_clean_but_kwargs_ok_suppresses(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# Frozen-instance bypass (LIT010) — only the `object` receiver counts
+# --------------------------------------------------------------------------- #
+
+
+def test_object_setattr_and_delattr_are_flagged(tmp_path):
+    assert "LIT010" in _codes(tmp_path, "def f(o: object) -> None:\n    object.__setattr__(o, 'a', 1)\n")
+    assert "LIT010" in _codes(tmp_path, "def f(o: object) -> None:\n    object.__delattr__(o, 'a')\n")
+    qualified = "import builtins\ndef f(o: object) -> None:\n    builtins.object.__setattr__(o, 'a', 1)\n"
+    assert "LIT010" in _codes(tmp_path, qualified)
+
+
+def test_cooperative_setattr_is_not_flagged(tmp_path):
+    # An owner writing through its own __setattr__ (directly or via super()) is not a
+    # bypass; only the builtin that steps around the owner's guard is.
+    src = (
+        "class X:\n"
+        "    def __setattr__(self, name: str, value: int) -> None:\n"
+        "        super().__setattr__(name, value)\n"
+        "        self.__setattr__(name, value)\n"
+    )
+    assert "LIT010" not in _codes(tmp_path, src)
+
+
+def test_setattr_ok_with_reason_suppresses(tmp_path):
+    src = (
+        "def f(o: object) -> None:\n"
+        "    object.__setattr__(o, 'a', 1)  # setattr-ok: rehydrating a frozen row from the DB\n"
+    )
+    assert "LIT010" not in _codes(tmp_path, src)
+
+
+def test_setattr_ok_without_reason_is_lit005(tmp_path):
+    codes = _codes(tmp_path, "def f(o: object) -> None:\n    object.__setattr__(o, 'a', 1)  # setattr-ok\n")
+    assert "LIT005" in codes
+    assert "LIT010" in codes
+
+
+# --------------------------------------------------------------------------- #
 # Budget integrity: every emittable LIT rule (bar the LIT000 read/parse error) is gated
 # --------------------------------------------------------------------------- #
 
 
 def test_budget_covers_exactly_the_checker_rules():
     budget = json.loads((_REPO_ROOT / "type-discipline-budget.json").read_text())
-    assert set(budget) == {f"LIT00{n}" for n in range(1, 10)}
+    assert set(budget) == {f"LIT{n:03d}" for n in range(1, 11)}

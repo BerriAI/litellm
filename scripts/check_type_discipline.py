@@ -45,6 +45,14 @@ LIT009  `# type: ignore` in any shape (bare, with codes, with a reason).
         pyrightconfig.json sets enableTypeIgnoreComments to false, so basedpyright
         never honors it: the comment is inert dead syntax that suppresses nothing.
         Use `# pyright: ignore[ruleName]  # <reason>` instead.
+LIT010  `object.__setattr__(...)` / `object.__delattr__(...)` call. Both write straight
+        through a frozen dataclass' guard, so the immutability the type promises is not
+        real and any holder of the "frozen" value can be mutated out from under. Build
+        the final value and construct once, or produce a new instance with
+        dataclasses.replace(). ruff-strict.toml bans the qualified `builtins.` form via
+        TID251, but banned-api only resolves imported names and never sees the bare
+        `object` builtin, which is the form that actually gets written; this flags that.
+        Suppress with `# setattr-ok: <reason>` on the call's first line.
 
 LIT000  Setup failure: a target file could not be read, or contains a syntax error.
         Reported as a violation rather than crashing the run.
@@ -95,6 +103,7 @@ MUTABLE_CONSTRUCTORS = frozenset((
 QUALIFIED_CONSTRUCTORS = MUTABLE_CONSTRUCTORS - frozenset(("dict", "list", "set"))
 FREEZING_WRAPPERS = frozenset(("tuple", "frozenset", "MappingProxyType"))
 UNSAFE_GUARDS = frozenset(("TypeGuard", "TypeIs"))
+FROZEN_BYPASS_DUNDERS = frozenset(("__setattr__", "__delattr__"))
 MIN_REASON_LEN = 3
  
 NOQA_RE = re.compile(
@@ -111,6 +120,7 @@ MUTABLE_OK_RE = re.compile(r"#\s*mutable-ok(?::\s*(?P<reason>.*))?")
 CAST_OK_RE = re.compile(r"#\s*cast-ok(?::\s*(?P<reason>.*))?")
 GUARD_OK_RE = re.compile(r"#\s*guard-ok(?::\s*(?P<reason>.*))?")
 KWARGS_OK_RE = re.compile(r"#\s*kwargs-ok(?::\s*(?P<reason>.*))?")
+SETATTR_OK_RE = re.compile(r"#\s*setattr-ok(?::\s*(?P<reason>.*))?")
 
 # Suppression tokens that must each carry a reason (LIT005).
 OK_SUPPRESSIONS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -118,6 +128,7 @@ OK_SUPPRESSIONS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("cast-ok", CAST_OK_RE),
     ("guard-ok", GUARD_OK_RE),
     ("kwargs-ok", KWARGS_OK_RE),
+    ("setattr-ok", SETATTR_OK_RE),
 )
  
  
@@ -139,6 +150,7 @@ class Comments:
     cast_ok_lines: frozenset[int]
     guard_ok_lines: frozenset[int]
     kwargs_ok_lines: frozenset[int]
+    setattr_ok_lines: frozenset[int]
  
  
 # --------------------------------------------------------------------------- #
@@ -194,7 +206,7 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
         # tokenize raises TokenError (EOF mid-construct) or a SyntaxError subclass
         # (IndentationError / TabError) on malformed source; defer to ast.parse below,
         # which re-raises and is reported as LIT000 rather than crashing the run.
-        return Comments(frozenset(), frozenset(), frozenset(), frozenset()), ()
+        return Comments(frozenset(), frozenset(), frozenset(), frozenset(), frozenset()), ()
 
     def _lines_with(regex: re.Pattern[str]) -> frozenset[int]:
         return frozenset(line for line, text in comment_toks if _valid_ok(regex, text))
@@ -205,6 +217,7 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
             cast_ok_lines=_lines_with(CAST_OK_RE),
             guard_ok_lines=_lines_with(GUARD_OK_RE),
             kwargs_ok_lines=_lines_with(KWARGS_OK_RE),
+            setattr_ok_lines=_lines_with(SETATTR_OK_RE),
         ),
         tuple(v for line, text in comment_toks for v in _comment_violations(path, line, text)),
     )
@@ -356,6 +369,45 @@ def iter_guard_violations(path: Path, tree: ast.AST, comments: Comments) -> Iter
  
  
 # --------------------------------------------------------------------------- #
+# Frozen-instance bypass (LIT010)
+# --------------------------------------------------------------------------- #
+
+
+def _frozen_bypass_dunder(node: ast.Call) -> str | None:
+    """The dunder name when this call is `object.__setattr__`/`__delattr__`, else None.
+
+    Matched on the `object.` receiver rather than the attribute alone, so a class'
+    own `self.__setattr__(...)` or a `super().__setattr__(...)` cooperative call is
+    left alone; only the builtin that steps around the owner's guard is flagged.
+    """
+    func = node.func
+    if not isinstance(func, ast.Attribute) or func.attr not in FROZEN_BYPASS_DUNDERS:
+        return None
+    receiver = func.value
+    is_object = (isinstance(receiver, ast.Name) and receiver.id == "object") or (
+        isinstance(receiver, ast.Attribute)
+        and receiver.attr == "object"
+        and isinstance(receiver.value, ast.Name)
+        and receiver.value.id == "builtins"
+    )
+    return func.attr if is_object else None
+
+
+def iter_frozen_bypass_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or node.lineno in comments.setattr_ok_lines:
+            continue
+        dunder = _frozen_bypass_dunder(node)
+        if dunder is not None:
+            yield Violation(
+                path, node.lineno, "LIT010",
+                f"`object.{dunder}` writes through a frozen dataclass' guard, so the "
+                f"immutability the type promises is not real; build the final value and "
+                f"construct once, or dataclasses.replace() (suppress: `# setattr-ok: <reason>`)",
+            )
+
+
+# --------------------------------------------------------------------------- #
 # Mutable-collection construction (LIT002)
 # --------------------------------------------------------------------------- #
 
@@ -478,6 +530,7 @@ def check_file(path: Path) -> tuple[Violation, ...]:
         *iter_annotation_violations(path, tree, comments),
         *iter_cast_violations(path, tree, comments),
         *iter_guard_violations(path, tree, comments),
+        *iter_frozen_bypass_violations(path, tree, comments),
         *iter_construction_violations(path, tree, comments),
     )
  
