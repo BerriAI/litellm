@@ -7754,6 +7754,22 @@ def test_count_pre_call_check_tokens_counts_pre_tokenized_embedding_input():
     assert router._count_pre_call_check_tokens(messages=None, input=[]) == 0
 
 
+def test_count_embedding_input_tokens_shape_dispatch():
+    from litellm.router import _count_embedding_input_tokens
+
+    assert _count_embedding_input_tokens([15496, 2159, 0]) == 3
+    assert _count_embedding_input_tokens([[15496, 2159], [0, 1, 2]]) == 5
+    assert _count_embedding_input_tokens(["hello world", "second string"]) > 0
+
+    # `str` is itself a Sequence, so the text branch has to win or "ab" would count as 2 token ids
+    assert _count_embedding_input_tokens(["ab"]) == 1
+
+    # anything that is not an embedding shape defers to the Responses transform
+    assert _count_embedding_input_tokens([{"role": "user", "content": "hi"}]) is None
+    assert _count_embedding_input_tokens([1, "a"]) is None
+    assert _count_embedding_input_tokens([["a"]]) is None
+
+
 def test_pre_call_checks_filters_embedding_over_context_window():
     from litellm.router import Router
 
