@@ -17,42 +17,42 @@ class SingulrGuardrailRequest(BaseModel):
 
 
 class SingulrGuardrailPayload(BaseModel):
-    litellm_call_id: Optional[str] = None
-    request_data: Optional[SingulrGuardrailRequest] = None
+    litellm_call_id: str | None = None
+    request_data: SingulrGuardrailRequest | None = None
     input_type: str
-    is_playground_request: Optional[bool] = None
-    playground_text: Optional[str] = None
+    is_playground_request: bool | None = None
+    playground_text: str | None = None
 
 
 class SingulrGuardrailResponse(BaseModel):
     """Response returned by the Singulr guardrail API."""
 
     should_block: bool = False
-    blocking_due_to: Optional[str] = None
+    blocking_due_to: str | None = None
 
 
 class SingulrGuardrailConfigModel(GuardrailConfigModel):
-    singulr_api_key: Optional[str] = Field(
+    singulr_api_key: str | None = Field(
         default=None,
         description="The Singulr API key. Generate API key from Singulr Platform.",
     )
 
-    singulr_api_base: Optional[str] = Field(
+    singulr_api_base: str | None = Field(
         default=None,
         description="The Singulr API base URL. Get base URL from Singulr Platform.",
     )
 
-    singulr_application_id: Optional[str] = Field(
+    singulr_application_id: str | None = Field(
         default=None,
         description="The Singulr application ID. Get application ID from Singulr Platform.",
     )
 
-    singulr_guardrail_id: Optional[str] = Field(
+    singulr_guardrail_id: str | None = Field(
         default=None,
         description="The Singulr Guardrail ID. Get guardrail ID from Singulr Platform.",
     )
 
-    block_on_error: Optional[bool] = Field(
+    block_on_error: bool | None = Field(
         default=None,
         description=(
             "Whether to block requests when the Singulr Guardrails API is unavailable "

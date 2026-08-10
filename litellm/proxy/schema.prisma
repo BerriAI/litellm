@@ -601,6 +601,8 @@ model LiteLLM_TagTable {
 model LiteLLM_Config {
   param_name String @id
   param_value Json?
+  last_run_at DateTime?
+  reload_revision BigInt @default(0)
 }
 
 // View spend, model, api_key per request
@@ -748,6 +750,7 @@ model LiteLLM_DailyUserSpend {
   compression_saved_tokens    BigInt      @default(0)
   compression_savings_spend    Float       @default(0.0)
   prompt_caching_savings_spend Float       @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -782,6 +785,7 @@ model LiteLLM_DailyOrganizationSpend {
   compression_saved_tokens    BigInt      @default(0)
   compression_savings_spend    Float       @default(0.0)
   prompt_caching_savings_spend Float       @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -816,6 +820,7 @@ model LiteLLM_DailyEndUserSpend {
   compression_saved_tokens    BigInt      @default(0)
   compression_savings_spend    Float       @default(0.0)
   prompt_caching_savings_spend Float       @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -849,6 +854,7 @@ model LiteLLM_DailyAgentSpend {
   compression_saved_tokens    BigInt      @default(0)
   compression_savings_spend    Float       @default(0.0)
   prompt_caching_savings_spend Float       @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -882,6 +888,7 @@ model LiteLLM_DailyTeamSpend {
   compression_saved_tokens    BigInt      @default(0)
   compression_savings_spend    Float       @default(0.0)
   prompt_caching_savings_spend Float       @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -917,6 +924,7 @@ model LiteLLM_DailyTagSpend {
   compression_saved_tokens    BigInt      @default(0)
   compression_savings_spend    Float       @default(0.0)
   prompt_caching_savings_spend Float       @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -977,6 +985,8 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   created_at DateTime @default(now())
   created_by String?
   team_id String?
+  api_key String?
+  request_tags Json? @default("[]")
   updated_at DateTime @updatedAt
   updated_by String?
 
@@ -1108,6 +1118,26 @@ model LiteLLM_DailyToolSpend {
   updated_at    DateTime @updatedAt
 
   @@id([date, tool_name])
+}
+
+// Gateway request counts recorded at the ASGI edge by
+// BillableRequestMetricsMiddleware. This is the source of truth for SGR
+// (successful gateway requests): it counts what the proxy actually answered,
+// independent of whether the request reached litellm's logging callbacks.
+// The key carries no deployment or caller dimension. Every part of it is
+// chosen by the proxy and drawn from a closed set, so the table is bounded by
+// (days x categories x routes) rather than by anything a caller can vary.
+model LiteLLM_DailyGatewayRequests {
+  date                String
+  category            String
+  route               String
+  successful_requests BigInt   @default(0)
+  failed_requests     BigInt   @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@id([date, category, route])
+  @@index([date])
 }
 
 // Prompt table for storing prompt configurations
@@ -1383,6 +1413,38 @@ model LiteLLM_AdaptiveRouterSession {
 
   @@id([session_id, router_name, model_name])
   @@index([last_activity_at], map: "idx_adaptive_router_session_activity")
+}
+
+model LiteLLM_AutoRouterSession {
+  api_key               String
+  session_id            String
+  router_name           String
+  router_type           String
+  first_turn_at         DateTime
+  last_turn_at          DateTime
+  last_model            String
+  models                Json     @default("{}")
+  turns                 Int      @default(0)
+  unordered_turns       Int      @default(0)
+  covered_turns         Int      @default(0)
+  cache_hits            Int      @default(0)
+  same_model_turns      Int      @default(0)
+  same_model_hits       Int      @default(0)
+  first_visit_turns     Int      @default(0)
+  first_visit_hits      Int      @default(0)
+  return_turns          Int      @default(0)
+  return_hits           Int      @default(0)
+  return_expired_misses Int      @default(0)
+  return_within_ttl_misses  Int      @default(0)
+  ttl_5m_turns          Int      @default(0)
+  ttl_1h_turns          Int      @default(0)
+  total_tokens          BigInt   @default(0)
+  spend                 Float    @default(0)
+  saved_spend           Float    @default(0)
+  tier_turns            Json     @default("{}")
+
+  @@id([api_key, session_id, router_name])
+  @@index([last_turn_at], map: "idx_autorouter_session_last_turn")
 }
 
 // ---------------------------------------------------------------------------

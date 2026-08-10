@@ -9,7 +9,8 @@ Like ``GenAIMapper``, each span kind declares its schema as a flat
 ``attribute key -> extractor`` table: one lambda per mapping operation.
 """
 
-from typing import Callable, Final
+from collections.abc import Callable
+from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
@@ -80,7 +81,7 @@ class LegacyMapper:
                 return {}
 
     def _llm_call(self, data: LLMCallSpanData) -> AttributeMap:
-        attrs = collect(self._LLM_CALL_ATTRS, data)
+        attrs: Final = collect(self._LLM_CALL_ATTRS, data)
         attrs.update(
             tool_definition_attrs(
                 lambda idx, suffix: f"llm.request.functions.{idx}.{suffix}",
@@ -93,6 +94,6 @@ class LegacyMapper:
 
     @classmethod
     def _service(cls, data: ServiceSpanData) -> AttributeMap:
-        attrs = collect(cls._SERVICE_ATTRS, data)
+        attrs: Final = collect(cls._SERVICE_ATTRS, data)
         attrs.update(dict(data.event_metadata))
         return attrs
