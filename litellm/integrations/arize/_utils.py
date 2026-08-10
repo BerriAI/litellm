@@ -13,7 +13,7 @@ from litellm.litellm_core_utils.redact_messages import (
     should_redact_message_logging,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.types.utils import CallTypes, StandardLoggingPayload
+from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall, StandardLoggingPayload
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -1090,7 +1090,7 @@ def _maybe_set_mcp_tool_attrs(
         return
 
     metadata: Final = standard_logging_payload.get("metadata")
-    mcp_meta: Final = metadata.get("mcp_tool_call_metadata") if metadata else None
+    mcp_meta: Final[StandardLoggingMCPToolCall | None] = metadata.get("mcp_tool_call_metadata") if metadata else None
     if mcp_meta is None:
         return
 
@@ -1102,7 +1102,7 @@ def _maybe_set_mcp_tool_attrs(
         return
 
     arguments: Final[object] = mcp_meta.get("arguments")
-    if arguments:
+    if arguments is not None:
         safe_set_attribute(span, SpanAttributes.INPUT_VALUE, safe_dumps(arguments))
         safe_set_attribute(span, SpanAttributes.INPUT_MIME_TYPE, OpenInferenceMimeTypeValues.JSON.value)
 
@@ -1120,6 +1120,10 @@ def _set_mcp_tool_output(span: "Span", coerced_response_obj: object) -> None:
         safe_set_attribute(span, SpanAttributes.OUTPUT_MIME_TYPE, OpenInferenceMimeTypeValues.TEXT.value)
         return
 
-    if content:
-        safe_set_attribute(span, SpanAttributes.OUTPUT_VALUE, safe_dumps(content))
-        safe_set_attribute(span, SpanAttributes.OUTPUT_MIME_TYPE, OpenInferenceMimeTypeValues.JSON.value)
+    structured: Final[object] = coerced_response_obj.get("structuredContent")
+    payload: Final[object] = content if content else structured if structured is not None else content
+    if payload is None:
+        return
+
+    safe_set_attribute(span, SpanAttributes.OUTPUT_VALUE, safe_dumps(payload))
+    safe_set_attribute(span, SpanAttributes.OUTPUT_MIME_TYPE, OpenInferenceMimeTypeValues.JSON.value)
