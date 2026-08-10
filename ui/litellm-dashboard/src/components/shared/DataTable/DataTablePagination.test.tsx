@@ -13,6 +13,28 @@ const baseProps = {
 };
 
 describe("DataTablePagination", () => {
+  it("renders caller-provided Russian pagination labels", () => {
+    render(
+      <DataTablePagination
+        {...baseProps}
+        labels={{
+          rowsPerPage: "Строк на странице",
+          noResults: "Нет результатов",
+          range: (start, end, total) => `Показано ${start}–${end} из ${total}`,
+          page: (current, total) => `Страница ${current} из ${total}`,
+          firstPage: "На первую страницу",
+          previousPage: "На предыдущую страницу",
+          nextPage: "На следующую страницу",
+          lastPage: "На последнюю страницу",
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Строк на странице")).toBeInTheDocument();
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Показано 1–25 из 100");
+    expect(screen.getByRole("button", { name: "На следующую страницу" })).toBeInTheDocument();
+  });
+
   it("renders the current range from plain props", () => {
     render(<DataTablePagination {...baseProps} />);
     expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-25 of 100");

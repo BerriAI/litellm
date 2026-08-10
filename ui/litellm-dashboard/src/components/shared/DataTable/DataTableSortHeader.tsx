@@ -105,7 +105,20 @@ interface DataTableMultiSortHeaderProps<TData> {
   table: Table<TData>;
   fields: DataTableSortField[];
   className?: string;
+  labels?: {
+    ascending: string;
+    descending: string;
+    reset: string;
+    sortOptions: (fields: string) => string;
+  };
 }
+
+const DEFAULT_MULTI_SORT_LABELS = {
+  ascending: "ascending",
+  descending: "descending",
+  reset: "Reset",
+  sortOptions: (fields: string) => `Sort options for ${fields}`,
+};
 
 /**
  * Sort header for a column that merges several backend-sortable fields into one cell
@@ -113,15 +126,26 @@ interface DataTableMultiSortHeaderProps<TData> {
  * with the field currently driving the sort emphasized so the active column reads at a glance
  * without opening the menu. The chevron opens a menu offering each field in both directions.
  */
-export function DataTableMultiSortHeader<TData>({ table, fields, className }: DataTableMultiSortHeaderProps<TData>) {
+export function DataTableMultiSortHeader<TData>({
+  table,
+  fields,
+  className,
+  labels = DEFAULT_MULTI_SORT_LABELS,
+}: DataTableMultiSortHeaderProps<TData>) {
   const active = table.getState().sorting[0];
   const activeField = active !== undefined && fields.some((field) => field.id === active.id) ? active : undefined;
   const activeDirection: SortDirection = activeField?.desc === true ? "desc" : "asc";
   const sorted: false | SortDirection = activeField === undefined ? false : activeDirection;
 
   const options = fields.flatMap((field) => [
-    { key: `${field.id}-asc`, id: field.id, desc: false, label: `${field.label} ascending`, Icon: ChevronUp },
-    { key: `${field.id}-desc`, id: field.id, desc: true, label: `${field.label} descending`, Icon: ChevronDown },
+    { key: `${field.id}-asc`, id: field.id, desc: false, label: `${field.label} ${labels.ascending}`, Icon: ChevronUp },
+    {
+      key: `${field.id}-desc`,
+      id: field.id,
+      desc: true,
+      label: `${field.label} ${labels.descending}`,
+      Icon: ChevronDown,
+    },
   ]);
 
   const segmentClass = (isActive: boolean): string => {
@@ -155,7 +179,7 @@ export function DataTableMultiSortHeader<TData>({ table, fields, className }: Da
             <button
               type="button"
               data-testid={`sort-trigger-${fields[0]?.id ?? "field"}`}
-              aria-label={`Sort options for ${fields.map((field) => field.label).join(" or ")}`}
+              aria-label={labels.sortOptions(fields.map((field) => field.label).join(" / "))}
               onClick={(event) => event.stopPropagation()}
               className={cn(
                 "inline-flex size-6 items-center justify-center rounded-md hover:bg-muted",
@@ -183,7 +207,7 @@ export function DataTableMultiSortHeader<TData>({ table, fields, className }: Da
                 );
               })}
               <Menu.Item className={MENU_ITEM_CLASS} onClick={() => table.setSorting([])}>
-                <X className="size-3.5" /> Reset
+                <X className="size-3.5" /> {labels.reset}
               </Menu.Item>
             </Menu.Popup>
           </Menu.Positioner>

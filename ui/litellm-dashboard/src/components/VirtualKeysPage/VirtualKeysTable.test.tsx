@@ -9,6 +9,29 @@ import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 
+const translationState = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: (namespace: "common" | "gateway" = "common") => ({
+      t: (key: string, values?: Record<string, unknown>) => {
+        const dictionary = resources[translationState.language][namespace] as unknown;
+        const copy = key.split(".").reduce<unknown>((value, segment) => {
+          if (typeof value !== "object" || value === null) return undefined;
+          return (value as Record<string, unknown>)[segment];
+        }, dictionary);
+        if (typeof copy !== "string") return key;
+        return Object.entries(values ?? {}).reduce(
+          (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+          copy,
+        );
+      },
+      i18n: { language: translationState.language, resolvedLanguage: translationState.language },
+    }),
+  };
+});
+
 // Resolve debounced values synchronously so an applied filter lands in the useKeys query within the test tick.
 vi.mock("@tanstack/react-pacer/debouncer", async () => {
   const React = await vi.importActual<typeof import("react")>("react");
@@ -172,6 +195,7 @@ const lastKeyParam = (onUrlUpdate: Mock<OnUrlUpdateFunction>) =>
   onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("key");
 
 beforeEach(() => {
+  translationState.language = "en";
   vi.clearAllMocks();
 
   mockUseKeys.mockReturnValue(keysResult([mockKey]));
@@ -181,6 +205,18 @@ beforeEach(() => {
     teams: [mockTeam],
     setTeams: vi.fn(),
   });
+});
+
+it("renders the virtual keys list controls in Russian", async () => {
+  translationState.language = "ru";
+  renderWithProviders(<VirtualKeysTable />);
+
+  expect(screen.getByRole("heading", { name: "Виртуальные ключи" })).toBeInTheDocument();
+  expect(screen.getByPlaceholderText("Поиск по псевдониму ключа…")).toBeInTheDocument();
+  expect(await screen.findByTestId(`key-status-${mockKey.token_id}`)).toHaveTextContent("Активен");
+  expect(screen.getByRole("button", { name: "Столбцы" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Фильтры" })).toBeInTheDocument();
+  expect(screen.getByTestId("pagination-range")).toHaveTextContent("Показано 1–1 из 1");
 });
 
 it("should render VirtualKeysTable component", () => {

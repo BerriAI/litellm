@@ -1,7 +1,6 @@
-export interface KeyModelScope {
-  hasModelAccess: boolean;
-  label: string | null;
-}
+export type KeyModelScope =
+  | { hasModelAccess: false; label: string }
+  | { hasModelAccess: true; label: null };
 
 const MANAGEMENT_ROUTES_PRESET = "management_routes";
 const INFO_ROUTES_PRESET = "info_routes";

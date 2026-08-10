@@ -19,6 +19,7 @@ import { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@
 import { KeyRound } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import React, { useCallback, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "../templates/key_info_view";
@@ -36,14 +37,10 @@ const toSortOrder = (sorting: SortingState): "asc" | "desc" | undefined => {
   return active.desc ? "desc" : "asc";
 };
 
-const FILTER_LABELS: Record<string, string> = {
-  team_id: "Team",
-  org_id: "Organization",
-  user_id: "User ID",
-  key_hash: "Key ID",
-};
-
 export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
+  const { t, i18n } = useTranslation("gateway");
+  const { t: commonT } = useTranslation("common");
+  const locale = i18n.resolvedLanguage === "ru" ? "ru-RU" : "en-US";
   const { data: fetchedOrganizations } = useOrganizations();
   const organizations = useMemo(() => fetchedOrganizations ?? [], [fetchedOrganizations]);
   const { data: fetchedTeams } = useAllTeams();
@@ -105,8 +102,26 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   }, []);
 
   const columns = useMemo(
-    () => getKeyTableColumns({ allTeams, organizations, onSelectKey: (key) => void setSelectedKeyId(key.token) }),
-    [allTeams, organizations, setSelectedKeyId],
+    () =>
+      getKeyTableColumns({
+        allTeams,
+        organizations,
+        onSelectKey: (key) => void setSelectedKeyId(key.token),
+        t,
+        commonT,
+        locale,
+      }),
+    [allTeams, organizations, setSelectedKeyId, t, commonT, locale],
+  );
+
+  const filterLabels = useMemo<Record<string, string>>(
+    () => ({
+      team_id: t("virtualKeys.filters.team"),
+      org_id: t("virtualKeys.filters.organization"),
+      user_id: t("virtualKeys.filters.userId"),
+      key_hash: t("virtualKeys.filters.keyId"),
+    }),
+    [t],
   );
 
   const selectedKeyFromList = useMemo(
@@ -155,7 +170,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
 
   if (selectedKeyId) {
     if (!selectedKey && !selectedKeyLoadFailed) {
-      return <div className="p-4 text-sm text-muted-foreground">Loading key...</div>;
+      return <div className="p-4 text-sm text-muted-foreground">{t("virtualKeys.loadingKey")}</div>;
     }
     return (
       <div className="w-full h-full overflow-hidden">
@@ -174,8 +189,8 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
     <div className="flex h-full flex-col gap-4 overflow-hidden py-2">
       <PageHeader
         icon={<KeyRound className="size-5" />}
-        title="Virtual Keys"
-        subtitle="Every key that authenticates requests to the gateway."
+        title={t("virtualKeys.title")}
+        subtitle={t("virtualKeys.subtitle")}
       />
       {headerActions}
       <DataTable
@@ -196,8 +211,18 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
         enableColumnResizing
         columnResizeMode="onChange"
         isLoading={isLoading}
-        loadingMessage="Loading keys..."
-        noDataMessage="No keys found"
+        loadingMessage={t("virtualKeys.loading")}
+        noDataMessage={t("virtualKeys.empty")}
+        paginationLabels={{
+          rowsPerPage: commonT("table.rowsPerPage"),
+          noResults: commonT("table.noResults"),
+          range: (start, end, total) => commonT("table.range", { start, end, total }),
+          page: (current, total) => commonT("table.page", { current, total }),
+          firstPage: commonT("table.firstPage"),
+          previousPage: commonT("table.previousPage"),
+          nextPage: commonT("table.nextPage"),
+          lastPage: commonT("table.lastPage"),
+        }}
         maxBodyHeight="calc(75vh - 210px)"
         size="compact"
         toolbar={(table) => (
@@ -206,52 +231,61 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
               table={table}
               searchValue={searchInput}
               onSearchChange={handleSearchChange}
-              searchPlaceholder="Search by key alias…"
+              searchPlaceholder={t("virtualKeys.searchPlaceholder")}
               onRefresh={() => refetch?.()}
               isRefreshing={isFetching}
               onOpenFilters={() => setFiltersOpen(true)}
-              filterLabels={FILTER_LABELS}
+              filterLabels={filterLabels}
               formatFilterValue={formatFilterValue}
+              labels={{
+                columns: commonT("table.columns"),
+                filters: commonT("table.filters"),
+                refresh: commonT("table.refresh"),
+                clearAll: commonT("table.clearAll"),
+                removeFilter: (label) => commonT("table.removeFilter", { label }),
+              }}
             />
             <DataTableFilterDrawer
               table={table}
               open={filtersOpen}
               onOpenChange={setFiltersOpen}
-              title="Filters"
-              description="Narrow down virtual keys"
+              title={t("virtualKeys.filters.title")}
+              description={t("virtualKeys.filters.description")}
+              applyLabel={commonT("table.applyFilters")}
+              resetLabel={commonT("table.reset")}
             >
               {({ get, set }) => (
                 <>
-                  <DataTableFilterField label="Team">
+                  <DataTableFilterField label={t("virtualKeys.filters.team")}>
                     <SearchSelect
                       options={teamOptions}
                       value={(get("team_id") as string) || undefined}
                       onValueChange={(value) => set("team_id", value)}
-                      placeholder="Select a team…"
-                      emptyText="No teams found"
+                      placeholder={t("virtualKeys.filters.selectTeam")}
+                      emptyText={t("virtualKeys.filters.noTeams")}
                     />
                   </DataTableFilterField>
-                  <DataTableFilterField label="Organization">
+                  <DataTableFilterField label={t("virtualKeys.filters.organization")}>
                     <SearchSelect
                       options={orgOptions}
                       value={(get("org_id") as string) || undefined}
                       onValueChange={(value) => set("org_id", value)}
-                      placeholder="Select an organization…"
-                      emptyText="No organizations found"
+                      placeholder={t("virtualKeys.filters.selectOrganization")}
+                      emptyText={t("virtualKeys.filters.noOrganizations")}
                     />
                   </DataTableFilterField>
-                  <DataTableFilterField label="User ID">
+                  <DataTableFilterField label={t("virtualKeys.filters.userId")}>
                     <Input
                       value={(get("user_id") as string) ?? ""}
                       onChange={(event) => set("user_id", event.target.value)}
-                      placeholder="Enter User ID…"
+                      placeholder={t("virtualKeys.filters.enterUserId")}
                     />
                   </DataTableFilterField>
-                  <DataTableFilterField label="Key ID">
+                  <DataTableFilterField label={t("virtualKeys.filters.keyId")}>
                     <Input
                       value={(get("key_hash") as string) ?? ""}
                       onChange={(event) => set("key_hash", event.target.value)}
-                      placeholder="Enter Key ID…"
+                      placeholder={t("virtualKeys.filters.enterKeyId")}
                     />
                   </DataTableFilterField>
                 </>

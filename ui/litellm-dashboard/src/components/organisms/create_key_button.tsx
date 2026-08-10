@@ -79,6 +79,7 @@ interface CreateKeyProps {
   addKey: (data: any) => void;
   autoOpenCreate?: boolean;
   prefillData?: CreateKeyPrefillData;
+  buttonLabel?: string;
 }
 
 interface User {
@@ -144,7 +145,15 @@ export const fetchUserModels = async (
  * Please contribute to the new refactor.
  * ─────────────────────────────────────────────────────────────────────────
  */
-const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOpenCreate, prefillData }) => {
+const CreateKey: React.FC<CreateKeyProps> = ({
+  team,
+  teams,
+  data,
+  addKey,
+  autoOpenCreate,
+  prefillData,
+  buttonLabel = "+ Create New Key",
+}) => {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
@@ -677,7 +686,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     <div>
       {userRole && rolesWithWriteAccess.includes(userRole) && (
         <Button className="mx-auto" onClick={() => setIsModalVisible(true)} data-testid="create-key-button">
-          + Create New Key
+          {buttonLabel}
         </Button>
       )}
       <Modal open={isModalVisible} width={1000} footer={null} onOk={handleOk} onCancel={handleCancel}>

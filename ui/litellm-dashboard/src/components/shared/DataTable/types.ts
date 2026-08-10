@@ -21,6 +21,17 @@ export type DataTableSize = "compact" | "default";
 export type ColumnPinnedSide = "left" | "right";
 export type DataTableSkeletonShape = "text" | "twoLine" | "badge" | "chips" | "meter";
 
+export interface DataTablePaginationLabels {
+  rowsPerPage: string;
+  noResults: string;
+  range: (start: number, end: number, total: number) => string;
+  page: (current: number, total: number) => string;
+  firstPage: string;
+  previousPage: string;
+  nextPage: string;
+  lastPage: string;
+}
+
 export interface DataTableProps<TData extends RowData, TValue> {
   data: TData[];
   columns: ColumnDef<TData, TValue>[];
@@ -42,6 +53,7 @@ export interface DataTableProps<TData extends RowData, TValue> {
   onPaginationChange?: OnChangeFn<PaginationState>;
   rowCount?: number;
   pageSizeOptions?: number[];
+  paginationLabels?: DataTablePaginationLabels;
 
   filterMode?: FilterMode;
   columnFilters?: ColumnFiltersState;

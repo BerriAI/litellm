@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-r
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/cva.config";
+import type { DataTablePaginationLabels } from "./types";
 
 export const DEFAULT_PAGE_SIZE_OPTIONS = [25, 50, 100];
 
@@ -17,7 +18,19 @@ export interface DataTablePaginationProps {
   pageSizeOptions?: number[];
   isLoading?: boolean;
   className?: string;
+  labels?: DataTablePaginationLabels;
 }
+
+const DEFAULT_LABELS: DataTablePaginationLabels = {
+  rowsPerPage: "Rows per page",
+  noResults: "No results",
+  range: (start, end, total) => `Showing ${start}-${end} of ${total}`,
+  page: (current, total) => `Page ${current} of ${total}`,
+  firstPage: "Go to first page",
+  previousPage: "Go to previous page",
+  nextPage: "Go to next page",
+  lastPage: "Go to last page",
+};
 
 export function DataTablePagination({
   page,
@@ -28,6 +41,7 @@ export function DataTablePagination({
   pageSizeOptions = DEFAULT_PAGE_SIZE_OPTIONS,
   isLoading = false,
   className,
+  labels = DEFAULT_LABELS,
 }: DataTablePaginationProps) {
   const pageCount = pageSize > 0 ? Math.ceil(rowCount / pageSize) : 0;
   const start = rowCount === 0 ? 0 : page * pageSize + 1;
@@ -39,7 +53,7 @@ export function DataTablePagination({
   return (
     <div className={cn("flex flex-wrap items-center justify-between gap-4 px-4 py-2.5", className)}>
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <span>Rows per page</span>
+        <span>{labels.rowsPerPage}</span>
         <Select
           value={String(pageSize)}
           onValueChange={(value) => {
@@ -63,17 +77,17 @@ export function DataTablePagination({
 
       <div className="flex items-center gap-4">
         <span data-testid="pagination-range" className="text-sm text-muted-foreground tabular-nums">
-          {rowCount === 0 ? "No results" : `Showing ${start}-${end} of ${rowCount}`}
+          {rowCount === 0 ? labels.noResults : labels.range(start, end, rowCount)}
         </span>
         <span data-testid="pagination-page" className="text-sm text-muted-foreground tabular-nums">
-          Page {page + 1} of {Math.max(pageCount, 1)}
+          {labels.page(page + 1, Math.max(pageCount, 1))}
         </span>
         <div className="flex items-center gap-1">
           <Button
             variant="outline"
             size="icon-sm"
             data-testid="pagination-first"
-            aria-label="Go to first page"
+            aria-label={labels.firstPage}
             disabled={!canPrev}
             onClick={() => onPageChange(0)}
           >
@@ -83,7 +97,7 @@ export function DataTablePagination({
             variant="outline"
             size="icon-sm"
             data-testid="pagination-prev"
-            aria-label="Go to previous page"
+            aria-label={labels.previousPage}
             disabled={!canPrev}
             onClick={() => onPageChange(page - 1)}
           >
@@ -93,7 +107,7 @@ export function DataTablePagination({
             variant="outline"
             size="icon-sm"
             data-testid="pagination-next"
-            aria-label="Go to next page"
+            aria-label={labels.nextPage}
             disabled={!canNext}
             onClick={() => onPageChange(page + 1)}
           >
@@ -103,7 +117,7 @@ export function DataTablePagination({
             variant="outline"
             size="icon-sm"
             data-testid="pagination-last"
-            aria-label="Go to last page"
+            aria-label={labels.lastPage}
             disabled={!canNext}
             onClick={() => onPageChange(lastPage)}
           >

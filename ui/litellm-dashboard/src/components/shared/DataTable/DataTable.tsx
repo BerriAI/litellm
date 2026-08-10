@@ -549,6 +549,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
     paginationMode = "none",
     rowCount,
     pageSizeOptions = DEFAULT_PAGE_SIZE_OPTIONS,
+    paginationLabels,
     enableColumnResizing = false,
     onRowClick,
     rowClassName,
@@ -587,6 +588,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
         onPageSizeChange={(next) => table.setPageSize(next)}
         pageSizeOptions={pageSizeOptions}
         isLoading={isLoading}
+        labels={paginationLabels}
       />
     );
   };

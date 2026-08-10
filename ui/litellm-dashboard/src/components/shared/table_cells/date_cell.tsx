@@ -10,6 +10,7 @@ interface DateCellProps {
   value: string | null | undefined;
   precision?: DatePrecision;
   fallback?: string;
+  locale?: string;
 }
 
 const pad = (n: number): string => String(n).padStart(2, "0");
@@ -26,7 +27,23 @@ export const formatFullTimestamp = (date: Date): string => {
   return `${day}, ${time} (${timeZone})`;
 };
 
-export function DateCell({ value, precision = "datetime", fallback = "-" }: DateCellProps) {
+const formatLocalizedDate = (date: Date, precision: DatePrecision, locale: string): string =>
+  new Intl.DateTimeFormat(locale, {
+    day: "numeric",
+    month: "short",
+    year: precision === "date" ? "numeric" : undefined,
+    hour: precision === "datetime" ? "2-digit" : undefined,
+    minute: precision === "datetime" ? "2-digit" : undefined,
+    second: precision === "datetime" ? "2-digit" : undefined,
+  }).format(date);
+
+const formatLocalizedFullTimestamp = (date: Date, locale: string): string =>
+  new Intl.DateTimeFormat(locale, {
+    dateStyle: "medium",
+    timeStyle: "long",
+  }).format(date);
+
+export function DateCell({ value, precision = "datetime", fallback = "-", locale }: DateCellProps) {
   const date = value ? new Date(value) : null;
   if (!date || Number.isNaN(date.getTime())) {
     return <span className="text-muted-foreground">{fallback}</span>;
@@ -34,8 +51,12 @@ export function DateCell({ value, precision = "datetime", fallback = "-" }: Date
 
   return (
     <CellTooltip
-      content={formatFullTimestamp(date)}
-      trigger={<span className="whitespace-nowrap">{formatCellDate(date, precision)}</span>}
+      content={locale ? formatLocalizedFullTimestamp(date, locale) : formatFullTimestamp(date)}
+      trigger={
+        <span className="whitespace-nowrap">
+          {locale ? formatLocalizedDate(date, precision, locale) : formatCellDate(date, precision)}
+        </span>
+      }
     />
   );
 }

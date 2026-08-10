@@ -41,6 +41,8 @@ interface UserDashboardProps {
   createClicked: boolean;
   autoOpenCreate?: boolean;
   prefillData?: CreateKeyPrefillData;
+  createKeyLabel?: string;
+  missingUserLabel?: string;
 }
 
 const UserDashboard: React.FC<UserDashboardProps> = ({
@@ -58,6 +60,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   createClicked,
   autoOpenCreate,
   prefillData,
+  createKeyLabel = "+ Create New Key",
+  missingUserLabel = "User ID is not set",
 }) => {
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(null);
   const [currentOrg] = useState<Organization | null>(null);
@@ -204,7 +208,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   }
 
   if (userID == null) {
-    return <h1>User ID is not set</h1>;
+    return <h1>{missingUserLabel}</h1>;
   }
 
   if (userRole == null) {
@@ -231,6 +235,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
                   addKey={addKey}
                   autoOpenCreate={autoOpenCreate}
                   prefillData={prefillData}
+                  buttonLabel={createKeyLabel}
                 />
               ) : undefined
             }

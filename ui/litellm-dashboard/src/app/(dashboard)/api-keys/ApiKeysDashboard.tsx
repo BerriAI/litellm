@@ -8,8 +8,10 @@ import UserDashboard from "@/components/user_dashboard";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 export default function ApiKeysDashboard() {
+  const { t } = useTranslation("gateway");
   // Identity comes from useAuthorized (synchronous cookie decode) so userID is set whenever the
   // route is authorized; useAuth only supplies the backfill setters UserDashboard still expects.
   const { userId: userID, userRole, userEmail, accessToken, premiumUser } = useAuthorized();
@@ -92,6 +94,8 @@ export default function ApiKeysDashboard() {
       createClicked={createClicked}
       autoOpenCreate={autoOpenCreate}
       prefillData={prefillData}
+      createKeyLabel={t("virtualKeys.createAction")}
+      missingUserLabel={t("virtualKeys.missingUser")}
     />
   );
 }

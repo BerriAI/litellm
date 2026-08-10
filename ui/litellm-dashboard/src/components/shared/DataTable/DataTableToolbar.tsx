@@ -24,7 +24,22 @@ interface DataTableToolbarProps<TData> {
   showViewOptions?: boolean;
   children?: React.ReactNode;
   className?: string;
+  labels?: {
+    columns: string;
+    filters: string;
+    refresh: string;
+    clearAll: string;
+    removeFilter: (label: string) => string;
+  };
 }
+
+const DEFAULT_LABELS = {
+  columns: "Columns",
+  filters: "Filters",
+  refresh: "Refresh",
+  clearAll: "Clear all",
+  removeFilter: (label: string) => `Remove ${label} filter`,
+};
 
 function defaultFormatValue(value: unknown): string {
   if (Array.isArray(value)) {
@@ -46,6 +61,7 @@ export function DataTableToolbar<TData>({
   showViewOptions = true,
   children,
   className,
+  labels = DEFAULT_LABELS,
 }: DataTableToolbarProps<TData>) {
   const filters = table.getState().columnFilters;
 
@@ -75,7 +91,7 @@ export function DataTableToolbar<TData>({
             {valueFor(filter.id, filter.value)}
             <button
               type="button"
-              aria-label={`Remove ${labelFor(filter.id)} filter`}
+              aria-label={labels.removeFilter(labelFor(filter.id))}
               data-testid={`filter-chip-remove-${filter.id}`}
               onClick={() => table.setColumnFilters((previous) => previous.filter((entry) => entry.id !== filter.id))}
               className="ml-0.5 rounded-full text-muted-foreground hover:text-foreground"
@@ -91,7 +107,7 @@ export function DataTableToolbar<TData>({
             onClick={() => table.setColumnFilters([])}
             data-testid="datatable-clear-filters"
           >
-            Clear all
+            {labels.clearAll}
           </Button>
         )}
       </div>
@@ -103,18 +119,18 @@ export function DataTableToolbar<TData>({
             size="icon-sm"
             onClick={onRefresh}
             disabled={isRefreshing}
-            aria-label="Refresh"
-            title="Refresh"
+            aria-label={labels.refresh}
+            title={labels.refresh}
             data-testid="datatable-refresh"
           >
             <RefreshCw className={isRefreshing ? "animate-spin" : ""} />
           </Button>
         )}
-        {showViewOptions && <DataTableViewOptions table={table} label="Columns" />}
+        {showViewOptions && <DataTableViewOptions table={table} label={labels.columns} />}
         {onOpenFilters !== undefined && (
           <Button variant="outline" size="sm" onClick={onOpenFilters} data-testid="datatable-filters-trigger">
             <SlidersHorizontal />
-            Filters
+            {labels.filters}
             {filters.length > 0 && (
               <Badge className="ml-1 h-5 min-w-5 justify-center rounded-full px-1" data-testid="datatable-filter-count">
                 {filters.length}

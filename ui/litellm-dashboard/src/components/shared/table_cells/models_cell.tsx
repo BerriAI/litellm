@@ -11,34 +11,53 @@ interface ModelsCellProps {
   maxVisible?: number;
   allowedRoutes?: string[] | null;
   keyType?: string | null;
+  labels?: {
+    allProxyModels: string;
+    noModelAccess: string;
+    scopedRoutes: (scope: string) => string;
+    more: (count: number) => string;
+  };
 }
 
 const WILDCARD_MODEL = "all-proxy-models";
 
-const formatModel = (model: string): string => {
+const formatModel = (model: string, allProxyModelsLabel: string): string => {
   if (model === WILDCARD_MODEL) {
-    return "All Proxy Models";
+    return allProxyModelsLabel;
   }
   const name = getModelDisplayName(model);
   return name.length > 30 ? `${name.slice(0, 30)}...` : name;
 };
 
-export function ModelsCell({ models, maxVisible = 3, allowedRoutes, keyType }: ModelsCellProps) {
+const DEFAULT_LABELS = {
+  allProxyModels: "All Proxy Models",
+  noModelAccess: "No model access",
+  scopedRoutes: (scope: string) => `Scoped to ${scope} routes; this key cannot call any models`,
+  more: (count: number) => `+${count} more`,
+};
+
+export function ModelsCell({
+  models,
+  maxVisible = 3,
+  allowedRoutes,
+  keyType,
+  labels = DEFAULT_LABELS,
+}: ModelsCellProps) {
   if (!Array.isArray(models) || models.length === 0) {
     const scope = deriveKeyModelScope(allowedRoutes, keyType);
     if (!scope.hasModelAccess) {
       return (
         <CellTooltip
-          content={`Scoped to ${scope.label} routes; this key cannot call any models`}
+          content={labels.scopedRoutes(scope.label)}
           trigger={
             <Badge variant="secondary" className="cursor-default">
-              No model access
+              {labels.noModelAccess}
             </Badge>
           }
         />
       );
     }
-    return <Badge variant="secondary">All Proxy Models</Badge>;
+    return <Badge variant="secondary">{labels.allProxyModels}</Badge>;
   }
 
   const visible = models.slice(0, maxVisible);
@@ -48,7 +67,7 @@ export function ModelsCell({ models, maxVisible = 3, allowedRoutes, keyType }: M
     <div className="flex flex-wrap items-center gap-1">
       {visible.map((model, index) => (
         <Badge key={index} variant={model === WILDCARD_MODEL ? "secondary" : "outline"}>
-          {formatModel(model)}
+          {formatModel(model, labels.allProxyModels)}
         </Badge>
       ))}
       {overflow.length > 0 && (
@@ -56,13 +75,13 @@ export function ModelsCell({ models, maxVisible = 3, allowedRoutes, keyType }: M
           content={
             <div className="flex max-w-[280px] flex-col gap-0.5">
               {overflow.map((model, index) => (
-                <span key={index}>{formatModel(model)}</span>
+                <span key={index}>{formatModel(model, labels.allProxyModels)}</span>
               ))}
             </div>
           }
           trigger={
             <Badge variant="outline" className="cursor-default">
-              +{overflow.length} more
+              {labels.more(overflow.length)}
             </Badge>
           }
         />

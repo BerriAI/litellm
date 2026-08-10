@@ -30,6 +30,8 @@ const LOCALIZED_FILES = [
   "src/components/chat_ui/ReasoningContent.tsx",
   "src/components/chat_ui/ResponseMetrics.tsx",
   "src/components/chat_ui/MCPEventsDisplay.tsx",
+  "src/components/VirtualKeysPage/VirtualKeysTable.tsx",
+  "src/components/VirtualKeysPage/keyTableColumns.tsx",
 ];
 
 // These values are product names, identifiers, or protocol terms. Translating
@@ -41,6 +43,7 @@ const TECHNICAL_LITERAL_ALLOWLIST = [
     reason: "configuration identifier",
   },
   { pattern: /^(?:SSO|URL|MCP|A2A|OpenID|OAuth)$/, reason: "protocol or industry term" },
+  { pattern: /^(?:TPM|RPM):$/, reason: "rate-limit identifier" },
   { pattern: /^(?:admin|Admin)$/, reason: "fixed account role" },
   { pattern: /^OR$/, reason: "compact authentication separator" },
   { pattern: /^(?:: )?v$/, reason: "version prefix" },

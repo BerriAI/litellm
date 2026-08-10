@@ -7,6 +7,7 @@ interface SpendBudgetCellProps {
   spend: number | null | undefined;
   maxBudget: number | null | undefined;
   teamMaxBudget?: number | null;
+  labels?: { unlimited: string; of: string; team: string };
 }
 
 const meterTone = (pct: number): "default" | "warning" | "over" => {
@@ -15,7 +16,9 @@ const meterTone = (pct: number): "default" | "warning" | "over" => {
   return "default";
 };
 
-export function SpendBudgetCell({ spend, maxBudget, teamMaxBudget }: SpendBudgetCellProps) {
+const DEFAULT_LABELS = { unlimited: "Unlimited", of: "of", team: "Team" };
+
+export function SpendBudgetCell({ spend, maxBudget, teamMaxBudget, labels = DEFAULT_LABELS }: SpendBudgetCellProps) {
   const spendValue = typeof spend === "number" && !Number.isNaN(spend) ? spend : 0;
   const budget = maxBudget ?? teamMaxBudget ?? null;
   const isTeamBudget = maxBudget == null && teamMaxBudget != null;
@@ -24,7 +27,9 @@ export function SpendBudgetCell({ spend, maxBudget, teamMaxBudget }: SpendBudget
 
   const spendText = spendValue > 0 ? getSpendString(spendValue, 4) : "$0.00";
   const budgetLabel =
-    budget === null ? "· Unlimited" : `of $${formatNumberWithCommas(budget)}${isTeamBudget ? " (Team)" : ""}`;
+    budget === null
+      ? `· ${labels.unlimited}`
+      : `${labels.of} $${formatNumberWithCommas(budget)}${isTeamBudget ? ` (${labels.team})` : ""}`;
 
   return (
     <div className="flex min-w-[130px] flex-col gap-1">
@@ -33,7 +38,11 @@ export function SpendBudgetCell({ spend, maxBudget, teamMaxBudget }: SpendBudget
         <span className="text-muted-foreground">{budgetLabel}</span>
       </div>
       {hasBudget && (
-        <Meter value={spendValue} max={budget} aria-valuetext={`${spendText} of $${formatNumberWithCommas(budget)}`}>
+        <Meter
+          value={spendValue}
+          max={budget}
+          aria-valuetext={`${spendText} ${labels.of} $${formatNumberWithCommas(budget)}`}
+        >
           <MeterTrack>
             <MeterIndicator tone={meterTone(pct)} />
           </MeterTrack>

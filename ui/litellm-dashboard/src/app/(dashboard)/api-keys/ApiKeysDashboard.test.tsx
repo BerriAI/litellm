@@ -1,5 +1,20 @@
 import { render } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
+
+const translationState = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: () => ({
+      t: (key: string) =>
+        key.split(".").reduce<unknown>((copy, segment) => {
+          if (typeof copy !== "object" || copy === null) return undefined;
+          return (copy as Record<string, unknown>)[segment];
+        }, resources[translationState.language].gateway) ?? key,
+    }),
+  };
+});
 
 const { userDashboardSpy } = vi.hoisted(() => ({
   userDashboardSpy: vi.fn((_props: Record<string, unknown>) => null),
@@ -49,11 +64,25 @@ vi.mock("next/navigation", () => ({
 import ApiKeysDashboard from "./ApiKeysDashboard";
 
 describe("ApiKeysDashboard identity source", () => {
+  beforeEach(() => {
+    translationState.language = "en";
+    userDashboardSpy.mockClear();
+  });
+
   it("passes the useAuthorized userID through even while AuthContext.userID is still null", () => {
     render(<ApiKeysDashboard />);
 
     expect(userDashboardSpy).toHaveBeenCalled();
     const props = userDashboardSpy.mock.calls[0][0];
     expect(props.userID).toBe("u-123");
+  });
+
+  it("passes Russian page-level copy to the legacy key dashboard", () => {
+    translationState.language = "ru";
+    render(<ApiKeysDashboard />);
+
+    const props = userDashboardSpy.mock.calls[0][0];
+    expect(props.createKeyLabel).toBe("+ Создать ключ");
+    expect(props.missingUserLabel).toBe("ID пользователя не задан");
   });
 });
