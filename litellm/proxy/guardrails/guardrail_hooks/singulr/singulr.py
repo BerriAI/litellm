@@ -1,5 +1,6 @@
 import os
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any, Final
 from urllib.parse import urlparse
 
 import httpx
@@ -49,7 +50,7 @@ class SingulrGuardrail(CustomGuardrail):
         self.singulr_api_base = (singulr_api_base or os.environ.get("SINGULR_API_BASE") or _DEFAULT_API_BASE).rstrip(
             "/"
         )
-        parsed: Final = urlparse(self.singulr_api_base)
+        parsed = urlparse(self.singulr_api_base)
         if parsed.scheme == "http" and parsed.hostname not in (
             "localhost",
             "127.0.0.1",

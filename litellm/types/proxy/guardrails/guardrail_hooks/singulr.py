@@ -1,4 +1,4 @@
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -8,11 +8,11 @@ SingulrCallType = Literal["model", "agent"]
 
 
 class SingulrGuardrailRequest(BaseModel):
-    model: Optional[str] = None
-    messages: Optional[list[dict[str, Any]]] = None
-    tools: Optional[list[dict[str, Any]]] = None
-    model_response: Optional[dict[str, Any] | str] = None
-    litellm_metadata: Optional[dict[str, Any]] = None
+    model: str | None = None
+    messages: list[dict[str, Any]] | None = None
+    tools: list[dict[str, Any]] | None = None
+    model_response: dict[str, Any] | str | None = None
+    litellm_metadata: dict[str, Any] | None = None
     call_type: SingulrCallType = "model"
 
 
