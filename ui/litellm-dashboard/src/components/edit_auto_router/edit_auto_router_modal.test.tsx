@@ -6,12 +6,19 @@ import { fireEvent, renderWithProviders, screen, waitFor, within } from "@/../te
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import EditAutoRouterModal from "./edit_auto_router_modal";
 
-const { modelPatchUpdateCall, modelAvailableCall } = vi.hoisted(() => ({
+const { modelPatchUpdateCall, modelAvailableCall, getAutoRouterClassifierDefaultPromptCall } = vi.hoisted(() => ({
   modelPatchUpdateCall: vi.fn().mockResolvedValue({}),
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
+  getAutoRouterClassifierDefaultPromptCall: vi.fn().mockResolvedValue("Classify the request into exactly one tier."),
 }));
 
-vi.mock("../networking", () => ({ modelPatchUpdateCall, modelAvailableCall }));
+vi.mock("../networking", () => ({
+  modelPatchUpdateCall,
+  modelAvailableCall,
+  getAutoRouterClassifierDefaultPromptCall,
+}));
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => ({ accessToken: "sk-test" }) }));
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn().mockResolvedValue([{ model_group: "gpt-4o-mini" }]),
@@ -241,6 +248,22 @@ describe("EditAutoRouterModal classifier context window", () => {
     const config = savedConfig();
     expect(config.classifier_context_window_size).toBe(5);
     expect(config.classifier_context_per_turn_chars).toBe(300);
+  });
+
+  // The prompt editor is a base-ui Dialog at z-index 50. Housing this form in an antd Modal put a
+  // z-index 1000 overlay between the operator and it, so the editor opened underneath and could
+  // not be read or typed into. jsdom does not paint, so the assertion is the invariant behind the
+  // stacking: both overlays come from the one Dialog primitive the create form already uses.
+  it("opens the classifier prompt editor in the same overlay layer as the form", async () => {
+    const user = userEvent.setup();
+    const { baseElement } = renderLlmModal();
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("button", { name: /prompt/i }));
+
+    expect(await screen.findByLabelText("Classifier system prompt")).toBeInTheDocument();
+    expect(baseElement.querySelectorAll('[data-slot="dialog-content"]')).toHaveLength(2);
+    expect(baseElement.querySelector(".ant-modal")).toBeNull();
   });
 
   it("persists an edited classifier context window size", async () => {
