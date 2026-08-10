@@ -2,6 +2,7 @@ import { OnChangeFn, PaginationState, RowSelectionState } from "@tanstack/react-
 import { Modal } from "antd";
 import { Button as AntdButton } from "antd";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { errorPatterns } from "@/utils/errorPatterns";
 
@@ -56,8 +57,8 @@ const KEYWORD_ERRORS: ReadonlyArray<{ pattern: RegExp; label: string }> = [
 const truncate = (value: string): string => (value.length > 100 ? `${value.substring(0, 97)}...` : value);
 
 // Helper function to extract meaningful error information
-const extractMeaningfulError = (error: unknown): string => {
-  if (!error) return "Health check failed";
+const extractMeaningfulError = (error: unknown, fallback = "Health check failed"): string => {
+  if (!error) return fallback;
 
   const errorStr = typeof error === "string" ? error : JSON.stringify(error);
 
@@ -161,6 +162,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
   onPaginationChange,
   rowCount,
 }) => {
+  const { t } = useTranslation("gateway");
   const [modelHealthStatuses, setModelHealthStatuses] = useState<{ [key: string]: HealthStatus }>({});
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [errorModalVisible, setErrorModalVisible] = useState(false);
@@ -222,7 +224,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
               lastCheck: toCheckedAtLabel(checkData.checked_at, "None"),
               lastSuccess: toLastSuccessLabel(checkData, "None"),
               loading: false,
-              error: fullError ? extractMeaningfulError(fullError) : undefined,
+              error: fullError ? extractMeaningfulError(fullError, t("models.health.failed")) : undefined,
               fullError: fullError,
               successResponse: checkData.status === "healthy" ? checkData : undefined,
             };
@@ -236,7 +238,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
     };
 
     initializeHealthStatuses();
-  }, [accessToken, modelData]);
+  }, [accessToken, modelData, t]);
 
   const runIndividualHealthCheck = useCallback(
     async (modelId: string) => {
@@ -257,7 +259,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
 
         if (response.unhealthy_count > 0 && response.unhealthy_endpoints && response.unhealthy_endpoints.length > 0) {
           const rawError = response.unhealthy_endpoints[0]?.error || "Health check failed";
-          const errorMessage = extractMeaningfulError(rawError);
+          const errorMessage = extractMeaningfulError(rawError, t("models.health.failed"));
           setModelHealthStatuses((prev) => ({
             ...prev,
             [modelId]: {
@@ -295,7 +297,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
                 lastCheck: toCheckedAtLabel(checkData.checked_at, prev[modelId]?.lastCheck || "None"),
                 lastSuccess: toLastSuccessLabel(checkData, prev[modelId]?.lastSuccess || "None"),
                 loading: false,
-                error: fullError ? extractMeaningfulError(fullError) : prev[modelId]?.error,
+                error: fullError ? extractMeaningfulError(fullError, t("models.health.failed")) : prev[modelId]?.error,
                 fullError: fullError || prev[modelId]?.fullError,
                 successResponse: checkData.status === "healthy" ? checkData : prev[modelId]?.successResponse,
               },
@@ -305,7 +307,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
       } catch (error) {
         const currentTime = new Date().toLocaleString();
         const rawError = error instanceof Error ? error.message : String(error);
-        const errorMessage = extractMeaningfulError(rawError);
+        const errorMessage = extractMeaningfulError(rawError, t("models.health.failed"));
         setModelHealthStatuses((prev) => ({
           ...prev,
           [modelId]: {
@@ -319,7 +321,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
         }));
       }
     },
-    [accessToken],
+    [accessToken, t],
   );
 
   const selectedModelIds = useMemo(
@@ -353,7 +355,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
         const currentTime = new Date().toLocaleString();
         if (response.unhealthy_count > 0 && response.unhealthy_endpoints && response.unhealthy_endpoints.length > 0) {
           const rawError = response.unhealthy_endpoints[0]?.error || "Health check failed";
-          const errorMessage = extractMeaningfulError(rawError);
+          const errorMessage = extractMeaningfulError(rawError, t("models.health.failed"));
           setModelHealthStatuses((prev) => ({
             ...prev,
             [modelId]: {
@@ -381,7 +383,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
         console.error(`Health check failed for model id ${modelId}:`, error);
         const currentTime = new Date().toLocaleString();
         const rawError = error instanceof Error ? error.message : String(error);
-        const errorMessage = extractMeaningfulError(rawError);
+        const errorMessage = extractMeaningfulError(rawError, t("models.health.failed"));
         setModelHealthStatuses((prev) => ({
           ...prev,
           [modelId]: {
@@ -417,7 +419,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
                 lastCheck: toCheckedAtLabel(checkData.checked_at, currentStatus?.lastCheck || "None"),
                 lastSuccess: toLastSuccessLabel(checkData, currentStatus?.lastSuccess || "None"),
                 loading: false,
-                error: fullError ? extractMeaningfulError(fullError) : currentStatus?.error,
+                error: fullError ? extractMeaningfulError(fullError, t("models.health.failed")) : currentStatus?.error,
                 fullError: fullError || currentStatus?.fullError,
                 successResponse: checkData.status === "healthy" ? checkData : currentStatus?.successResponse,
               },
@@ -495,10 +497,8 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
       <div className="mb-6">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-foreground">Model Health Status</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Run health checks on individual models to verify they are working correctly
-            </p>
+            <h2 className="text-lg font-semibold text-foreground">{t("models.health.title")}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">{t("models.health.description")}</p>
           </div>
           <div className="flex items-center gap-3">
             {selectedModelIds.length > 0 && (
@@ -508,7 +508,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
                 onClick={() => setRowSelection({})}
                 data-testid="clear-health-selection"
               >
-                Clear Selection
+                {t("models.health.clearSelection")}
               </Button>
             )}
             <Button
@@ -518,7 +518,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
               disabled={anyCheckRunning}
               data-testid="run-health-checks"
             >
-              {isPartialSelection ? "Run Selected Checks" : "Run All Checks"}
+              {t(isPartialSelection ? "models.health.runSelected" : "models.health.runAll")}
             </Button>
           </div>
         </div>
@@ -543,12 +543,16 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
 
       {/* Error Modal */}
       <Modal
-        title={selectedErrorDetails ? `Health Check Error - ${selectedErrorDetails.modelName}` : "Error Details"}
+        title={
+          selectedErrorDetails
+            ? t("models.health.errorTitle", { model: selectedErrorDetails.modelName })
+            : t("models.health.errorDetailsTitle")
+        }
         open={errorModalVisible}
         onCancel={closeErrorModal}
         footer={[
           <AntdButton key="close" onClick={closeErrorModal}>
-            Close
+            {t("models.health.close")}
           </AntdButton>,
         ]}
         width={800}
@@ -556,14 +560,14 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
         {selectedErrorDetails && (
           <div className="space-y-4">
             <div>
-              <span className="font-medium">Error:</span>
+              <span className="font-medium">{t("models.health.errorLabel")}</span>
               <div className="mt-2 rounded-md border border-red-200 bg-red-50 p-3">
                 <span className="text-red-800">{selectedErrorDetails.cleanedError}</span>
               </div>
             </div>
 
             <div>
-              <span className="font-medium">Full Error Details:</span>
+              <span className="font-medium">{t("models.health.fullError")}</span>
               <div className="mt-2 max-h-96 overflow-y-auto rounded-md border border-gray-200 bg-gray-50 p-3">
                 <pre className="text-sm whitespace-pre-wrap text-gray-800">{selectedErrorDetails.fullError}</pre>
               </div>
@@ -575,13 +579,15 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
       {/* Success Modal */}
       <Modal
         title={
-          selectedSuccessDetails ? `Health Check Response - ${selectedSuccessDetails.modelName}` : "Response Details"
+          selectedSuccessDetails
+            ? t("models.health.responseTitle", { model: selectedSuccessDetails.modelName })
+            : t("models.health.responseDetailsTitle")
         }
         open={successModalVisible}
         onCancel={closeSuccessModal}
         footer={[
           <AntdButton key="close" onClick={closeSuccessModal}>
-            Close
+            {t("models.health.close")}
           </AntdButton>,
         ]}
         width={800}
@@ -589,14 +595,14 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
         {selectedSuccessDetails && (
           <div className="space-y-4">
             <div>
-              <span className="font-medium">Status:</span>
+              <span className="font-medium">{t("models.health.statusLabel")}</span>
               <div className="mt-2 rounded-md border border-green-200 bg-green-50 p-3">
-                <span className="text-green-800">Health check passed successfully</span>
+                <span className="text-green-800">{t("models.health.passed")}</span>
               </div>
             </div>
 
             <div>
-              <span className="font-medium">Response Details:</span>
+              <span className="font-medium">{t("models.health.responseDetails")}</span>
               <div className="mt-2 max-h-96 overflow-y-auto rounded-md border border-gray-200 bg-gray-50 p-3">
                 <pre className="text-sm whitespace-pre-wrap text-gray-800">
                   {JSON.stringify(selectedSuccessDetails.response, null, 2)}
