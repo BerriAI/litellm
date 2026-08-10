@@ -371,6 +371,12 @@ class _PROXY_TagRateLimiter(CustomLogger):
         is enforced here by refunding every earlier admission the moment a
         later key is rejected, not by a single multi-key script call.
 
+        Refunds are best-effort: a refund that fails (e.g. a transient Redis
+        error) is logged and skipped rather than raised, so one bad refund
+        can't stop the rest of the batch from being refunded, and can't turn
+        a clean rejection into an unhandled exception. A skipped refund
+        self-heals via the key's TTL -- see `_ttl_for`.
+
         Returns (failing_index, values). On success, failing_index is None
         and values holds each key's new post-increment value, same order as
         `checks`. On rejection, failing_index is the 0-based index of the
@@ -388,7 +394,10 @@ class _PROXY_TagRateLimiter(CustomLogger):
                 continue
             for refund_index in range(index):
                 refund_key, _limit, refund_increment, _ttl = checks[refund_index]
-                await self._decrement_floor_zero(refund_key, -refund_increment)
+                try:
+                    await self._decrement_floor_zero(refund_key, -refund_increment)
+                except Exception as e:  # noqa: BLE001 - one failed refund must not block refunding the rest
+                    verbose_proxy_logger.warning(f"tag_rate_limiter: failed to refund {refund_key} on rollback: {e}")
             return index, [value]
 
         return None, admitted_values

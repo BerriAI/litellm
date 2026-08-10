@@ -863,3 +863,43 @@ async def test_release_floors_at_zero_instead_of_going_negative(time_controller)
     await limiter._decrement_floor_zero(key, -1.0)
     value = await limiter.internal_usage_cache.async_get_cache(key=key, litellm_parent_otel_span=None)
     assert (float(value) if value is not None else 0.0) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# a failed refund must not block refunding the rest of the batch or raise
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_refund_failure_on_one_key_does_not_block_others_or_raise(time_controller):
+    """
+    If `_decrement_floor_zero` fails for one key mid-rollback (e.g. a
+    transient Redis error), the failure must be logged and swallowed, not
+    raised: otherwise it would surface as an unhandled exception in place of
+    the clean rejection the caller expects, and would abort the loop before
+    refunding every other already-committed key in the same batch.
+    """
+    failing_key = "{tag_rl:test:refund-fail:a}:requests"
+    other_key = "{tag_rl:test:refund-fail:b}:requests"
+    rejecting_key = "{tag_rl:test:refund-fail:c}:requests"
+
+    class _FlakyLimiter(_PROXY_TagRateLimiter):
+        async def _decrement_floor_zero(self, key: str, delta: float) -> None:
+            if key == failing_key:
+                raise RuntimeError("simulated transient redis failure")
+            await super()._decrement_floor_zero(key, delta)
+
+    flaky = _FlakyLimiter(internal_usage_cache=DualCache(), time_provider=time_controller.now)
+
+    failing_index, values = await flaky._atomic_check_and_increment(
+        [
+            (failing_key, 10.0, 1.0, 60),
+            (other_key, 10.0, 1.0, 60),
+            (rejecting_key, 0.0, 1.0, 60),
+        ]
+    )
+
+    assert failing_index == 2
+
+    other_value = await flaky.internal_usage_cache.async_get_cache(key=other_key, litellm_parent_otel_span=None)
+    assert (float(other_value) if other_value is not None else 0.0) == 0.0
