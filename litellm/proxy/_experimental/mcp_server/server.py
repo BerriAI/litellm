@@ -192,7 +192,7 @@ def _request_tags_header(
     if not raw_headers:
         return None
     for key, value in raw_headers.items():
-        if isinstance(key, str) and key.lower() == "x-litellm-tags":
+        if key.lower() == "x-litellm-tags":
             return value or None
     return None
 
