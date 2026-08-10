@@ -1,16 +1,30 @@
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
+
+import httpx
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import XAI_API_BASE
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from litellm.llms.xai.common_utils import XAIModelInfo
+from litellm.llms.xai.common_utils import XAIModelInfo, xai_reported_cost_in_usd
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.llms.openai import (
+    ResponsesAPIOptionalRequestParams,
+    ResponsesAPIResponse,
+)
 from litellm.types.llms.xai import XAIWebSearchTool, XAIXSearchTool
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as _LiteLLMLoggingObj,
+    )
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 
 class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -249,6 +263,37 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base = api_base.rstrip("/")
 
         return f"{api_base}/responses"
+
+    def transform_response_api_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        """
+        Bill what xAI charged instead of repricing the request locally.
+
+        xAI reports the amount on ``usage.cost_in_usd_ticks``; restate it in USD on
+        ``usage.cost``, which ``ResponseAPILoggingUtils`` already copies onto the chat
+        Usage that ``llms/xai/cost_calculator.py`` prices, so /v1/responses bills the
+        reported figure the same way /v1/chat/completions does. When xAI reported nothing
+        usable, ``cost`` is left alone and the request falls back to token pricing.
+        """
+        response: Final = super().transform_response_api_response(
+            model=model,
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
+
+        usage: Final = response.usage
+        if usage is None:
+            return response
+
+        reported_cost: Final = xai_reported_cost_in_usd(getattr(usage, "cost_in_usd_ticks", None))
+        if reported_cost is not None:
+            usage.cost = reported_cost
+
+        return response
 
     def supports_native_websocket(self) -> bool:
         """XAI does not support native WebSocket for Responses API"""

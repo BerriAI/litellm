@@ -11,7 +11,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     filter_value_from_dict,
     strip_name_from_messages,
 )
-from litellm.llms.xai.common_utils import XAIModelInfo
+from litellm.llms.xai.common_utils import XAIModelInfo, xai_reported_cost_in_usd
 from litellm.llms.xai.cost_calculator import (
     apply_server_side_tool_usage_details_to_usage,
 )
@@ -28,6 +28,33 @@ from ...openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
+
+
+def _adopt_cost_reported_by_xai(usage: Usage | dict[str, Any] | None) -> None:  # mutable-ok: streaming dict write
+    """Bill what xAI charged instead of repricing the request locally.
+
+    xAI reports the amount on ``cost_in_usd_ticks``; restate it in USD on ``cost``,
+    the field litellm already carries a provider stated cost in and the one
+    ``llms/xai/cost_calculator.py`` prices from. When xAI reported nothing usable,
+    ``cost`` is left alone and the request falls back to token pricing.
+
+    Accepts a ``Usage`` (non-streaming) or a raw usage ``dict`` (streaming chunk),
+    matching ``_fold_reasoning_tokens_into_completion``, so both paths stay in sync.
+    Streaming needs the dict form because chunk aggregation rebuilds usage from the
+    fields it models plus ``cost``, dropping everything else xAI sent.
+    """
+    if usage is None:
+        return
+
+    if isinstance(usage, dict):
+        chunk_cost: Final = xai_reported_cost_in_usd(usage.get("cost_in_usd_ticks"))
+        if chunk_cost is not None:
+            usage["cost"] = chunk_cost
+        return
+
+    reported_cost: Final = xai_reported_cost_in_usd(getattr(usage, "cost_in_usd_ticks", None))
+    if reported_cost is not None:
+        usage.cost = reported_cost
 
 
 class XAIChatConfig(OpenAIGPTConfig):
@@ -283,6 +310,7 @@ class XAIChatConfig(OpenAIGPTConfig):
 
         self._fold_reasoning_tokens_into_completion(response)
         self._normalize_openai_compatible_usage_totals(getattr(response, "usage", None))
+        _adopt_cost_reported_by_xai(getattr(response, "usage", None))
         return response
 
     @staticmethod
@@ -410,5 +438,6 @@ class XAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
         if "usage" in chunk and chunk["usage"] is not None:
             XAIChatConfig._fold_reasoning_tokens_into_completion(chunk["usage"])
             XAIChatConfig._normalize_openai_compatible_usage_totals(chunk["usage"])
+            _adopt_cost_reported_by_xai(chunk["usage"])
 
         return super().chunk_parser(chunk)
