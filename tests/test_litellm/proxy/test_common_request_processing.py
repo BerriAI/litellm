@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import datetime
+import threading
 from types import SimpleNamespace
 from typing import AsyncGenerator, Callable, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -5096,6 +5097,31 @@ class TestStreamingClientDisconnectBilling:
         await stream_iter.__anext__()
         await stream_iter.__anext__()
         return response
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_assembles_off_the_event_loop(self):
+        """
+        A partial stream carries no usage chunk, so assembling it re-tokenizes
+        the whole delivered response. On a multi-MB stream that is hundreds of
+        ms of tiktoken, which stalls every other request on the worker if it
+        runs on the event loop thread.
+        """
+        response = await self._start_partial_stream()
+        builder_threads: list[int] = []
+        real_builder = litellm.stream_chunk_builder
+
+        def _record_thread(*args, **kwargs):
+            builder_threads.append(threading.get_ident())
+            return real_builder(*args, **kwargs)
+
+        with patch.object(litellm, "stream_chunk_builder", _record_thread):
+            billed = await _bill_partial_streamed_spend_on_disconnect(
+                {"litellm_logging_obj": response.logging_obj}, response
+            )
+
+        assert billed is True
+        assert len(builder_threads) == 1
+        assert builder_threads[0] != threading.get_ident()
 
     @pytest.mark.asyncio
     async def test_disconnect_bills_partial_streamed_spend(self):

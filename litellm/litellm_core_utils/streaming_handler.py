@@ -2068,7 +2068,7 @@ class CustomStreamWrapper:
             ## ADD DEBUG INFORMATION - E.G. LITELLM REQUEST TIMEOUT
             traceback_exception += f"\nLiteLLM Default Request Timeout - {litellm.request_timeout}"
             if self.logging_obj is not None:
-                self._record_partial_usage_for_failure()
+                await asyncio.to_thread(self._record_partial_usage_for_failure)
                 ## LOGGING
                 asyncio.create_task(
                     self.logging_obj.dispatch_failure_handlers(e, traceback_exception, prefer_async_handlers=True)
@@ -2076,10 +2076,10 @@ class CustomStreamWrapper:
             self._handle_stream_fallback_error(e)
         except (httpx.ReadError, httpx.RemoteProtocolError) as e:
             if self.received_finish_reason is None:
-                self._log_stream_failure_and_raise(e)
+                await self._alog_stream_failure_and_raise(e)
             return await self._finalize_completed_stream(cache_hit=cache_hit)
         except Exception as e:
-            self._log_stream_failure_and_raise(e)
+            await self._alog_stream_failure_and_raise(e)
 
     async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
         if self.sent_last_chunk is True:
@@ -2183,10 +2183,10 @@ class CustomStreamWrapper:
             # relies on aclose() or the best-effort __del__ guard.
             return processed_chunk
 
-    def _log_stream_failure_and_raise(self, e: Exception) -> NoReturn:
+    async def _alog_stream_failure_and_raise(self, e: Exception) -> NoReturn:
         traceback_exception: Final = traceback.format_exc()
         if self.logging_obj is not None:
-            self._record_partial_usage_for_failure()
+            await asyncio.to_thread(self._record_partial_usage_for_failure)
             ## LOGGING
             asyncio.create_task(
                 self.logging_obj.dispatch_failure_handlers(e, traceback_exception, prefer_async_handlers=True)
