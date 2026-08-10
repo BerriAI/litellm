@@ -1098,8 +1098,8 @@ Model Info:
         try:
             existing_invitations: Final = TypeAdapter(list[InvitationModel]).validate_python(
                 await InvitationLinkRepository(prisma_client).table.find_many(  # pyright: ignore[reportAny]  # untyped prisma boundary (any-ok), result validated by TypeAdapter
-                    where={"user_id": recipient_user_id},
-                    order={"created_at": "desc"},
+                    where={"user_id": recipient_user_id},  # mutable-ok: prisma find_many requires a dict where filter
+                    order={"created_at": "desc"},  # mutable-ok: prisma find_many requires a dict order arg
                 ),
                 from_attributes=True,
             )

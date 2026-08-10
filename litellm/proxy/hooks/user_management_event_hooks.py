@@ -133,18 +133,18 @@ class UserManagementEventHooks:
             )
             return False
 
-        email_loggers: Final = [
+        email_loggers: Final = tuple(
             email_logger
             for email_logger in litellm.logging_callback_manager.get_custom_loggers_for_type(
                 callback_type=BaseEmailLogger
             )
             if isinstance(email_logger, BaseEmailLogger)
-        ]
+        )
         if len(email_loggers) == 0:
             return False
 
         send_outcomes: Final = await asyncio.gather(
-            *[email_logger.send_user_invitation_email(event=event) for email_logger in email_loggers],
+            *(email_logger.send_user_invitation_email(event=event) for email_logger in email_loggers),
             return_exceptions=True,
         )
         for outcome in send_outcomes:
