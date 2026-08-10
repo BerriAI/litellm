@@ -767,6 +767,57 @@ def normalize_request_route(route: str) -> str:
     return route
 
 
+UNMATCHED_REQUEST_ROUTE: Final = "/unmatched"
+
+# Literal proxy routes safe to emit when FastAPI's route template is unavailable
+# (e.g. auth failure on an unmatched scope). Dynamic segments must never appear
+# here — those are covered by get_request_route_template() or normalize_request_route().
+_LITERAL_STATIC_PROXY_ROUTES: Final = frozenset(
+    {
+        "/",
+        "/chat/completions",
+        "/v1/chat/completions",
+        "/v1/completions",
+        "/v1/embeddings",
+        "/v1/messages",
+        "/v1/models",
+        "/v1/responses",
+        "/health",
+        "/health/liveliness",
+        "/health/readiness",
+        "/metrics",
+    }
+)
+
+
+def resolve_request_route_for_metrics(
+    request: Request | None,
+    route: str,
+) -> str:
+    """
+    Resolve a bounded-vocabulary route label for Prometheus metrics.
+
+    Priority:
+    1. FastAPI matched route template (e.g. ``/v1/responses/{response_id}``)
+    2. Regex normalization for known dynamic API paths
+    3. Literal route when it is a known static proxy endpoint
+    4. ``/unmatched`` for scanner traffic and other unknown paths
+    """
+    if request is not None:
+        template = get_request_route_template(request)
+        if template:
+            return template
+
+    normalized = normalize_request_route(route)
+    if normalized != route:
+        return normalized
+
+    if route in _LITERAL_STATIC_PROXY_ROUTES:
+        return route
+
+    return UNMATCHED_REQUEST_ROUTE
+
+
 async def check_if_request_size_is_safe(request: Request) -> bool:
     """
     Enterprise Only:

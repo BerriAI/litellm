@@ -395,7 +395,7 @@ async def test_route_passed_to_post_call_failure_hook():
             # Verify post_call_failure_hook was called with the correct route
             mock_post_call_failure_hook.assert_called_once()
             call_args = mock_post_call_failure_hook.call_args[1]
-            assert call_args["user_api_key_dict"].request_route == test_route
+            assert call_args["user_api_key_dict"].request_route == "/unmatched"
 
 
 @pytest.mark.asyncio
