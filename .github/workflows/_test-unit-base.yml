@@ -25,15 +25,18 @@ on:
         required: false
         type: number
         default: 20
-      setup-timeout-minutes:
+      job-timeout-minutes:
         description: >-
-          Timeout allowance for everything before the test step. Must stay >= the
-          sum of the per-step timeouts on the setup steps below, which is what
-          makes the test budget above a floor rather than a hope: setup cannot
-          overrun into it without failing its own step first.
+          Backstop for the whole job. Keep it >= `timeout-minutes` plus 35: 30 for
+          the per-step ceilings on the setup steps below, and 5 for the runner
+          overhead the job clock charges but no step owns (job init, step
+          transitions, post-job cleanup). That headroom is what makes the test
+          budget a floor rather than a hope, since setup cannot overrun into it
+          without failing its own step first. GitHub expressions have no
+          arithmetic, so the sum is passed in rather than computed.
         required: false
         type: number
-        default: 30
+        default: 55
       max-failures:
         description: "Stop after this many failures"
         required: false
@@ -56,7 +59,7 @@ jobs:
   run:
     name: Run tests
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ inputs.timeout-minutes + inputs.setup-timeout-minutes }}
+    timeout-minutes: ${{ inputs.job-timeout-minutes }}
     outputs:
       decision: ${{ steps.changes.outputs.decision }}
 
