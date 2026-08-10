@@ -1141,3 +1141,227 @@ async def test_refund_failure_on_one_key_does_not_block_others_or_raise(time_con
 
     other_value = await flaky.internal_usage_cache.async_get_cache(key=other_key, litellm_parent_otel_span=None)
     assert (float(other_value) if other_value is not None else 0.0) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# scope_by_key_hash -- opt-in per-calling-key bucket separation
+# ---------------------------------------------------------------------------
+
+
+def _concurrency_router_scoped_by_key(limit: int) -> "litellm.Router":
+    return litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "concurrency_limits": {
+                        "limits": [
+                            {
+                                "name": "inflight",
+                                "tag_id": "end_user_id",
+                                "limit": limit,
+                                "period_seconds": 300,
+                                "scope_by_key_hash": True,
+                            }
+                        ]
+                    }
+                },
+            )
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_request_limit_scope_by_key_hash_gives_independent_counters_per_key(time_controller):
+    """
+    scope_by_key_hash=True: the identical tag value sent by two different
+    calling keys must get independent request counters -- exhausting keyA's
+    limit must not affect keyB's admission for the same tag.
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "request_limits": {
+                        "limits": [
+                            {
+                                "name": "per_minute",
+                                "tag_id": "end_user_id",
+                                "limit": 2,
+                                "period_seconds": 60,
+                                "scope_by_key_hash": True,
+                            }
+                        ]
+                    }
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    for _ in range(2):
+        result = await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyA"}},
+        )
+        assert result == healthy
+
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyA"}},
+        )
+
+    # keyB, identical tag value, is unaffected -- it gets its own bucket and
+    # can admit up to the same limit independently of keyA's exhausted one.
+    for _ in range(2):
+        result = await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyB"}},
+        )
+        assert result == healthy
+
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyB"}},
+        )
+
+
+@pytest.mark.asyncio
+async def test_request_limit_without_scope_by_key_hash_still_shares_one_counter(time_controller):
+    """
+    Regression guard: scope_by_key_hash defaults to False, so today's
+    existing behavior -- the bucket is shared across every key sending the
+    same tag value -- must be unchanged. Two different keys sending the
+    identical tag value must still share one counter.
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {"request_limits": {"limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 2, "period_seconds": 60}]}},
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    # keyA and keyB share the same bucket -- one call each exhausts the
+    # shared limit of 2.
+    await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyA"}},
+    )
+    await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyB"}},
+    )
+
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyA"}},
+        )
+
+
+@pytest.mark.asyncio
+async def test_concurrency_scope_by_key_hash_gives_independent_reservations_per_key(time_controller):
+    """
+    scope_by_key_hash=True on a concurrency_limits entry: two different
+    calling keys sending the identical tag value must not share one
+    reservation bucket -- keyA exhausting its own single slot must not
+    block keyB's admission, and releasing keyA's reservation (via the
+    standard_logging_object.metadata.user_api_key_hash channel) must free
+    keyA's capacity, not keyB's.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router_scoped_by_key(limit=1)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    logging_obj_a = _FakeLoggingObj()
+
+    # keyA occupies its own single slot.
+    await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={
+            "metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyA"},
+            "litellm_logging_obj": logging_obj_a,
+        },
+    )
+
+    # keyB, same tag value, different key -- must still admit since it has its own bucket.
+    await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyB"}},
+    )
+
+    # keyA is now at its own capacity -- a second keyA request is rejected.
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyA"}},
+        )
+
+    # Release keyA's reservation via the success event, matching its key hash.
+    logging_obj_a.model_call_details.update(
+        {
+            "standard_logging_object": {
+                "model_group": "grp",
+                "model_id": "dep-1",
+                "total_tokens": 0,
+                "response_cost": 0,
+                "metadata": {"user_api_key_hash": "keyA"},
+            },
+            "metadata": {"tags": ["end_user_id:u1"]},
+        }
+    )
+    await limiter.async_log_success_event(kwargs=logging_obj_a.model_call_details, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    # keyA's capacity is freed -- a fresh keyA request now admits.
+    result = await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyA"}},
+    )
+    assert result == healthy
+
+    # keyB's own reservation is untouched by keyA's release -- a second keyB
+    # request is still rejected.
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyB"}},
+        )

@@ -30657,6 +30657,11 @@ export interface components {
             /** Period Seconds */
             period_seconds: number;
             /**
+             * Scope By Key Hash
+             * @default false
+             */
+            scope_by_key_hash: boolean;
+            /**
              * Tag Id
              * @default end_user_id
              */

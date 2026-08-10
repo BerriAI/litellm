@@ -145,6 +145,17 @@ class TagRateLimitEntry(BaseModel):
     tag_id: str = "end_user_id"
     limit: float
     period_seconds: int
+    scope_by_key_hash: bool = False
+    """
+    When `True`, the bucket is additionally scoped by the calling virtual
+    key's hash, on top of the existing `tag_id`/tag-value match. Without
+    this, two different keys (e.g. two separate services) that both happen
+    to send the same tag value (e.g. the same `end_user_id`) share one
+    bucket and one counter; opting in gives each calling key its own
+    independent counter for the same tag value. Defaults to `False`, which
+    is today's existing behavior: the bucket is scoped by tag value alone,
+    shared across every key that sends it.
+    """
 
     model_config = ConfigDict(protected_namespaces=())
 

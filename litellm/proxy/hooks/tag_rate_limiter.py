@@ -156,6 +156,17 @@ def _extract_team_id(request_kwargs: dict) -> Optional[str]:
     return team_id if isinstance(team_id, str) else None
 
 
+def _extract_key_hash(request_kwargs: dict) -> Optional[str]:
+    """Same two-channel lookup as `_extract_team_id`, but for the calling
+    virtual key's hash: `LiteLLMProxyRequestSetup` sets `metadata["user_api_key"]`
+    to `user_api_key_dict.api_key`, which despite the plain name is already
+    the hashed token (see `litellm_pre_call_utils.py`)."""
+    metadata = request_kwargs.get("metadata") or {}
+    litellm_metadata = request_kwargs.get("litellm_metadata") or {}
+    key_hash = metadata.get("user_api_key") or litellm_metadata.get("user_api_key")
+    return key_hash if isinstance(key_hash, str) else None
+
+
 def _entries_for_unit(deployment: dict, unit: _LimitUnit) -> list[TagRateLimitEntry]:
     raw_tag_rate_limits = (deployment.get("model_info") or {}).get("tag_rate_limits")
     if not raw_tag_rate_limits:
@@ -192,24 +203,24 @@ def _build_group_limits(deployments: list[dict], unit: _LimitUnit) -> list[_Conf
     creating a bucket that can leak; only chain-wide concurrency entries
     (identical across every deployment in the group) are supported.
     """
-    declaring_ids_by_signature: dict[tuple[str, str, float, int], list[str]] = {}
+    declaring_ids_by_signature: dict[tuple[str, str, float, int, bool], list[str]] = {}
     for deployment in deployments:
         dep_id = _deployment_id(deployment)
         if dep_id is None:
             continue
         for entry in _entries_for_unit(deployment, unit):
-            signature = (entry.tag_id, entry.name, entry.limit, entry.period_seconds)
+            signature = (entry.tag_id, entry.name, entry.limit, entry.period_seconds, entry.scope_by_key_hash)
             declaring_ids_by_signature.setdefault(signature, []).append(dep_id)
 
     distinct_signatures_by_name: dict[tuple[str, str], int] = {}
-    for tag_id, name, _limit, _period in declaring_ids_by_signature:
+    for tag_id, name, _limit, _period, _scope_by_key_hash in declaring_ids_by_signature:
         key = (tag_id, name)
         distinct_signatures_by_name[key] = distinct_signatures_by_name.get(key, 0) + 1
 
     total_deployments = len(deployments)
     configured: list[_ConfiguredLimit] = []
     for signature, declaring_ids in declaring_ids_by_signature.items():
-        tag_id, name, limit, period_seconds = signature
+        tag_id, name, limit, period_seconds, scope_by_key_hash = signature
         is_chain_wide = distinct_signatures_by_name[(tag_id, name)] == 1 and len(declaring_ids) == total_deployments
         if unit == "concurrency" and not is_chain_wide:
             verbose_proxy_logger.warning(
@@ -223,7 +234,13 @@ def _build_group_limits(deployments: list[dict], unit: _LimitUnit) -> list[_Conf
         configured.append(
             _ConfiguredLimit(
                 unit=unit,
-                entry=TagRateLimitEntry(name=name, tag_id=tag_id, limit=limit, period_seconds=period_seconds),
+                entry=TagRateLimitEntry(
+                    name=name,
+                    tag_id=tag_id,
+                    limit=limit,
+                    period_seconds=period_seconds,
+                    scope_by_key_hash=scope_by_key_hash,
+                ),
                 deployment_scope=None if is_chain_wide else tuple(sorted(declaring_ids)),
             )
         )
@@ -329,18 +346,31 @@ def _scope_suffix(deployment_scope: Optional[tuple[str, ...]]) -> str:
     return "chain" if deployment_scope is None else "dep:" + "+".join(deployment_scope)
 
 
-def _bucket_key(model_group: str, configured: _ConfiguredLimit, tag_value: str, bucket_id: int) -> str:
+def _bucket_key(
+    model_group: str,
+    configured: _ConfiguredLimit,
+    tag_value: str,
+    bucket_id: int,
+    key_hash: Optional[str] = None,
+) -> str:
     scope = _scope_suffix(configured.deployment_scope)
-    hash_tag = f"tag_rl:{model_group}:{configured.unit}:{configured.entry.name}:{scope}:{tag_value}"
+    key_suffix = f":key:{key_hash}" if key_hash is not None else ""
+    hash_tag = f"tag_rl:{model_group}:{configured.unit}:{configured.entry.name}:{scope}:{tag_value}{key_suffix}"
     return f"{{{hash_tag}}}:{bucket_id}"
 
 
-def _inflight_key(model_group: str, configured: _ConfiguredLimit, tag_value: str) -> str:
+def _inflight_key(
+    model_group: str,
+    configured: _ConfiguredLimit,
+    tag_value: str,
+    key_hash: Optional[str] = None,
+) -> str:
     """Concurrency counter key: not epoch-bucketed, since "how many are in
     flight right now" has no window to reset on -- it's released explicitly
     on completion, with a TTL fallback only for a leaked (crashed) reservation."""
     scope = _scope_suffix(configured.deployment_scope)
-    hash_tag = f"tag_rl:{model_group}:{configured.unit}:{configured.entry.name}:{scope}:{tag_value}"
+    key_suffix = f":key:{key_hash}" if key_hash is not None else ""
+    hash_tag = f"tag_rl:{model_group}:{configured.unit}:{configured.entry.name}:{scope}:{tag_value}{key_suffix}"
     return f"{{{hash_tag}}}:inflight"
 
 
@@ -517,16 +547,17 @@ class _PROXY_TagRateLimiter(CustomLogger):
             tag_value = _extract_identity(tags, configured_limit.entry.tag_id)
             if tag_value is None:
                 continue
+            key_hash = _extract_key_hash(request_kwargs) if configured_limit.entry.scope_by_key_hash else None
             if configured_limit.unit == "concurrency":
-                key = _inflight_key(model, configured_limit, tag_value)
+                key = _inflight_key(model, configured_limit, tag_value, key_hash=key_hash)
                 atomic_checks.append((configured_limit, tag_value, key))
             elif configured_limit.unit in _ATOMIC_UNITS:
                 bucket_id = int(now) // configured_limit.entry.period_seconds
-                key = _bucket_key(model, configured_limit, tag_value, bucket_id)
+                key = _bucket_key(model, configured_limit, tag_value, bucket_id, key_hash=key_hash)
                 atomic_checks.append((configured_limit, tag_value, key))
             else:
                 bucket_id = int(now) // configured_limit.entry.period_seconds
-                key = _bucket_key(model, configured_limit, tag_value, bucket_id)
+                key = _bucket_key(model, configured_limit, tag_value, bucket_id, key_hash=key_hash)
                 read_only_checks.append((configured_limit, tag_value, key))
 
         current_values = await self._read_only_values(read_only_checks, parent_otel_span)
@@ -704,6 +735,7 @@ class _PROXY_TagRateLimiter(CustomLogger):
 
         standard_logging_metadata = standard_logging_object.get("metadata") or {}
         team_id = standard_logging_metadata.get("user_api_key_team_id")
+        key_hash = standard_logging_metadata.get("user_api_key_hash")
         configured = self._index.get(self.llm_router).resolve(model_group, team_id)
         if not configured:
             return
@@ -735,7 +767,13 @@ class _PROXY_TagRateLimiter(CustomLogger):
             if increment_value == 0:
                 continue
             bucket_id = int(now) // configured_limit.entry.period_seconds
-            key = _bucket_key(model_group, configured_limit, tag_value, bucket_id)
+            key = _bucket_key(
+                model_group,
+                configured_limit,
+                tag_value,
+                bucket_id,
+                key_hash=key_hash if configured_limit.entry.scope_by_key_hash else None,
+            )
             operations.append(
                 RedisPipelineIncrementOperation(
                     key=key,
