@@ -622,8 +622,12 @@ async def test_service_logger_keys_success():
     logger success hook is called with the correct event metadata and no exception is logged.
     """
     keys = [
-        {"id": "key1", "spend": 10.0, "budget_duration": 60, "token": "key1"},
-        {"id": "key2", "spend": 15.0, "budget_duration": 60, "token": "key2"},
+        _attrify(
+            {"id": "key1", "spend": 10.0, "budget_duration": 60, "token": "key1"}
+        ),
+        _attrify(
+            {"id": "key2", "spend": 15.0, "budget_duration": 60, "token": "key2"}
+        ),
     ]
     prisma_client = MagicMock()
     prisma_client.get_data = AsyncMock(return_value=keys)
@@ -740,8 +744,12 @@ async def test_service_logger_users_success():
     the correct metadata and no exception is logged.
     """
     users = [
-        {"id": "user1", "spend": 20.0, "budget_duration": 120, "user_id": "user1"},
-        {"id": "user2", "spend": 25.0, "budget_duration": 120, "user_id": "user2"},
+        _attrify(
+            {"id": "user1", "spend": 20.0, "budget_duration": 120, "user_id": "user1"}
+        ),
+        _attrify(
+            {"id": "user2", "spend": 25.0, "budget_duration": 120, "user_id": "user2"}
+        ),
     ]
     prisma_client = MagicMock()
     prisma_client.get_data = AsyncMock(return_value=users)
@@ -853,8 +861,12 @@ async def test_service_logger_teams_success():
     the proper metadata and nothing is logged as an exception.
     """
     teams = [
-        {"id": "team1", "spend": 30.0, "budget_duration": 180, "team_id": "team1"},
-        {"id": "team2", "spend": 35.0, "budget_duration": 180, "team_id": "team2"},
+        _attrify(
+            {"id": "team1", "spend": 30.0, "budget_duration": 180, "team_id": "team1"}
+        ),
+        _attrify(
+            {"id": "team2", "spend": 35.0, "budget_duration": 180, "team_id": "team2"}
+        ),
     ]
     prisma_client = MagicMock()
     prisma_client.get_data = AsyncMock(return_value=teams)
