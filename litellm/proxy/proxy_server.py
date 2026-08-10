@@ -7796,6 +7796,34 @@ def _resolve_keepalive_seconds(request_data: Mapping[str, Any], response: object
     return clamped
 
 
+def _make_keepalive_resolver(request_data: Mapping[str, Any]) -> Callable[[object], float]:
+    """Wrap `_resolve_keepalive_seconds` with a memo keyed on the serving
+    deployment's model_id. The steady-state case (no mid-stream fallback, the
+    overwhelming majority of streams) sees the same model_id on every chunk, so
+    this turns the per-chunk cost from a full `llm_router.get_deployment()`
+    Pydantic rebuild into a cheap hidden-params read once the first chunk for
+    that model_id has been resolved. A missing/empty model_id can't be trusted
+    as a cache key (see `_keepalive_from_deployment_config`'s model_name
+    fallback, which reflects current router state rather than one deployment's
+    fixed identity), so those chunks always resolve fresh, matching prior
+    behavior exactly.
+    """
+    last_model_id: str | None = None  # rebind-ok: memoized identity of the last-resolved chunk
+    last_value: float = 0.0  # rebind-ok: cached resolution for last_model_id
+
+    def _resolve(item: object) -> float:
+        nonlocal last_model_id, last_value
+        model_id = get_hidden_params_dict(item).get("model_id")
+        if isinstance(model_id, str) and model_id and model_id == last_model_id:
+            return last_value
+        value: Final = _resolve_keepalive_seconds(request_data, item)
+        if isinstance(model_id, str) and model_id:
+            last_model_id, last_value = model_id, value
+        return value
+
+    return _resolve
+
+
 async def async_data_generator(
     response,
     user_api_key_dict: UserAPIKeyAuth,
@@ -7850,11 +7878,12 @@ async def async_data_generator(
         # which case _resolve_keepalive_seconds can never return non-zero for
         # any chunk of this stream), not merely because the first chunk's
         # deployment happens to start with it off.
+        resolve_keepalive_seconds: Final = _make_keepalive_resolver(request_data)
         stream_source: Final = (
             _iter_with_keepalive(
                 stream_iterator.__aiter__(),
-                lambda item: _resolve_keepalive_seconds(request_data, item),
-                _resolve_keepalive_seconds(request_data, response),
+                resolve_keepalive_seconds,
+                resolve_keepalive_seconds(response),
             )
             if llm_router is not None
             else stream_iterator

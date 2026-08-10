@@ -916,6 +916,7 @@ def test_select_data_generator_missing_required_kwarg_raises_type_error():
 from litellm.proxy.proxy_server import (  # noqa: E402
     _iter_with_keepalive,
     _keepalive_from_deployment_config,
+    _make_keepalive_resolver,
     _resolve_keepalive_seconds,
 )
 from litellm.proxy.proxy_server import _KEEPALIVE_MAX_SECONDS, _KEEPALIVE_MIN_SECONDS  # noqa: E402
@@ -1365,6 +1366,83 @@ def test_keepalive_from_deployment_config_no_router_returns_none(monkeypatch):
     assert result is None
 
 
+def test_make_keepalive_resolver_caches_by_model_id(monkeypatch):
+    """The steady-state case (no fallback): every chunk shares the same
+    model_id, so the deployment lookup must happen once, not once per chunk."""
+    from unittest.mock import MagicMock
+
+    deployment = MagicMock()
+    deployment.litellm_params.keepalive_seconds = 5.0
+    deployment.litellm_params.allow_client_keepalive_override = False
+
+    router = MagicMock()
+    router.get_deployment.return_value = deployment
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    resolve = _make_keepalive_resolver({"model": "my-model"})
+
+    first = _simple_chunk(content="a")
+    first._hidden_params = {"model_id": "deploy-steady"}
+    second = _simple_chunk(content="b")
+    second._hidden_params = {"model_id": "deploy-steady"}
+
+    assert resolve(first) == 5.0
+    assert resolve(second) == 5.0
+    router.get_deployment.assert_called_once_with(model_id="deploy-steady")
+
+
+def test_make_keepalive_resolver_reresolves_on_model_id_change(monkeypatch):
+    """A mid-stream fallback changes model_id: the cache must miss and
+    re-resolve against the new deployment, not keep serving the stale value."""
+    from unittest.mock import MagicMock
+
+    before = MagicMock()
+    before.litellm_params.keepalive_seconds = 5.0
+    before.litellm_params.allow_client_keepalive_override = False
+
+    after = MagicMock()
+    after.litellm_params.keepalive_seconds = 30.0
+    after.litellm_params.allow_client_keepalive_override = False
+
+    router = MagicMock()
+    router.get_deployment.side_effect = lambda model_id: {"deploy-a": before, "deploy-b": after}[model_id]
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    resolve = _make_keepalive_resolver({"model": "my-model"})
+
+    chunk_a = _simple_chunk(content="a")
+    chunk_a._hidden_params = {"model_id": "deploy-a"}
+    chunk_b = _simple_chunk(content="b")
+    chunk_b._hidden_params = {"model_id": "deploy-b"}
+
+    assert resolve(chunk_a) == 5.0
+    assert resolve(chunk_b) == 30.0
+    assert router.get_deployment.call_count == 2
+
+
+def test_make_keepalive_resolver_missing_model_id_never_cached(monkeypatch):
+    """Without a model_id there's no reliable cache key (see the model_name
+    fallback in _keepalive_from_deployment_config), so every chunk must
+    re-resolve fresh rather than reuse a stale guess."""
+    from unittest.mock import MagicMock
+
+    router = MagicMock()
+    router.get_deployment.return_value = None
+    router.get_model_list.return_value = [{"litellm_params": {"keepalive_seconds": 12.0}}]
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    resolve = _make_keepalive_resolver({"model": "slow-model"})
+
+    chunk_a = _simple_chunk(content="a")
+    chunk_a._hidden_params = {}
+    chunk_b = _simple_chunk(content="b")
+    chunk_b._hidden_params = {}
+
+    assert resolve(chunk_a) == 12.0
+    assert resolve(chunk_b) == 12.0
+    assert router.get_model_list.call_count == 2
+
+
 def test_keepalive_seconds_in_all_litellm_params():
     from litellm.types.utils import all_litellm_params
 
@@ -1429,4 +1507,50 @@ async def test_async_data_generator_no_keepalive_no_pings(monkeypatch):
         out.append(line)
 
     assert ": ping\n\n" not in out
+    assert out[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_resolves_deployment_once_per_steady_stream(monkeypatch):
+    """Regression test for the per-chunk resolver cost: a stream where every
+    real chunk comes from the same deployment (the common, no-fallback case)
+    must only pay for one `llm_router.get_deployment()` call, not one per
+    chunk. Before caching, this asserted 1 but got len(chunks) since the
+    resolver re-ran the full deployment lookup after every single chunk.
+
+    The very first resolve happens on the raw `response` object before any
+    chunk is yielded; a bare async generator (unlike the real
+    CustomStreamWrapper this stands in for) can't carry `_hidden_params`, so
+    that one call goes through the model_name fallback instead of
+    `get_deployment` — hence it's asserted separately.
+    """
+    from unittest.mock import MagicMock
+
+    _patch_logging_flags(monkeypatch)
+
+    deployment = MagicMock()
+    deployment.litellm_params.keepalive_seconds = None
+    deployment.litellm_params.allow_client_keepalive_override = False
+
+    router = MagicMock()
+    router.get_deployment.return_value = deployment
+    router.get_model_list.return_value = [{"litellm_params": {}}]
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    async def _steady_response():
+        for content in ("a", "b", "c", "d", "e"):
+            chunk = _simple_chunk(content=content)
+            chunk._hidden_params = {"model_id": "deploy-steady"}
+            yield chunk
+
+    out = []
+    async for line in async_data_generator(
+        response=_steady_response(),
+        user_api_key_dict=_user_auth(),
+        request_data={"model": "gpt-4"},
+    ):
+        out.append(line)
+
+    assert router.get_deployment.call_count == 1
+    assert router.get_model_list.call_count == 1
     assert out[-1] == "data: [DONE]\n\n"
