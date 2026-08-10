@@ -641,9 +641,9 @@ class TestBedrockMantlePricing:
 @pytest.mark.parametrize(
     "model_id,input_cost,output_cost,max_tokens",
     [
-        ("google.gemma-4-31b", 1.4e-07, 4e-07, 256000),
-        ("google.gemma-4-26b-a4b", 1.3e-07, 4e-07, 256000),
-        ("google.gemma-4-e2b", 4e-08, 8e-08, 128000),
+        ("google.gemma-4-31b", 1.4e-07, 4e-07, 262144),
+        ("google.gemma-4-26b-a4b", 1.3e-07, 4e-07, 262144),
+        ("google.gemma-4-e2b", 4e-08, 8e-08, 131072),
     ],
 )
 def test_gemma_4_bedrock_mantle_model_metadata(
@@ -685,3 +685,20 @@ def test_gemma_4_models_register_under_bedrock_mantle(local_cost_map, model_id):
     resolved_model, provider, _, _ = litellm.get_llm_provider(full_model_name)
     assert provider == "bedrock_mantle"
     assert resolved_model == model_id
+
+
+@pytest.mark.parametrize(
+    "model_id, expected_tokens",
+    [
+        ("xai.grok-4.3", 1048576),
+        ("google.gemma-4-31b", 262144),
+        ("google.gemma-4-26b-a4b", 262144),
+        ("google.gemma-4-e2b", 131072),
+    ],
+)
+def test_context_windows_match_bedrock_limits(
+    local_cost_map, model_id, expected_tokens
+):
+    info = litellm.get_model_info(model=model_id, custom_llm_provider="bedrock_mantle")
+    assert info["max_input_tokens"] == expected_tokens
+    assert info["max_output_tokens"] == expected_tokens
