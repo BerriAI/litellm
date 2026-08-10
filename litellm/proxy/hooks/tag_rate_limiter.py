@@ -27,7 +27,6 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_metadata_variable_name_from_kwargs,
 )
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3,
@@ -589,61 +588,21 @@ class _PROXY_TagRateLimiter(CustomLogger):
             except Exception as e:  # noqa: BLE001 - releasing a slot must never raise into the caller's request path
                 verbose_proxy_logger.warning("tag_rate_limiter: failed to release concurrency slot %s: %s", key, e)
 
-    async def async_post_call_failure_hook(
-        self,
-        request_data: dict,
-        original_exception: Exception,
-        user_api_key_dict: UserAPIKeyAuth,
-        traceback_str: Optional[str] = None,
-    ) -> None:
-        """
-        Release any concurrency slot reserved for this hop before the call
-        failed. request_data carries no resolved model_group/deployment_id
-        the way a successful call's standard_logging_object does, so this
-        re-derives identity from request_data["model"] (the hop's own model
-        group -- reliable, since a hop that reserved a slot did so under
-        this exact name). Concurrency entries are always chain-wide (see
-        `_build_group_limits`'s docstring), so no deployment_id is needed to
-        resolve which bucket to release here.
-        """
-        if self.llm_router is None:
-            return
-        model_group = request_data.get("model")
-        if not model_group:
-            return
-        configured = self._index.get(self.llm_router).resolve(model_group, _extract_team_id(request_data))
-        if not configured:
-            return
-        metadata_variable_name = get_metadata_variable_name_from_kwargs(request_data)
-        tags = _get_tags_from_request_kwargs(request_data, metadata_variable_name=metadata_variable_name)
-        if not tags:
-            return
-
-        release_keys = [
-            _inflight_key(model_group, configured_limit, tag_value)
-            for configured_limit in configured
-            if configured_limit.unit == "concurrency"
-            and configured_limit.deployment_scope is None
-            and (tag_value := _extract_identity(tags, configured_limit.entry.tag_id)) is not None
-        ]
-        if release_keys:
-            await self._release_keys(release_keys)
-        return None
-
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """
-        Release any concurrency slot reserved for this specific hop.
-        `async_post_call_failure_hook` only fires once, if and when the
-        entire request (every fallback exhausted) ultimately fails; a hop
-        that fails but gets recovered by a later fallback never reaches it,
-        so without this, that hop's reservation would sit until its safety
-        TTL expires (up to an hour) even though the overall call succeeded.
-        This fires per hop, on every failure, so it covers that case as well
-        as the one `async_post_call_failure_hook` already covers -- the rare
-        overlap where both fire for the same terminal failure is a harmless
-        double release, bounded the same way a lone release already is (see
-        `_release_keys`): floor-at-zero turns it into brief under-counting,
-        never a negative counter.
+        Release any concurrency slot reserved for this specific hop. This is
+        the only place concurrency gets released on failure -- there is no
+        `async_post_call_failure_hook` override here, deliberately: that hook
+        only fires once, if and when the entire request (every fallback
+        exhausted) ultimately fails, while this fires per hop, on every
+        failure, covering both that terminal case and a hop that fails but
+        gets recovered by a later fallback (which `async_post_call_failure_hook`
+        never sees at all). Implementing both would double-release the same
+        terminal failure's reservation: since the inflight counter is
+        aggregate, not per-request, that would silently free capacity
+        belonging to a different, still-running request sharing the same
+        tag, admitting one more concurrent request than configured rather
+        than merely under-counting.
         """
         if self.llm_router is None:
             return
