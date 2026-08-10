@@ -938,6 +938,18 @@ export default function KeyInfoView({
                         ? JSON.stringify(currentKeyData.metadata.tag_rpm_limit)
                         : "Unlimited"}
                     </Text>
+                    <Text>
+                      Estimated Output Tokens:{" "}
+                      {currentKeyData.metadata?.default_estimated_output_tokens != null
+                        ? String(currentKeyData.metadata.default_estimated_output_tokens)
+                        : "Default"}
+                    </Text>
+                    <Text>
+                      Estimated Output Tokens Per Model:{" "}
+                      {currentKeyData.metadata?.default_estimated_output_tokens_per_model
+                        ? JSON.stringify(currentKeyData.metadata.default_estimated_output_tokens_per_model)
+                        : "Default"}
+                    </Text>
                   </div>
 
                   <div>
