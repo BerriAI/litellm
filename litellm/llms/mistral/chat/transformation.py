@@ -24,7 +24,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMessage
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, ModelResponseStream
-from litellm.utils import convert_to_model_response_object
+from litellm.utils import convert_to_model_response_object, supports_reasoning
 
 
 class MistralConfig(OpenAIGPTConfig):
@@ -98,11 +98,25 @@ class MistralConfig(OpenAIGPTConfig):
             "parallel_tool_calls",
         ]
 
-        # Add reasoning support for magistral models
-        if "magistral" in model.lower():
+        if self._is_magistral_model(model):
             supported_params.extend(["thinking", "reasoning_effort"])
+        elif self._supports_native_reasoning_effort(model):
+            supported_params.append("reasoning_effort")
 
         return supported_params
+
+    @staticmethod
+    def _is_magistral_model(model: str) -> bool:
+        return "magistral" in model.lower()
+
+    @staticmethod
+    def _supports_native_reasoning_effort(model: str) -> bool:
+        """
+        Mistral's hybrid reasoning models (mistral-medium-3-5 and newer) take ``reasoning_effort``
+        directly on /chat/completions, so it is forwarded as-is instead of being emulated with the
+        magistral system prompt: https://docs.mistral.ai/capabilities/reasoning
+        """
+        return supports_reasoning(model=model, custom_llm_provider="mistral")
 
     def _map_tool_choice(self, tool_choice: str) -> str:
         if tool_choice == "auto" or tool_choice == "none":
@@ -168,10 +182,12 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["extra_body"] = {"random_seed": value}
             if param == "response_format":
                 optional_params["response_format"] = value
-            if param == "reasoning_effort" and "magistral" in model.lower():
-                # Flag that we need to add reasoning system prompt
-                optional_params["_add_reasoning_prompt"] = True
-            if param == "thinking" and "magistral" in model.lower():
+            if param == "reasoning_effort" and value is not None:
+                if self._is_magistral_model(model):
+                    optional_params["_add_reasoning_prompt"] = True
+                elif self._supports_native_reasoning_effort(model):
+                    optional_params["reasoning_effort"] = value
+            if param == "thinking" and self._is_magistral_model(model):
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True
             if param == "parallel_tool_calls":
