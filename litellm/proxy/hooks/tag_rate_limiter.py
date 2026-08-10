@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_metadata_variable_name_from_kwargs,
 )
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3,
@@ -343,6 +344,51 @@ def _inflight_key(model_group: str, configured: _ConfiguredLimit, tag_value: str
     return f"{{{hash_tag}}}:inflight"
 
 
+# Key under which accumulated-but-not-yet-released concurrency reservation
+# keys are stashed on `Logging.model_call_details` -- the one piece of state
+# litellm itself guarantees persists, mutated in place, across every hop of
+# one logical request (retries and fallbacks alike). litellm's own
+# `has_logged_async_failure` dedup flag lives in the same dict for the same
+# reason: it's the only reliably request-scoped, cross-hop-surviving state
+# available from inside a CustomLogger hook.
+_PENDING_CONCURRENCY_KEYS_ATTR = "_tag_rl_pending_concurrency_keys"
+
+
+def _accumulate_pending_concurrency_keys(request_kwargs: dict, keys: list[str]) -> None:
+    """
+    Called from `async_filter_deployments` right after a hop's concurrency
+    admission succeeds. `async_log_failure_event` fires once per logical
+    request, not once per hop -- litellm dedupes it after the first failed
+    hop (`Logging.has_run_logging`'s `has_logged_async_failure` guard) -- so
+    a later failed hop (a retry, or a further fallback) has no event of its
+    own to release its reservation. Stashing every hop's keys here lets
+    whichever release path fires next (the single `async_log_failure_event`,
+    `async_log_success_event`, or the terminal `async_post_call_failure_hook`)
+    release everything accumulated since the last release, not just the
+    current hop's own.
+    """
+    if not keys:
+        return
+    logging_obj = request_kwargs.get("litellm_logging_obj")
+    model_call_details = getattr(logging_obj, "model_call_details", None)
+    if not isinstance(model_call_details, dict):
+        return
+    existing = model_call_details.get(_PENDING_CONCURRENCY_KEYS_ATTR, [])
+    model_call_details[_PENDING_CONCURRENCY_KEYS_ATTR] = [*existing, *keys]
+
+
+def _pop_pending_concurrency_keys(model_call_details: dict) -> list[str]:
+    """
+    `kwargs` in `async_log_success_event`/`async_log_failure_event` IS the
+    `Logging` object's own `model_call_details` (the same dict `Logging`
+    passes to itself), so popping here both reads and clears the state
+    `_accumulate_pending_concurrency_keys` wrote -- clearing matters since a
+    hop after this one (a further fallback) must accumulate into a fresh
+    list, not one still holding an already-released key.
+    """
+    return model_call_details.pop(_PENDING_CONCURRENCY_KEYS_ATTR, [])
+
+
 class _PROXY_TagRateLimiter(CustomLogger):
     def __init__(
         self,
@@ -497,6 +543,11 @@ class _PROXY_TagRateLimiter(CustomLogger):
                 configured_limit, tag_value, _key = atomic_checks[failing_index]
                 self._raise_over_limit(configured_limit, tag_value, model, current=values[0])
 
+            _accumulate_pending_concurrency_keys(
+                request_kwargs,
+                [key for configured_limit, _tag_value, key in atomic_checks if configured_limit.unit == "concurrency"],
+            )
+
         return healthy_deployments
 
     @staticmethod
@@ -588,54 +639,58 @@ class _PROXY_TagRateLimiter(CustomLogger):
             except Exception as e:  # noqa: BLE001 - releasing a slot must never raise into the caller's request path
                 verbose_proxy_logger.warning("tag_rate_limiter: failed to release concurrency slot %s: %s", key, e)
 
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: Optional[str] = None,
+    ) -> None:
+        """
+        Release every concurrency reservation accumulated for this request
+        that `async_log_failure_event` never got to release. This fires once,
+        from the proxy route handler, only when the entire request (every
+        retry and fallback) is ultimately exhausted -- exactly the case that
+        event's per-request dedup can't cover on its own: if hop 1 fails
+        (releasing via that event, which clears the accumulated list) and
+        every hop after it also fails, those later hops' reservations sit in
+        the list with no event left to release them, since the dedup means
+        `async_log_failure_event` won't fire again for this request. Reads
+        `request_data["litellm_logging_obj"]` directly rather than
+        `request_data` itself, since `request_data` is not the same dict as
+        `Logging.model_call_details`. No double-release risk against
+        `async_log_failure_event`: whichever fires first clears the list, so
+        there's nothing left in it for the other to release.
+        """
+        logging_obj = request_data.get("litellm_logging_obj")
+        model_call_details = getattr(logging_obj, "model_call_details", None)
+        if not isinstance(model_call_details, dict):
+            return
+        release_keys = _pop_pending_concurrency_keys(model_call_details)
+        if release_keys:
+            await self._release_keys(release_keys)
+
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """
-        Release any concurrency slot reserved for this specific hop. This is
-        the only place concurrency gets released on failure -- there is no
-        `async_post_call_failure_hook` override here, deliberately: that hook
-        only fires once, if and when the entire request (every fallback
-        exhausted) ultimately fails, while this fires per hop, on every
-        failure, covering both that terminal case and a hop that fails but
-        gets recovered by a later fallback (which `async_post_call_failure_hook`
-        never sees at all). Implementing both would double-release the same
-        terminal failure's reservation: since the inflight counter is
-        aggregate, not per-request, that would silently free capacity
-        belonging to a different, still-running request sharing the same
-        tag, admitting one more concurrent request than configured rather
-        than merely under-counting.
+        Release every concurrency reservation accumulated since the last
+        release. `async_log_failure_event` itself fires once per logical
+        request, not once per hop -- litellm dedupes it after the first
+        failed hop -- so this can't just recompute the current hop's own
+        key; it releases everything `async_filter_deployments` has
+        accumulated onto `kwargs` (which IS `Logging.model_call_details`)
+        across every hop so far, covering hops this event's dedup would
+        otherwise skip. Any hop after this one accumulates fresh into the
+        list this clears.
         """
-        if self.llm_router is None:
-            return
-
-        standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
-        if standard_logging_object is None:
-            return
-
-        model_group = standard_logging_object.get("model_group")
-        if not model_group:
-            return
-
-        standard_logging_metadata = standard_logging_object.get("metadata") or {}
-        team_id = standard_logging_metadata.get("user_api_key_team_id")
-        configured = self._index.get(self.llm_router).resolve(model_group, team_id)
-        if not configured:
-            return
-
-        metadata_variable_name = get_metadata_variable_name_from_kwargs(kwargs)
-        tags = _get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name)
-        if not tags:
-            return
-
-        release_keys = [
-            _inflight_key(model_group, configured_limit, tag_value)
-            for configured_limit in configured
-            if configured_limit.unit == "concurrency"
-            and (tag_value := _extract_identity(tags, configured_limit.entry.tag_id)) is not None
-        ]
+        release_keys = _pop_pending_concurrency_keys(kwargs)
         if release_keys:
             await self._release_keys(release_keys)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        release_keys = _pop_pending_concurrency_keys(kwargs)
+        if release_keys:
+            asyncio.create_task(self._release_keys(release_keys))
+
         if self.llm_router is None:
             return
 
@@ -666,15 +721,13 @@ class _PROXY_TagRateLimiter(CustomLogger):
         }
 
         operations: list[RedisPipelineIncrementOperation] = []
-        release_keys: list[str] = []
         for configured_limit in configured:
+            if configured_limit.unit == "concurrency":
+                continue  # released above, from the accumulated per-request list
             if configured_limit.deployment_scope is not None and deployment_id not in configured_limit.deployment_scope:
                 continue
             tag_value = _extract_identity(tags, configured_limit.entry.tag_id)
             if tag_value is None:
-                continue
-            if configured_limit.unit == "concurrency":
-                release_keys.append(_inflight_key(model_group, configured_limit, tag_value))
                 continue
             if configured_limit.unit not in increment_by_unit:
                 continue  # "requests" is accounted atomically at admission, not here
@@ -690,9 +743,6 @@ class _PROXY_TagRateLimiter(CustomLogger):
                     ttl=configured_limit.entry.period_seconds + 3600,
                 )
             )
-
-        if release_keys:
-            asyncio.create_task(self._release_keys(release_keys))
 
         if not operations:
             return

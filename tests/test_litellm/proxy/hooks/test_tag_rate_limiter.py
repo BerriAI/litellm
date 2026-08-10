@@ -342,6 +342,24 @@ def _concurrency_router(limit: int) -> "litellm.Router":
     )
 
 
+class _FakeLoggingObj:
+    """
+    Stands in for litellm's real `Logging` object: the same instance is
+    threaded through every hop of one logical request (retries and
+    fallbacks alike), and its `model_call_details` dict is exactly the
+    `kwargs` a logging callback receives -- see
+    `_accumulate_pending_concurrency_keys`'s docstring for why this is the
+    one piece of state that reliably survives across hops.
+    """
+
+    def __init__(self):
+        self.model_call_details: dict = {}
+
+
+def _hop_kwargs(logging_obj: "_FakeLoggingObj", tags: list[str]) -> dict:
+    return {"metadata": {"tags": tags}, "litellm_logging_obj": logging_obj}
+
+
 @pytest.mark.asyncio
 async def test_cross_unit_rejection_does_not_leave_a_phantom_increment(time_controller):
     """
@@ -500,8 +518,10 @@ async def test_concurrency_slot_released_on_success_frees_capacity(time_controll
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
 
-    kwargs = {"metadata": {"tags": ["end_user_id:u1"]}}
-    await limiter.async_filter_deployments(model="grp", healthy_deployments=healthy, messages=None, request_kwargs=kwargs)
+    logging_obj = _FakeLoggingObj()
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(logging_obj, ["end_user_id:u1"])
+    )
 
     # At capacity: a second concurrent request is rejected.
     with pytest.raises(ProxyRateLimitError):
@@ -510,8 +530,13 @@ async def test_concurrency_slot_released_on_success_frees_capacity(time_controll
         )
 
     # The first request completes -- its slot is released -- freeing capacity again.
-    kwargs["standard_logging_object"] = {"model_group": "grp", "model_id": "dep-1", "total_tokens": 0, "response_cost": 0}
-    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    logging_obj.model_call_details.update(
+        {
+            "standard_logging_object": {"model_group": "grp", "model_id": "dep-1", "total_tokens": 0, "response_cost": 0},
+            "metadata": {"tags": ["end_user_id:u1"]},
+        }
+    )
+    await limiter.async_log_success_event(kwargs=logging_obj.model_call_details, response_obj=None, start_time=0, end_time=0)
     await asyncio.sleep(0)
 
     result = await limiter.async_filter_deployments(
@@ -527,16 +552,13 @@ async def test_concurrency_slot_released_on_failure_frees_capacity(time_controll
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
 
+    logging_obj = _FakeLoggingObj()
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(logging_obj, ["end_user_id:u1"])
     )
 
-    await limiter.async_log_failure_event(
-        kwargs={"standard_logging_object": {"model_group": "grp"}, "metadata": {"tags": ["end_user_id:u1"]}},
-        response_obj=None,
-        start_time=0,
-        end_time=0,
-    )
+    logging_obj.model_call_details.update({"standard_logging_object": {"model_group": "grp"}, "metadata": {"tags": ["end_user_id:u1"]}})
+    await limiter.async_log_failure_event(kwargs=logging_obj.model_call_details, response_obj=None, start_time=0, end_time=0)
 
     result = await limiter.async_filter_deployments(
         model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
@@ -545,33 +567,96 @@ async def test_concurrency_slot_released_on_failure_frees_capacity(time_controll
 
 
 @pytest.mark.asyncio
-async def test_concurrency_slot_released_on_fallback_recovered_hop_failure(time_controller):
+async def test_concurrency_released_for_every_hop_when_only_the_first_failure_fires(time_controller):
     """
-    A hop that fails but gets recovered by a later fallback never reaches
-    `async_post_call_failure_hook` (which this limiter deliberately does not
-    implement -- see its removal note on `async_log_failure_event`), since
-    that hook only fires once, if and when the entire request (every
-    fallback exhausted) ultimately fails. Only `async_log_failure_event`
-    fires for a per-hop failure that a fallback recovers, so it alone must
-    release that hop's reservation, or it leaks until its safety TTL (up to
-    an hour).
+    litellm dedupes `async_log_failure_event` to fire once per logical
+    request: only the first failed hop's failure reaches it (see
+    `Logging.has_run_logging`'s `has_logged_async_failure` guard); a later
+    failed hop (a retry, or a further fallback) never gets its own failure
+    event at all. Reservations still accumulate at admission for every hop
+    regardless, so whichever event fires next must release everything
+    accumulated since the last release, not just its own hop's key, or a
+    hop whose failure event never fired leaks until its safety TTL.
     """
     limiter = _make_limiter(time_controller)
-    router = _concurrency_router(limit=1)
+    router = _concurrency_router(limit=2)
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
+    logging_obj = _FakeLoggingObj()
 
-    request_kwargs = {"metadata": {"tags": ["end_user_id:u1"]}}
-    await limiter.async_filter_deployments(model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs)
+    # Hop 1 admits and fails; its failure event is the one that fires.
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(logging_obj, ["end_user_id:u1"])
+    )
+    logging_obj.model_call_details.update({"standard_logging_object": {"model_group": "grp"}, "metadata": {"tags": ["end_user_id:u1"]}})
+    await limiter.async_log_failure_event(kwargs=logging_obj.model_call_details, response_obj=None, start_time=0, end_time=0)
 
-    # The failed hop's own logging kwargs, as they'd look mid-fallback-chain:
-    # model_group/model_id/metadata reflect this hop, not a later fallback.
-    failure_kwargs = {
-        "standard_logging_object": {"model_group": "grp", "model_id": "dep-1"},
-        "metadata": {"tags": ["end_user_id:u1"]},
-    }
-    await limiter.async_log_failure_event(kwargs=failure_kwargs, response_obj=None, start_time=0, end_time=0)
+    # Hop 2 (a retry or fallback) admits and also fails, but -- per litellm's
+    # dedup -- no async_log_failure_event call follows it.
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(logging_obj, ["end_user_id:u1"])
+    )
 
+    # Hop 3 admits and succeeds. Its success event must release both hop 2's
+    # still-pending reservation and its own.
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(logging_obj, ["end_user_id:u1"])
+    )
+    logging_obj.model_call_details.update(
+        {"standard_logging_object": {"model_group": "grp", "model_id": "dep-1", "total_tokens": 0, "response_cost": 0}}
+    )
+    await limiter.async_log_success_event(kwargs=logging_obj.model_call_details, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    # Full capacity (2) is free again -- both hops admit.
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+    )
+    result = await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+    )
+    assert result == healthy
+
+
+@pytest.mark.asyncio
+async def test_concurrency_released_by_terminal_hook_when_every_hop_fails(time_controller):
+    """
+    Same dedup as above, but no hop ever succeeds: the whole request is
+    exhausted after every retry/fallback fails. Neither `async_log_success_event`
+    nor a second `async_log_failure_event` will ever fire for this request,
+    so `async_post_call_failure_hook` -- which fires once, from the proxy
+    route handler, only when the entire request is exhausted -- must release
+    everything still accumulated.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=2)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+    logging_obj = _FakeLoggingObj()
+
+    # Hop 1 admits and fails; its failure event fires and clears the list.
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(logging_obj, ["end_user_id:u1"])
+    )
+    logging_obj.model_call_details.update({"standard_logging_object": {"model_group": "grp"}, "metadata": {"tags": ["end_user_id:u1"]}})
+    await limiter.async_log_failure_event(kwargs=logging_obj.model_call_details, response_obj=None, start_time=0, end_time=0)
+
+    # Hop 2 admits and is the terminal failure -- no fallback left. Per
+    # litellm's dedup, its own async_log_failure_event never fires either.
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(logging_obj, ["end_user_id:u1"])
+    )
+
+    await limiter.async_post_call_failure_hook(
+        request_data={"model": "grp", "litellm_logging_obj": logging_obj, "metadata": {"tags": ["end_user_id:u1"]}},
+        original_exception=Exception("provider error"),
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    # Full capacity (2) is free again.
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+    )
     result = await limiter.async_filter_deployments(
         model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
     )
@@ -581,49 +666,48 @@ async def test_concurrency_slot_released_on_fallback_recovered_hop_failure(time_
 @pytest.mark.asyncio
 async def test_terminal_failure_does_not_double_release_and_steal_another_requests_slot(time_controller):
     """
-    The inflight counter is aggregate per tag, not per-request: if a terminal
-    failure's reservation were released twice (once each by
-    `async_post_call_failure_hook` and `async_log_failure_event`), the second
-    release would silently free capacity belonging to a different,
-    still-running request sharing the same tag, admitting one more
-    concurrent request than configured. This limiter deliberately does not
-    implement `async_post_call_failure_hook`, so calling it (as the proxy
-    still would, falling through to the CustomLogger base no-op) must have
-    no effect on the counter.
+    The inflight counter is aggregate per tag, not per-request: if a
+    terminal failure's reservation were released twice (once each by
+    `async_post_call_failure_hook` and `async_log_failure_event`, both
+    firing for the same single-hop failure), the second release would
+    silently free capacity belonging to a different, still-running request
+    sharing the same tag, admitting one more concurrent request than
+    configured. Both hooks release from the same shared accumulated-keys
+    state, so whichever fires first drains it and the other finds nothing
+    left.
     """
     limiter = _make_limiter(time_controller)
     router = _concurrency_router(limit=2)
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
 
-    # Two concurrent requests at capacity.
+    logging_obj_a = _FakeLoggingObj()
+    logging_obj_b = _FakeLoggingObj()
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(logging_obj_a, ["end_user_id:u1"])
     )
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(logging_obj_b, ["end_user_id:u1"])
     )
 
-    # One of them fails terminally.
-    await limiter.async_log_failure_event(
-        kwargs={"standard_logging_object": {"model_group": "grp"}, "metadata": {"tags": ["end_user_id:u1"]}},
-        response_obj=None,
-        start_time=0,
-        end_time=0,
-    )
+    # A fails terminally: both its failure event and the terminal post-call
+    # hook fire for the same single hop, against the same shared state.
+    logging_obj_a.model_call_details.update({"standard_logging_object": {"model_group": "grp"}, "metadata": {"tags": ["end_user_id:u1"]}})
+    await limiter.async_log_failure_event(kwargs=logging_obj_a.model_call_details, response_obj=None, start_time=0, end_time=0)
     await limiter.async_post_call_failure_hook(
-        request_data={"model": "grp", "metadata": {"tags": ["end_user_id:u1"]}},
+        request_data={"model": "grp", "litellm_logging_obj": logging_obj_a, "metadata": {"tags": ["end_user_id:u1"]}},
         original_exception=Exception("provider error"),
         user_api_key_dict=UserAPIKeyAuth(),
     )
 
-    # Exactly one slot was freed: a third request is admitted (back to 2 in flight)...
+    # Exactly A's one slot was freed: B's reservation is untouched, so a
+    # third request is admitted (back to 2 in flight)...
     result = await limiter.async_filter_deployments(
         model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
     )
     assert result == healthy
-    # ...but a fourth would exceed the limit of 2. If the failure had freed a
-    # second slot, this would wrongly be admitted instead of rejected.
+    # ...but a fourth would exceed the limit of 2. If A's failure had freed a
+    # second slot (double release), this would wrongly be admitted.
     with pytest.raises(ProxyRateLimitError):
         await limiter.async_filter_deployments(
             model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
