@@ -804,3 +804,52 @@ def test_get_complete_model_list_sentinel_only_grants_nothing():
         infer_model_from_keys=False,
     )
     assert result == []
+
+
+def test_get_complete_model_list_omits_literal_wildcard_when_router_has_deployment():
+    """Regression for #13752: a configured wildcard route (e.g. openai/*) with a real
+    router deployment must expand to concrete models without listing the literal pattern
+    itself, unless return_wildcard_routes is requested."""
+    from unittest.mock import MagicMock
+
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    router = MagicMock()
+    router.get_model_list.return_value = [{"litellm_params": {"model": "openai/*"}}]
+
+    default_result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["openai/*"],
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=False,
+        llm_router=router,
+    )
+    assert "openai/*" not in default_result
+    assert any(m.startswith("openai/") and m != "openai/*" for m in default_result)
+
+    with_routes_result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["openai/*"],
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=True,
+        llm_router=router,
+    )
+    assert with_routes_result.count("openai/*") == 1
+
+    # No router at all: the wildcard still expands from known provider models and
+    # the literal is not listed.
+    no_router_result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["openai/*"],
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=False,
+        llm_router=None,
+    )
+    assert "openai/*" not in no_router_result
+    assert any(m.startswith("openai/") and m != "openai/*" for m in no_router_result)

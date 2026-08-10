@@ -2,7 +2,7 @@
 ## Common checks for /v1/models and `/model/info`
 import copy
 from collections.abc import Sequence
-from typing import Any, Final
+from typing import Any, Final, NamedTuple
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -377,44 +377,60 @@ def expand_wildcard_deployments_for_model_info(
     return expanded
 
 
+class _WildcardExpansion(NamedTuple):
+    concrete_models: tuple[str, ...]
+    has_router_deployment: bool
+
+
+def _expand_wildcard_model(model: str, llm_router: Router | None, team_id: str | None) -> _WildcardExpansion:
+    if llm_router is None:
+        return _WildcardExpansion(
+            tuple(get_known_models_from_wildcard(wildcard_model=model, litellm_params=None)), False
+        )
+
+    router_deployments: Final = llm_router.get_model_list(model_name=model, team_id=team_id)
+    if not router_deployments:
+        # Router has no deployment for this wildcard (e.g. BYOK team models); fall
+        # back to expanding from known provider models.
+        return _WildcardExpansion(
+            tuple(get_known_models_from_wildcard(wildcard_model=model, litellm_params=None)), False
+        )
+
+    concrete_models: Final = tuple(
+        concrete
+        for router_model in router_deployments
+        for concrete in get_known_models_from_wildcard(
+            wildcard_model=model,
+            litellm_params=LiteLLM_Params(**router_model["litellm_params"]),
+        )
+    )
+    return _WildcardExpansion(concrete_models, True)
+
+
 def _get_wildcard_models(
     unique_models: list[str],
     return_wildcard_routes: bool | None = False,
     llm_router: Router | None = None,
     team_id: str | None = None,
 ) -> list[str]:
-    models_to_remove: Final = set()
-    all_wildcard_models: Final = []
-    for model in unique_models:
-        if _check_wildcard_routing(model=model):
-            if return_wildcard_routes:  # will add the wildcard route to the list eg: anthropic/*.
-                all_wildcard_models.append(model)
+    expansions: Final = {
+        model: _expand_wildcard_model(model=model, llm_router=llm_router, team_id=team_id)
+        for model in unique_models
+        if _check_wildcard_routing(model=model)
+    }
 
-            ## get litellm params from model
-            if llm_router is not None:
-                model_list = llm_router.get_model_list(model_name=model, team_id=team_id)
-                if model_list:
-                    for router_model in model_list:
-                        wildcard_models = get_known_models_from_wildcard(
-                            wildcard_model=model,
-                            litellm_params=LiteLLM_Params(**router_model["litellm_params"]),
-                        )
-                        all_wildcard_models.extend(wildcard_models)
-                else:
-                    # Router has no deployment for this wildcard (e.g., BYOK team models)
-                    # Fall back to expanding from known provider models
-                    wildcard_models = get_known_models_from_wildcard(wildcard_model=model, litellm_params=None)
-                    if wildcard_models:
-                        models_to_remove.add(model)
-                        all_wildcard_models.extend(wildcard_models)
-            else:
-                # get all known provider models
-                wildcard_models = get_known_models_from_wildcard(wildcard_model=model, litellm_params=None)
+    all_wildcard_models: Final = [
+        item
+        for model, expansion in expansions.items()
+        for item in [*([model] if return_wildcard_routes else []), *expansion.concrete_models]
+    ]
 
-                if wildcard_models:
-                    models_to_remove.add(model)
-                    all_wildcard_models.extend(wildcard_models)
-
+    # The literal pattern (e.g. "openai/*") is a routing directive, not a callable
+    # model, so drop it from the listing once expanded. It is re-surfaced above only
+    # when return_wildcard_routes is set (#13752).
+    models_to_remove: Final = {
+        model for model, expansion in expansions.items() if expansion.has_router_deployment or expansion.concrete_models
+    }
     for model in models_to_remove:
         unique_models.remove(model)
 
