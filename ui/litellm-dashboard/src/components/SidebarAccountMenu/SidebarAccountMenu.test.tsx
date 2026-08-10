@@ -3,6 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import SidebarAccountMenu from "./SidebarAccountMenu";
 
+const { mockLanguageState } = vi.hoisted(() => ({ mockLanguageState: { current: "en" as "en" | "ru" } }));
+
+vi.mock("@/i18n/I18nProvider", () => ({
+  useDashboardLanguage: () => ({ language: mockLanguageState.current, setLanguage: vi.fn() }),
+}));
+
 interface AuthMock {
   userId: string | null;
   userEmail: string | null;
@@ -86,6 +92,30 @@ describe("SidebarAccountMenu", () => {
       if (key === "disableShowPrompts") return null;
       return null;
     };
+    mockLanguageState.current = "en";
+  });
+
+  it("localizes the account menu for Russian users", async () => {
+    const user = userEvent.setup();
+    mockLanguageState.current = "ru";
+    renderWithProviders(<SidebarAccountMenu onLogout={mockOnLogout} />);
+
+    await user.click(screen.getByRole("button", { name: /меню аккаунта/i }));
+    await waitFor(() => expect(screen.getByTestId("sidebar-account-menu-panel")).toBeInTheDocument());
+
+    [
+      "Уровень",
+      "Стандартный",
+      "Роль",
+      "Эл. почта",
+      "ID пользователя",
+      "Скрыть метки новых функций",
+      "Скрыть все промпты",
+      "Скрыть записи блога",
+      "Скрыть прыгающий значок",
+      "Выйти",
+    ].forEach((label) => expect(screen.getByText(label)).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Копировать эл. почту" })).toBeInTheDocument();
   });
 
   it("should render the account trigger with initials", () => {

@@ -2,6 +2,13 @@ import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
+import { resources } from "@/i18n/resources";
+
+const { mockLanguageState } = vi.hoisted(() => ({ mockLanguageState: { current: "en" as "en" | "ru" } }));
+
+vi.mock("@/i18n/I18nProvider", () => ({
+  useDashboardLanguage: () => ({ language: mockLanguageState.current, setLanguage: vi.fn() }),
+}));
 
 vi.mock("../utils/roles", () => {
   return {
@@ -90,6 +97,75 @@ describe("Sidebar (leftnav)", () => {
     defaultSelectedKey: "api-keys",
     collapsed: false,
   };
+
+  afterEach(() => {
+    mockLanguageState.current = "en";
+  });
+
+  it("renders the complete visible sidebar in Russian without localizing breadcrumbs", async () => {
+    mockLanguageState.current = "ru";
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    [
+      "AI-ШЛЮЗ",
+      "Виртуальные ключи",
+      "Песочница",
+      "Модели и эндпоинты",
+      "Агентные функции",
+      "MCP-серверы",
+      "Навыки",
+      "Ограничители",
+      "Политики",
+      "Инструменты",
+      "НАБЛЮДАЕМОСТЬ",
+      "Использование",
+      "Оптимизация затрат",
+      "Логи",
+      "Мониторинг ограничителей",
+      "УПРАВЛЕНИЕ ДОСТУПОМ",
+      "Команды",
+      "Внутренние пользователи",
+      "Организации",
+      "Группы доступа",
+      "Бюджеты",
+      "ИНСТРУМЕНТЫ РАЗРАБОТЧИКА",
+      "Справочник API",
+      "Каталог AI",
+      "Учебные материалы",
+      "Кэш ответов",
+      "Экспериментальные",
+      "НАСТРОЙКИ",
+    ].forEach((label) => expect(screen.getByText(label)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("Инструменты"));
+    await waitFor(() => expect(screen.getByText("Поиск инструментов")).toBeInTheDocument());
+    expect(screen.getByText("Векторные хранилища")).toBeInTheDocument();
+    expect(screen.getByText("Политики инструментов")).toBeInTheDocument();
+
+    expect(screen.getByText("Бета")).toBeInTheDocument();
+    expect(screen.getByText("Новое")).toBeInTheDocument();
+    expect(getBreadcrumb("api-keys")).toEqual({ section: "AI Gateway", title: "Virtual Keys" });
+  });
+
+  it("has English and Russian translations for every navigation key", () => {
+    const translations = resources as {
+      en: { translation: { sidebar: { groups: Record<string, string>; items: Record<string, string> } } };
+      ru: { translation: { sidebar: { groups: Record<string, string>; items: Record<string, string> } } };
+    };
+
+    menuGroups.forEach((group) => {
+      expect(translations.en.translation.sidebar.groups[group.groupLabel]).toBeTruthy();
+      expect(translations.ru.translation.sidebar.groups[group.groupLabel]).toBeTruthy();
+      group.items.forEach((item) => {
+        expect(translations.en.translation.sidebar.items[item.key]).toBeTruthy();
+        expect(translations.ru.translation.sidebar.items[item.key]).toBeTruthy();
+        item.children?.forEach((child) => {
+          expect(translations.en.translation.sidebar.items[child.key]).toBeTruthy();
+          expect(translations.ru.translation.sidebar.items[child.key]).toBeTruthy();
+        });
+      });
+    });
+  });
 
   it("should link the logo to the UI home route rather than the proxy origin", () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
