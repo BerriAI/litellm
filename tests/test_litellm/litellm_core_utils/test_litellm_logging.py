@@ -15,6 +15,7 @@ import httpx
 from openai._legacy_response import HttpxBinaryResponseContent
 
 import litellm
+from litellm._logging import session_id_var, trace_id_var
 from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
@@ -3312,6 +3313,51 @@ def test_failure_handler_runs_sync_callbacks_for_non_pass_through_requests(
     dummy_logger.log_failure_event.assert_called_once()
 
 
+@pytest.mark.asyncio
+async def test_async_failure_handler_runs_callbacks_and_restores_correlation_context(logging_obj):
+    """await logging_obj.async_failure_handler(...) must dispatch async failure callbacks
+    and, once its own body completes, restore trace_id/session_id contextvars via
+    _restore_correlation_context() (the fix for the nested-call context leak)."""
+    from litellm._logging import session_id_var, trace_id_var
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class DummyLogger(CustomLogger):
+        pass
+
+    logging_obj.call_type = "acompletion"
+    logging_obj.stream = False
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    dummy_logger = DummyLogger()
+    dummy_logger.async_log_failure_event = AsyncMock()
+
+    # logging_obj is constructed by the fixture (before this line runs), so it
+    # already captured whatever was ambient at that point as its own pre-call
+    # value - assert restoration lands back on THAT captured value, not a
+    # value set here (which would be too late to affect __init__'s snapshot).
+    trace_id_var.set("mutated-during-call")
+    session_id_var.set("mutated-during-call")
+    try:
+        with patch.object(
+            logging_obj,
+            "get_combined_callback_list",
+            return_value=[dummy_logger],
+        ):
+            await logging_obj.async_failure_handler(
+                exception=Exception("test error"),
+                traceback_exception="",
+            )
+
+        dummy_logger.async_log_failure_event.assert_called_once()
+        assert trace_id_var.get() == logging_obj._pre_call_trace_id
+        assert session_id_var.get() == logging_obj._pre_call_session_id
+        assert trace_id_var.get() != "mutated-during-call"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
 def test_merge_hidden_params_from_response_into_metadata_populates_metadata():
     """Streaming completion path should mirror non-stream: metadata.hidden_params from response."""
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -4230,3 +4276,199 @@ def test_pre_call_does_not_pin_request_in_module_state(logging_obj):
     logging_obj.post_call(original_response='{"ok": true}', input=big_input, api_key="sk-test")
 
     assert litellm.error_logs == {}
+
+
+def test_logging_init_sets_trace_id():
+    """Logging.__init__() must call set_trace_id with self.litellm_trace_id."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("")
+
+    log_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="call-001",
+        function_id="fn-001",
+        kwargs={},
+    )
+    assert trace_id_var.get() == log_obj.litellm_trace_id
+
+
+def test_logging_init_skips_stamping_when_correlation_logging_unsupported():
+    """supports_correlation_logging=False (what wrapper(), the sync entry
+    point, always passes) must leave trace_id_var/session_id_var completely
+    untouched, even though self.litellm_trace_id/litellm_session_id (the
+    plain attributes used by StandardLoggingPayload) are still populated as
+    usual - only the ambient contextvar stamping is gated."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("")
+    session_id_var.set("")
+
+    log_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="call-sync-excluded",
+        function_id="fn-sync-excluded",
+        kwargs={"litellm_session_id": "should-not-be-stamped"},
+        litellm_trace_id="should-not-be-stamped-either",
+        supports_correlation_logging=False,
+    )
+
+    assert trace_id_var.get() == ""
+    assert session_id_var.get() == ""
+    # The plain attributes are unaffected - only the contextvar stamping is gated.
+    assert log_obj.litellm_trace_id == "should-not-be-stamped-either"
+    assert log_obj.litellm_session_id == "should-not-be-stamped"
+
+
+def test_logging_init_sets_session_id_when_provided():
+    """Logging.__init__() must call set_session_id when litellm_session_id is in kwargs."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    session_id_var.set("")
+
+    Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="call-002",
+        function_id="fn-002",
+        kwargs={"litellm_session_id": "my-session-99"},
+    )
+    assert session_id_var.get() == "my-session-99"
+
+
+def test_logging_init_resets_session_id_to_empty_when_absent():
+    """When no session_id is in kwargs, Logging.__init__() must reset session_id_var to ""
+    so a prior request's session_id does not leak into subsequent log records."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    session_id_var.set("preexisting-sid")
+
+    Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="call-003",
+        function_id="fn-003",
+        kwargs={},
+    )
+    assert session_id_var.get() == ""
+
+
+def test_restore_correlation_context_resets_to_pre_call_value():
+    """_restore_correlation_context() must put trace_id_var/session_id_var back to
+    whatever they were immediately before this Logging instance was constructed.
+    This is the mechanism that prevents a nested call (e.g. a guardrail's own
+    LLM-as-judge call sharing the same asyncio Task) from leaking its trace_id/
+    session_id into the outer call's subsequent log lines."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("outer-trace")
+    session_id_var.set("outer-session")
+    try:
+        inner = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="inner-call",
+            function_id="fn-inner",
+            kwargs={"litellm_session_id": "inner-session"},
+        )
+        assert trace_id_var.get() == inner.litellm_trace_id
+        assert session_id_var.get() == "inner-session"
+
+        inner._restore_correlation_context()
+
+        assert trace_id_var.get() == "outer-trace"
+        assert session_id_var.get() == "outer-session"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_restore_correlation_context_safe_to_call_repeatedly():
+    """Calling _restore_correlation_context() more than once must not raise.
+
+    It's deliberately NOT guarded against repeat calls: wrapper()'s finally
+    block and a terminal handler (success_handler/failure_handler) can both
+    end up calling it for the same instance, potentially from different
+    asyncio Tasks - each call needs to take effect in its own Task's view of
+    the contextvars, so repeat calls are expected, not just tolerated."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    log_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="call-idempotent",
+        function_id="fn-idempotent",
+        kwargs={},
+    )
+    log_obj._restore_correlation_context()
+    log_obj._restore_correlation_context()  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_restore_correlation_context_works_across_asyncio_task_boundary():
+    """_restore_correlation_context() must succeed even when it's called from a
+    different asyncio Task than the one Logging.__init__() ran in - exactly what
+    happens on litellm's real async success path, where async_success_handler is
+    dispatched via asyncio.create_task / the global logging worker rather than
+    awaited directly in the request's own task.
+
+    A contextvars.Token can only be reset in the exact Context it was created in
+    and raises ValueError otherwise (verified separately against raw contextvars,
+    not just this codebase). The fix uses a plain set() of the captured pre-call
+    value instead, which works regardless of which Task calls it. This test
+    fails with a token-based implementation - the child task's reset() would
+    raise, get silently swallowed, and leave the child's view unrestored - and
+    passes with the value-based one.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("outer-trace-cross-task")
+    session_id_var.set("outer-session-cross-task")
+    try:
+        # __init__ runs in THIS (outer) task's context.
+        log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=None,
+            litellm_call_id="cross-task-call",
+            function_id="fn-cross-task",
+            kwargs={"litellm_session_id": "cross-task-session"},
+        )
+        assert trace_id_var.get() == log_obj.litellm_trace_id
+        assert session_id_var.get() == "cross-task-session"
+
+        async def restore_in_new_task():
+            # Simulates async_success_handler running in a task spawned after
+            # __init__ already ran elsewhere - a different Context object.
+            log_obj._restore_correlation_context()
+            return trace_id_var.get(), session_id_var.get()
+
+        trace_in_child, session_in_child = await asyncio.create_task(restore_in_new_task())
+
+        assert trace_in_child == "outer-trace-cross-task"
+        assert session_in_child == "outer-session-cross-task"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")

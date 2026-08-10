@@ -15,6 +15,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Final, NamedTuple, Optional, Protocol, Union, runtime_checkable
 
 if typing.TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from fastapi import Request
     from mcp.client.session import ClientSession
     from mcp.shared.context import RequestContext
@@ -28,8 +30,9 @@ if typing.TYPE_CHECKING:
         ToolUseContent,
     )
 
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.utils import ModelResponse
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter
@@ -1016,7 +1019,7 @@ async def _run_budget_checks(
             general_settings=general_settings or {},
             route="/chat/completions",
             llm_router=_llm_router,
-            proxy_logging_obj=typing.cast("ProxyLogging", _proxy_logging_obj),
+            proxy_logging_obj=_proxy_logging_obj,
             valid_token=user_api_key_auth,
             request=dummy_request,
         )
@@ -1176,15 +1179,19 @@ async def _build_completion_kwargs(
     )
 
 
+class _AcompletionCall(NamedTuple):
+    fn: "Callable[..., Awaitable[ModelResponse | CustomStreamWrapper]]"
+
+
 async def _run_guardrails_and_call_llm(
-    completion_kwargs: dict[str, Any],
+    completion_kwargs: dict[str, object],
     user_api_key_auth: "UserAPIKeyAuth",
 ) -> Any:
     try:
         from litellm.proxy.proxy_server import proxy_logging_obj as _plo
 
         if _plo is not None:
-            completion_kwargs = await typing.cast("ProxyLogging", _plo).pre_call_hook(
+            completion_kwargs = await _plo.pre_call_hook(
                 user_api_key_dict=user_api_key_auth,
                 data=completion_kwargs,
                 call_type="acompletion",
@@ -1204,10 +1211,10 @@ async def _run_guardrails_and_call_llm(
         from litellm.proxy.proxy_server import llm_router
 
         if llm_router is not None:
-            return await llm_router.acompletion(**completion_kwargs)
-        return await litellm.acompletion(**completion_kwargs)
+            return await _AcompletionCall(fn=llm_router.acompletion).fn(**completion_kwargs)
+        return await _AcompletionCall(fn=litellm.acompletion).fn(**completion_kwargs)
     except ImportError:
-        return await litellm.acompletion(**completion_kwargs)
+        return await _AcompletionCall(fn=litellm.acompletion).fn(**completion_kwargs)
 
 
 async def handle_sampling_create_message(

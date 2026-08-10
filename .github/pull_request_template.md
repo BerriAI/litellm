@@ -83,7 +83,11 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 🚄 Infrastructure
 ✅ Test
 
-## Changes
+## Caveats (if any)
+
+<!-- Short bullet points, just like the TLDR: one line per bullet, roughly 10 words max
+     Call out known limitations, follow-up work, or anything a reviewer should watch out for
+     Leave this section empty if there are none -->
 
 ## QA runbook
 

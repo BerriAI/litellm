@@ -71,12 +71,13 @@ jobs:
         run: |
           uv sync --frozen --group proxy-dev --group e2e-dev
 
+      - name: Cache Prisma binaries
+        uses: ./.github/actions/cache-prisma-binaries
+
       # basedpyright resolves Prisma's generated client (litellm/proxy/schema.prisma)
       # only after `prisma generate` writes prisma/client.py et al. Without this the
       # DB wrappers typed against the generated client would degrade to Unknown.
       - name: Generate Prisma client
-        env:
-          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
         run: |
           uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
@@ -119,7 +120,6 @@ jobs:
       - name: Check basedpyright budget (delta vs base)
         env:
           GH_TOKEN: ${{ github.token }}
-          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
         run: |
           uv run --no-sync python scripts/type_check_gate.py --base "$GATE_BASE_SHA"
 
