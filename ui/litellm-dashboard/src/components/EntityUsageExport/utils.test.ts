@@ -1876,7 +1876,7 @@ describe("EntityUsageExport utils", () => {
 
     it("should create CSV file and trigger download", () => {
       const createObjectURLSpy = vi.spyOn(window.URL, "createObjectURL").mockReturnValue("blob:mock-url");
-      const revokeObjectURLSpy = vi.spyOn(window.URL, "revokeObjectURL");
+      vi.spyOn(window.URL, "revokeObjectURL");
       const createElementSpy = vi.spyOn(document, "createElement");
       const appendChildSpy = vi.spyOn(document.body, "appendChild");
       const removeChildSpy = vi.spyOn(document.body, "removeChild");
@@ -1892,7 +1892,7 @@ describe("EntityUsageExport utils", () => {
 
     it("should generate correct filename", () => {
       const anchorElement = document.createElement("a");
-      const createElementSpy = vi.spyOn(document, "createElement").mockReturnValue(anchorElement);
+      vi.spyOn(document, "createElement").mockReturnValue(anchorElement);
 
       const today = new Date().toISOString().split("T")[0];
 
@@ -1935,7 +1935,7 @@ describe("EntityUsageExport utils", () => {
 
     it("should create JSON file and trigger download", () => {
       const createObjectURLSpy = vi.spyOn(window.URL, "createObjectURL").mockReturnValue("blob:mock-url");
-      const revokeObjectURLSpy = vi.spyOn(window.URL, "revokeObjectURL");
+      vi.spyOn(window.URL, "revokeObjectURL");
       const createElementSpy = vi.spyOn(document, "createElement");
       const appendChildSpy = vi.spyOn(document.body, "appendChild");
       const removeChildSpy = vi.spyOn(document.body, "removeChild");
@@ -1955,7 +1955,7 @@ describe("EntityUsageExport utils", () => {
 
     it("should generate correct filename", () => {
       const anchorElement = document.createElement("a");
-      const createElementSpy = vi.spyOn(document, "createElement").mockReturnValue(anchorElement);
+      vi.spyOn(document, "createElement").mockReturnValue(anchorElement);
 
       const today = new Date().toISOString().split("T")[0];
       const mockDateRange: DateRangePickerValue = {
@@ -2195,6 +2195,178 @@ describe("EntityUsageExport utils", () => {
         expect(team1?.["Spend ($)"]).toBe("15.5000");
         expect(team2?.["Spend ($)"]).toBe("20.3000");
       });
+    });
+  });
+
+  describe("display name resolution from entity metadata", () => {
+    const entityMetrics = {
+      spend: 12.25,
+      api_requests: 40,
+      successful_requests: 39,
+      failed_requests: 1,
+      total_tokens: 900,
+      prompt_tokens: 500,
+      completion_tokens: 400,
+      cache_read_input_tokens: 20,
+      cache_creation_input_tokens: 10,
+    };
+
+    const makeSpendData = (entity: string, metadata?: Record<string, any>): EntitySpendData => ({
+      results: [
+        {
+          date: "2025-04-01",
+          breakdown: {
+            entities: {
+              [entity]: {
+                metrics: entityMetrics,
+                metadata,
+                api_key_breakdown: {
+                  key1: {
+                    metrics: entityMetrics,
+                    metadata: { key_alias: "prod-key" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      ],
+      metadata: mockSpendData.metadata,
+    });
+
+    it("should export the user email as the entity label and keep the raw user id in the id column", () => {
+      const result = generateDailyData(
+        makeSpendData("user-123", { user_email: "ada@example.com", user_alias: "Ada" }),
+        "User",
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0]["User"]).toBe("ada@example.com");
+      expect(result[0]["User ID"]).toBe("user-123");
+    });
+
+    it("should fall back to the user alias when the user has no email", () => {
+      const nullEmail = generateDailyData(
+        makeSpendData("user-123", { user_email: null, user_alias: "Ada Lovelace" }),
+        "User",
+      );
+      const missingEmail = generateDailyData(makeSpendData("user-123", { user_alias: "Ada Lovelace" }), "User");
+
+      expect(nullEmail[0]["User"]).toBe("Ada Lovelace");
+      expect(missingEmail[0]["User"]).toBe("Ada Lovelace");
+    });
+
+    it("should fall back to the raw entity key when the entity carries no metadata", () => {
+      const noMetadata = generateDailyData(makeSpendData("my-tag"), "Tag");
+      const emptyMetadata = generateDailyData(makeSpendData("customer-9", {}), "Customer");
+      const blankNames = generateDailyData(makeSpendData("user-123", { user_email: null, user_alias: null }), "User");
+
+      expect(noMetadata[0]["Tag"]).toBe("my-tag");
+      expect(emptyMetadata[0]["Customer"]).toBe("customer-9");
+      expect(blankNames[0]["User"]).toBe("user-123");
+    });
+
+    it("should prefer the team alias map over any alias in entity metadata", () => {
+      const result = generateDailyData(
+        makeSpendData("team-1", { team_alias: "Stale Alias", user_email: "ada@example.com" }),
+        "Team",
+        mockTeamAliasMap,
+      );
+
+      expect(result[0]["Team"]).toBe("Team One");
+    });
+
+    it("should use the team alias from entity metadata when the alias map has no entry for the team", () => {
+      const result = generateDailyData(
+        makeSpendData("team-9", { team_alias: "Team Nine", user_email: "ada@example.com" }),
+        "Team",
+        mockTeamAliasMap,
+      );
+
+      expect(result[0]["Team"]).toBe("Team Nine");
+    });
+
+    it("should resolve metadata.alias to the user email in getEntityBreakdown", () => {
+      const withEmail = getEntityBreakdown(
+        makeSpendData("user-123", { user_email: "ada@example.com", user_alias: "Ada" }),
+      );
+      const withoutEmail = getEntityBreakdown(makeSpendData("user-123", { user_alias: "Ada" }));
+
+      expect(withEmail[0].metadata.alias).toBe("ada@example.com");
+      expect(withEmail[0].metadata.id).toBe("user-123");
+      expect(withoutEmail[0].metadata.alias).toBe("Ada");
+    });
+
+    it("should resolve the user email on every key row of the keys scope", () => {
+      const spendData: EntitySpendData = {
+        results: [
+          {
+            date: "2025-04-01",
+            breakdown: {
+              entities: {
+                "user-123": {
+                  metrics: entityMetrics,
+                  metadata: { user_email: "ada@example.com", user_alias: "Ada" },
+                  api_key_breakdown: {
+                    key1: { metrics: entityMetrics, metadata: { key_alias: "prod-key" } },
+                    key2: { metrics: entityMetrics, metadata: { key_alias: "dev-key" } },
+                  },
+                },
+              },
+            },
+          },
+        ],
+        metadata: mockSpendData.metadata,
+      };
+
+      const result = generateDailyWithKeysData(spendData, "User");
+
+      expect(result).toHaveLength(2);
+      expect(result.map((r) => r["User"])).toEqual(["ada@example.com", "ada@example.com"]);
+      expect(result.map((r) => r["User ID"])).toEqual(["user-123", "user-123"]);
+      expect(result.find((r) => r["Key ID"] === "key1")?.["Key Alias"]).toBe("prod-key");
+      expect(result.find((r) => r["Key ID"] === "key2")?.["Key Alias"]).toBe("dev-key");
+    });
+
+    it("should resolve each entity's own email in the models scope", () => {
+      const spendData: EntitySpendData = {
+        results: [
+          {
+            date: "2025-04-01",
+            breakdown: {
+              entities: {
+                "user-a": {
+                  metrics: entityMetrics,
+                  metadata: { user_email: "ada@example.com", user_alias: "Ada" },
+                  api_key_breakdown: { key1: { metrics: entityMetrics, metadata: {} } },
+                },
+                "user-b": {
+                  metrics: entityMetrics,
+                  metadata: { user_email: null, user_alias: "Grace" },
+                  api_key_breakdown: { key2: { metrics: entityMetrics, metadata: {} } },
+                },
+              },
+              models: {
+                "claude-sonnet-4-5": {
+                  metrics: entityMetrics,
+                  api_key_breakdown: {
+                    key1: { metrics: entityMetrics, metadata: {} },
+                    key2: { metrics: entityMetrics, metadata: {} },
+                  },
+                },
+              },
+            },
+          },
+        ],
+        metadata: mockSpendData.metadata,
+      };
+
+      const result = generateDailyWithModelsData(spendData, "User");
+
+      expect(result).toHaveLength(2);
+      expect(result.every((r) => r.Model === "claude-sonnet-4-5")).toBe(true);
+      expect(result.find((r) => r["User ID"] === "user-a")?.["User"]).toBe("ada@example.com");
+      expect(result.find((r) => r["User ID"] === "user-b")?.["User"]).toBe("Grace");
     });
   });
 });

@@ -146,3 +146,18 @@ Get redis service port
 {{ .Values.redis.master.service.ports.redis }}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Reject an unpinned image tag for the bundled PostgreSQL.
+A floating tag lets a chart upgrade start a newer PostgreSQL major against the
+existing PersistentVolumeClaim. The server then refuses to start on a data
+directory written by another major version, and the only way back is a dump
+taken before the change, which by that point no longer exists.
+*/}}
+{{- define "litellm.validateBundledPostgresImageTag" -}}
+{{- $tag := .Values.postgresql.image.tag | default "" | toString -}}
+{{- $digest := .Values.postgresql.image.digest | default "" | toString -}}
+{{- if and (eq $digest "") (or (eq $tag "") (eq $tag "latest")) -}}
+{{- fail (printf "postgresql.image.tag must be pinned to an explicit version when db.deployStandalone is true (got %q). An unpinned tag can start a different PostgreSQL major against the existing data directory, which makes the database unreadable and is not recoverable in place. Crossing a major version requires a dump and restore." $tag) -}}
+{{- end -}}
+{{- end -}}
