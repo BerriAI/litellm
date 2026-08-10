@@ -132,6 +132,59 @@ class TestResponsesAPIRequestUtils:
         assert result["max_output_tokens"] == 100
         assert result["prompt"] == {"id": "pmpt_456"}
 
+    def test_get_requested_response_api_optional_param_strips_empty_metadata(self):
+        """Regression #35780: empty metadata dict must not reach upstream."""
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
+            {"temperature": 0.7, "metadata": {}}
+        )
+        assert "metadata" not in result
+
+    def test_get_requested_response_api_optional_param_strips_internal_metadata(self):
+        """Regression #35780: proxy/router internal metadata must not reach upstream."""
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
+            {
+                "temperature": 0.7,
+                "metadata": {
+                    "model_group": "test-model",
+                    "deployment": "openai/gpt-4o",
+                    "model_info": {"id": "dep-1"},
+                    "user_api_key_user_id": "user-1",
+                },
+                "litellm_metadata": {
+                    "user_api_key_team_id": "team-1",
+                    "tags": ["internal-tag"],
+                },
+            }
+        )
+        assert "metadata" not in result
+
+    def test_get_requested_response_api_optional_param_preserves_caller_metadata(self):
+        """Caller-supplied string metadata should still be forwarded."""
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
+            {
+                "temperature": 0.7,
+                "metadata": {"customer_id": "cust-123", "campaign": "spring"},
+            }
+        )
+        assert result["metadata"] == {"customer_id": "cust-123", "campaign": "spring"}
+
+    def test_get_requested_response_api_optional_param_uses_requester_metadata(self):
+        """Proxy snapshots caller metadata under litellm_metadata.requester_metadata."""
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
+            {
+                "temperature": 0.7,
+                "metadata": {
+                    "model_group": "test-model",
+                    "user_api_key_user_id": "user-1",
+                },
+                "litellm_metadata": {
+                    "requester_metadata": {"customer_id": "cust-456"},
+                    "user_api_key_team_id": "team-1",
+                },
+            }
+        )
+        assert result["metadata"] == {"customer_id": "cust-456"}
+
     def test_decode_previous_response_id_to_original_previous_response_id(self):
         """Test decoding a LiteLLM encoded previous_response_id to the original previous_response_id"""
         # Setup

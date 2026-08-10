@@ -231,14 +231,30 @@ class ResponsesAPIRequestUtils:
             )
             non_default_params["previous_response_id"] = decoded_previous_response_id
 
-        if "metadata" in non_default_params:
-            from litellm.utils import add_openai_metadata
+        litellm_metadata = params.get("litellm_metadata")
+        if not isinstance(litellm_metadata, dict):
+            litellm_metadata = {}
 
-            converted_metadata: Final = add_openai_metadata(non_default_params["metadata"])
-            if converted_metadata is not None:
+        requester_metadata = litellm_metadata.get("requester_metadata")
+        metadata_in_params = non_default_params.get("metadata")
+        is_proxy_internal_metadata = any(key.startswith("user_api_key_") for key in litellm_metadata)
+
+        metadata_source: dict | None = None
+        if isinstance(requester_metadata, dict):
+            metadata_source = requester_metadata
+        elif not is_proxy_internal_metadata and isinstance(metadata_in_params, dict):
+            metadata_source = metadata_in_params
+
+        if metadata_source is not None:
+            from litellm.utils import get_requester_metadata
+
+            converted_metadata: Final = get_requester_metadata(metadata_source)
+            if converted_metadata:
                 non_default_params["metadata"] = converted_metadata
             else:
                 non_default_params.pop("metadata", None)
+        else:
+            non_default_params.pop("metadata", None)
 
         return cast(ResponsesAPIOptionalRequestParams, non_default_params)
 
