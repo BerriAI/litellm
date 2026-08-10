@@ -16,7 +16,17 @@
 #      compatibility-matrix.json.
 #   6. `gh repo clone` litellm-docs, write the JSON to a deterministic
 #      branch (`compat-matrix/<litellm>-<claude>-<UTC-date>`), commit,
-#      `git push --force-with-lease`, and `gh pr create`.
+#      push the branch straight to BerriAI/litellm-docs (mateo-berri has
+#      write access), `gh pr create`, then — *only if no cell regressed
+#      green→red versus the currently-published matrix* — enable squash
+#      auto-merge so the PR merges itself once required checks pass. A
+#      green→red regression leaves auto-merge off for human review; an
+#      already-red cell (red→red) does not block.
+#   7. Sweep stale compat-matrix PRs: once today's PR exists, close any
+#      other open `compat-matrix/*` PR (and delete its bot-owned branch)
+#      so at most ONE compat-matrix PR is ever open — the newest. A
+#      gate-withheld PR that nobody triages is superseded by the next
+#      day's run rather than accumulating in the queue.
 #
 # Same-day reruns land on the same branch so they update the existing PR
 # rather than spawning a new one. If the JSON is byte-identical to the
@@ -40,11 +50,10 @@ DOCS_BRANCH="${DOCS_BRANCH:-main}"
 DOCS_TARGET_PATH="${DOCS_TARGET_PATH:-src/data/compatibility-matrix.json}"
 SKIP_PUBLISH="${SKIP_PUBLISH:-0}"
 PYTEST_K="${PYTEST_K:-}"
-# Comma-separated GitHub usernames to request a review from on every PR.
-# Reviewers must have at least read access to ${DOCS_REPO}. PR-author
-# (agent-shin) has implicit rights to request reviews from anyone with
-# read access, so no extra token scope is needed. Set to empty to skip.
-PR_REVIEWERS="${PR_REVIEWERS:-mateo-berri}"
+# Merge method for auto-merge. BerriAI/litellm-docs only allows squash
+# merges (merge-commit and rebase are disabled at the repo level), so
+# `squash` is the only valid value here unless that changes upstream.
+AUTO_MERGE_METHOD="${AUTO_MERGE_METHOD:-squash}"
 
 POPULATOR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKDIR="$(mktemp -d -t litellm-compat-matrix.XXXXXX)"
@@ -94,26 +103,32 @@ for cmd in git uv gh jq curl claude; do
   command -v "${cmd}" >/dev/null 2>&1 || die "missing required command: ${cmd}"
 done
 
-# Publishing is from a fork (agent-shin/litellm-docs) so neither the cron
-# host nor the bot identity needs write access to BerriAI/litellm-docs. We
-# require the fork token up front -- failing 30 minutes into a run because
-# the env file is missing one line is a waste of CI quota.
+# Publishing pushes the branch straight to BerriAI/litellm-docs and opens
+# the PR as mateo-berri, who has write access on the docs repo. The same
+# ${GITHUB_TOKEN} is reused for release-listing above, so require it up
+# front -- failing 30 minutes into a run because the env file is missing
+# one line is a waste of CI quota.
 if [[ "${SKIP_PUBLISH}" != "1" ]]; then
-  [[ -n "${AGENT_SHIN_GITHUB_TOKEN:-}" ]] \
-    || die "AGENT_SHIN_GITHUB_TOKEN required to open PRs from agent-shin/litellm-docs (or set SKIP_PUBLISH=1)"
+  [[ -n "${GITHUB_TOKEN:-}" ]] \
+    || die "GITHUB_TOKEN (mateo-berri, write access to ${DOCS_REPO}) required to push the branch and open the PR (or set SKIP_PUBLISH=1)"
 fi
 
 # ---------------------------------------------------------------------------
 # 1. Resolve versions
 # ---------------------------------------------------------------------------
 
-# Newest v*-stable release on BerriAI/litellm. The `select(...)` filter
-# drops drafts/non-stable, the version_key sort handles 1.10 > 1.9.
+# Newest PEP 440 *final* release on BerriAI/litellm. LiteLLM moved off
+# the legacy `vX.Y.Z-stable` tag convention to PEP 440: a final/stable
+# release is now a bare `vX.Y.Z` tag, while pre-releases carry a
+# `-rc.N` / `-dev.N` segment (and the old `…-stable` / `…-stable.patch.N`
+# tags are legacy and frozen at v1.83.x). We therefore select the newest
+# tag with no pre-release segment -- matching `^v[0-9]+\.[0-9]+\.[0-9]+$`
+# -- and skip drafts. The numeric version_key sort handles 1.10 > 1.9.
 #
 # Paginate through the releases endpoint instead of grabbing only page 1
-# (default page_size=30). LiteLLM ships multiple non-stable releases per
-# day, so it's common to need to walk past 30+ entries before hitting
-# the most recent v*-stable. We cap at 5 pages (500 releases) which is
+# (default page_size=30). LiteLLM ships multiple pre-releases per day, so
+# it's common to need to walk past 30+ entries before hitting the most
+# recent final release. We cap at 5 pages (500 releases) which is
 # conservatively beyond the worst observed gap.
 GH_AUTH_HEADER=()
 if [[ -n "${GITHUB_TOKEN:-}" ]]; then
@@ -131,9 +146,9 @@ for page in 1 2 3 4 5; do
     >"${PAGE_JSON}"
   jq -s '.[0] + .[1]' "${RELEASES_JSON}" "${PAGE_JSON}" >"${RELEASES_JSON}.merged"
   mv "${RELEASES_JSON}.merged" "${RELEASES_JSON}"
-  # Stop early once we've seen at least one v*-stable tag — no point
+  # Stop early once we've seen at least one final release tag — no point
   # paging further for a daily script that only needs the newest.
-  if jq -e '[.[] | .tag_name // "" | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+-stable$"))] | length > 0' "${PAGE_JSON}" >/dev/null; then
+  if jq -e '[.[] | select((.draft // false) == false) | .tag_name // "" | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))] | length > 0' "${PAGE_JSON}" >/dev/null; then
     break
   fi
   # No more pages? GitHub returns an empty array past the last page.
@@ -143,17 +158,19 @@ for page in 1 2 3 4 5; do
 done
 LITELLM_VERSION="$(
   jq -r '
-    [ .[] | .tag_name // empty
-      | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+-stable$"))
+    [ .[]
+      | select((.draft // false) == false)
+      | .tag_name // empty
+      | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
     ]
     | sort_by(
-        capture("^v(?<a>[0-9]+)\\.(?<b>[0-9]+)\\.(?<c>[0-9]+)-stable$")
+        capture("^v(?<a>[0-9]+)\\.(?<b>[0-9]+)\\.(?<c>[0-9]+)$")
         | [(.a|tonumber), (.b|tonumber), (.c|tonumber)]
       )
     | last // empty
   ' "${RELEASES_JSON}"
 )"
-[[ -n "${LITELLM_VERSION}" ]] || die "could not resolve latest v*-stable tag in 5 pages of releases"
+[[ -n "${LITELLM_VERSION}" ]] || die "could not resolve latest PEP 440 final release (vX.Y.Z) in 5 pages of releases"
 log "resolved litellm: ${LITELLM_VERSION}"
 
 CLAUDE_CODE_VERSION="$(claude --version 2>/dev/null | awk '{print $1}')"
@@ -354,8 +371,6 @@ fi
 DATE_UTC="$(date -u +%Y-%m-%d)"
 BRANCH_NAME="compat-matrix/${LITELLM_VERSION}-${CLAUDE_CODE_VERSION}-${DATE_UTC}"
 DOCS_CLONE="${WORKDIR}/litellm-docs"
-FORK_OWNER="${FORK_OWNER:-agent-shin}"
-FORK_REPO="${FORK_REPO:-${FORK_OWNER}/litellm-docs}"
 
 log "cloning ${DOCS_REPO}@${DOCS_BRANCH}"
 gh repo clone "${DOCS_REPO}" "${DOCS_CLONE}" -- --depth 1 --branch "${DOCS_BRANCH}"
@@ -365,6 +380,16 @@ git config user.email "litellm-bot@berri.ai"
 git config user.name "litellm-compat-matrix-bot"
 git checkout -b "${BRANCH_NAME}"
 
+# Snapshot the currently-published matrix *before* we overwrite it, so the
+# auto-merge gate below can diff old→new cell statuses. On the first-ever
+# publish the file won't exist yet; we leave ${PUBLISHED_MATRIX} pointing
+# at a path that doesn't exist and let check_regressions.py treat that as
+# "no baseline → no regressions".
+PUBLISHED_MATRIX="${WORKDIR}/published-matrix.json"
+if [[ -f "${DOCS_TARGET_PATH}" ]]; then
+  cp "${DOCS_TARGET_PATH}" "${PUBLISHED_MATRIX}"
+fi
+
 mkdir -p "$(dirname "${DOCS_TARGET_PATH}")"
 cp "${MATRIX_JSON}" "${DOCS_TARGET_PATH}"
 git add "${DOCS_TARGET_PATH}"
@@ -372,6 +397,37 @@ git add "${DOCS_TARGET_PATH}"
 if git diff --cached --quiet; then
   log "matrix JSON unchanged from ${DOCS_BRANCH}; skipping PR"
   exit 0
+fi
+
+# --- Auto-merge regression gate --------------------------------------------
+# Only auto-merge when the new matrix is improvement-or-equal: every cell
+# transition is red→green, green→green, or red→red. If any cell flips
+# green→red (a `pass` that became `fail`), we still open/refresh the PR but
+# leave auto-merge OFF so a human reviews the regression before it lands on
+# the public docs table. A pre-existing red cell (e.g. Anthropic out of API
+# credits) is red→red and does NOT block, so the daily PR keeps flowing.
+log "checking for green->red regressions vs the published matrix"
+set +e
+REGRESSION_REPORT="$(
+  cd "${WORKTREE}" \
+    && "${WORKTREE_UV}" run python "${POPULATOR_DIR}/check_regressions.py" \
+       --old "${PUBLISHED_MATRIX}" \
+       --new "${MATRIX_JSON}"
+)"
+REGRESSION_EXIT=$?
+set -e
+printf '%s\n' "${REGRESSION_REPORT}" | sed 's/^/  /' >&2
+# Exit 0 = clean. Exit 3 = green→red regression(s) found. Any other code
+# means the checker itself errored; fail *closed* (withhold auto-merge) so a
+# bug in the gate can never silently auto-merge a regression.
+if [[ ${REGRESSION_EXIT} -eq 0 ]]; then
+  ALLOW_AUTOMERGE=1
+elif [[ ${REGRESSION_EXIT} -eq 3 ]]; then
+  ALLOW_AUTOMERGE=0
+  log "WARN: green->red regression(s) detected; auto-merge will be left OFF for review"
+else
+  ALLOW_AUTOMERGE=0
+  log "WARN: regression check errored (exit ${REGRESSION_EXIT}); withholding auto-merge to be safe"
 fi
 
 GENERATED_AT="$(jq -r '.generated_at' "${MATRIX_JSON}")"
@@ -385,24 +441,24 @@ EOF
 )"
 git commit -m "${COMMIT_MSG}"
 
-# Push to the fork (agent-shin/litellm-docs), not to BerriAI/litellm-docs.
-# The cron host has no write access to BerriAI/litellm-docs by design --
-# only agent-shin's PAT does, and only over its own fork. The temp remote
-# carries the token in its URL, so we add it, push, then immediately
-# remove it so the token never lingers in ${DOCS_CLONE}/.git/config.
-# (${DOCS_CLONE} is also rm -rf'd by the cleanup trap on exit.)
+# Push the branch straight to BerriAI/litellm-docs. mateo-berri has write
+# access on the docs repo, so there's no fork hop: the PR is a same-repo
+# branch PR. The temp remote carries the token in its URL, so we add it,
+# push, then immediately remove it so the token never lingers in
+# ${DOCS_CLONE}/.git/config. (${DOCS_CLONE} is also rm -rf'd by the
+# cleanup trap on exit.)
 #
-# Plain --force (not --force-with-lease) is acceptable here: the fork
-# branch is bot-owned, only this script ever writes to it, and runs are
-# serialized by the systemd timer. --force-with-lease would require a
-# fetch to populate the remote-tracking ref before each push and adds
-# no safety in this single-writer setup.
-FORK_PUSH_URL="https://x-access-token:${AGENT_SHIN_GITHUB_TOKEN}@github.com/${FORK_REPO}.git"
-git remote remove fork 2>/dev/null || true
-git remote add fork "${FORK_PUSH_URL}"
-git push --force --set-upstream fork "${BRANCH_NAME}"
-git remote remove fork
-unset FORK_PUSH_URL
+# Plain --force (not --force-with-lease) is acceptable here: the
+# compat-matrix/* branch is bot-owned, only this script ever writes to
+# it, and runs are serialized by the systemd timer. --force-with-lease
+# would require a fetch to populate the remote-tracking ref before each
+# push and adds no safety in this single-writer setup.
+PUBLISH_PUSH_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${DOCS_REPO}.git"
+git remote remove publish 2>/dev/null || true
+git remote add publish "${PUBLISH_PUSH_URL}"
+git push --force --set-upstream publish "${BRANCH_NAME}"
+git remote remove publish
+unset PUBLISH_PUSH_URL
 
 # Per-feature status table for the PR body. Reviewers triage from this.
 PR_FEATURE_TABLE="$(jq -r '
@@ -413,9 +469,31 @@ PR_FEATURE_TABLE="$(jq -r '
      ] | join(", "))
 ' "${MATRIX_JSON}")"
 
+# When the gate withheld auto-merge, call it out at the top of the PR body
+# (with the offending cells) so a reviewer knows this PR needs a human and
+# why. On the clean path this section is empty. Note `$(...)` strips the
+# trailing newline, so the body below puts explicit blank lines *around*
+# the placeholder rather than relying on the heredoc's own spacing.
+if [[ "${ALLOW_AUTOMERGE}" != "1" ]]; then
+  PR_REGRESSION_SECTION="$(cat <<EOF
+> [!WARNING]
+> **Auto-merge disabled:** one or more cells regressed green→red versus the
+> currently-published matrix. Review the diff before merging.
+
+\`\`\`
+${REGRESSION_REPORT}
+\`\`\`
+EOF
+)"
+else
+  PR_REGRESSION_SECTION=""
+fi
+
 PR_TITLE="chore(compat-matrix): refresh for ${LITELLM_VERSION} + claude-code ${CLAUDE_CODE_VERSION}"
 PR_BODY="$(cat <<EOF
 Automated daily refresh of the Claude Code compatibility matrix.
+
+${PR_REGRESSION_SECTION}
 
 | Field | Value |
 | --- | --- |
@@ -433,26 +511,16 @@ Generated by \`tests/claude_code/cron_vm/run_daily.sh\`. Close without merging i
 EOF
 )"
 
-log "opening PR from ${FORK_OWNER}:${BRANCH_NAME} -> ${DOCS_REPO}:${DOCS_BRANCH}"
-# GH_TOKEN here is scoped to this single subshell so we don't bleed the
-# fork token into the rest of the script (release-listing earlier uses
-# ${GITHUB_TOKEN}, which may be a different identity). gh's --head accepts
-# `OWNER:BRANCH` for cross-repo PRs from a fork.
-#
-# Reviewer assignment is done in a *separate* call below: as the PR
-# author from a fork, agent-shin has no write/triage access on
-# ${DOCS_REPO} and the `RequestReviewsByLogin` GraphQL mutation
-# (which backs `gh pr create --reviewer` and `gh pr edit --add-reviewer`)
-# rejects with "does not have the correct permissions". We use the
-# collaborator-scoped ${GITHUB_TOKEN} for that instead. Don't fold
-# --reviewer into `gh pr create` here -- it would fail the whole
-# create on the very first cron run.
+log "opening PR from ${BRANCH_NAME} -> ${DOCS_REPO}:${DOCS_BRANCH} (as mateo-berri)"
+# GH_TOKEN is mateo-berri's write-scoped token, the same identity used
+# for release-listing above. The branch lives on ${DOCS_REPO} itself, so
+# --head is a bare branch name (a same-repo PR), not `OWNER:BRANCH`.
 set +e
 PR_OUT="$(
-  GH_TOKEN="${AGENT_SHIN_GITHUB_TOKEN}" gh pr create \
+  GH_TOKEN="${GITHUB_TOKEN}" gh pr create \
     --repo "${DOCS_REPO}" \
     --base "${DOCS_BRANCH}" \
-    --head "${FORK_OWNER}:${BRANCH_NAME}" \
+    --head "${BRANCH_NAME}" \
     --title "${PR_TITLE}" \
     --body "${PR_BODY}" 2>&1
 )"
@@ -462,35 +530,90 @@ echo "${PR_OUT}"
 
 if [[ ${PR_EXIT} -ne 0 ]]; then
   if grep -q "a pull request for branch.*already exists" <<<"${PR_OUT}"; then
-    log "PR already exists for ${FORK_OWNER}:${BRANCH_NAME}; updated branch in place"
+    log "PR already exists for ${BRANCH_NAME}; updated branch in place"
   else
     die "gh pr create failed (exit ${PR_EXIT})"
   fi
 fi
 
-# Request reviews from PR_REVIEWERS using the collaborator-scoped
-# ${GITHUB_TOKEN} (mateo-berri's token, already provisioned for release
-# listing). This is idempotent: `gh pr edit --add-reviewer` is a no-op
-# on a user who's already in reviewRequests, and silently re-adds
-# anyone whose prior review was dismissed -- so same-day reruns stay
-# clean. Reviewer-add failures are non-fatal: the matrix JSON has
-# already landed on the PR; the worst case is a manual ping.
-if [[ -n "${PR_REVIEWERS}" ]]; then
-  if [[ -z "${GITHUB_TOKEN:-}" ]]; then
-    log "WARN: PR_REVIEWERS set but GITHUB_TOKEN missing -- cannot request reviews; skipping"
-  else
-    log "requesting reviews from: ${PR_REVIEWERS}"
-    set +e
-    GH_TOKEN="${GITHUB_TOKEN}" gh pr edit \
-      "${FORK_OWNER}:${BRANCH_NAME}" \
-      --repo "${DOCS_REPO}" \
-      --add-reviewer "${PR_REVIEWERS}" 2>&1 | sed 's/^/  /'
-    REVIEWER_EXIT=${PIPESTATUS[0]}
-    set -e
-    if [[ ${REVIEWER_EXIT} -ne 0 ]]; then
-      log "WARN: gh pr edit --add-reviewer exited ${REVIEWER_EXIT} (non-fatal)"
-    fi
+# Enable auto-merge so the PR merges itself once the docs repo's required
+# checks pass -- we no longer gate these bot PRs on a second human
+# approval. mateo-berri authors and merges them directly. The repo only
+# permits squash merges and has auto-merge enabled at the repo level
+# (${AUTO_MERGE_METHOD} defaults to squash accordingly).
+#
+# This only fires when the regression gate above is satisfied
+# (${ALLOW_AUTOMERGE}==1): a green→red regression — or a gate error —
+# leaves auto-merge OFF so a human triages the PR.
+#
+# `gh pr merge --auto` is idempotent: re-enabling auto-merge on a PR that
+# already has it set is a no-op, so same-day reruns stay clean. It's
+# non-fatal: if auto-merge can't be enabled (e.g. the PR is already in a
+# clean/mergeable state with nothing left to wait on, or branch
+# protection isn't configured), the matrix JSON has still landed on the
+# PR and the worst case is a manual merge click.
+if [[ "${ALLOW_AUTOMERGE}" == "1" ]]; then
+  log "enabling ${AUTO_MERGE_METHOD} auto-merge on ${BRANCH_NAME}"
+  set +e
+  GH_TOKEN="${GITHUB_TOKEN}" gh pr merge \
+    "${BRANCH_NAME}" \
+    --repo "${DOCS_REPO}" \
+    --auto \
+    "--${AUTO_MERGE_METHOD}" 2>&1 | sed 's/^/  /'
+  AUTOMERGE_EXIT=${PIPESTATUS[0]}
+  set -e
+  if [[ ${AUTOMERGE_EXIT} -ne 0 ]]; then
+    log "WARN: gh pr merge --auto exited ${AUTOMERGE_EXIT} (non-fatal)"
   fi
+else
+  # Regression (or gate error): make sure auto-merge is OFF. A same-day
+  # rerun may have enabled it on an earlier, clean pass, so explicitly
+  # disable rather than just skipping. Non-fatal: if it was never enabled,
+  # `--disable-auto` is a harmless no-op/error we swallow.
+  log "leaving ${BRANCH_NAME} for manual review; disabling any prior auto-merge"
+  set +e
+  GH_TOKEN="${GITHUB_TOKEN}" gh pr merge \
+    "${BRANCH_NAME}" \
+    --repo "${DOCS_REPO}" \
+    --disable-auto 2>&1 | sed 's/^/  /'
+  set -e
 fi
+
+# --- Stale-PR sweep ----------------------------------------------------------
+# Keep at most ONE compat-matrix PR open: today's. Any other open
+# `compat-matrix/*` PR is a leftover from a day whose regression gate
+# withheld auto-merge and nobody triaged it; the PR we just opened or
+# refreshed above carries strictly fresher results, so the old one is
+# pure queue noise. Closing is non-destructive — the PR record and its
+# regression report stay browsable; only the bot-owned branch is
+# deleted. This runs only after today's PR exists (a `die` above skips
+# it), so a failed publish can never close the queue down to zero.
+#
+# Non-fatal: a sweep failure (rate limit, transient API error) leaves
+# stale PRs for the next run to retry; it must not fail the pipeline.
+log "sweeping stale compat-matrix PRs (keeping ${BRANCH_NAME})"
+set +e
+STALE_PRS="$(
+  GH_TOKEN="${GITHUB_TOKEN}" gh pr list \
+    --repo "${DOCS_REPO}" \
+    --state open \
+    --limit 100 \
+    --json number,headRefName \
+    --jq '.[] | select(.headRefName | startswith("compat-matrix/")) | "\(.number)\t\(.headRefName)"'
+)"
+while IFS=$'\t' read -r stale_pr stale_head; do
+  [[ -z "${stale_pr}" ]] && continue
+  [[ "${stale_head}" == "${BRANCH_NAME}" ]] && continue
+  GH_TOKEN="${GITHUB_TOKEN}" gh pr close "${stale_pr}" \
+    --repo "${DOCS_REPO}" \
+    --delete-branch \
+    --comment "Superseded by the newer daily compat-matrix PR from \`${BRANCH_NAME}\`; the populator keeps only the most recent compat-matrix PR open." 2>&1 | sed 's/^/  /'
+  if [[ ${PIPESTATUS[0]} -eq 0 ]]; then
+    log "closed stale compat-matrix PR #${stale_pr} (${stale_head})"
+  else
+    log "WARN: could not close stale compat-matrix PR #${stale_pr} (non-fatal)"
+  fi
+done <<<"${STALE_PRS}"
+set -e
 
 log "done"
