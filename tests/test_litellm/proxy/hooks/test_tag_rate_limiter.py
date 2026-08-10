@@ -523,7 +523,7 @@ async def test_concurrency_slot_released_on_failure_frees_capacity(time_controll
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
 
-    kwargs = {"metadata": {"tags": ["end_user_id:u1"]}}
+    kwargs = {"model": "grp", "metadata": {"tags": ["end_user_id:u1"]}}
     await limiter.async_filter_deployments(model="grp", healthy_deployments=healthy, messages=None, request_kwargs=kwargs)
 
     await limiter.async_post_call_failure_hook(

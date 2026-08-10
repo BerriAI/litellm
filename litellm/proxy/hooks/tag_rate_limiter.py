@@ -55,7 +55,6 @@ _LIMIT_UNITS: tuple[_LimitUnit, ...] = ("tokens", "requests", "dollars", "concur
 # they stay a read-then-account-on-success check with a documented,
 # unavoidable admit-vs-account race.
 _ATOMIC_UNITS: frozenset[_LimitUnit] = frozenset({"requests", "concurrency"})
-_CONCURRENCY_STASH_KEY = "_tag_rate_limit_concurrency_keys"
 
 _UNIT_TO_GROUP_FIELD: dict[_LimitUnit, str] = {
     "tokens": "token_limits",
@@ -369,10 +368,6 @@ class _PROXY_TagRateLimiter(CustomLogger):
             if failing_index is not None:
                 configured_limit, tag_value, _key = atomic_checks[failing_index]
                 self._raise_over_limit(configured_limit, tag_value, model, current=values[0])
-            concurrency_keys = [key for (cfg, _tv, key) in atomic_checks if cfg.unit == "concurrency"]
-            if concurrency_keys:
-                metadata = request_kwargs.setdefault(metadata_variable_name, {})
-                metadata.setdefault(_CONCURRENCY_STASH_KEY, []).extend(concurrency_keys)
 
         return healthy_deployments
 
@@ -442,12 +437,7 @@ class _PROXY_TagRateLimiter(CustomLogger):
             llm_provider="litellm_proxy",
         )
 
-    async def _release_concurrency_keys(self, kwargs: dict) -> None:
-        metadata_variable_name = get_metadata_variable_name_from_kwargs(kwargs)
-        metadata = kwargs.get(metadata_variable_name) or {}
-        keys = metadata.get(_CONCURRENCY_STASH_KEY)
-        if not keys:
-            return
+    async def _release_keys(self, keys: list[str]) -> None:
         for key in keys:
             try:
                 await self.internal_usage_cache.async_increment_cache(
@@ -463,12 +453,42 @@ class _PROXY_TagRateLimiter(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: Optional[str] = None,
     ) -> None:
-        await self._release_concurrency_keys(request_data)
+        """
+        Release any concurrency slot reserved for this hop before the call
+        failed. request_data carries no resolved model_group/deployment_id
+        the way a successful call's standard_logging_object does, so this
+        re-derives identity from request_data["model"] (the hop's own model
+        group -- reliable, since a hop that reserved a slot did so under
+        this exact name) and releases only chain-wide entries; a
+        per-deployment-scoped entry can't be resolved without knowing which
+        deployment was actually dispatched, so it's left to its TTL instead
+        of guessed at.
+        """
+        if self.llm_router is None:
+            return
+        model_group = request_data.get("model")
+        if not model_group:
+            return
+        configured = self._index.get(self.llm_router).get(model_group)
+        if not configured:
+            return
+        metadata_variable_name = get_metadata_variable_name_from_kwargs(request_data)
+        tags = _get_tags_from_request_kwargs(request_data, metadata_variable_name=metadata_variable_name)
+        if not tags:
+            return
+
+        release_keys = [
+            _inflight_key(model_group, configured_limit, tag_value)
+            for configured_limit in configured
+            if configured_limit.unit == "concurrency"
+            and configured_limit.deployment_scope is None
+            and (tag_value := _extract_identity(tags, configured_limit.entry.tag_id)) is not None
+        ]
+        if release_keys:
+            await self._release_keys(release_keys)
         return None
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        asyncio.create_task(self._release_concurrency_keys(kwargs))
-
         if self.llm_router is None:
             return
 
@@ -497,14 +517,18 @@ class _PROXY_TagRateLimiter(CustomLogger):
         }
 
         operations: list[RedisPipelineIncrementOperation] = []
+        release_keys: list[str] = []
         for configured_limit in configured:
-            if configured_limit.unit not in increment_by_unit:
-                continue  # "requests" is accounted atomically at admission; "concurrency" is released, not incremented here
             if configured_limit.deployment_scope is not None and deployment_id not in configured_limit.deployment_scope:
                 continue
             tag_value = _extract_identity(tags, configured_limit.entry.tag_id)
             if tag_value is None:
                 continue
+            if configured_limit.unit == "concurrency":
+                release_keys.append(_inflight_key(model_group, configured_limit, tag_value))
+                continue
+            if configured_limit.unit not in increment_by_unit:
+                continue  # "requests" is accounted atomically at admission, not here
             increment_value = increment_by_unit[configured_limit.unit]
             if increment_value == 0:
                 continue
@@ -517,6 +541,9 @@ class _PROXY_TagRateLimiter(CustomLogger):
                     ttl=configured_limit.entry.period_seconds + 3600,
                 )
             )
+
+        if release_keys:
+            asyncio.create_task(self._release_keys(release_keys))
 
         if not operations:
             return
