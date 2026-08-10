@@ -4,12 +4,14 @@ import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { DownOutlined, RightOutlined, BulbOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 
 interface ReasoningContentProps {
   reasoningContent: string;
 }
 
 const ReasoningContent: React.FC<ReasoningContentProps> = ({ reasoningContent }) => {
+  const { t } = useTranslation("chat");
   const [isExpanded, setIsExpanded] = useState(true);
 
   if (!reasoningContent) return null;
@@ -22,7 +24,7 @@ const ReasoningContent: React.FC<ReasoningContentProps> = ({ reasoningContent })
         onClick={() => setIsExpanded(!isExpanded)}
         icon={<BulbOutlined />}
       >
-        {isExpanded ? "Hide reasoning" : "Show reasoning"}
+        {isExpanded ? t("details.hideReasoning") : t("details.showReasoning")}
         {isExpanded ? <DownOutlined className="ml-1" /> : <RightOutlined className="ml-1" />}
       </Button>
 

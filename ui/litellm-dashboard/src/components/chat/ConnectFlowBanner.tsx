@@ -3,6 +3,7 @@
 import React from "react";
 import { CheckCircle } from "lucide-react";
 import { getProxyBaseUrl } from "@/components/networking";
+import { useTranslation } from "react-i18next";
 
 interface Props {
   flowHandle: string;
@@ -37,8 +38,9 @@ export function isLoopbackOrigin(origin: string | null): boolean {
 }
 
 const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, clientOrigin }) => {
+  const { t } = useTranslation("chat");
   const action = `${getProxyBaseUrl()}/authorize/complete`;
-  const clientLabel = clientOrigin ?? "the application";
+  const clientLabel = clientOrigin ?? t("integrations.flow.application");
   const loopbackClient = isLoopbackOrigin(clientOrigin);
 
   return (
@@ -47,9 +49,11 @@ const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, clientOrigin }) => {
         <div className="flex items-start gap-3 min-w-0">
           <CheckCircle className="h-5 w-5 text-primary shrink-0 mt-0.5" />
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-foreground">Connect your MCP servers to {clientLabel}</p>
+            <p className="text-sm font-semibold text-foreground">
+              {t("integrations.flow.title", { client: clientLabel })}
+            </p>
             <p className="text-[13px] text-muted-foreground mt-0.5">
-              Authorize the servers you want to use below, then click Finish connecting to return to {clientLabel}.
+              {t("integrations.flow.description", { client: clientLabel })}
             </p>
           </div>
         </div>
@@ -59,12 +63,12 @@ const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, clientOrigin }) => {
             type="submit"
             className="h-[38px] rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
           >
-            Finish connecting
+            {t("integrations.flow.finish")}
           </button>
           {loopbackClient && (
             <label className="mt-2 flex items-center gap-2 text-[13px] text-muted-foreground">
               <input type="checkbox" name="delivery" value="manual" />
-              My client is on a remote or SSH machine
+              {t("integrations.flow.remoteClient")}
             </label>
           )}
         </form>

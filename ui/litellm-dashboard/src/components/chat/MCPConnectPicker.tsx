@@ -6,6 +6,7 @@ import MessageManager from "@/components/molecules/message_manager";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { fetchMCPServers, listMCPTools } from "../networking";
 import { MCPServer } from "../mcp_tools/types";
+import { useTranslation } from "react-i18next";
 
 interface Props {
   accessToken: string;
@@ -14,6 +15,7 @@ interface Props {
 }
 
 const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onChange }) => {
+  const { t } = useTranslation("chat");
   const [servers, setServers] = useState<MCPServer[]>([]);
   const [loadingServers, setLoadingServers] = useState(true);
   const [togglingOn, setTogglingOn] = useState<Set<string>>(new Set());
@@ -56,12 +58,12 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
     try {
       const result = await listMCPTools(accessToken, serverName);
       if (result?.error) {
-        MessageManager.warning(`Could not load tools for ${serverName} \u2014 it will be excluded from this message.`);
+        MessageManager.warning(t("integrations.excludedToolsError", { server: serverName }));
         return;
       }
       onChange([...selectedServers, serverName]);
     } catch {
-      MessageManager.warning(`Could not load tools for ${serverName} \u2014 it will be excluded from this message.`);
+      MessageManager.warning(t("integrations.excludedToolsError", { server: serverName }));
     } finally {
       setTogglingOn((prev) => {
         const next = new Set(prev);
@@ -89,7 +91,9 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
           ))}
         </div>
       ) : servers.length === 0 ? (
-        <div className="px-3 py-4 text-muted-foreground text-[13px] text-center">No MCP servers configured</div>
+        <div className="px-3 py-4 text-muted-foreground text-[13px] text-center">
+          {t("integrations.noServersConfigured")}
+        </div>
       ) : (
         servers.map((server) => {
           const name = server.server_name ?? server.alias ?? server.server_id;

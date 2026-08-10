@@ -8,6 +8,7 @@ import { Separator } from "@/components/ui/separator";
 import { migratedHref } from "@/utils/migratedPages";
 import { useChatShell } from "@/contexts/ChatShellContext";
 import ConversationList from "./ConversationList";
+import { useTranslation } from "react-i18next";
 
 export function getChatRoutes() {
   const base = migratedHref("chat");
@@ -53,6 +54,7 @@ interface ChatShellProps {
 }
 
 const ChatShell: React.FC<ChatShellProps> = ({ children }) => {
+  const { t } = useTranslation("chat");
   const router = useRouter();
   const pathname = stripTrailingSlash(usePathname() ?? "");
   const { conversations, activeConversationId, deleteConversation, renameConversation } = useChatShell();
@@ -63,14 +65,14 @@ const ChatShell: React.FC<ChatShellProps> = ({ children }) => {
   return (
     <div className="flex h-full w-full flex-col bg-background overflow-hidden">
       <div className="shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-center text-[13px] text-amber-800">
-        This is a pre-v0 feature. Do not use in production, it may change unexpectedly. Please share feedback{" "}
+        {t("preview.warning")}{" "}
         <a
           href="https://github.com/BerriAI/litellm/discussions/32085"
           target="_blank"
           rel="noreferrer"
           className="font-medium underline"
         >
-          here
+          {t("preview.link")}
         </a>
         .
       </div>
@@ -79,7 +81,7 @@ const ChatShell: React.FC<ChatShellProps> = ({ children }) => {
           <div className="px-2 pt-3 pb-1 shrink-0">
             <Button onClick={() => router.push(routes.chats)} className="w-full justify-start gap-2.5">
               <Plus className="h-4 w-4" />
-              New Chat
+              {t("navigation.newChat")}
             </Button>
           </div>
 
@@ -88,37 +90,37 @@ const ChatShell: React.FC<ChatShellProps> = ({ children }) => {
           <div className="px-2 py-1 shrink-0">
             <NavItem
               icon={<MessageSquare className="h-4 w-4" />}
-              label="Chats"
+              label={t("navigation.chats")}
               onClick={() => router.push(routes.chats)}
               active={isChatsRoute}
             />
             <NavItem
               icon={<LayoutGrid className="h-4 w-4" />}
-              label="Integrations"
+              label={t("navigation.integrations")}
               onClick={() => router.push(routes.integrations)}
               active={pathname === routes.integrations}
             />
             <NavItem
               icon={<KeyRound className="h-4 w-4" />}
-              label="Credentials"
+              label={t("navigation.credentials")}
               onClick={() => router.push(routes.credentials)}
               active={pathname === routes.credentials}
             />
             <NavItem
               icon={<Lock className="h-4 w-4" />}
-              label="API Keys"
+              label={t("navigation.apiKeys")}
               onClick={() => router.push(routes.apiKeys)}
               active={pathname === routes.apiKeys}
             />
             <NavItem
               icon={<ScrollText className="h-4 w-4" />}
-              label="Logs"
+              label={t("navigation.logs")}
               onClick={() => router.push(routes.logs)}
               active={pathname === routes.logs}
             />
             <NavItem
               icon={<BarChart3 className="h-4 w-4" />}
-              label="Usage"
+              label={t("navigation.usage")}
               onClick={() => router.push(routes.usage)}
               active={pathname === routes.usage}
             />

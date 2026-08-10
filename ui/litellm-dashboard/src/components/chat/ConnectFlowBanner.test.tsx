@@ -2,6 +2,25 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import ConnectFlowBanner, { isLoopbackOrigin } from "./ConnectFlowBanner";
 
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: () => ({
+      t: (key: string, values?: Record<string, string | number>) => {
+        const value = key.split(".").reduce<unknown>((copy, segment) => {
+          if (typeof copy !== "object" || copy === null) return undefined;
+          return (copy as Record<string, unknown>)[segment];
+        }, resources.en.chat);
+        if (typeof value !== "string") return key;
+        return Object.entries(values ?? {}).reduce(
+          (copy, [name, replacement]) => copy.replaceAll(`{{${name}}}`, String(replacement)),
+          value,
+        );
+      },
+    }),
+  };
+});
+
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: () => "https://gateway.example.com",
 }));

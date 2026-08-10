@@ -1,6 +1,7 @@
 import React from "react";
 import { Collapse } from "antd";
 import type { MCPEvent } from "@/components/mcp_tools/types";
+import { useTranslation } from "react-i18next";
 
 const { Panel } = Collapse;
 
@@ -10,6 +11,7 @@ interface MCPEventsDisplayProps {
 }
 
 const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }) => {
+  const { t } = useTranslation("chat");
   if (!events || events.length === 0) {
     return null;
   }
@@ -165,7 +167,7 @@ const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }
         >
           {/* List Tools Panel */}
           {toolsEvent && (
-            <Panel header="List tools" key="list-tools">
+            <Panel header={t("details.listTools")} key="list-tools">
               <div>
                 {toolsEvent.item?.tools?.map((tool, index) => (
                   <div key={index} className="tool-item">
@@ -178,11 +180,11 @@ const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }
 
           {/* MCP Call Panels */}
           {mcpCallEvents.map((callEvent, index) => (
-            <Panel header={callEvent.item?.name || "Tool call"} key={`mcp-call-${index}`}>
+            <Panel header={callEvent.item?.name || t("details.toolCall")} key={`mcp-call-${index}`}>
               <div>
                 {/* Request section */}
                 <div className="mcp-section">
-                  <div className="mcp-section-header">Request</div>
+                  <div className="mcp-section-header">{t("details.request")}</div>
                   <div className="mcp-code-block">
                     {callEvent.item?.arguments && (
                       <pre className="mcp-json">
@@ -201,14 +203,14 @@ const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }
                 {/* Approved section */}
                 <div className="mcp-section">
                   <div className="mcp-approved">
-                    <span className="mcp-checkmark">✓</span> Approved
+                    <span className="mcp-checkmark">✓</span> {t("details.approved")}
                   </div>
                 </div>
 
                 {/* Response section */}
                 {callEvent.item?.output && (
                   <div className="mcp-section">
-                    <div className="mcp-section-header">Response</div>
+                    <div className="mcp-section-header">{t("details.response")}</div>
                     <div className="mcp-response-content">{callEvent.item.output}</div>
                   </div>
                 )}

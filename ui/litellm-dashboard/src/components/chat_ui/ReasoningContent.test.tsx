@@ -1,6 +1,19 @@
 import { render, screen, fireEvent } from "@testing-library/react";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import ReasoningContent from "./ReasoningContent";
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: () => ({
+      t: (key: string) =>
+        key.split(".").reduce<unknown>((copy, segment) => {
+          if (typeof copy !== "object" || copy === null) return undefined;
+          return (copy as Record<string, unknown>)[segment];
+        }, resources.en.chat) ?? key,
+    }),
+  };
+});
 
 describe("ReasoningContent", () => {
   it("should render nothing when reasoningContent is empty", () => {

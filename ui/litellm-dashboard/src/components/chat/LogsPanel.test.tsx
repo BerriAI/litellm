@@ -4,6 +4,28 @@ import LogsPanel from "./LogsPanel";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { uiSpendLogDetailsCall, uiSpendLogsCall } from "../networking";
 
+const translationState = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: () => ({
+      t: (key: string, values?: Record<string, string | number>) => {
+        const translation = key.split(".").reduce<unknown>((copy, segment) => {
+          if (typeof copy !== "object" || copy === null) return undefined;
+          return (copy as Record<string, unknown>)[segment];
+        }, resources[translationState.language].chat);
+        if (typeof translation !== "string") return key;
+        return Object.entries(values ?? {}).reduce(
+          (copy, [name, value]) => copy.replaceAll(`{{${name}}}`, String(value)),
+          translation,
+        );
+      },
+      i18n: { language: translationState.language, resolvedLanguage: translationState.language },
+    }),
+  };
+});
+
 vi.mock("../networking", () => ({
   uiSpendLogsCall: vi.fn(),
   uiSpendLogDetailsCall: vi.fn(),
@@ -35,9 +57,19 @@ const paginated = (rows: unknown[]) => ({
 
 describe("LogsPanel", () => {
   beforeEach(() => {
+    translationState.language = "en";
     vi.clearAllMocks();
     mockedLogsCall.mockResolvedValue(paginated([sampleRow]));
     mockedDetailsCall.mockResolvedValue({ messages: [{ role: "user", content: "hi" }], response: { ok: true } });
+  });
+
+  it("renders the log panel in Russian", async () => {
+    translationState.language = "ru";
+    renderWithProviders(<LogsPanel accessToken="tok-ru" userId="user-1" />);
+
+    expect(await screen.findByText("Ваши логи")).toBeInTheDocument();
+    expect(await screen.findByText("Успешно")).toBeInTheDocument();
+    expect(await screen.findByRole("columnheader", { name: "Стоимость" })).toBeInTheDocument();
   });
 
   it("scopes the query to the current user so it only shows their own logs", async () => {

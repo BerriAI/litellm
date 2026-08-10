@@ -2,6 +2,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import ChatShell from "./ChatShell";
 
+const translationState = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: () => ({
+      t: (key: string) =>
+        key.split(".").reduce<unknown>((copy, segment) => {
+          if (typeof copy !== "object" || copy === null) return undefined;
+          return (copy as Record<string, unknown>)[segment];
+        }, resources[translationState.language].chat) ?? key,
+    }),
+  };
+});
+
 const { mockPush, mockUsePathname, mockUseChatShell } = vi.hoisted(() => ({
   mockPush: vi.fn(),
   mockUsePathname: vi.fn(() => "/ui/chat"),
@@ -24,8 +39,22 @@ vi.mock("./ConversationList", () => ({ default: () => <div data-testid="conversa
 
 describe("ChatShell", () => {
   afterEach(() => {
+    translationState.language = "en";
     mockPush.mockClear();
     mockUsePathname.mockReturnValue("/ui/chat");
+  });
+
+  it("renders the chat navigation in Russian", () => {
+    translationState.language = "ru";
+    render(
+      <ChatShell>
+        <div />
+      </ChatShell>,
+    );
+
+    expect(screen.getByRole("button", { name: "Новый чат" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Интеграции" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Использование" })).toBeInTheDocument();
   });
 
   it("marks Chats active and shows the conversation list on the base chat route", () => {

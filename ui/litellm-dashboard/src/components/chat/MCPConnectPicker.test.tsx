@@ -6,6 +6,25 @@ import { fetchMCPServers } from "../networking";
 import type { MCPServer } from "../mcp_tools/types";
 import { setServerRootPath } from "@/lib/serverRootPath";
 
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: () => ({
+      t: (key: string, values?: Record<string, string | number>) => {
+        const value = key.split(".").reduce<unknown>((copy, segment) => {
+          if (typeof copy !== "object" || copy === null) return undefined;
+          return (copy as Record<string, unknown>)[segment];
+        }, resources.en.chat);
+        if (typeof value !== "string") return key;
+        return Object.entries(values ?? {}).reduce(
+          (copy, [name, replacement]) => copy.replaceAll(`{{${name}}}`, String(replacement)),
+          value,
+        );
+      },
+    }),
+  };
+});
+
 vi.mock("../networking", () => ({
   fetchMCPServers: vi.fn(),
   listMCPTools: vi.fn(),

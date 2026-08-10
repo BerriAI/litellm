@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
-const STAGE_ONE_FILES = [
+const LOCALIZED_FILES = [
   "src/components/DashboardHeader.tsx",
   "src/components/Navbar/ViewSwitcher.tsx",
   "src/components/navbar.tsx",
@@ -16,6 +16,20 @@ const STAGE_ONE_FILES = [
   "src/app/model_hub/page.tsx",
   "src/app/model_hub_table/page.tsx",
   "src/app/mcp/oauth/callback/page.tsx",
+  "src/app/chat/page.tsx",
+  "src/components/chat/ChatShell.tsx",
+  "src/components/chat/ConversationList.tsx",
+  "src/components/chat/ChatMessages.tsx",
+  "src/components/chat/UsagePanel.tsx",
+  "src/components/chat/KeysPanel.tsx",
+  "src/components/chat/LogsPanel.tsx",
+  "src/components/chat/MCPAppsPanel.tsx",
+  "src/components/chat/MCPConnectPicker.tsx",
+  "src/components/chat/MCPCredentialsTab.tsx",
+  "src/components/chat/ConnectFlowBanner.tsx",
+  "src/components/chat_ui/ReasoningContent.tsx",
+  "src/components/chat_ui/ResponseMetrics.tsx",
+  "src/components/chat_ui/MCPEventsDisplay.tsx",
 ];
 
 // These values are product names, identifiers, or protocol terms. Translating
@@ -84,14 +98,14 @@ export function auditSource(source, file = "source.tsx") {
   return findings;
 }
 
-export function auditFiles(files = STAGE_ONE_FILES) {
+export function auditFiles(files = LOCALIZED_FILES) {
   return files.flatMap((file) => auditSource(readFileSync(file, "utf8"), file));
 }
 
 function runCli() {
   const findings = auditFiles();
   if (findings.length === 0) {
-    console.log(`Localization audit passed (${STAGE_ONE_FILES.length} shared UI files).`);
+    console.log(`Localization audit passed (${LOCALIZED_FILES.length} shared UI files).`);
     return;
   }
 

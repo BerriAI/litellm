@@ -12,6 +12,7 @@ import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import ReasoningContent from "@/components/chat_ui/ReasoningContent";
 import MCPEventsDisplay from "@/components/chat_ui/MCPEventsDisplay";
 import { ChatMessage } from "./types";
+import { useTranslation } from "react-i18next";
 
 const REDACTED_KEY_PATTERNS = /token|key|secret|password|auth/i;
 
@@ -73,6 +74,7 @@ interface UserBubbleProps {
 }
 
 function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
+  const { t } = useTranslation("chat");
   const [hovered, setHovered] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(message.content);
@@ -131,10 +133,10 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
                 setEditing(false);
               }}
             >
-              Cancel
+              {t("messages.cancel")}
             </Button>
             <Button size="sm" onClick={handleSave} disabled={!editValue.trim()}>
-              Save & Send
+              {t("messages.saveAndSend")}
             </Button>
           </div>
         </div>
@@ -168,7 +170,7 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
                 }
               />
               <TooltipContent>
-                <p>Edit message</p>
+                <p>{t("messages.edit")}</p>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -191,6 +193,7 @@ interface AssistantBubbleProps {
 }
 
 function AssistantBubble({ message, isLastMessage, isStreaming, isTypingIndicator, mcpEvents }: AssistantBubbleProps) {
+  const { t } = useTranslation("chat");
   const [reasoningKey, setReasoningKey] = useState(0);
   const prevStreamingRef = useRef<boolean>(isStreaming);
 
@@ -239,7 +242,7 @@ function AssistantBubble({ message, isLastMessage, isStreaming, isTypingIndicato
         >
           {mainContent}
         </ReactMarkdown>
-        {stoppedSuffix && <span className="text-muted-foreground italic"> [stopped]</span>}
+        {stoppedSuffix && <span className="text-muted-foreground italic"> [{t("messages.stopped")}]</span>}
       </div>
 
       <CopyButton text={mainContent} />
@@ -253,6 +256,7 @@ function AssistantBubble({ message, isLastMessage, isStreaming, isTypingIndicato
 }
 
 function CopyButton({ text }: { text: string }) {
+  const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
@@ -282,7 +286,7 @@ function CopyButton({ text }: { text: string }) {
             }
           />
           <TooltipContent>
-            <p>{copied ? "Copied!" : "Copy"}</p>
+            <p>{copied ? t("messages.copied") : t("messages.copy")}</p>
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
@@ -291,6 +295,7 @@ function CopyButton({ text }: { text: string }) {
 }
 
 function ThinkingPlaceholder() {
+  const { t } = useTranslation("chat");
   return (
     <>
       <style>{`
@@ -303,7 +308,7 @@ function ThinkingPlaceholder() {
         }
       `}</style>
       <div className="inline-flex items-center gap-1.5 px-2.5 mb-2 bg-muted/50 border rounded-lg text-xs text-muted-foreground">
-        <span className="chat-thinking-text py-1">Thinking...</span>
+        <span className="chat-thinking-text py-1">{t("messages.thinking")}</span>
       </div>
     </>
   );
@@ -339,6 +344,7 @@ interface ToolCardProps {
 }
 
 function ToolCard({ message }: ToolCardProps) {
+  const { t } = useTranslation("chat");
   const redactedArgs = message.toolArgs ? redactSensitiveValues(message.toolArgs) : undefined;
   const [open, setOpen] = useState(false);
 
@@ -347,13 +353,13 @@ function ToolCard({ message }: ToolCardProps) {
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger className="flex items-center gap-1.5 text-[13px] px-3 py-2 border rounded-lg bg-muted/50 hover:bg-muted transition-colors w-full text-left">
           <Wrench className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="font-medium text-foreground">{message.toolName ?? "Tool call"}</span>
+          <span className="font-medium text-foreground">{message.toolName ?? t("messages.toolCall")}</span>
         </CollapsibleTrigger>
         <CollapsibleContent className="border border-t-0 rounded-b-lg px-3 py-2 bg-muted/30">
           {redactedArgs !== undefined && (
             <div className={message.toolResult ? "mb-3" : ""}>
               <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-                Arguments
+                {t("messages.arguments")}
               </div>
               <pre className="m-0 p-2 bg-muted rounded-md text-xs font-mono whitespace-pre-wrap break-words text-foreground">
                 {JSON.stringify(redactedArgs, null, 2)}
@@ -363,7 +369,7 @@ function ToolCard({ message }: ToolCardProps) {
           {message.toolResult && (
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-                Result
+                {t("messages.result")}
               </div>
               <div className="text-[13px] text-foreground whitespace-pre-wrap break-words font-mono">
                 {message.toolResult}
