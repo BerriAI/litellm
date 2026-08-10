@@ -7,7 +7,6 @@ import {
   CodeOutlined,
   DatabaseOutlined,
   DeleteOutlined,
-  FilePdfOutlined,
   InfoCircleOutlined,
   KeyOutlined,
   LinkOutlined,
@@ -19,12 +18,10 @@ import {
   SoundOutlined,
   TagsOutlined,
   ToolOutlined,
-  UserOutlined,
 } from "@ant-design/icons";
 import { Card, Text, TextInput, Title, Button as TremorButton } from "@tremor/react";
-import { Button, Input, Modal, Popover, Select, Spin, Tooltip, Typography, Upload } from "antd";
+import { Button, Input, Modal, Popover, Select, Spin, Tooltip, Upload } from "antd";
 import React, { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { v4 as uuidv4 } from "uuid";
@@ -50,14 +47,10 @@ import { makeOpenAIImageEditsRequest } from "../../llm_calls/image_edits";
 import { makeOpenAIImageGenerationRequest } from "../../llm_calls/image_generation";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
 import { makeInteractionsRequest } from "../../llm_calls/interactions_api";
-import A2AMetrics from "./A2AMetrics";
 import AdditionalModelSettings from "./AdditionalModelSettings";
-import AudioRenderer from "./AudioRenderer";
 import { OPEN_AI_VOICE_SELECT_OPTIONS, OpenAIVoice } from "./chatConstants";
-import ChatImageRenderer from "./ChatImageRenderer";
 import ChatImageUpload from "./ChatImageUpload";
 import { createChatDisplayMessage, createChatMultimodalMessage } from "./ChatImageUtils";
-import CodeInterpreterOutput from "./CodeInterpreterOutput";
 import CodeInterpreterTool from "./CodeInterpreterTool";
 import { generateCodeSnippet } from "@/components/chat_ui/CodeSnippets";
 import EndpointSelector from "./EndpointSelector";
@@ -65,15 +58,11 @@ import FilePreviewCard from "./FilePreviewCard";
 import ChatMessageBubble from "./ChatMessageBubble";
 import MCPEventsDisplay from "@/components/chat_ui/MCPEventsDisplay";
 import { EndpointType, getEndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
-import ReasoningContent from "@/components/chat_ui/ReasoningContent";
-import ResponseMetrics, { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
-import ResponsesImageRenderer from "./ResponsesImageRenderer";
 import ResponsesImageUpload from "./ResponsesImageUpload";
 import { createDisplayMessage, createMultimodalMessage } from "./ResponsesImageUtils";
-import { SearchResultsDisplay } from "./SearchResultsDisplay";
 import SessionManagement from "./SessionManagement";
 import RealtimePlayground from "./RealtimePlayground";
-import { A2ATaskMetadata, MessageType } from "@/components/chat_ui/types";
+import { MessageType } from "@/components/chat_ui/types";
 import { useCodeInterpreter } from "../../hooks/useCodeInterpreter";
 import { useChatHistory } from "../../hooks/useChatHistory";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
@@ -147,13 +136,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
     chatHistory,
     setChatHistory,
     mcpEvents,
-    setMCPEvents,
     messageTraceId,
     setMessageTraceId,
     responsesSessionId,
-    setResponsesSessionId,
     useApiSessionManagement,
-    setUseApiSessionManagement,
     updateTextUI,
     updateReasoningContent,
     updateTimingData,
@@ -261,6 +247,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [maxTokens, setMaxTokens] = useState<number>(2048);
   const [useAdvancedParams, setUseAdvancedParams] = useState<boolean>(false);
   const [mockTestFallbacks, setMockTestFallbacks] = useState<boolean>(false);
+  const [streamingEnabled, setStreamingEnabled] = useState<boolean>(() => {
+    if (simplified) return true;
+    const saved = sessionStorage.getItem("streamingEnabled");
+    return saved === null ? true : saved === "true";
+  });
 
   // Code Interpreter state (using custom hook)
   const codeInterpreter = useCodeInterpreter();
@@ -372,6 +363,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     sessionStorage.removeItem("selectedMCPTools"); // Clean up old key
 
     if (!simplified) {
+      sessionStorage.setItem("streamingEnabled", JSON.stringify(streamingEnabled));
       if (selectedModel) {
         sessionStorage.setItem("selectedModel", selectedModel);
       } else {
@@ -392,6 +384,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     selectedMCPServers,
     mcpServerToolRestrictions,
     selectedVoice,
+    streamingEnabled,
   ]);
 
   useEffect(() => {
@@ -596,8 +589,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
         NotificationsManager.fromBackend("Please select an MCP server to test");
         return;
       }
-      // Resolve the real server ID (toolsets use toolset: prefix)
-      const mcpServerId = rawSelected.startsWith("toolset:") ? rawSelected : rawSelected;
       if (!selectedMCPDirectTool) {
         NotificationsManager.fromBackend("Please select an MCP tool to call");
         return;
@@ -771,6 +762,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             handleMCPEvent,
             mockTestFallbacks,
             mcpToolsets,
+            streamingEnabled,
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -852,6 +844,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             mcpServers,
             mcpServerToolRestrictions,
             mcpToolsets,
+            streamingEnabled,
+            updateTotalLatency,
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [
@@ -1006,16 +1000,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
     NotificationsManager.success("Chat history cleared.");
   };
 
-  if (userRole && userRole === "Admin Viewer") {
-    const { Title, Paragraph } = Typography;
-    return (
-      <div>
-        <Title level={1}>Access Denied</Title>
-        <Paragraph>Ask your proxy admin for access to test models</Paragraph>
-      </div>
-    );
-  }
-
   const onModelChange = (value: string) => {
     setSelectedModel(value);
 
@@ -1034,6 +1018,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
     // Check if mode is explicitly "chat" or undefined (which defaults to chat per backend)
     return !model.mode || model.mode === "chat";
   };
+
+  const supportsStreamingToggle = endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES;
 
   const antIcon = <LoadingOutlined style={{ fontSize: 24 }} spin />;
 
@@ -1184,10 +1170,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       <span className="flex items-center">
                         <RobotOutlined className="mr-2" /> Select Model
                       </span>
-                      {isChatModel() ? (
+                      {isChatModel() || supportsStreamingToggle ? (
                         <Popover
                           content={
                             <AdditionalModelSettings
+                              showAdvancedParams={isChatModel()}
                               temperature={temperature}
                               maxTokens={maxTokens}
                               useAdvancedParams={useAdvancedParams}
@@ -1196,6 +1183,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                               onUseAdvancedParamsChange={setUseAdvancedParams}
                               mockTestFallbacks={mockTestFallbacks}
                               onMockTestFallbacksChange={setMockTestFallbacks}
+                              streamingEnabled={streamingEnabled}
+                              onStreamingChange={supportsStreamingToggle ? setStreamingEnabled : undefined}
                             />
                           }
                           title="Model Settings"

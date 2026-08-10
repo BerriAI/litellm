@@ -16,7 +16,6 @@ from typing import (
     Any,
     Final,
     Literal,
-    Union,
 )
 from urllib.parse import urljoin
 
@@ -54,7 +53,7 @@ SENSITIVE_DATA_DETECTOR_KEYS: Final[list[str]] = ["sensitiveData", "dataDetector
 
 # Type aliases
 MessageRole = Literal["user", "assistant"]
-LLMResponse = Union[Any, ModelResponse, EmbeddingResponse, ImageResponse]
+LLMResponse = Any | ModelResponse | EmbeddingResponse | ImageResponse
 _LEGACY_NOMA_DEPRECATION_WARNED = False
 
 if TYPE_CHECKING:
@@ -163,7 +162,7 @@ class NomaGuardrail(CustomGuardrail):
         try:
             asyncio.create_task(coro)
         except Exception as e:
-            verbose_proxy_logger.error(f"Failed to create background Noma task: {e!s}")
+            verbose_proxy_logger.error("Failed to create background Noma task: %s", e)
 
     async def _process_user_message_check(
         self,
@@ -172,19 +171,19 @@ class NomaGuardrail(CustomGuardrail):
         event_type: GuardrailEventHooks | None = None,
     ) -> str | None:
         """Shared logic for processing user message checks"""
-        start_time = datetime.now()
-        extra_data = self.get_guardrail_dynamic_request_body_params(request_data)
+        start_time: Final = datetime.now()
+        extra_data: Final = self.get_guardrail_dynamic_request_body_params(request_data)
 
-        messages = request_data.get("messages") or []
+        messages: Final = request_data.get("messages") or []
         if not messages:
             return None
 
-        input_items, instructions = self._responses_transform_handler.convert_chat_completion_messages_to_responses_api(  # type: ignore[arg-type]
+        input_items, instructions = self._responses_transform_handler.convert_chat_completion_messages_to_responses_api(
             messages
         )
 
         if instructions:
-            system_message = {
+            system_message: Final = {
                 "type": "message",
                 "role": "system",
                 "content": [
@@ -196,8 +195,8 @@ class NomaGuardrail(CustomGuardrail):
         if not input_items:
             return None
 
-        payload = {"input": input_items}
-        response_json = await self._call_noma_api(
+        payload: Final = {"input": input_items}
+        response_json: Final = await self._call_noma_api(
             payload=payload,
             llm_request_id=None,
             request_data=request_data,
@@ -205,11 +204,11 @@ class NomaGuardrail(CustomGuardrail):
             extra_data=extra_data,
         )
 
-        end_time = datetime.now()
-        duration = (end_time - start_time).total_seconds()
+        end_time: Final = datetime.now()
+        duration: Final = (end_time - start_time).total_seconds()
 
         # Determine guardrail status based on response
-        guardrail_status = self._determine_guardrail_status(response_json)
+        guardrail_status: Final = self._determine_guardrail_status(response_json)
 
         # Always log guardrail information for consistency
         self.add_standard_logging_guardrail_information_to_request_data(
@@ -229,11 +228,11 @@ class NomaGuardrail(CustomGuardrail):
 
         # Check if we should anonymize content
         if self._should_anonymize(response_json, USER_ROLE):
-            anonymized_content = self._extract_anonymized_content(response_json, USER_ROLE)
+            anonymized_content: Final = self._extract_anonymized_content(response_json, USER_ROLE)
             if anonymized_content:
                 # Replace the user message content with anonymized version
                 self._replace_user_message_content(request_data, anonymized_content)
-                verbose_proxy_logger.debug(f"Noma guardrail anonymized user message: {anonymized_content}")
+                verbose_proxy_logger.debug("Noma guardrail anonymized user message: %s", anonymized_content)
                 return anonymized_content
 
         await self._check_verdict(USER_ROLE, json.dumps(input_items), response_json)
@@ -248,8 +247,8 @@ class NomaGuardrail(CustomGuardrail):
     ) -> str | None:
         """Shared logic for processing LLM response checks"""
 
-        start_time = datetime.now()
-        extra_data = self.get_guardrail_dynamic_request_body_params(request_data)
+        start_time: Final = datetime.now()
+        extra_data: Final = self.get_guardrail_dynamic_request_body_params(request_data)
 
         if not isinstance(response, litellm.ModelResponse):
             return None
@@ -263,7 +262,7 @@ class NomaGuardrail(CustomGuardrail):
         if not content or not isinstance(content, str):
             return None
 
-        payload = {
+        payload: Final = {
             "input": [
                 {
                     "type": "message",
@@ -273,7 +272,7 @@ class NomaGuardrail(CustomGuardrail):
             ]
         }
 
-        response_json = await self._call_noma_api(
+        response_json: Final = await self._call_noma_api(
             payload=payload,
             llm_request_id=response.id,
             request_data=request_data,
@@ -281,11 +280,11 @@ class NomaGuardrail(CustomGuardrail):
             extra_data=extra_data,
         )
 
-        end_time = datetime.now()
-        duration = (end_time - start_time).total_seconds()
+        end_time: Final = datetime.now()
+        duration: Final = (end_time - start_time).total_seconds()
 
         # Determine guardrail status based on response
-        guardrail_status = self._determine_guardrail_status(response_json)
+        guardrail_status: Final = self._determine_guardrail_status(response_json)
 
         # Always log guardrail information for consistency
         self.add_standard_logging_guardrail_information_to_request_data(
@@ -305,11 +304,11 @@ class NomaGuardrail(CustomGuardrail):
 
         # Check if we should anonymize content
         if self._should_anonymize(response_json, ASSISTANT_ROLE):
-            anonymized_content = self._extract_anonymized_content(response_json, ASSISTANT_ROLE)
+            anonymized_content: Final = self._extract_anonymized_content(response_json, ASSISTANT_ROLE)
             if anonymized_content:
                 # Replace the LLM response content with anonymized version
                 self._replace_llm_response_content(response, anonymized_content)
-                verbose_proxy_logger.debug(f"Noma guardrail anonymized LLM response: {anonymized_content}")
+                verbose_proxy_logger.debug("Noma guardrail anonymized LLM response: %s", anonymized_content)
                 return anonymized_content
 
         await self._check_verdict(ASSISTANT_ROLE, content, response_json)
@@ -334,7 +333,7 @@ class NomaGuardrail(CustomGuardrail):
 
             # Get the aggregatedScanResult from the response
             # aggregatedScanResult=True means unsafe (block), False means safe (allow)
-            aggregated_scan_result = response_json.get("aggregatedScanResult", False)
+            aggregated_scan_result: Final = response_json.get("aggregatedScanResult", False)
 
             # If aggregatedScanResult is False, content is safe/allowed
             if aggregated_scan_result is False:
@@ -348,7 +347,7 @@ class NomaGuardrail(CustomGuardrail):
             return "guardrail_failed_to_respond"
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error determining NOMA guardrail status: {e!s}")
+            verbose_proxy_logger.error("Error determining NOMA guardrail status: %s", e)
             return "guardrail_failed_to_respond"
 
     def _should_only_sensitive_data_failed(self, classification_obj: dict) -> bool:
@@ -365,7 +364,7 @@ class NomaGuardrail(CustomGuardrail):
             return False
 
         # Track which detectors have result=true (detected violations)
-        failed_detectors = []
+        failed_detectors: Final = []
         sensitive_data_detected = False
 
         for key, value in classification_obj.items():
@@ -402,7 +401,7 @@ class NomaGuardrail(CustomGuardrail):
             The anonymized content string if available, None otherwise
         """
         # Extract from new scanResult structure
-        scan_result = response_json.get("scanResult", [])
+        scan_result: Final = response_json.get("scanResult", [])
         if not scan_result:
             return None
 
@@ -435,14 +434,14 @@ class NomaGuardrail(CustomGuardrail):
             return False
 
         # aggregatedScanResult=False means safe, True means unsafe
-        aggregated_scan_result = response_json.get("aggregatedScanResult", False)
+        aggregated_scan_result: Final = response_json.get("aggregatedScanResult", False)
 
         # If aggregatedScanResult is False, content is safe - anonymize if available
         if not aggregated_scan_result:
             return True
 
         # If aggregatedScanResult is True (unsafe), check if only sensitive data detectors triggered
-        scan_result = response_json.get("scanResult", [])
+        scan_result: Final = response_json.get("scanResult", [])
         if not scan_result:
             return False
 
@@ -478,7 +477,7 @@ class NomaGuardrail(CustomGuardrail):
             request_data: The original request data
             anonymized_content: The anonymized content to replace with
         """
-        messages = request_data.get("messages", [])
+        messages: Final = request_data.get("messages", [])
         if not messages:
             return
 
@@ -513,7 +512,7 @@ class NomaGuardrail(CustomGuardrail):
         try:
             await self._process_user_message_check(request_data, user_auth)
         except Exception as e:
-            verbose_proxy_logger.error(f"Noma background user message check failed: {e!s}")
+            verbose_proxy_logger.error("Noma background user message check failed: %s", e)
 
     async def _check_llm_response_background(
         self,
@@ -525,7 +524,7 @@ class NomaGuardrail(CustomGuardrail):
         try:
             await self._process_llm_response_check(request_data, response, user_auth)
         except Exception as e:
-            verbose_proxy_logger.error(f"Noma background response check failed: {e!s}")
+            verbose_proxy_logger.error("Noma background response check failed: %s", e)
 
     async def _handle_verdict_background(
         self,
@@ -538,7 +537,7 @@ class NomaGuardrail(CustomGuardrail):
         """
         try:
             # aggregatedScanResult=True means blocked, False means allowed
-            aggregated_scan_result = response_json.get("aggregatedScanResult", False)
+            aggregated_scan_result: Final = response_json.get("aggregatedScanResult", False)
 
             if aggregated_scan_result:  # True = unsafe
                 msg = f"Noma guardrail blocked {type} message: {message}"
@@ -547,7 +546,7 @@ class NomaGuardrail(CustomGuardrail):
                 msg = f"Noma guardrail allowed {type} message: {message}"
                 verbose_proxy_logger.info(msg)
         except Exception as e:
-            verbose_proxy_logger.error(f"Noma background verdict handling failed: {e!s}")
+            verbose_proxy_logger.error("Noma background verdict handling failed: %s", e)
 
     async def async_pre_call_hook(
         self,
@@ -570,7 +569,7 @@ class NomaGuardrail(CustomGuardrail):
             try:
                 self._create_background_noma_check(self._check_user_message_background(data, user_api_key_dict))
             except Exception as e:
-                verbose_proxy_logger.error(f"Failed to start background Noma pre-call check: {e!s}")
+                verbose_proxy_logger.error("Failed to start background Noma pre-call check: %s", e)
             return data
 
         try:
@@ -582,7 +581,7 @@ class NomaGuardrail(CustomGuardrail):
             # Log technical failures
             from datetime import datetime
 
-            start_time = datetime.now()
+            start_time: Final = datetime.now()
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_provider="noma",
                 guardrail_json_response=str(e),
@@ -594,7 +593,7 @@ class NomaGuardrail(CustomGuardrail):
                 event_type=GuardrailEventHooks.pre_call,
             )
 
-            verbose_proxy_logger.error(f"Noma pre-call hook failed: {e!s}")
+            verbose_proxy_logger.error("Noma pre-call hook failed: %s", e)
 
             if self.block_failures:
                 raise
@@ -618,7 +617,7 @@ class NomaGuardrail(CustomGuardrail):
             try:
                 self._create_background_noma_check(self._check_user_message_background(data, user_api_key_dict))
             except Exception as e:
-                verbose_proxy_logger.error(f"Failed to start background Noma moderation check: {e!s}")
+                verbose_proxy_logger.error("Failed to start background Noma moderation check: %s", e)
             return data
 
         try:
@@ -630,7 +629,7 @@ class NomaGuardrail(CustomGuardrail):
             # Log technical failures
             from datetime import datetime
 
-            start_time = datetime.now()
+            start_time: Final = datetime.now()
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_provider="noma",
                 guardrail_json_response=str(e),
@@ -642,7 +641,7 @@ class NomaGuardrail(CustomGuardrail):
                 event_type=GuardrailEventHooks.during_call,
             )
 
-            verbose_proxy_logger.error(f"Noma moderation hook failed: {e!s}")
+            verbose_proxy_logger.error("Noma moderation hook failed: %s", e)
 
             if self.block_failures:
                 raise
@@ -654,7 +653,7 @@ class NomaGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponse,
     ):
-        event_type: GuardrailEventHooks = GuardrailEventHooks.post_call
+        event_type: Final[GuardrailEventHooks] = GuardrailEventHooks.post_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return response
 
@@ -665,7 +664,7 @@ class NomaGuardrail(CustomGuardrail):
                     self._check_llm_response_background(data, response, user_api_key_dict)
                 )
             except Exception as e:
-                verbose_proxy_logger.error(f"Failed to start background Noma post-call check: {e!s}")
+                verbose_proxy_logger.error("Failed to start background Noma post-call check: %s", e)
             return response
 
         try:
@@ -677,7 +676,7 @@ class NomaGuardrail(CustomGuardrail):
             # Log technical failures
             from datetime import datetime
 
-            start_time = datetime.now()
+            start_time: Final = datetime.now()
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_provider="noma",
                 guardrail_json_response=str(e),
@@ -689,7 +688,7 @@ class NomaGuardrail(CustomGuardrail):
                 event_type=GuardrailEventHooks.post_call,
             )
 
-            verbose_proxy_logger.error(f"Noma post-call hook failed: {e!s}")
+            verbose_proxy_logger.error("Noma post-call hook failed: %s", e)
             if self.block_failures:
                 raise
             return response
@@ -701,7 +700,7 @@ class NomaGuardrail(CustomGuardrail):
         event_type: GuardrailEventHooks | None = None,
     ) -> Exception | str | dict | None:
         """Check user message for policy violations"""
-        user_message = await self._process_user_message_check(request_data, user_auth, event_type)
+        user_message: Final = await self._process_user_message_check(request_data, user_auth, event_type)
         if not user_message:
             return request_data
 
@@ -715,7 +714,7 @@ class NomaGuardrail(CustomGuardrail):
         event_type: GuardrailEventHooks | None = None,
     ) -> Any:
         """Check LLM response for policy violations"""
-        content = await self._process_llm_response_check(request_data, response, user_auth, event_type)
+        content: Final = await self._process_llm_response_check(request_data, response, user_auth, event_type)
         if not content:
             return response
 
@@ -729,14 +728,14 @@ class NomaGuardrail(CustomGuardrail):
         user_auth: UserAPIKeyAuth,
         extra_data: dict,
     ) -> dict:
-        call_id = request_data.get("litellm_call_id")
-        headers = {
+        call_id: Final = request_data.get("litellm_call_id")
+        headers: Final = {
             **({"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}),
             **({"X-Noma-Request-ID": call_id} if call_id else {}),
         }
-        endpoint = urljoin(self.api_base or "https://api.noma.security/", NomaGuardrail._AIDR_ENDPOINT)
+        endpoint: Final = urljoin(self.api_base or "https://api.noma.security/", NomaGuardrail._AIDR_ENDPOINT)
 
-        response = await self.async_handler.post(
+        response: Final = await self.async_handler.post(
             endpoint,
             headers=headers,
             json={
@@ -769,7 +768,7 @@ class NomaGuardrail(CustomGuardrail):
         aggregatedScanResult=True means unsafe (block), False means safe (allow)
         """
         # aggregatedScanResult=True means blocked, False means allowed
-        aggregated_scan_result = response_json.get("aggregatedScanResult", False)
+        aggregated_scan_result: Final = response_json.get("aggregatedScanResult", False)
 
         if aggregated_scan_result:  # True = unsafe, block it
             msg = f"Noma guardrail blocked {type} message: {message}"
@@ -778,7 +777,7 @@ class NomaGuardrail(CustomGuardrail):
                 verbose_proxy_logger.warning(msg)
             else:
                 verbose_proxy_logger.debug(msg)
-                original_response = response_json.get("scanResult", {})
+                original_response: Final = response_json.get("scanResult", {})
                 # Use the full response as the original response for error details
                 raise NomaBlockedMessage(original_response)
         else:  # False = safe, allow it
@@ -804,20 +803,20 @@ class NomaGuardrail(CustomGuardrail):
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """Process streaming response chunks with Noma guardrail."""
 
-        all_chunks: list[ModelResponseStream] = []
+        all_chunks: Final[list[ModelResponseStream]] = []
         async for chunk in response:
             all_chunks.append(chunk)
 
         if not all_chunks:
             return
 
-        assembled_model_response: ModelResponse | TextCompletionResponse | None = stream_chunk_builder(
+        assembled_model_response: Final[ModelResponse | TextCompletionResponse | None] = stream_chunk_builder(
             chunks=all_chunks
         )
 
         if isinstance(assembled_model_response, ModelResponse):
             try:
-                processed_response = await self._check_llm_response(
+                processed_response: Final = await self._check_llm_response(
                     request_data,
                     assembled_model_response,
                     user_api_key_dict,
@@ -828,12 +827,12 @@ class NomaGuardrail(CustomGuardrail):
             except Exception as e:
                 if self.block_failures:
                     raise
-                verbose_proxy_logger.error(f"Noma streaming post-call hook failed: {e!s}")
+                verbose_proxy_logger.error("Noma streaming post-call hook failed: %s", e)
                 for chunk in all_chunks:
                     yield chunk
                 return
 
-            mock_response = MockResponseIterator(model_response=processed_response)
+            mock_response: Final = MockResponseIterator(model_response=processed_response)
             async for chunk in mock_response:
                 yield chunk
             return

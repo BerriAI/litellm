@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
@@ -20,7 +20,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
 from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
 from litellm.types.vector_stores import IndexCreateRequest
 
-router = APIRouter()
+router: Final = APIRouter()
 ########################################################
 # OpenAI Compatible Endpoints
 ########################################################
@@ -42,7 +42,7 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
     Raises:
         HTTPException: If user doesn't have access to the vector store
     """
-    vector_store_to_run: LiteLLM_ManagedVectorStore | None = await get_litellm_managed_vector_store(
+    vector_store_to_run: Final[LiteLLM_ManagedVectorStore | None] = await get_litellm_managed_vector_store(
         vector_store_id=vector_store_id
     )
     if vector_store_to_run is not None:
@@ -67,11 +67,11 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
             # Legacy rows that already carry a resolved (cleartext)
             # ``litellm_embedding_config`` skip the lookup and pass through
             # unchanged so the embed call keeps working.
-            embedding_model = litellm_params.get("litellm_embedding_model")
+            embedding_model: Final = litellm_params.get("litellm_embedding_model")
             if embedding_model and not litellm_params.get("litellm_embedding_config"):
                 from litellm.proxy.proxy_server import prisma_client
 
-                resolved_config = await _resolve_embedding_config(
+                resolved_config: Final = await _resolve_embedding_config(
                     embedding_model=embedding_model, prisma_client=prisma_client
                 )
                 if resolved_config:
@@ -137,7 +137,7 @@ async def vector_store_search(
     # 3. Setting up proper routing
     # 4. Authentication checks
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -202,10 +202,10 @@ async def vector_store_create(
         version,
     )
 
-    data = await _read_request_body(request=request)
+    data: Final = await _read_request_body(request=request)
 
     # Check for target_model_names parameter
-    target_model_names = data.pop("target_model_names", None)
+    target_model_names: Final = data.pop("target_model_names", None)
 
     if target_model_names:
         # Use managed vector stores for multi-model support
@@ -220,7 +220,7 @@ async def vector_store_create(
             )
 
         # Get managed vector stores hook
-        managed_vector_stores: Any = proxy_logging_obj.get_proxy_hook("managed_vector_stores")
+        managed_vector_stores: Final[Any] = proxy_logging_obj.get_proxy_hook("managed_vector_stores")
         if managed_vector_stores is None:
             raise HTTPException(
                 status_code=500,
@@ -234,7 +234,7 @@ async def vector_store_create(
             )
 
         # Create vector store across multiple models
-        response = await managed_vector_stores.acreate_vector_store(
+        response: Final = await managed_vector_stores.acreate_vector_store(
             create_request=data,
             llm_router=llm_router,
             target_model_names_list=target_model_names_list,
@@ -244,7 +244,7 @@ async def vector_store_create(
 
         return response
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -307,7 +307,7 @@ async def vector_store_retrieve(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
     )
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -367,7 +367,7 @@ async def vector_store_list(
         version,
     )
 
-    data: dict = {}
+    data: Final[dict] = {}
     if after is not None:
         data["after"] = after
     if before is not None:
@@ -377,7 +377,7 @@ async def vector_store_list(
     if order is not None:
         data["order"] = order
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -443,7 +443,7 @@ async def vector_store_update(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
     )
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -506,7 +506,7 @@ async def vector_store_delete(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
     )
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -573,7 +573,7 @@ async def index_create(
             detail=CommonProxyErrors.db_not_connected_error.value,
         )
     ## 1. check if index already exists
-    existing_index = await ManagedVectorStoreIndexRepository(prisma_client).table.find_unique(
+    existing_index: Final = await ManagedVectorStoreIndexRepository(prisma_client).table.find_unique(
         where={"index_name": index_create_request.index_name}
     )
 
@@ -586,7 +586,7 @@ async def index_create(
         )
 
     ## 2. create index
-    index_data = index_create_request.model_dump(exclude_none=True)
+    index_data: Final = index_create_request.model_dump(exclude_none=True)
     index_data["created_by"] = user_api_key_dict.user_id
     index_data["updated_by"] = user_api_key_dict.user_id
     new_index = await ManagedVectorStoreIndexRepository(prisma_client).table.create(data=jsonify_object(index_data))
