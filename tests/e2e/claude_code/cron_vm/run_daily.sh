@@ -366,6 +366,10 @@ set +e
 PYTEST_EXIT=$?
 set -e
 log "pytest exit code: ${PYTEST_EXIT} (failures become 'fail' cells, not script errors)"
+# 0=green, 1=test failures (fail cells); >=2 = interrupted/internal/usage/no
+# tests, i.e. a partial run whose missing cells would publish as not_tested.
+[[ ${PYTEST_EXIT} -le 1 ]] \
+  || die "pytest exited abnormally (${PYTEST_EXIT}); refusing to publish a partial matrix"
 [[ -f "${RESULTS_JSON}" ]] || die "pytest did not produce ${RESULTS_JSON}"
 
 # ---------------------------------------------------------------------------
@@ -594,8 +598,10 @@ if [[ "${ALLOW_AUTOMERGE}" == "1" ]]; then
 else
   # Regression (or gate error): make sure auto-merge is OFF. A same-day
   # rerun may have enabled it on an earlier, clean pass, so explicitly
-  # disable rather than just skipping. Non-fatal: if it was never enabled,
-  # `--disable-auto` is a harmless no-op/error we swallow.
+  # disable rather than just skipping. The disable call itself is allowed
+  # to error (`--disable-auto` fails harmlessly when auto-merge was never
+  # enabled), but the read-back below is authoritative: a regressed matrix
+  # must never be left armed to merge, so a still-armed PR is fatal.
   log "leaving ${BRANCH_NAME} for manual review; disabling any prior auto-merge"
   set +e
   GH_TOKEN="${GITHUB_TOKEN}" gh pr merge \
@@ -603,6 +609,15 @@ else
     --repo "${DOCS_REPO}" \
     --disable-auto 2>&1 | sed 's/^/  /'
   set -e
+  AUTOMERGE_ARMED="$(
+    GH_TOKEN="${GITHUB_TOKEN}" gh pr view \
+      "${BRANCH_NAME}" \
+      --repo "${DOCS_REPO}" \
+      --json autoMergeRequest \
+      --jq '.autoMergeRequest.enabledAt // empty'
+  )" || die "could not read back the auto-merge state on ${BRANCH_NAME}"
+  [[ -z "${AUTOMERGE_ARMED}" ]] \
+    || die "auto-merge still armed on ${BRANCH_NAME} (enabled ${AUTOMERGE_ARMED}) after --disable-auto"
 fi
 
 # --- Stale-PR sweep ----------------------------------------------------------
