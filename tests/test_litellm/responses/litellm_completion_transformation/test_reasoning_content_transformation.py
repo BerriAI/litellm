@@ -23,6 +23,7 @@ from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
     ReasoningSummaryTextDeltaEvent,
     ResponseCompletedEvent,
+    ResponsePartAddedEvent,
     ResponsesAPIStreamEvents,
 )
 from litellm.types.utils import (
@@ -222,6 +223,9 @@ def _assert_mixed_reasoning_content_events(events: list[BaseLiteLLMOpenAIRespons
     reasoning_item_added = next(
         event for event in events if isinstance(event, OutputItemAddedEvent) and _event_item_type(event) == "reasoning"
     )
+    reasoning_part_added_events: Final = tuple(event for event in events if isinstance(event, ResponsePartAddedEvent))
+    assert len(reasoning_part_added_events) == 1
+    reasoning_part_added: Final = reasoning_part_added_events[0]
     reasoning_item_done = next(
         event for event in events if isinstance(event, OutputItemDoneEvent) and _event_item_type(event) == "reasoning"
     )
@@ -229,8 +233,10 @@ def _assert_mixed_reasoning_content_events(events: list[BaseLiteLLMOpenAIRespons
         event for event in events if isinstance(event, OutputItemAddedEvent) and _event_item_type(event) == "message"
     )
     content_part_added = next(event for event in events if isinstance(event, ContentPartAddedEvent))
-    assert reasoning_delta.item_id == getattr(reasoning_item_added.item, "id", None)
-    assert reasoning_delta.output_index == reasoning_item_added.output_index == 0
+    assert reasoning_part_added.item_id == reasoning_delta.item_id == getattr(reasoning_item_added.item, "id", None)
+    assert reasoning_part_added.output_index == reasoning_delta.output_index == reasoning_item_added.output_index == 0
+    assert getattr(reasoning_part_added, "summary_index", None) == 0
+    assert reasoning_part_added.part == {"type": "summary_text", "text": ""}
     assert text_delta.output_index == message_item_added.output_index == 1
     assert _done_output_items_by_index(events) == ((0, "reasoning"), (1, "message"))
     assert _completed_output_types(events) == ("reasoning", "message")
@@ -247,7 +253,7 @@ def _assert_mixed_reasoning_content_events(events: list[BaseLiteLLMOpenAIRespons
         if getattr(event, "item_id", None) == text_delta.item_id
         or getattr(getattr(event, "item", None), "id", None) == text_delta.item_id
     )
-    assert events.index(reasoning_item_added) < events.index(reasoning_delta)
+    assert events.index(reasoning_item_added) < events.index(reasoning_part_added) < events.index(reasoning_delta)
     assert events.index(reasoning_delta) < events.index(reasoning_item_done)
     assert events.index(reasoning_item_done) < events.index(message_item_added)
     assert events.index(message_item_added) < events.index(content_part_added)

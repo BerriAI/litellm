@@ -35,6 +35,7 @@ from litellm.types.llms.openai import (
     ResponseCreatedEvent,
     ResponseInProgressEvent,
     ResponseInputParam,
+    ResponsePartAddedEvent,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
@@ -717,22 +718,34 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if getattr(self, "_sent_reasoning_output_item_added_event", False):
             return
         self._reasoning_active = True
-        if self._cached_reasoning_item_id is None:
-            self._cached_reasoning_item_id = f"rs_{uuid.uuid4()}"
-        self._reasoning_item_id = self._cached_reasoning_item_id
-        event: Final = OutputItemAddedEvent(
-            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
-            output_index=self._get_or_assign_reasoning_output_index(),
-            item=BaseLiteLLMOpenAIResponseObject(
-                **{
-                    "id": self._cached_reasoning_item_id,
-                    "type": "reasoning",
-                    "status": "in_progress",
-                    "summary": None,
+        reasoning_item_id: Final = self._cached_reasoning_item_id or f"rs_{uuid.uuid4()}"
+        self._cached_reasoning_item_id = reasoning_item_id
+        self._reasoning_item_id = reasoning_item_id
+        reasoning_output_index: Final = self._get_or_assign_reasoning_output_index()
+        events: Final = (
+            OutputItemAddedEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                output_index=reasoning_output_index,
+                item=BaseLiteLLMOpenAIResponseObject(
+                    **{
+                        "id": reasoning_item_id,
+                        "type": "reasoning",
+                        "status": "in_progress",
+                        "summary": None,
+                    }
+                ),
+            ),
+            ResponsePartAddedEvent.model_validate(
+                {
+                    "type": ResponsesAPIStreamEvents.RESPONSE_PART_ADDED,
+                    "item_id": reasoning_item_id,
+                    "output_index": reasoning_output_index,
+                    "summary_index": 0,
+                    "part": {"type": "summary_text", "text": ""},
                 }
             ),
         )
-        self._pending_response_events.append(event)
+        self._pending_response_events.extend(events)
         self._sent_reasoning_output_item_added_event = True
 
     def _ensure_message_output_item(self) -> None:
