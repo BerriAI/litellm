@@ -124,6 +124,35 @@ def test_create_request_builds_s3_input_output_and_arn(config):
     assert result["headers"] == {"Authorization": "signed"}
 
 
+def test_create_request_forwards_cross_account_aws_auth_from_litellm_params_to_signer(
+    config,
+):
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        config.transform_create_batch_request(
+            model="m",
+            create_batch_data={"input_file_id": "s3://b/in.jsonl"},
+            optional_params={},
+            litellm_params={
+                "aws_batch_role_arn": "arn:aws:iam::999999999999:role/cross-account-batch-role",
+                "aws_role_name": "arn:aws:iam::999999999999:role/cross-account-assume-role",
+                "aws_region_name": "eu-west-1",
+            },
+        )
+    signing_params = mock_sign.call_args.kwargs["optional_params"]
+    assert (
+        signing_params["aws_role_name"]
+        == "arn:aws:iam::999999999999:role/cross-account-assume-role"
+    )
+    assert mock_sign.call_args.kwargs["endpoint_url"] == (
+        "https://bedrock.eu-west-1.amazonaws.com/model-invocation-job"
+    )
+
+
 def test_create_request_defaults_output_bucket_to_input_bucket(config):
     with patch.object(
         config.common_utils,
