@@ -131,7 +131,7 @@ def _reasoning_tool_chunks() -> tuple[ModelResponseStream, ModelResponseStream, 
                     tool_calls=[
                         {
                             "index": 0,
-                            "id": "call_1",
+                            "id": "call_reasoning_tool",
                             "type": "function",
                             "function": {"name": "lookup", "arguments": "{}"},
                         }
