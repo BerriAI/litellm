@@ -265,3 +265,23 @@ async def test_prefetch_config_params_swallows_db_error_without_caching(
     prisma.db.litellm_config.find_many = AsyncMock(side_effect=RuntimeError("boom"))
     await prefetch_config_params(prisma, ["a", "b"])
     assert _swap_config_cache._store == {}
+
+@pytest.mark.asyncio
+async def test_invalidate_config_param_broadcasts_the_cache_key(
+    _swap_config_cache: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Evicting only this worker's copy leaves every other worker serving the
+    pre-write param value for the rest of the 60s TTL, so the write has to be
+    broadcast at the config cache.
+    """
+    published: List[Any] = []
+
+    async def _record(cache_key: str, target: str = "user_api_key") -> None:
+        published.append((cache_key, target))
+
+    monkeypatch.setattr(utils_mod, "publish_auth_cache_invalidation", _record)
+    await invalidate_config_param("p5")
+
+    assert published == [("litellm_config:param:p5", "config_param")]

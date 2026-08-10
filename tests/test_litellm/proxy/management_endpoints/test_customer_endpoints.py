@@ -781,3 +781,82 @@ def test_char_delete_body(mock_prisma_client, mock_user_api_key_auth):
         "deleted_customers": 2,
         "message": "Successfully deleted customers with ids: ['c1', 'c2']",
     }
+
+@pytest.fixture
+def seeded_end_user_cache():
+    """A cache already holding the auth-path entries for customer c1."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache = UserApiKeyCache()
+    cache.in_memory_cache.set_cache("end_user_id:c1", {"user_id": "c1", "blocked": False})
+    cache.in_memory_cache.set_cache("end_user_validation:c1", "valid")
+    with patch("litellm.proxy.proxy_server.user_api_key_cache", cache):
+        yield cache
+
+
+def _cached_end_user_entries(cache):
+    return (
+        cache.in_memory_cache.get_cache("end_user_id:c1"),
+        cache.in_memory_cache.get_cache("end_user_validation:c1"),
+    )
+
+
+def test_block_customer_evicts_cached_end_user(mock_prisma_client, mock_user_api_key_auth, seeded_end_user_cache):
+    """
+    Without eviction the auth path keeps serving the pre-block end-user object,
+    so a blocked customer's requests still pass until the cache entry expires.
+    """
+    mock_prisma_client.db.litellm_endusertable.upsert = AsyncMock(
+        return_value=LiteLLM_EndUserTable(user_id="c1", blocked=True)
+    )
+
+    response = client.post("/customer/block", json={"user_ids": ["c1"]}, headers={"Authorization": "Bearer k"})
+
+    assert response.status_code == 200
+    assert _cached_end_user_entries(seeded_end_user_cache) == (None, None)
+
+
+def test_update_customer_evicts_cached_end_user(mock_prisma_client, mock_user_api_key_auth, seeded_end_user_cache):
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=_row({"user_id": "c1", "blocked": False})
+    )
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=_row(_FULL_DB_ROW))
+
+    response = client.post(
+        "/customer/update",
+        json={"user_id": "c1", "alias": "Acme"},
+        headers={"Authorization": "Bearer k"},
+    )
+
+    assert response.status_code == 200
+    assert _cached_end_user_entries(seeded_end_user_cache) == (None, None)
+
+
+def test_delete_customer_evicts_cached_end_user(mock_prisma_client, mock_user_api_key_auth, seeded_end_user_cache):
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(
+        return_value=[LiteLLM_EndUserTable(user_id="c1", blocked=False)]
+    )
+    mock_prisma_client.db.litellm_endusertable.delete_many = AsyncMock(return_value=1)
+
+    response = client.post("/customer/delete", json={"user_ids": ["c1"]}, headers={"Authorization": "Bearer k"})
+
+    assert response.status_code == 200
+    assert _cached_end_user_entries(seeded_end_user_cache) == (None, None)
+
+
+def test_new_customer_evicts_cached_negative_validation(mock_prisma_client, mock_user_api_key_auth):
+    """
+    The id-validation cache stores 'invalid' verdicts too, so creating a customer
+    for an id that was just rejected must drop that verdict.
+    """
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache = UserApiKeyCache()
+    cache.in_memory_cache.set_cache("end_user_validation:c1", "invalid")
+    mock_prisma_client.db.litellm_endusertable.create = AsyncMock(return_value=_row(_FULL_DB_ROW))
+
+    with patch("litellm.proxy.proxy_server.user_api_key_cache", cache):
+        response = client.post("/customer/new", json={"user_id": "c1"}, headers={"Authorization": "Bearer k"})
+
+    assert response.status_code == 200
+    assert cache.in_memory_cache.get_cache("end_user_validation:c1") is None

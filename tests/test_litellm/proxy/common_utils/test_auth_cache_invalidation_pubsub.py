@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 from redis.asyncio import Redis
 
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AUTH_CACHE_INVALIDATION_CHANNEL,
     AuthCacheInvalidationSubscriber,
@@ -69,8 +70,9 @@ class _FakeRedisCache:
         return self._client
 
 
-def _invalidation_message(cache_key: str) -> dict:
-    return {"type": "message", "data": json.dumps({"cache_key": cache_key}).encode()}
+def _invalidation_message(cache_key: str, cache: Optional[str] = None) -> dict:
+    payload = {"cache_key": cache_key} if cache is None else {"cache_key": cache_key, "cache": cache}
+    return {"type": "message", "data": json.dumps(payload).encode()}
 
 
 @pytest.mark.asyncio
@@ -82,7 +84,12 @@ async def test_publish_sends_cache_key_json_on_channel() -> None:
     ):
         await publish_auth_cache_invalidation(cache_key="project_id:p-1")
 
-    assert client.published == [(AUTH_CACHE_INVALIDATION_CHANNEL, json.dumps({"cache_key": "project_id:p-1"}))]
+    assert client.published == [
+        (
+            AUTH_CACHE_INVALIDATION_CHANNEL,
+            json.dumps({"cache_key": "project_id:p-1", "cache": "user_api_key"}),
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -129,7 +136,7 @@ async def test_subscriber_deletes_local_cache_entry_on_message() -> None:
     pubsub = _QueuePubSub(initial_messages=[_invalidation_message("project_id:p-1")])
     subscriber = AuthCacheInvalidationSubscriber(
         redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
-        user_api_key_cache=cache,
+        in_memory_caches={"user_api_key": cache.in_memory_cache},
     )
     subscriber.start()
     try:
@@ -151,11 +158,64 @@ async def test_subscriber_ignores_malformed_messages() -> None:
 
     subscriber = AuthCacheInvalidationSubscriber(
         redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[_QueuePubSub()])),
-        user_api_key_cache=cache,
+        in_memory_caches={"user_api_key": cache.in_memory_cache},
     )
     subscriber._apply_message({"type": "message", "data": b"not json"})
     subscriber._apply_message({"type": "message", "data": json.dumps({"other": "x"}).encode()})
+    subscriber._apply_message({"type": "message", "data": json.dumps({"cache_key": "project_id:p-1", "cache": "nope"}).encode()})
     subscriber._apply_message("raw string")
     subscriber._apply_message(None)
 
     assert cache.in_memory_cache.get_cache("project_id:p-1") is not None
+
+
+@pytest.mark.asyncio
+async def test_publish_targets_the_named_cache() -> None:
+    client = _RecordingRedisClient()
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_FakeRedisCache(client=client),
+    ):
+        await publish_auth_cache_invalidation(cache_key="litellm_config:param:general_settings", target="config_param")
+
+    assert json.loads(client.published[0][1]) == {
+        "cache_key": "litellm_config:param:general_settings",
+        "cache": "config_param",
+    }
+
+
+@pytest.mark.asyncio
+async def test_subscriber_routes_message_to_the_targeted_cache_only() -> None:
+    """
+    A config-param broadcast must land on the config cache. Routing by target keeps
+    one worker's config write from evicting an unrelated, identically keyed auth entry.
+    """
+    auth_cache = InMemoryCache()
+    config_cache = InMemoryCache()
+    shared_key = "litellm_config:param:general_settings"
+    auth_cache.set_cache(shared_key, {"from": "auth"})
+    config_cache.set_cache(shared_key, {"from": "config"})
+
+    subscriber = AuthCacheInvalidationSubscriber(
+        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[_QueuePubSub()])),
+        in_memory_caches={"user_api_key": auth_cache, "config_param": config_cache},
+    )
+    subscriber._apply_message(_invalidation_message(shared_key, cache="config_param"))
+
+    assert config_cache.get_cache(shared_key) is None
+    assert auth_cache.get_cache(shared_key) is not None
+
+
+@pytest.mark.asyncio
+async def test_subscriber_defaults_untargeted_message_to_the_auth_cache() -> None:
+    """Messages published by a pre-upgrade worker carry no target during a rolling deploy."""
+    auth_cache = InMemoryCache()
+    auth_cache.set_cache("project_id:p-1", {"models": []})
+
+    subscriber = AuthCacheInvalidationSubscriber(
+        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[_QueuePubSub()])),
+        in_memory_caches={"user_api_key": auth_cache},
+    )
+    subscriber._apply_message(_invalidation_message("project_id:p-1"))
+
+    assert auth_cache.get_cache("project_id:p-1") is None

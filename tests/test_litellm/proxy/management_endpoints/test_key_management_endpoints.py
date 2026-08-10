@@ -15442,3 +15442,45 @@ async def test_migrate_encryption_endpoint_rejects_proxy_admin_viewer():
 
     assert exc_info.value.status_code == 403
     mock_migrate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_verification_tokens_broadcasts_key_eviction(monkeypatch):
+    """
+    /key/delete evicting only the handling worker's copy leaves the deleted key
+    authenticating requests on every other worker until its cache entry expires.
+    """
+    published: list = []
+
+    async def _record(cache_key: str, target: str = "user_api_key") -> None:
+        published.append((cache_key, target))
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[LiteLLM_VerificationToken(token="hashed-token-1")]
+    )
+    mock_prisma_client.delete_data = AsyncMock(return_value=["hashed-token-1"])
+    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+        lambda token: "hashed-token-1",
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        _record,
+    )
+
+    await delete_verification_tokens(
+        tokens=["sk-token-1"],
+        user_api_key_cache=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user",
+            api_key="sk-admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        ),
+        litellm_changed_by="admin-user",
+    )
+
+    assert published == [("hashed-token-1", "user_api_key")]
