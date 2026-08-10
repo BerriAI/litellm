@@ -2951,10 +2951,8 @@ class TestResolveRequestRouteForMetrics:
             assert resolve_request_route_for_metrics(None, route) == route
 
     def test_collapses_unknown_paths_to_unmatched(self):
-        from litellm.proxy.auth.auth_utils import (
-            UNMATCHED_REQUEST_ROUTE,
-            resolve_request_route_for_metrics,
-        )
+        from litellm.constants import UNMATCHED_REQUEST_ROUTE
+        from litellm.proxy.auth.auth_utils import resolve_request_route_for_metrics
 
         scanner_paths = [
             "/files/pRzAdaV1.php",

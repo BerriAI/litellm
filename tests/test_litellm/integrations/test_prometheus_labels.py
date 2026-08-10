@@ -451,10 +451,8 @@ def test_route_normalization_preserves_static_routes():
 
 def test_unmatched_scanner_routes_collapse_for_metrics():
     """Unknown paths must not create unbounded Prometheus route labels."""
-    from litellm.proxy.auth.auth_utils import (
-        UNMATCHED_REQUEST_ROUTE,
-        resolve_request_route_for_metrics,
-    )
+    from litellm.constants import UNMATCHED_REQUEST_ROUTE
+    from litellm.proxy.auth.auth_utils import resolve_request_route_for_metrics
 
     scanner_paths = [
         "/files/pRzAdaV1.php",

@@ -11,7 +11,7 @@ from fastapi import HTTPException, Request, status
 import litellm
 from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH, STANDARD_CUSTOMER_ID_HEADERS
+from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH, STANDARD_CUSTOMER_ID_HEADERS, UNMATCHED_REQUEST_ROUTE
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import (
     SSRFError,
@@ -766,8 +766,6 @@ def normalize_request_route(route: str) -> str:
     # Return original route if no pattern matched
     return route
 
-
-UNMATCHED_REQUEST_ROUTE: Final = "/unmatched"
 
 # Literal proxy routes safe to emit when FastAPI's route template is unavailable
 # (e.g. auth failure on an unmatched scope). Dynamic segments must never appear
