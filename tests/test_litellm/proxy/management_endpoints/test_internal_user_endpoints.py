@@ -788,6 +788,68 @@ def test_update_internal_user_params_reset_spend_and_max_budget():
     assert "budget_duration" not in non_default_values  # Should not add default values
 
 
+@pytest.mark.parametrize("bad_duration", ["0s", "-5m"])
+def test_update_internal_user_params_rejects_a_duration_that_never_advances(bad_duration):
+    """A zero-length window resets to "now", so the user row is due again the
+    moment it is written and the reset job re-reads it on every tick. Enough of
+    them fill each batch and starve other tenants' resets.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UpdateUserRequest
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_user_params,
+    )
+
+    data = UpdateUserRequest(user_id="test_user_id", budget_duration=bad_duration)
+
+    with pytest.raises(HTTPException) as exc_info:
+        _update_internal_user_params(data_json=data.model_dump(exclude_unset=True), data=data)
+
+    assert exc_info.value.status_code == 400
+    assert "Invalid budget_duration" in str(exc_info.value.detail)
+
+
+def test_update_internal_user_params_accepts_a_normal_duration():
+    from litellm.proxy._types import UpdateUserRequest
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_user_params,
+    )
+
+    data = UpdateUserRequest(user_id="test_user_id", budget_duration="30d")
+
+    non_default_values = _update_internal_user_params(data_json=data.model_dump(exclude_unset=True), data=data)
+
+    assert non_default_values["budget_duration"] == "30d"
+    assert non_default_values["budget_reset_at"] is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_duration", ["0s", "-5m"])
+async def test_new_user_rejects_a_duration_that_never_advances(mocker, bad_duration):
+    """/user/new must reject the same never-advancing durations /user/update does."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    duplicate_check = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        new=AsyncMock(),
+    )
+    admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await new_user(
+            data=NewUserRequest(budget_duration=bad_duration),
+            user_api_key_dict=admin,
+        )
+
+    assert str(exc_info.value.code) == "400"
+    assert "Invalid budget_duration" in str(exc_info.value.message)
+    duplicate_check.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_new_user_license_over_limit(mocker):
     """

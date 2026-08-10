@@ -82,6 +82,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _set_object_metadata_field,
     _team_member_has_permission,
     _user_has_admin_view,
+    validate_budget_duration,
     validate_finite_spend,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
@@ -844,6 +845,8 @@ async def _common_key_generation_helper(
         premium_user=premium_user,
     )
 
+    validate_budget_duration(data.budget_duration)
+
     if data.throttle_on_budget_exceeded is True and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
         raise HTTPException(
             status_code=403,
@@ -1024,7 +1027,7 @@ async def _common_key_generation_helper(
 
     # Only set budget_duration on key when explicitly provided. Keys with budget_id
     # but no explicit budget_duration follow their linked budget tier's schedule;
-    # reset_budget_for_keys_linked_to_budgets() resets them when the tier resets.
+    # reset_budget_for_litellm_budget_table() resets them when the tier resets.
     # This avoids duplicating budget_duration on keys so tier updates apply automatically.
     if "budget_duration" in data_json:
         data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
@@ -2401,6 +2404,7 @@ async def _validate_update_key_data(
     """Validate permissions and constraints for key update."""
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
     validate_finite_spend(data.spend)
+    validate_budget_duration(data.budget_duration)
 
     _is_proxy_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
