@@ -1114,7 +1114,7 @@ Model Info:
                     from_attributes=True,
                 )
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # best-effort link build; any DB/creation failure falls back to base_url
             verbose_proxy_logger.error(
                 "Error creating invitation link for user_id %s: %s",
                 recipient_user_id,
