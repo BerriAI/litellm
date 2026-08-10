@@ -788,8 +788,10 @@ if MCP_AVAILABLE:
 
             request_tags: Final = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
                 llm_router=None,
-                headers={key.lower(): value for key, value in (raw_headers or {}).items()},
-                data={},
+                headers={  # mutable-ok: request-tag helper accepts a mutable header mapping
+                    key.lower(): value for key, value in (raw_headers or {}).items()
+                },
+                data={},  # mutable-ok: request-tag helper mutates request metadata in place
             )
             listing: Final = await _list_mcp_tools(
                 user_api_key_auth=user_api_key_auth,

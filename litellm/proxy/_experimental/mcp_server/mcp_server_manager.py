@@ -774,7 +774,7 @@ def _without_authorization(
 
 
 def _is_gateway_attribution_header(header_name: str) -> bool:
-    return header_name.lower() in {"x-litellm-tags", "x-litellm-end-user-id"}
+    return header_name.lower() in frozenset(("x-litellm-tags", "x-litellm-end-user-id"))
 
 
 def _format_byok_openapi_auth_header(mcp_server: MCPServer, mcp_auth_header: str) -> str:
