@@ -575,7 +575,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         return filtered_betas
 
     @staticmethod
-    def _reject_unsupported_web_search_tools(anthropic_messages_request: dict, model: str) -> None:
+    def _reject_unsupported_web_search_tools(anthropic_messages_request: dict[str, object], model: str) -> None:
         """
         Bedrock's Anthropic endpoints cannot execute Anthropic's server-side
         ``web_search_*`` tool; forwarding it returns an opaque
@@ -671,8 +671,6 @@ class AmazonAnthropicClaudeMessagesConfig(
         ############## BEDROCK Invoke SPECIFIC TRANSFORMATION ###
         #########################################################
 
-        # 0. Server-side web_search tools are unsupported on Bedrock — reject
-        # with an actionable error before Bedrock 400s opaquely.
         self._reject_unsupported_web_search_tools(anthropic_messages_request=anthropic_messages_request, model=model)
 
         # 1. anthropic_version is required for all claude models

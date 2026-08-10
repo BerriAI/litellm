@@ -2583,7 +2583,7 @@ def test_replayed_intercepted_search_turn_leaves_no_unsupported_block_for_bedroc
 
 
 @pytest.mark.parametrize("tool_type", ["web_search_20250305", "web_search_20260209"])
-def test_bedrock_invoke_messages_rejects_server_web_search_tool(tool_type):
+def test_bedrock_invoke_messages_rejects_server_web_search_tool(tool_type: str):
     """Bedrock can't execute Anthropic's server-side web search; the transform
     must raise an actionable 400 pointing at the interception docs instead of
     letting Bedrock return an opaque "provided request is not valid"."""
