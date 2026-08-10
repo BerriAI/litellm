@@ -150,10 +150,6 @@ type RowSelectionProps =
   | { rowSelection: RowSelectionState; onRowSelectionChange: OnChangeFn<RowSelectionState> }
   | { rowSelection?: never; onRowSelectionChange?: OnChangeFn<RowSelectionState> };
 
-/**
- * Public prop type. The mode-keyed unions make the combinations
- * `validateDataTableConfig` used to reject at runtime unrepresentable instead.
- */
 export type DataTableProps<TData extends RowData, TValue> = DataTableBaseProps<TData, TValue> &
   SortingProps &
   PaginationProps &
