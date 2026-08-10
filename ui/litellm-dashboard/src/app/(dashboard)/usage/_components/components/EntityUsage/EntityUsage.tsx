@@ -1,5 +1,6 @@
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { BarChart, DonutChart } from "@/components/shared/charts";
+import { buildCostBreakdownTiles, buildSummaryTiles, hasFlatCost, type SummaryTile } from "./entityUsageSummary";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -23,8 +24,8 @@ import {
   Text,
   Title,
 } from "@tremor/react";
-import { ExportOutlined, LoadingOutlined } from "@ant-design/icons";
-import { Alert, Button } from "antd";
+import { DownOutlined, ExportOutlined, InfoCircleOutlined, LoadingOutlined, RightOutlined } from "@ant-design/icons";
+import { Alert, Button, Tooltip } from "antd";
 import React, { type ReactNode, useMemo, useState } from "react";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
@@ -76,6 +77,7 @@ interface EntitySpendData {
   results: ExtendedDailyData[];
   metadata: {
     total_spend: number;
+    total_flat_cost?: number;
     total_api_requests: number;
     total_successful_requests: number;
     total_failed_requests: number;
@@ -115,6 +117,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const [topAgentsLimit, setTopAgentsLimit] = useState<number>(5);
+  const [showCostBreakdown, setShowCostBreakdown] = useState(false);
 
   const startTime = useMemo(() => (dateValue.from ? new Date(dateValue.from) : null), [dateValue.from]);
   const endTime = useMemo(() => (dateValue.to ? new Date(dateValue.to) : null), [dateValue.to]);
@@ -408,42 +411,39 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   };
 
   const capitalizedEntityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
+  const showFlatCost = entityType === "team" && hasFlatCost(spendData.metadata);
+
+  const chev = "text-gray-400 text-xs";
+  const expandIcon = showCostBreakdown ? <DownOutlined className={chev} /> : <RightOutlined className={chev} />;
+  const infoIcon = <InfoCircleOutlined className="text-gray-400 hover:text-gray-600" />;
+
+  const renderSummaryTile = ({ title, value, className, tooltip, expandable }: SummaryTile) => (
+    <Card
+      key={title}
+      className={expandable ? "cursor-pointer hover:bg-gray-50 transition-colors" : undefined}
+      onClick={expandable ? () => setShowCostBreakdown(!showCostBreakdown) : undefined}
+    >
+      <div className="flex items-center gap-2">
+        <Title>{title}</Title>
+        {tooltip ? <Tooltip title={tooltip}>{infoIcon}</Tooltip> : null}
+        {expandable ? expandIcon : null}
+      </div>
+      <Text className={`text-2xl font-bold mt-2 ${className ?? ""}`}>{value}</Text>
+    </Card>
+  );
+
+  const breakdownTiles = showFlatCost && showCostBreakdown ? buildCostBreakdownTiles(spendData.metadata) : [];
+  const summaryTiles = [...buildSummaryTiles(spendData.metadata, showFlatCost), ...breakdownTiles];
 
   const modelViewTitle = modelViewType === "groups" ? "Top Public Model Names" : "Top Litellm Models";
 
   const costPanel = (
     <Grid numItems={2} className="gap-2 w-full">
-      {/* Total Spend Card */}
       <Col numColSpan={2}>
         <Card>
           <Title>{capitalizedEntityLabel} Spend Overview</Title>
           <Grid numItems={5} className="gap-4 mt-4">
-            <Card>
-              <Title>Total Spend</Title>
-              <Text className="text-2xl font-bold mt-2">
-                ${formatNumberWithCommas(spendData.metadata.total_spend, 2)}
-              </Text>
-            </Card>
-            <Card>
-              <Title>Total Requests</Title>
-              <Text className="text-2xl font-bold mt-2">{spendData.metadata.total_api_requests.toLocaleString()}</Text>
-            </Card>
-            <Card>
-              <Title>Successful Requests</Title>
-              <Text className="text-2xl font-bold mt-2 text-green-600">
-                {spendData.metadata.total_successful_requests.toLocaleString()}
-              </Text>
-            </Card>
-            <Card>
-              <Title>Failed Requests</Title>
-              <Text className="text-2xl font-bold mt-2 text-red-600">
-                {spendData.metadata.total_failed_requests.toLocaleString()}
-              </Text>
-            </Card>
-            <Card>
-              <Title>Total Tokens</Title>
-              <Text className="text-2xl font-bold mt-2">{spendData.metadata.total_tokens.toLocaleString()}</Text>
-            </Card>
+            {summaryTiles.map(renderSummaryTile)}
           </Grid>
         </Card>
       </Col>
@@ -456,21 +456,40 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
           </CardHeader>
           <CardContent>
             <BarChart
-              data={[...spendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())}
+              data={[...spendData.results]
+                .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                .map((row) => ({
+                  ...row,
+                  "Request cost": row.metrics.spend ?? 0,
+                  "Flat cost": row.metrics.flat_cost ?? 0,
+                }))}
               index="date"
-              categories={["metrics.spend"]}
-              colors={["cyan"]}
+              categories={showFlatCost ? ["Request cost", "Flat cost"] : ["metrics.spend"]}
+              colors={showFlatCost ? ["cyan", "violet"] : ["cyan"]}
+              stack={showFlatCost}
               valueFormatter={valueFormatterSpend}
               yAxisWidth={100}
-              showLegend={false}
+              showLegend={showFlatCost}
               customTooltip={({ payload, active }) => {
                 if (!active || !payload?.[0]) return null;
                 const data = payload[0].payload;
                 const entityCount = Object.keys(data.breakdown.entities || {}).length;
+                const requestSpend = data.metrics.spend ?? 0;
+                const flatCost = data.metrics.flat_cost ?? 0;
                 return (
                   <div className="bg-white p-4 shadow-lg rounded-lg border">
                     <p className="font-bold">{data.date}</p>
-                    <p className="text-cyan-500">Total Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}</p>
+                    {showFlatCost ? (
+                      <>
+                        <p className="text-cyan-500">Request cost: ${formatNumberWithCommas(requestSpend, 2)}</p>
+                        <p className="text-violet-500">Flat cost: ${formatNumberWithCommas(flatCost, 2)}</p>
+                        <p className="font-semibold">
+                          Total cost: ${formatNumberWithCommas(requestSpend + flatCost, 2)}
+                        </p>
+                      </>
+                    ) : (
+                      <p className="text-cyan-500">Total Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}</p>
+                    )}
                     <p className="text-gray-600">Total Requests: {data.metrics.api_requests}</p>
                     <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
                     <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>

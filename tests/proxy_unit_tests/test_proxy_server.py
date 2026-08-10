@@ -2697,6 +2697,79 @@ def test_get_timeout_from_request():
     assert timeout == 90.5
 
 
+def test_add_litellm_data_for_backend_llm_call_marks_client_side_timeout():
+    """A caller-supplied x-litellm-timeout must be marked with client_side_timeout=True,
+    so the router's fallback-cooldown trigger can tell it apart from a deployment
+    actually timing out (a caller could otherwise force every deployment in a fallback
+    chain to look unhealthy with a single near-zero timeout request)."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="test_api_key")
+
+    data = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+        headers={"x-litellm-timeout": "0.001"},
+        request_data={},
+        user_api_key_dict=user_api_key_dict,
+    )
+    assert data["timeout"] == 0.001
+    assert data["client_side_timeout"] is True
+
+    data_without_header = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+        headers={},
+        request_data={},
+        user_api_key_dict=user_api_key_dict,
+    )
+    assert "client_side_timeout" not in data_without_header
+
+
+@pytest.mark.parametrize(
+    "request_data",
+    [
+        {"timeout": 0.001},
+        {"request_timeout": 0.001},
+        {"stream_timeout": 0.001},
+    ],
+)
+def test_add_litellm_data_for_backend_llm_call_marks_client_side_timeout_from_body(
+    request_data,
+):
+    """Router._get_timeout resolves the effective timeout from kwargs["timeout"],
+    kwargs["request_timeout"], or kwargs["stream_timeout"], and a caller can supply any
+    of those directly in the request body, not just via the x-litellm-timeout header.
+    Missing this would let a caller force a 408 on every deployment in a fallback chain
+    without it being recognized as caller-controlled, cooling down deployments other
+    tenants rely on."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="test_api_key")
+
+    data = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+        headers={},
+        request_data=request_data,
+        user_api_key_dict=user_api_key_dict,
+    )
+    assert data["client_side_timeout"] is True
+
+
+def test_add_litellm_data_for_backend_llm_call_ignores_forged_client_side_timeout():
+    """The caller-supplied client_side_timeout key itself must never be trusted verbatim:
+    the marker is always recomputed from the actual timeout sources, so a caller can't
+    forge client_side_timeout=True to dodge cooldown on a real deployment failure."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="test_api_key")
+
+    data = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+        headers={},
+        request_data={"client_side_timeout": True},
+        user_api_key_dict=user_api_key_dict,
+    )
+    assert "client_side_timeout" not in data
+
+
 @pytest.mark.parametrize(
     "ui_exists, ui_has_content",
     [

@@ -7,6 +7,7 @@ Docs - https://lmstudio.ai/docs/basics/server
 """
 
 import types
+from typing import Final
 
 
 class LmStudioEmbeddingConfig:
@@ -17,7 +18,7 @@ class LmStudioEmbeddingConfig:
     def __init__(
         self,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

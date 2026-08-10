@@ -93,26 +93,6 @@ interface UserOption {
   user: User;
 }
 
-const getPredefinedTags = (data: any[] | null) => {
-  let allTags = [];
-
-  if (data) {
-    for (let key of data) {
-      if (key["metadata"] && key["metadata"]["tags"]) {
-        allTags.push(...key["metadata"]["tags"]);
-      }
-    }
-  }
-
-  // Deduplicate using Set
-  const uniqueTags = Array.from(new Set(allTags)).map((tag) => ({
-    value: tag,
-    label: tag,
-  }));
-
-  return uniqueTags;
-};
-
 export const fetchTeamModels = async (
   userID: string,
   userRole: string,
@@ -178,7 +158,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiKey, setApiKey] = useState(null);
-  const [softBudget, setSoftBudget] = useState(null);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
   const [keyOwner, setKeyOwner] = useState("you");
@@ -192,11 +171,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
-  const [newlyCreatedUserId, setNewlyCreatedUserId] = useState<string | null>(null);
   const [possibleUIRoles, setPossibleUIRoles] = useState<Record<string, Record<string, string>>>({});
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
   const [userSearchLoading, setUserSearchLoading] = useState<boolean>(false);
-  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
   const [keyType, setKeyType] = useState<string>("llm_api");
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
@@ -578,7 +555,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       queryClient.invalidateQueries({ queryKey: keyKeys.lists() });
 
       setApiKey(response["key"]);
-      setSoftBudget(response["soft_budget"]);
       NotificationsManager.success("Virtual Key Created");
       form.resetFields();
       setBudgetLimits([]);
@@ -590,10 +566,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       const simplifiedError = simplifyKeyGenerateError(error);
       NotificationsManager.fromBackend(simplifiedError);
     }
-  };
-
-  const handleCopy = () => {
-    NotificationsManager.success("Virtual Key copied to clipboard");
   };
 
   // Fetch available models when team or auth changes.
@@ -657,7 +629,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
   // Add a callback function to handle user creation
   const handleUserCreated = (userId: string) => {
-    setNewlyCreatedUserId(userId);
     form.setFieldsValue({ user_id: userId });
     setIsCreateUserModalVisible(false);
   };
@@ -1089,7 +1060,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     name="budget_duration"
                     help={`Team Reset Budget: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : "None"}`}
                   >
-                    <BudgetDurationDropdown onChange={(value) => form.setFieldValue("budget_duration", value)} />
+                    <BudgetDurationDropdown
+                      placeholder="Never resets"
+                      onChange={(value) => form.setFieldValue("budget_duration", value)}
+                    />
                   </Form.Item>
                   <Form.Item
                     className="mt-4"

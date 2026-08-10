@@ -20,8 +20,9 @@ https://{ENDPOINT_NUMBER}.{location}-{REGION_NUMBER}.prediction.vertexai.goog/v1
 """
 
 from collections.abc import Callable
+from typing import Final
 
-import httpx  # type: ignore
+import httpx
 
 from litellm.utils import ModelResponse
 
@@ -85,10 +86,10 @@ class VertexAIGemmaModels(VertexBase):
                 custom_llm_provider="vertex_ai",
             )
 
-            gemma_transformation = VertexGemmaConfig()
+            gemma_transformation: Final = VertexGemmaConfig()
 
             ## CONSTRUCT API BASE
-            stream: bool = optional_params.get("stream", False) or False
+            stream: Final[bool] = optional_params.get("stream", False) or False
             optional_params["stream"] = stream
 
             # If api_base is not provided, it should be set as an environment variable

@@ -6,6 +6,7 @@ Handles dynamic loading of user-defined secret manager classes from Python files
 
 import importlib.util
 import os
+from typing import Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -37,7 +38,7 @@ def load_custom_secret_manager(config_file_path: str | None = None) -> None:
             "CustomSecretManagerException - key_management_settings is required with custom_secret_manager field"
         )
 
-    custom_secret_manager_path = getattr(litellm._key_management_settings, "custom_secret_manager", None)
+    custom_secret_manager_path: Final = getattr(litellm._key_management_settings, "custom_secret_manager", None)
 
     if not custom_secret_manager_path:
         raise ValueError(
@@ -54,23 +55,23 @@ def load_custom_secret_manager(config_file_path: str | None = None) -> None:
     )
 
     # Load the module from the same directory as config.yaml
-    directory = os.path.dirname(config_file_path)
-    module_file_path = os.path.join(directory, _file_name) + ".py"
+    directory: Final = os.path.dirname(config_file_path)
+    module_file_path: Final = os.path.join(directory, _file_name) + ".py"
 
-    spec = importlib.util.spec_from_file_location(_class_name, module_file_path)  # type: ignore
+    spec: Final = importlib.util.spec_from_file_location(_class_name, module_file_path)
     if not spec:
         raise ImportError(f"Could not find a module specification for {module_file_path}")
 
-    module = importlib.util.module_from_spec(spec)  # type: ignore
-    spec.loader.exec_module(module)  # type: ignore
-    _secret_manager_class = getattr(module, _class_name)
+    module: Final = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _secret_manager_class: Final = getattr(module, _class_name)
 
     # Validate that it's a CustomSecretManager subclass
     if not issubclass(_secret_manager_class, CustomSecretManager):
         raise TypeError(f"CustomSecretManagerException - {_class_name} must be a subclass of CustomSecretManager")
 
     # Instantiate the custom secret manager
-    _secret_manager_instance = _secret_manager_class()
+    _secret_manager_instance: Final = _secret_manager_class()
 
     # Set it as the secret manager client
     litellm.secret_manager_client = _secret_manager_instance

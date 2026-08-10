@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 
+import { NuqsAdapter } from "nuqs/adapters/next/app";
+
 import AntdGlobalProvider from "@/contexts/AntdGlobalProvider";
 import { AuthProvider } from "@/contexts/AuthContext";
 import ReactQueryProvider from "@/contexts/ReactQueryProvider";
@@ -22,11 +24,13 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={inter.className}>
-        <ReactQueryProvider>
-          <AntdGlobalProvider>
-            <AuthProvider>{children}</AuthProvider>
-          </AntdGlobalProvider>
-        </ReactQueryProvider>
+        <NuqsAdapter>
+          <ReactQueryProvider>
+            <AntdGlobalProvider>
+              <AuthProvider>{children}</AuthProvider>
+            </AntdGlobalProvider>
+          </ReactQueryProvider>
+        </NuqsAdapter>
       </body>
     </html>
   );

@@ -1,3 +1,5 @@
+from typing import Final
+
 imported_openAIResponse = True
 try:
     import io
@@ -14,12 +16,12 @@ try:
 
         from typing_extensions import Protocol
 
-    logger = logging.getLogger(__name__)
+    logger: Final = logging.getLogger(__name__)
 
     K = TypeVar("K", bound=str)
     V = TypeVar("V")
 
-    class OpenAIResponse(Protocol[K, V]):  # type: ignore
+    class OpenAIResponse(Protocol[K, V]):
         # contains a (known) object attribute
         object: Literal["chat.completion", "edit", "text_completion"]
 
@@ -64,17 +66,17 @@ try:
             returns:
                 A wandb trace tree object.
             """
-            start_time_ms = int(round(response["created"] * 1000))
-            end_time_ms = start_time_ms + int(round(time_elapsed * 1000))
-            span = trace_tree.Span(
+            start_time_ms: Final = int(round(response["created"] * 1000))
+            end_time_ms: Final = start_time_ms + int(round(time_elapsed * 1000))
+            span: Final = trace_tree.Span(
                 name=f"{response.get('model', 'openai')}_{response['object']}_{response.get('created')}",
-                attributes=dict(response),  # type: ignore
+                attributes=dict(response),
                 start_time_ms=start_time_ms,
                 end_time_ms=end_time_ms,
                 span_kind=trace_tree.SpanKind.LLM,
                 results=results,
             )
-            model_obj = {"request": request, "response": response, "_kind": "openai"}
+            model_obj: Final = {"request": request, "response": response, "_kind": "openai"}
             return trace_tree.WBTraceTree(root_span=span, model_dict=model_obj)
 
         def _resolve_edit(
@@ -84,8 +86,8 @@ try:
             time_elapsed: float,
         ) -> trace_tree.WBTraceTree:
             """Resolves the request and response objects for `openai.Edit`."""
-            request_str = f"\n\n**Instruction**: {request['instruction']}\n\n**Input**: {request['input']}\n"
-            choices = [f"\n\n**Edited**: {choice['text']}\n" for choice in response["choices"]]
+            request_str: Final = f"\n\n**Instruction**: {request['instruction']}\n\n**Input**: {request['input']}\n"
+            choices: Final = [f"\n\n**Edited**: {choice['text']}\n" for choice in response["choices"]]
 
             return self._request_response_result_to_trace(
                 request=request,
@@ -102,8 +104,8 @@ try:
             time_elapsed: float,
         ) -> trace_tree.WBTraceTree:
             """Resolves the request and response objects for `openai.Completion`."""
-            request_str = f"\n\n**Prompt**: {request['prompt']}\n"
-            choices = [f"\n\n**Completion**: {choice['text']}\n" for choice in response["choices"]]
+            request_str: Final = f"\n\n**Prompt**: {request['prompt']}\n"
+            choices: Final = [f"\n\n**Completion**: {choice['text']}\n" for choice in response["choices"]]
 
             return self._request_response_result_to_trace(
                 request=request,
@@ -120,12 +122,12 @@ try:
             time_elapsed: float,
         ) -> trace_tree.WBTraceTree:
             """Resolves the request and response objects for `openai.Completion`."""
-            prompt = io.StringIO()
+            prompt: Final = io.StringIO()
             for message in request["messages"]:
                 prompt.write(f"\n\n**{message['role']}**: {message['content']}\n")
-            request_str = prompt.getvalue()
+            request_str: Final = prompt.getvalue()
 
-            choices = [
+            choices: Final = [
                 f"\n\n**{choice['message']['role']}**: {choice['message']['content']}\n"
                 for choice in response["choices"]
             ]
@@ -147,14 +149,14 @@ try:
             time_elapsed: float,
         ) -> trace_tree.WBTraceTree:
             """Resolves the request and response objects for `openai.Completion`."""
-            results = [
+            results: Final = [
                 trace_tree.Result(
                     inputs={"request": request_str},
                     outputs={"response": choice},
                 )
                 for choice in choices
             ]
-            trace = self.results_to_trace_tree(request, response, results, time_elapsed)
+            trace: Final = self.results_to_trace_tree(request, response, results, time_elapsed)
             return trace
 
 except Exception:
@@ -183,10 +185,10 @@ class WeightsBiasesLogger:
 
         try:
             print_verbose(f"W&B Logging - Enters logging function for model {kwargs}")
-            run = wandb.init()
+            run: Final = wandb.init()
             print_verbose(response_obj)
 
-            trace = self.resolver(kwargs, response_obj, (end_time - start_time).total_seconds())
+            trace: Final = self.resolver(kwargs, response_obj, (end_time - start_time).total_seconds())
 
             if trace is not None and run is not None:
                 run.log({"trace": trace})
