@@ -7044,6 +7044,39 @@ async def test_update_general_settings_store_model_in_db_false():
 
 
 @pytest.mark.asyncio
+async def test_update_general_settings_propagates_apply_user_budget_to_team_keys():
+    """The Admin UI toggle writes to the DB config, so the flag has to be in the
+    runtime propagation allowlist. The reverted skip_user_budget_on_team_key was
+    exposed in /config/list but never propagated, so its toggle did nothing."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        await proxy_config._update_general_settings(db_general_settings={"apply_user_budget_to_team_keys": "true"})
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["apply_user_budget_to_team_keys"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_apply_user_budget_to_team_keys_yaml_wins():
+    """A DB value must not silently override an explicit YAML setting on reload."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._yaml_general_settings_keys = {"apply_user_budget_to_team_keys"}
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"apply_user_budget_to_team_keys": True}):
+        await proxy_config._update_general_settings(db_general_settings={"apply_user_budget_to_team_keys": False})
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["apply_user_budget_to_team_keys"] is True
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "db_value,expected",
     [(True, True), (False, False), ("true", True), ("false", False), (None, None)],
@@ -9532,6 +9565,38 @@ def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
         fields = {item["field_name"]: item for item in resp.json()}
         assert "cancel_on_disconnect" in fields
         assert fields["cancel_on_disconnect"]["field_type"] == "Boolean"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_get_config_list_includes_apply_user_budget_to_team_keys(monkeypatch):
+    """Related to #12905: the opt-in must be discoverable via /config/list so it
+    renders as a Boolean toggle on the Admin UI General Settings table. This needs
+    both the ConfigGeneralSettings field and the allowed_args entry."""
+    import types
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi.testclient import TestClient
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app
+
+    mock_prisma = MagicMock()
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(return_value=None)
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        client = TestClient(app)
+        resp = client.get("/config/list", params={"config_type": "general_settings"})
+        assert resp.status_code == 200, resp.text
+        fields = {item["field_name"]: item for item in resp.json()}
+        assert "apply_user_budget_to_team_keys" in fields
+        assert fields["apply_user_budget_to_team_keys"]["field_type"] == "Boolean"
     finally:
         app.dependency_overrides.clear()
 

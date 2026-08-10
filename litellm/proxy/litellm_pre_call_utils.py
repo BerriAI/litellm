@@ -18,6 +18,7 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
@@ -151,6 +152,20 @@ LITELLM_METADATA_ROUTES: Final = (
     "files",
 )
 
+LITELLM_TRACE_CONTROL_METADATA_FIELDS: Final = frozenset(
+    {
+        "mask_input",
+        "mask_output",
+        "session_id",
+        "trace_id",
+        "trace_metadata",
+        "trace_name",
+        "trace_release",
+        "trace_user_id",
+        "trace_version",
+    }
+)
+
 _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "proxy_server_request",
     "standard_logging_object",
@@ -212,6 +227,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "applied_policies",
     "policy_sources",
     "routing_decision",
+    SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     "standard_logging_object",
     "proxy_server_request",
@@ -456,6 +472,18 @@ def _get_metadata_variable_name(request: Request) -> str:
         return "litellm_metadata"
 
     return "metadata"
+
+
+def _promoted_trace_control_fields(
+    requester_metadata: Mapping[str, Any],
+    litellm_metadata: Mapping[str, Any],
+) -> tuple[tuple[str, Any], ...]:
+    """Return the caller's trace-control fields that ``litellm_metadata`` does not already set."""
+    return tuple(
+        (key, value)
+        for key, value in requester_metadata.items()
+        if key in LITELLM_TRACE_CONTROL_METADATA_FIELDS and key not in litellm_metadata
+    )
 
 
 def _extract_generic_session_id_from_headers(
@@ -1671,6 +1699,13 @@ async def add_litellm_data_to_request(
     # paths may read from it.
     if "metadata" in data and isinstance(data["metadata"], dict):
         data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(data["metadata"])
+        if _metadata_variable_name == "litellm_metadata":
+            data[_metadata_variable_name].update(
+                _promoted_trace_control_fields(
+                    requester_metadata=data[_metadata_variable_name]["requester_metadata"],
+                    litellm_metadata=data[_metadata_variable_name],
+                )
+            )
 
     # Merge litellm_metadata into the metadata variable (preserving existing
     # values). Runs after the user_api_key_* / _pipeline_managed_guardrails
