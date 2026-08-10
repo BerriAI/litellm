@@ -11008,3 +11008,207 @@ def test_validate_member_user_id_provisioning_caps_the_ids_it_echoes_back():
     assert f"u{_MAX_REPORTED_UNKNOWN_USER_IDS}" not in detail
     assert f"and {500 - _MAX_REPORTED_UNKNOWN_USER_IDS} more" in detail
     assert len(detail) < 1000
+
+
+_TEAM_ESTIMATE = "default_estimated_output_tokens"
+_TEAM_ESTIMATE_PER_MODEL = "default_estimated_output_tokens_per_model"
+
+
+@pytest.mark.parametrize(
+    "label, request_body, existing_metadata, allowed",
+    [
+        ("nothing declared", {}, None, True),
+        ("declared top-level with none stored", {_TEAM_ESTIMATE: 1}, None, False),
+        ("declared inside metadata with none stored", {"metadata": {_TEAM_ESTIMATE: 1}}, None, False),
+        (
+            "per-model map declared inside metadata",
+            {"metadata": {_TEAM_ESTIMATE_PER_MODEL: {"gpt-4": 1}}},
+            None,
+            False,
+        ),
+        ("unrelated edit, metadata omitted", {"tpm_limit": 99}, {_TEAM_ESTIMATE: 2000}, True),
+        ("stored value resent unchanged", {_TEAM_ESTIMATE: 2000}, {_TEAM_ESTIMATE: 2000}, True),
+        ("stored value lowered", {_TEAM_ESTIMATE: 1}, {_TEAM_ESTIMATE: 2000}, False),
+        ("stored value raised", {_TEAM_ESTIMATE: 9000}, {_TEAM_ESTIMATE: 2000}, False),
+        (
+            "stored value cleared by sending a metadata blob without it",
+            {"metadata": {"other": "keep"}},
+            {_TEAM_ESTIMATE: 2000, "other": "keep"},
+            False,
+        ),
+        (
+            "stored value resent inside the metadata blob",
+            {"metadata": {_TEAM_ESTIMATE: 2000, "other": "keep"}},
+            {_TEAM_ESTIMATE: 2000, "other": "keep"},
+            True,
+        ),
+        (
+            "per-model map resent unchanged",
+            {_TEAM_ESTIMATE_PER_MODEL: {"gpt-4": 4096}},
+            {_TEAM_ESTIMATE_PER_MODEL: {"gpt-4": 4096}},
+            True,
+        ),
+        (
+            "one model in the per-model map lowered",
+            {_TEAM_ESTIMATE_PER_MODEL: {"gpt-4": 1}},
+            {_TEAM_ESTIMATE_PER_MODEL: {"gpt-4": 4096}},
+            False,
+        ),
+    ],
+)
+def test_team_output_token_estimate_admin_gate_matrix(label, request_body, existing_metadata, allowed):
+    """A team admin may only leave a team's stored output-token estimate exactly as it is.
+
+    A team admin can write team metadata, and every key on the team inherits the
+    team declaration, so without this a team admin could shrink the reservation
+    for the whole team and under-reserve against an organization TPM window the
+    organization set above them. Same value-transition rule as the key gate,
+    including the raw-metadata route and clearing by omission.
+    """
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.auth.auth_utils import (
+        enforce_output_token_estimates_are_admin_only,
+    )
+
+    def _call(caller):
+        enforce_output_token_estimates_are_admin_only(
+            data=UpdateTeamRequest(team_id="t", **request_body),
+            existing_metadata=existing_metadata,
+            user_api_key_dict=caller,
+            entity="team",
+        )
+
+    team_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-team-admin",
+        user_id="team-admin",
+    )
+    if allowed:
+        _call(team_admin)
+    else:
+        with pytest.raises(HTTPException) as exc:
+            _call(team_admin)
+        assert exc.value.status_code == 403
+        assert "on a team" in str(exc.value.detail)
+
+    _call(
+        UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-admin",
+            user_id="admin",
+        )
+    )
+
+
+def _wire_update_team(stack, existing_metadata):
+    """Mock just enough of update_team to reach (or pass) the estimate gate."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    mock_prisma_client = stack.enter_context(patch("litellm.proxy.proxy_server.prisma_client"))
+    stack.enter_context(patch("litellm.proxy.proxy_server.llm_router"))
+    stack.enter_context(patch("litellm.proxy.proxy_server.user_api_key_cache"))
+    stack.enter_context(patch("litellm.proxy.proxy_server.proxy_logging_obj"))
+    stack.enter_context(patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"))
+    stack.enter_context(patch("litellm.proxy.management_endpoints.team_endpoints._cache_team_object"))
+
+    existing_team = MagicMock()
+    existing_team.metadata = existing_metadata
+    existing_team.model_dump.return_value = {
+        "team_id": "test_team_id",
+        "team_alias": "test_team",
+        "metadata": existing_metadata,
+        "members_with_roles": [{"user_id": "team-admin", "role": "admin"}],
+    }
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
+
+    updated_team = MagicMock()
+    updated_team.team_id = "test_team_id"
+    updated_team.model_dump.return_value = {"team_id": "test_team_id"}
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=updated_team)
+    mock_prisma_client.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
+    return mock_prisma_client
+
+
+@pytest.mark.asyncio
+async def test_update_team_output_token_estimate_lowered_rejected_for_team_admin():
+    """End-to-end wiring: _verify_team_access admits a team admin, so the gate
+    has to fire inside update_team itself."""
+    import contextlib
+    from unittest.mock import Mock
+
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    with contextlib.ExitStack() as stack:
+        _wire_update_team(stack, {_TEAM_ESTIMATE: 4000})
+        with pytest.raises(ProxyException) as exc:
+            await update_team(
+                data=UpdateTeamRequest(team_id="test_team_id", default_estimated_output_tokens=1),
+                http_request=Mock(spec=Request),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                    api_key="sk-team-admin",
+                    user_id="team-admin",
+                ),
+            )
+
+    assert str(exc.value.code) == "403"
+    assert "on a team" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_update_team_output_token_estimate_unchanged_allows_team_admin_edit():
+    """The team settings form resends every field it renders, so gating on
+    presence would break a team admin editing an unrelated setting."""
+    import contextlib
+    from unittest.mock import Mock
+
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    with contextlib.ExitStack() as stack:
+        prisma = _wire_update_team(stack, {_TEAM_ESTIMATE: 4000})
+        await update_team(
+            data=UpdateTeamRequest(
+                team_id="test_team_id",
+                team_alias="renamed",
+                default_estimated_output_tokens=4000,
+            ),
+            http_request=Mock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-team-admin",
+                user_id="team-admin",
+            ),
+        )
+
+    assert prisma.db.litellm_teamtable.update.called
+
+
+@pytest.mark.asyncio
+async def test_new_team_output_token_estimate_rejected_for_non_admin():
+    """/team/new is the other write path into the same stored declaration."""
+    from unittest.mock import Mock
+
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    with pytest.raises(ProxyException) as exc:
+        await new_team(
+            data=NewTeamRequest(team_alias="t", default_estimated_output_tokens=1),
+            http_request=Mock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-alice",
+                user_id="alice",
+            ),
+        )
+
+    assert str(exc.value.code) == "403"
+    assert "on a team" in str(exc.value.message)
