@@ -1,13 +1,13 @@
 import React, { useState, useCallback } from "react";
 import { Button, Text, Title } from "@tremor/react";
-import { Modal, Form, Input, message, Spin, Card, Typography, Space } from "antd";
-import { PlusIcon, PencilIcon, TrashIcon } from "@heroicons/react/outline";
-import { ColumnDef } from "@tanstack/react-table";
+import { Modal, Form, Input, message, Spin } from "antd";
+import { PlusIcon } from "@heroicons/react/outline";
+import { SortingState } from "@tanstack/react-table";
+import { Inbox } from "lucide-react";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useQueryClient } from "@tanstack/react-query";
-import { DateCell, IdCell } from "@/components/shared/table_cells";
-import { DataTable } from "@/components/view_logs/table";
+import { DataTable } from "@/components/shared/DataTable";
 import {
   createMCPToolset,
   updateMCPToolset,
@@ -16,19 +16,7 @@ import {
   getProxyBaseUrl,
 } from "@/components/networking";
 import { MCPToolset, MCPToolsetTool } from "@/components/mcp_tools/types";
-
-const { Text: AntdText } = Typography;
-
-// Display-only. Toolsets persist {server_id, bare tool_name}; the gateway serves
-// each tool prefixed as "{server-prefix}-{tool}". Render that qualified form so
-// the same tool name on different servers stays distinguishable. This mirrors the
-// backend default MCP_TOOL_PREFIX_SEPARATOR; overriding that env var only changes
-// this cosmetic label, never what is stored or how tools are matched.
-const MCP_TOOL_PREFIX_SEPARATOR = "-";
-
-function displayToolName(serverPrefix: string | undefined, toolName: string): string {
-  return serverPrefix ? `${serverPrefix}${MCP_TOOL_PREFIX_SEPARATOR}${toolName}` : toolName;
-}
+import { displayToolName, getMCPToolsetTableColumns } from "./MCPToolsetTableColumns";
 
 interface MCPToolsetsTabProps {
   accessToken: string | null;
@@ -298,99 +286,18 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
   );
 }
 
-function toolsetColumns(
-  isAdmin: boolean,
-  onEdit: (t: MCPToolset) => void,
-  onDelete: (id: string) => void,
-  serverPrefixById: Map<string, string>,
-): ColumnDef<MCPToolset>[] {
-  const proxyBaseUrl = getProxyBaseUrl();
-  return [
-    {
-      header: "Toolset ID",
-      accessorKey: "toolset_id",
-      cell: ({ row }) => <IdCell value={row.original.toolset_id} />,
-    },
-    {
-      header: "Name",
-      accessorKey: "toolset_name",
-      cell: ({ row }) => {
-        const url = `${proxyBaseUrl}/toolset/${row.original.toolset_name}/mcp`;
-        return (
-          <div className="flex flex-col gap-0.5">
-            <div className="flex items-center gap-2">
-              <span className="inline-block w-2 h-2 rounded-full bg-purple-500 shrink-0" />
-              <span className="font-medium text-gray-900">{row.original.toolset_name}</span>
-            </div>
-            <button
-              type="button"
-              className="text-xs text-gray-400 hover:text-purple-600 font-mono truncate max-w-xs text-left transition-colors"
-              onClick={() => navigator.clipboard.writeText(url)}
-              title="Click to copy endpoint URL"
-            >
-              {url}
-            </button>
-          </div>
-        );
-      },
-    },
-    {
-      header: "Description",
-      accessorKey: "description",
-      cell: ({ row }) => <span className="text-sm text-gray-500">{row.original.description || "—"}</span>,
-    },
-    {
-      header: "Tools",
-      accessorKey: "tools",
-      cell: ({ row }) => {
-        const tools = row.original.tools;
-        return (
-          <div className="flex flex-wrap gap-1 max-w-xs">
-            {tools.slice(0, 4).map((t, i) => (
-              <span
-                key={i}
-                className="inline-flex items-center px-1.5 py-0.5 rounded-sm bg-purple-50 border border-purple-200 text-purple-700 text-xs"
-              >
-                {displayToolName(serverPrefixById.get(t.server_id), t.tool_name)}
-              </span>
-            ))}
-            {tools.length > 4 && <span className="text-xs text-gray-400 self-center">+{tools.length - 4} more</span>}
-          </div>
-        );
-      },
-    },
-    {
-      header: "Created",
-      accessorKey: "created_at",
-      cell: ({ row }) => <DateCell value={row.original.created_at} precision="date" />,
-    },
-    ...(isAdmin
-      ? [
-          {
-            header: "",
-            id: "actions",
-            cell: ({ row }: { row: { original: MCPToolset } }) => (
-              <div className="flex items-center gap-1 justify-end">
-                <button
-                  type="button"
-                  className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors"
-                  onClick={() => onEdit(row.original)}
-                >
-                  <PencilIcon className="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
-                  onClick={() => onDelete(row.original.toolset_id)}
-                >
-                  <TrashIcon className="h-4 w-4" />
-                </button>
-              </div>
-            ),
-          } as ColumnDef<MCPToolset>,
-        ]
-      : []),
-  ];
+function ToolsetsEmptyState() {
+  return (
+    <div className="flex flex-col items-center gap-1 py-6">
+      <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
+        <Inbox className="size-5 text-muted-foreground" />
+      </div>
+      <div className="text-sm font-medium text-foreground">No toolsets yet</div>
+      <div className="text-sm text-muted-foreground">
+        Create a toolset to give keys and teams a curated set of MCP tools.
+      </div>
+    </div>
+  );
 }
 
 function ToolsetUsageGuide() {
@@ -484,7 +391,16 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
     () => new Map(mcpServers.map((s) => [s.server_id, s.alias || s.server_name || s.server_id])),
     [mcpServers],
   );
-  const columns = toolsetColumns(isAdmin, setEditToolset, setDeleteId, serverPrefixById);
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const columns = React.useMemo(() => {
+    const deps = {
+      isAdmin,
+      serverPrefixById,
+      onEditClick: setEditToolset,
+      onDeleteClick: setDeleteId,
+    };
+    return getMCPToolsetTableColumns(deps);
+  }, [isAdmin, serverPrefixById]);
 
   return (
     <div className="mt-4">
@@ -508,10 +424,14 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
       <DataTable
         data={toolsets}
         columns={columns}
+        getRowId={(toolset, index) => toolset.toolset_id || String(index)}
+        sortingMode="client"
+        sorting={sorting}
+        onSortingChange={setSorting}
         isLoading={isLoading}
-        noDataMessage="No toolsets yet. Click 'New Toolset' to create one."
-        loadingMessage="Loading toolsets..."
-        enableSorting={true}
+        loadingMessage="Loading toolsets…"
+        noDataMessage={<ToolsetsEmptyState />}
+        size="compact"
       />
 
       <CreateToolsetModal

@@ -1,7 +1,7 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
   "entry": ["scripts/**/*.{ts,mjs}", "src/components/ui/**/*.{ts,tsx}"],
-  "project": ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}", "scripts/**/*.{ts,mjs}", "e2e_tests/**/*.ts"],
+  "project": ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}", "scripts/**/*.{ts,mjs}"],
   "ignore": ["src/lib/http/schema.d.ts"],
   "ignoreDependencies": [
     "openapi-typescript",
@@ -10,14 +10,6 @@
     "tailwindcss",
     "tw-animate-css"
   ],
-  "playwright": {
-    "config": [
-      "e2e_tests/playwright.config.ts",
-      "e2e_tests/serverRootPath.config.ts",
-      "e2e_tests/migration.serverRootPath.config.ts"
-    ],
-    "entry": ["e2e_tests/**/*.spec.ts", "e2e_tests/**/*.setup.ts", "e2e_tests/globalSetup.ts"]
-  },
   "vitest": {
     "config": ["vitest.config.ts"]
   },

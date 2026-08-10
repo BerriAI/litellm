@@ -8,10 +8,6 @@ import type { LicenseInfo } from "./networking";
 
 vi.mock("./networking", () => ({ getRemainingUsers: vi.fn() }));
 
-vi.mock("@/app/(dashboard)/hooks/useDisableUsageIndicator", () => ({
-  useDisableUsageIndicator: vi.fn(() => false),
-}));
-
 vi.mock("@/app/(dashboard)/hooks/license/useLicenseInfo", () => ({
   useLicenseInfo: vi.fn(),
 }));

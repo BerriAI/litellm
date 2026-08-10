@@ -1,6 +1,6 @@
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
-import { LoadingOutlined } from "@ant-design/icons";
-import { Card, Flex, Input, Pagination, Spin } from "antd";
+import { PaginationState } from "@tanstack/react-table";
+import { Card, Flex, Input } from "antd";
 import { KeyIcon, SearchIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ProjectKeysTable } from "./ProjectKeysTable";
@@ -12,17 +12,16 @@ interface ProjectKeysSectionProps {
 const PAGE_SIZE = 5;
 
 export function ProjectKeysSection({ projectId }: ProjectKeysSectionProps) {
-  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: PAGE_SIZE });
   const [keyAlias, setKeyAlias] = useState<string>("");
 
-  const { data, isLoading } = useKeys(page, PAGE_SIZE, {
+  const { data, isLoading } = useKeys(pagination.pageIndex + 1, pagination.pageSize, {
     projectID: projectId,
     selectedKeyAlias: keyAlias || null,
   });
 
-  // Reset to page 1 when filter changes
   useEffect(() => {
-    setPage(1);
+    setPagination((current) => ({ ...current, pageIndex: 0 }));
   }, [keyAlias]);
 
   const keys = data?.keys ?? [];
@@ -38,7 +37,7 @@ export function ProjectKeysSection({ projectId }: ProjectKeysSectionProps) {
       }
       style={{ height: "100%" }}
     >
-      <Flex justify="space-between" align="center" style={{ marginBottom: 12 }}>
+      <Flex justify="flex-start" align="center" style={{ marginBottom: 12 }}>
         <Input
           prefix={<SearchIcon size={14} />}
           placeholder="Filter by key name..."
@@ -48,19 +47,13 @@ export function ProjectKeysSection({ projectId }: ProjectKeysSectionProps) {
           allowClear
           size="small"
         />
-        <Pagination
-          current={page}
-          total={totalCount}
-          pageSize={PAGE_SIZE}
-          onChange={setPage}
-          size="small"
-          showSizeChanger={false}
-          showTotal={(total) => `${total} keys`}
-        />
       </Flex>
       <ProjectKeysTable
         keys={keys}
-        loading={isLoading ? { indicator: <Spin indicator={<LoadingOutlined spin />} /> } : false}
+        totalCount={totalCount}
+        isLoading={isLoading}
+        pagination={pagination}
+        onPaginationChange={setPagination}
       />
     </Card>
   );

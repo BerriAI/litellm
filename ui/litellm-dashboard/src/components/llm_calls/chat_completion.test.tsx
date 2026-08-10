@@ -224,6 +224,143 @@ describe("chat_completion", () => {
     expect(callArgs.mock_testing_fallbacks).toBe(true);
   });
 
+  it("should send a non-streaming request and render the whole message at once when streaming is disabled", async () => {
+    mockCreate.mockResolvedValueOnce({
+      id: "chatcmpl-1",
+      object: "chat.completion",
+      created: 1,
+      model: "gpt-4",
+      choices: [
+        {
+          index: 0,
+          finish_reason: "stop",
+          message: { role: "assistant", content: "Hello there" },
+        },
+      ],
+      usage: {
+        completion_tokens: 2,
+        prompt_tokens: 5,
+        total_tokens: 7,
+        cost: 0.25,
+      },
+    });
+
+    const onTimingData = vi.fn();
+    const onUsageData = vi.fn();
+    const onTotalLatency = vi.fn();
+
+    await makeOpenAIChatCompletionRequest(
+      mockChatHistory,
+      mockUpdateUI,
+      "gpt-4",
+      "test-token",
+      undefined, // tags
+      undefined, // signal
+      undefined, // onReasoningContent
+      onTimingData,
+      onUsageData,
+      undefined, // traceId
+      undefined, // vector_store_ids
+      undefined, // guardrails
+      undefined, // policies
+      undefined, // selectedMCPServers
+      undefined, // onImageGenerated
+      undefined, // onSearchResults
+      undefined, // temperature
+      undefined, // max_tokens
+      onTotalLatency,
+      undefined, // customBaseUrl
+      undefined, // mcpServers
+      undefined, // mcpServerToolRestrictions
+      undefined, // onMCPEvent
+      undefined, // mockTestFallbacks
+      undefined, // mcpToolsets
+      false, // streamingEnabled
+    );
+
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.stream).toBe(false);
+    expect(callArgs).not.toHaveProperty("stream_options");
+
+    expect(mockUpdateUI).toHaveBeenCalledTimes(1);
+    expect(mockUpdateUI).toHaveBeenCalledWith("Hello there", "gpt-4");
+
+    expect(onUsageData).toHaveBeenCalledWith({
+      completionTokens: 2,
+      promptTokens: 5,
+      totalTokens: 7,
+      cost: 0.25,
+    });
+    expect(onTimingData).not.toHaveBeenCalled();
+    expect(onTotalLatency).toHaveBeenCalledWith(expect.any(Number));
+  });
+
+  it("should surface reasoning content and MCP metadata from a non-streaming response", async () => {
+    mockCreate.mockResolvedValueOnce({
+      model: "gpt-4",
+      choices: [
+        {
+          index: 0,
+          finish_reason: "stop",
+          message: {
+            role: "assistant",
+            content: "done",
+            reasoning_content: "thinking",
+            provider_specific_fields: {
+              mcp_tool_calls: [{ id: "call_1", function: { name: "search_docs", arguments: "{}" } }],
+              mcp_call_results: [{ tool_call_id: "call_1", result: "found it" }],
+            },
+          },
+        },
+      ],
+    });
+
+    const onReasoningContent = vi.fn();
+    const onMCPEvent = vi.fn();
+
+    await makeOpenAIChatCompletionRequest(
+      mockChatHistory,
+      mockUpdateUI,
+      "gpt-4",
+      "test-token",
+      undefined, // tags
+      undefined, // signal
+      onReasoningContent,
+      undefined, // onTimingData
+      undefined, // onUsageData
+      undefined, // traceId
+      undefined, // vector_store_ids
+      undefined, // guardrails
+      undefined, // policies
+      undefined, // selectedMCPServers
+      undefined, // onImageGenerated
+      undefined, // onSearchResults
+      undefined, // temperature
+      undefined, // max_tokens
+      undefined, // onTotalLatency
+      undefined, // customBaseUrl
+      undefined, // mcpServers
+      undefined, // mcpServerToolRestrictions
+      onMCPEvent,
+      undefined, // mockTestFallbacks
+      undefined, // mcpToolsets
+      false, // streamingEnabled
+    );
+
+    expect(onReasoningContent).toHaveBeenCalledWith("thinking");
+    expect(onMCPEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "response.output_item.done",
+        item: expect.objectContaining({
+          type: "mcp_call",
+          name: "search_docs",
+          output: "found it",
+        }),
+      }),
+    );
+  });
+
   it("should not include mock_testing_fallbacks in request body when mockTestFallbacks is false or undefined", async () => {
     await makeOpenAIChatCompletionRequest(
       mockChatHistory,
