@@ -688,6 +688,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "mock_response": "free response",
         "mock_tool_calls": [{"id": "call_1"}],
         "disable_global_guardrails": True,
+        "enable_prompt_caching": True,
         "routing_decision": {"cause": "forged", "routed_model": "spoofed"},
         "metadata": copy.deepcopy(malicious_metadata),
         "litellm_metadata": copy.deepcopy(malicious_metadata),
@@ -705,6 +706,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
     assert "mock_response" not in updated
     assert "mock_tool_calls" not in updated
     assert "disable_global_guardrails" not in updated
+    assert "enable_prompt_caching" not in updated
     assert "routing_decision" not in updated
 
     stripped_keys = {
@@ -739,6 +741,42 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
     assert "mock_response" not in snapshot_body
     assert "mock_tool_calls" not in snapshot_body
     assert "pillar_response_headers" not in snapshot_body["metadata"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_value, expected",
+    [(True, True), (False, False), ("yes", None), (None, None)],
+)
+async def test_key_metadata_enable_prompt_caching_promoted_to_request_root(key_value, expected):
+    """Key metadata enable_prompt_caching is stamped onto the request root (bools only), even when the client spoofs it."""
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {
+        "model": "claude-sonnet-4-5",
+        "messages": [{"role": "user", "content": "hello"}],
+        "enable_prompt_caching": "spoofed-by-client",
+    }
+    key_metadata = {} if key_value is None else {"enable_prompt_caching": key_value}
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", metadata=key_metadata),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated.get("enable_prompt_caching") == expected
 
 
 @pytest.mark.asyncio

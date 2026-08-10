@@ -780,6 +780,13 @@ export default function KeyInfoView({
                     <Text>{currentKeyData.expires ? formatTimestamp(currentKeyData.expires) : "Never"}</Text>
                   </div>
 
+                  {Boolean(currentKeyData.metadata?.enable_prompt_caching) && (
+                    <div>
+                      <Text className="font-medium">Prompt Caching</Text>
+                      <Text>Enabled (auto-injects cache_control markers on Anthropic and Bedrock Claude requests)</Text>
+                    </div>
+                  )}
+
                   <AutoRotationView
                     autoRotate={currentKeyData.auto_rotate}
                     rotationInterval={currentKeyData.rotation_interval}
