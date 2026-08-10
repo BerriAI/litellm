@@ -10104,6 +10104,7 @@ class Router:
             "model_group_alias",
             "enable_weighted_failover",
             "enable_tag_filtering",
+            "tag_routing_prefix",
         ]
 
         for var in vars_to_include:
@@ -10141,6 +10142,7 @@ class Router:
             "model_group_alias",
             "enable_weighted_failover",
             "enable_tag_filtering",
+            "tag_routing_prefix",
         ]
 
         _int_settings: Final = [

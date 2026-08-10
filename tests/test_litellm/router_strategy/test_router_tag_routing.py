@@ -2720,3 +2720,40 @@ async def test_allow_fail_open_unconditional_discard_when_inherited_tags_key_abs
     )
 
     assert response._hidden_params["model_id"] == "us-default"
+
+
+# --- tag_routing_prefix must be configurable through every settings-update
+# path the router already supports for its sibling enable_tag_filtering, not
+# just the config.yaml constructor argument ---
+
+
+def test_router_update_settings_applies_tag_routing_prefix():
+    # Regression: tag_routing_prefix was missing from Router.update_settings's
+    # _allowed_settings, so an operator configuring it via the DB-backed
+    # router_settings path (proxy_server.py's _add_router_settings_from_db_config,
+    # which calls update_settings directly) had the value silently ignored.
+    router = litellm.Router(model_list=[{"model_name": "x", "litellm_params": {"model": "openai/gpt-4o-mini"}}])
+    assert router.tag_routing_prefix == ""
+
+    router.update_settings(tag_routing_prefix="route:")
+
+    assert router.tag_routing_prefix == "route:"
+
+
+def test_router_get_settings_includes_tag_routing_prefix():
+    router = litellm.Router(model_list=[{"model_name": "x", "litellm_params": {"model": "openai/gpt-4o-mini"}}])
+    router.update_settings(tag_routing_prefix="route:")
+
+    assert router.get_settings()["tag_routing_prefix"] == "route:"
+
+
+def test_update_router_config_schema_includes_tag_routing_prefix():
+    # The Admin UI's POST /config/update path validates through
+    # UpdateRouterConfig before calling update_settings; a field missing here
+    # causes model_dump(exclude_none=True) to silently drop it before
+    # update_settings is ever called -- the same bug shape LIT-3152 fixed for
+    # retry_policy (see tests/test_litellm/test_router_retry_policy_update.py).
+    from litellm.types.router import UpdateRouterConfig
+
+    config = UpdateRouterConfig(tag_routing_prefix="route:")
+    assert config.model_dump(exclude_none=True)["tag_routing_prefix"] == "route:"
