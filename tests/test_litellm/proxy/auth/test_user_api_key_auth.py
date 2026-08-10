@@ -4100,6 +4100,65 @@ async def test_centralized_common_checks_runs_for_custom_auth_with_flag():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "endpoint, route, expect_common_checks",
+    [
+        # #36280: an include_subpath endpoint without auth forwards its
+        # sub-paths without proxy authz, exactly like its exact path — so a
+        # virtual key is accepted instead of 401'd as an admin-only route.
+        ({"path": "/orx", "include_subpath": True}, "/orx/rerank", False),
+        ({"path": "/orx", "include_subpath": True}, "/orx", False),
+        # No include_subpath: the sub-path is not a registered route, so authz
+        # must still run — the bypass must not widen to arbitrary prefixes.
+        ({"path": "/orx"}, "/orx/rerank", True),
+        # A path that only shares a prefix is not a sub-path.
+        ({"path": "/orx", "include_subpath": True}, "/orxfoo", True),
+        # auth enforced (any spelling) keeps authz on sub-paths.
+        ({"path": "/orx", "include_subpath": True, "auth": "true"}, "/orx/rerank", True),
+        ({"path": "/orx", "include_subpath": True, "auth": True}, "/orx/rerank", True),
+        # auth enforced also keeps authz on the exact path (any spelling).
+        ({"path": "/orx", "auth": "true"}, "/orx", True),
+        ({"path": "/orx", "auth": True}, "/orx", True),
+    ],
+)
+async def test_centralized_common_checks_include_subpath_pass_through_authz(
+    endpoint, route, expect_common_checks
+):
+    """#36280: pass-through sub-paths registered via include_subpath must be
+    treated like the exact path for auth — the auth:false forward bypasses the
+    centralized gate on both, and auth:true keeps enforcing on both."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
+    request = Request(scope={"type": "http", "method": "POST", "headers": [], "query_string": b""})
+    request._url = URL(url=route)
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    attrs["general_settings"] = {"pass_through_endpoints": [endpoint]}
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+        ) as mock_checks:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={},
+                route=route,
+            )
+        assert bool(mock_checks.await_count) is expect_common_checks
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
 async def test_centralized_common_checks_runs_for_oauth2_fallback_token():
     """VERIA-18 regression: an OAuth2 token that would previously early-
     return without common_checks is now subject to it. If common_checks

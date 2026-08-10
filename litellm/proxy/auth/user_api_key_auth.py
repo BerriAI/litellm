@@ -2363,6 +2363,34 @@ def _token_can_vouch_for_team(valid_token: UserAPIKeyAuth, lookup_error: BaseExc
     return PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
 
 
+_PASS_THROUGH_SUBPATH_SEPARATOR: Final = "/"
+
+
+def _request_matches_unauthenticated_pass_through(endpoint: object, route: str) -> bool:
+    """Match config pass-through routes that forward without proxy authz.
+
+    ``include_subpath`` wildcards must inherit the exact path's auth treatment,
+    else a valid virtual key is 401'd as an admin-only route on every sub-path
+    (issue #36280). ``auth`` uses the same ``str(...).lower() == "true"`` spelling
+    the route registration uses to decide enforcement."""
+    if not isinstance(endpoint, dict):
+        return False
+    endpoint_data: Final = cast("dict[str, object]", endpoint)
+    auth: Final = endpoint_data.get("auth")
+    if auth is not None and str(auth).lower() == "true":
+        return False
+    path: Final = endpoint_data.get("path", "")
+    if not isinstance(path, str) or not path:
+        return False
+    if route == path:
+        return True
+    if endpoint_data.get("include_subpath", False) is True:
+        return route.startswith(
+            path.rstrip(_PASS_THROUGH_SUBPATH_SEPARATOR) + _PASS_THROUGH_SUBPATH_SEPARATOR
+        )
+    return False
+
+
 @tracer.wrap()
 async def _run_centralized_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
@@ -2413,7 +2441,7 @@ async def _run_centralized_common_checks(
     pass_through_endpoints: Final = general_settings.get("pass_through_endpoints", None)
     if pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
-            if isinstance(endpoint, dict) and endpoint.get("path", "") == route and endpoint.get("auth") is not True:
+            if _request_matches_unauthenticated_pass_through(endpoint=endpoint, route=route):
                 return
 
     # No-auth dev mode: master_key unset AND no JWT/OAuth2 auth
