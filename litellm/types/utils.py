@@ -3070,6 +3070,7 @@ class StandardLoggingPayload(TypedDict):
     requester_ip_address: Optional[str]
     user_agent: Optional[str]
     messages: Optional[Union[str, list, dict]]
+    system_prompt: Optional[Union[str, list, dict]]
     response: Optional[Union[str, list, dict]]
     error_str: Optional[str]
     error_information: Optional[StandardLoggingPayloadErrorInformation]

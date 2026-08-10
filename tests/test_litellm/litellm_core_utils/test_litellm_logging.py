@@ -2163,6 +2163,94 @@ def test_append_system_prompt_messages():
     assert result == messages
 
 
+def test_get_system_prompt_from_kwargs():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Anthropic Messages list-form system blocks
+    system_blocks = [
+        {"type": "text", "text": "SHAPE-SECRET", "cache_control": {"type": "ephemeral"}},
+    ]
+    result = StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(
+        kwargs={"system": system_blocks, "messages": [{"role": "user", "content": "hi"}]}
+    )
+    assert result == system_blocks
+
+    # String system kwarg
+    result = StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(kwargs={"system": "Be helpful"})
+    assert result == "Be helpful"
+
+    # Responses API instructions
+    result = StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(kwargs={"instructions": "Follow policy"})
+    assert result == "Follow policy"
+
+    # Vertex Gemini system_instructions
+    gemini_system = [{"role": "system", "content": "Be concise."}]
+    result = StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(
+        kwargs={"system_instructions": gemini_system}
+    )
+    assert result == gemini_system
+
+    # system_instructions wins over instructions and system
+    result = StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(
+        kwargs={
+            "system_instructions": "From Gemini",
+            "instructions": "From Responses",
+            "system": "From Anthropic",
+        }
+    )
+    assert result == "From Gemini"
+
+    # Empty list should not fall through to instructions
+    result = StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(
+        kwargs={"system_instructions": [], "instructions": "From Responses"}
+    )
+    assert result == []
+
+    # No system kwargs
+    assert StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(kwargs={}) is None
+    assert StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(kwargs=None) is None
+
+
+def test_get_standard_logging_object_payload_includes_system_prompt_for_list_system(logging_obj):
+    """List-form Anthropic system blocks must appear on the payload without mutating messages."""
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    system_blocks = [
+        {"type": "text", "text": "SHAPE-SECRET", "cache_control": {"type": "ephemeral"}},
+    ]
+    user_messages = [{"role": "user", "content": "hello"}]
+    kwargs = {
+        "model": "anthropic/claude-sonnet-4-5",
+        "system": system_blocks,
+        "messages": user_messages,
+        "litellm_params": {},
+    }
+    mock_response = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "hi"}],
+        "model": "claude-sonnet-4-5",
+        "usage": {"input_tokens": 5, "output_tokens": 2},
+    }
+    now = datetime.datetime.now()
+
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=mock_response,
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["system_prompt"] == system_blocks
+    assert payload["messages"] == user_messages
+
+
 @pytest.mark.asyncio
 async def test_async_success_handler_sets_standard_logging_object_for_pass_through_endpoints():
     """

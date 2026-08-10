@@ -4556,6 +4556,26 @@ class StandardLoggingPayloadSetup:
         return start_time_float, end_time_float, completion_start_time_float
 
     @staticmethod
+    def get_system_prompt_from_kwargs(kwargs: Optional[Dict] = None) -> Optional[Union[str, list, dict]]:
+        """
+        Return the system prompt kwargs as sent by the client, without reshaping.
+
+        Coalesces the kwarg names used across call paths (Vertex Gemini, Responses API,
+        Anthropic Messages). Uses `is not None` checks so falsy values like [] do not
+        fall through to a different kwarg.
+        """
+        if kwargs is None:
+            return None
+
+        if kwargs.get("system_instructions") is not None:
+            return kwargs.get("system_instructions")
+        if kwargs.get("instructions") is not None:
+            return kwargs.get("instructions")
+        if kwargs.get("system") is not None:
+            return kwargs.get("system")
+        return None
+
+    @staticmethod
     def append_system_prompt_messages(kwargs: Optional[Dict] = None, messages: Optional[Any] = None):
         """
         Append system prompt messages to the messages
@@ -5451,6 +5471,7 @@ def get_standard_logging_object_payload(
                     kwargs=kwargs, messages=kwargs.get("messages")
                 )
             ),
+            system_prompt=StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(kwargs=kwargs),
             response=final_response_obj,
             model_parameters=ModelParamHelper.get_standard_logging_model_parameters(
                 kwargs.get("optional_params", None) or {}
