@@ -77,24 +77,6 @@ const normalizeUnderlyingModel = (model: string): string | null => {
   return stripped.toLowerCase() || null;
 };
 
-// A linear glob scan rather than a RegExp: patterns are admin-controlled model_name values, and a
-// backtracking regex built from one ("a*a*a*...") can freeze another admin's dashboard.
-const matchesWildcard = (pattern: string, name: string): boolean => {
-  const parts = pattern.split("*");
-  if (parts.length === 1) return pattern === name;
-  const head = parts[0];
-  const tail = parts[parts.length - 1];
-  if (!name.startsWith(head) || !name.endsWith(tail)) return false;
-  if (name.length < head.length + tail.length) return false;
-  const scanEnd = name.length - tail.length;
-  const scanResult = parts.slice(1, -1).reduce((searchFrom: number, part: string) => {
-    if (searchFrom < 0) return -1;
-    const found = name.indexOf(part, searchFrom);
-    return found === -1 || found + part.length > scanEnd ? -1 : found + part.length;
-  }, head.length);
-  return scanResult >= 0;
-};
-
 export const buildModelAvailability = (
   modelGroups: Iterable<string>,
   deployments: readonly DeploymentModelRef[],
@@ -108,22 +90,18 @@ export const buildModelAvailability = (
         .filter((key): key is string => key !== null)
         .map((key) => ({ key, modelGroup: deployment.modelGroup })),
     );
-  // Mirrors get_known_models_from_wildcard: a bare "*" model_name expands via its underlying
-  // wildcard (or not at all), and a wildcard without a "/" expands to nothing.
-  const wildcardPatterns = Array.from(
-    new Set(
-      deployments
-        .flatMap((deployment) =>
-          deployment.modelGroup === "*" ? deployment.underlyingModels : [deployment.modelGroup],
-        )
-        .filter((pattern) => pattern !== "*" && pattern.includes("*") && pattern.includes("/")),
-    ),
-  );
-  const wildcardEntries = Array.from(groups)
-    .filter((group) => !group.includes("*") && wildcardPatterns.some((pattern) => matchesWildcard(pattern, group)))
+  // A group's own name is the last resort, used only where no deployment row speaks for it: the
+  // tier dropdown reads /model_group/info while these rows come from /v2/model/info, and a
+  // team-scoped caller gets every proxy group from the first and only their team's rows from the
+  // second, so without this a preset reports a model the caller can select one field below. Where a
+  // row does exist it wins outright, since model_name is an admin's label and can name one model
+  // while serving another.
+  const vouchedGroups = new Set(literalEntries.map((entry) => entry.modelGroup));
+  const groupNameEntries = Array.from(groups)
+    .filter((group) => !group.includes("*") && !vouchedGroups.has(group))
     .map((group) => ({ key: normalizeUnderlyingModel(group), modelGroup: group }))
     .filter((entry): entry is { key: string; modelGroup: string } => entry.key !== null);
-  const entries = [...literalEntries, ...wildcardEntries];
+  const entries = [...literalEntries, ...groupNameEntries];
   const grouped = new Map<string, Set<string>>();
   for (const entry of entries) {
     const groupsForKey = grouped.get(entry.key) ?? new Set<string>();
@@ -152,27 +130,48 @@ export const deploymentRefsFromModelInfo = (
     return row.model_name && underlyingModels.length > 0 ? [{ modelGroup: row.model_name, underlyingModels }] : [];
   });
 
-const resolveAvailableModel = (requiredModel: string, availability: ModelAvailability): string | undefined => {
-  const { modelGroups, underlyingIndex } = availability;
+// What may be SUBMITTED: only a literal model_group the router can resolve at request time. The two
+// spellings of one version number are the same group name (normalizeModelName), never a different
+// model.
+const resolveModelGroup = (requiredModel: string, modelGroups: ReadonlySet<string>): string | undefined => {
   if (modelGroups.has(requiredModel)) return requiredModel;
   const normalized = normalizeModelName(requiredModel);
-  const groupMatch = Array.from(modelGroups).find((available) => normalizeModelName(available) === normalized);
+  return Array.from(modelGroups).find((available) => normalizeModelName(available) === normalized);
+};
+
+// What may PREFILL a config: a preset's hardcoded name is a display convention, so it also matches a
+// group carrying that model under a provider prefix or a rename, and buildPresetPrefill rewrites it
+// to the group's real name before it can be submitted.
+const resolveAvailableModel = (requiredModel: string, availability: ModelAvailability): string | undefined => {
+  const groupMatch = resolveModelGroup(requiredModel, availability.modelGroups);
   if (groupMatch !== undefined) return groupMatch;
   const key = normalizeUnderlyingModel(requiredModel);
-  return key === null ? undefined : underlyingIndex.get(key)?.[0];
+  return key === null ? undefined : availability.underlyingIndex.get(key)?.[0];
 };
+
+const missingFrom = (
+  config: Pick<ComplexityRouterConfigPayload, "tiers" | "classifier_llm_config" | "embedding_model">,
+  resolve: (model: string) => string | undefined,
+): string[] => [...getRequiredModels(config)].filter((model) => resolve(model) === undefined).sort();
 
 export const getMissingModels = (
   config: Pick<ComplexityRouterConfigPayload, "tiers" | "classifier_llm_config" | "embedding_model">,
   availability: ModelAvailability,
-): string[] =>
-  [...getRequiredModels(config)].filter((model) => resolveAvailableModel(model, availability) === undefined).sort();
+): string[] => missingFrom(config, (model) => resolveAvailableModel(model, availability));
+
+export const getMissingModelGroups = (
+  config: Pick<ComplexityRouterConfigPayload, "tiers" | "classifier_llm_config" | "embedding_model">,
+  modelGroups: ReadonlySet<string>,
+): string[] => missingFrom(config, (model) => resolveModelGroup(model, modelGroups));
 
 export const getRequiredModelsInPreset = (preset: AutoRouterPreset): Set<string> =>
   getRequiredModels(preset.complexity_router_config);
 
 export const getMissingModelsInPreset = (preset: AutoRouterPreset, availability: ModelAvailability): string[] =>
   getMissingModels(preset.complexity_router_config, availability);
+
+export const presetNeedsSubstitution = (preset: AutoRouterPreset, modelGroups: ReadonlySet<string>): boolean =>
+  getMissingModelGroups(preset.complexity_router_config, modelGroups).length > 0;
 
 // Checks the config actually being built (whether it arrived via a preset prefill or was typed by
 // hand - the two are indistinguishable once the caller has started editing), not a preset's
@@ -188,15 +187,15 @@ export const getReferencedModelsError = (
     semanticMatchingEnabled: boolean;
     embeddingModel: string | undefined;
   },
-  availability: ModelAvailability,
+  modelGroups: ReadonlySet<string>,
 ): string | null => {
-  const missing = getMissingModels(
+  const missing = getMissingModelGroups(
     {
       tiers: params.tiers,
       classifier_llm_config: params.classifierType === "llm" ? params.classifierLlmConfig : undefined,
       embedding_model: params.semanticMatchingEnabled ? params.embeddingModel : undefined,
     },
-    availability,
+    modelGroups,
   );
   return missing.length > 0 ? `Model(s) no longer available: ${missing.join(", ")}` : null;
 };

@@ -586,7 +586,7 @@ describe("AddAutoRouterTab", () => {
       await waitFor(() => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
-      expect(optionByLabel("Anthropic Family")!.textContent).toContain("Matches your deployments");
+      expect(optionByLabel("Anthropic Family")!.textContent).toContain("Matches your models");
     });
 
     it("keeps detailed configuration open and prefills the admin's group names on apply", async () => {
@@ -677,7 +677,7 @@ describe("AddAutoRouterTab", () => {
       await waitFor(() => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
-      expect(optionByLabel("Anthropic Family")!.textContent).toContain("Matches your deployments");
+      expect(optionByLabel("Anthropic Family")!.textContent).toContain("Matches your models");
     });
 
     it("prefills the expanded group names and submits them", async () => {
@@ -703,6 +703,60 @@ describe("AddAutoRouterTab", () => {
             MEDIUM: ANTHROPIC_TIERS.MEDIUM.map(expandedGroupFor),
             COMPLEX: ANTHROPIC_TIERS.COMPLEX.map(expandedGroupFor),
             REASONING: ANTHROPIC_TIERS.REASONING.map(expandedGroupFor),
+          },
+        },
+      });
+    });
+  });
+
+  // The team-scoped shape from the live repro: /model_group/info lists every proxy group while
+  // /v2/model/info returns only the caller's team rows, so most preset models are backed by a hub
+  // group and nothing else.
+  describe("hub groups no deployment row covers", () => {
+    const prefixedGroupFor = (model: string): string => `anthropic/${model}`;
+
+    const PREFIXED_HUB_GROUPS: ModelGroup[] = [...getRequiredModelsInPreset(getPresetByKey("anthropic_family")!)].map(
+      (model) => ({ model_group: prefixedGroupFor(model), mode: "chat" }),
+    );
+
+    const UNRELATED_DEPLOYMENT = [{ model_name: "team-only-model", litellm_params: { model: "anthropic/some-other" } }];
+
+    it("enables a preset whose models the hub lists and the deployment rows omit", async () => {
+      mockFetchAvailableModels.mockResolvedValue(PREFIXED_HUB_GROUPS);
+      mockFetchAllModelDeployments.mockResolvedValue(UNRELATED_DEPLOYMENT);
+
+      renderWithProviders(<Harness />);
+      openTemplateDropdown();
+
+      await waitFor(() => {
+        expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
+      });
+      expect(optionByLabel("Anthropic Family")!.textContent).not.toContain("Missing:");
+    });
+
+    it("prefills and submits the hub's own group names", async () => {
+      const user = userEvent.setup();
+      mockFetchAvailableModels.mockResolvedValue(PREFIXED_HUB_GROUPS);
+      mockFetchAllModelDeployments.mockResolvedValue(UNRELATED_DEPLOYMENT);
+
+      renderWithProviders(<Harness />);
+      openTemplateDropdown();
+      await waitFor(() => {
+        expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
+      });
+      fireEvent.click(optionByLabel("Anthropic Family")!);
+
+      await user.type(screen.getByPlaceholderText(/smart_router/i), "hub-router");
+      await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+      expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({
+        complexity_router_config: {
+          tiers: {
+            SIMPLE: ANTHROPIC_TIERS.SIMPLE.map(prefixedGroupFor),
+            MEDIUM: ANTHROPIC_TIERS.MEDIUM.map(prefixedGroupFor),
+            COMPLEX: ANTHROPIC_TIERS.COMPLEX.map(prefixedGroupFor),
+            REASONING: ANTHROPIC_TIERS.REASONING.map(prefixedGroupFor),
           },
         },
       });

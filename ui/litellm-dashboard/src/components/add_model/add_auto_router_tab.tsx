@@ -41,7 +41,7 @@ import {
   buildPresetPrefill,
   buildModelAvailability,
   deploymentRefsFromModelInfo,
-  ModelAvailability,
+  presetNeedsSubstitution,
   PresetPrefill,
   AutoRouterPreset,
 } from "@/lib/autorouter_presets";
@@ -60,7 +60,7 @@ interface AddAutoRouterTabProps {
 }
 
 type PresetAvailability =
-  | { kind: "available"; viaDeployments: boolean }
+  | { kind: "available"; viaSubstitution: boolean }
   | { kind: "loading" }
   | { kind: "unverifiable" }
   | { kind: "missing_models"; models: readonly string[] };
@@ -115,12 +115,12 @@ const getSubmitBlockedReason = (
   config: ComplexityRouterConfigValue,
   keywordTierRules: KeywordTierRule[],
   referencedModelsParams: Parameters<typeof getReferencedModelsError>[0],
-  availability: ModelAvailability,
+  modelGroups: ReadonlySet<string>,
 ): string | null =>
   getMissingTiersError(config.tiers) ??
   getTierLabelsError(config.tier_labels) ??
   getKeywordTierRulesError(keywordTierRules) ??
-  getReferencedModelsError(referencedModelsParams, availability);
+  getReferencedModelsError(referencedModelsParams, modelGroups);
 
 const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   handleOk,
@@ -150,7 +150,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   // Closed by default: a caller opens it deliberately, either by clicking it or by choosing Custom
   // (which expands it automatically, since there's nothing else to show them their config from). A
   // preset re-collapses it after prefilling, offering the same "here's what got filled in, expand to
-  // change it" affordance. A caller can always toggle it manually at any point.
+  // change it" affordance, EXCEPT where the prefill had to rewrite the preset's model names to the
+  // caller's own group names (viaSubstitution), which is worth showing unprompted. A caller can
+  // always toggle it manually at any point.
   const [detailsExpanded, setDetailsExpanded] = useState<boolean>(false);
 
   const [isRoutingTestVisible, setIsRoutingTestVisible] = useState<boolean>(false);
@@ -199,15 +201,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       ),
     [modelInfo, deployments],
   );
-  const groupsOnlyAvailability = React.useMemo(
-    () =>
-      buildModelAvailability(
-        modelInfo.map((m) => m.model_group),
-        [],
-      ),
-    [modelInfo],
-  );
-
   // A preset's models can only be trusted against a successfully loaded list. Selection and the
   // greyed-out state derive from this one function, so a preset that cannot be selected can never
   // have been applied: while loading we withhold selection rather than let a caller pick a preset
@@ -219,12 +212,15 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       if (modelsUnverifiable) return { kind: "unverifiable" };
       const missing = getMissingModelsInPreset(preset, availability);
       if (missing.length > 0) return { kind: "missing_models", models: missing };
+      // True when the preset's own model names are not themselves model groups, so applying it
+      // rewrites them to the caller's names. That one fact drives both the "Matches your models"
+      // hint and the auto-expand, since each is a way of saying "we picked these, take a look".
       return {
         kind: "available",
-        viaDeployments: getMissingModelsInPreset(preset, groupsOnlyAvailability).length > 0,
+        viaSubstitution: presetNeedsSubstitution(preset, availability.modelGroups),
       };
     },
-    [modelsLoading, modelsUnverifiable, availability, groupsOnlyAvailability],
+    [modelsLoading, modelsUnverifiable, availability],
   );
 
   const sortedPresetOptions = React.useMemo(
@@ -262,7 +258,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
     setSelectedPreset(presetKey);
     applyPrefill(buildPresetPrefill(preset.complexity_router_config, availability));
-    setDetailsExpanded(presetState.viaDeployments);
+    setDetailsExpanded(presetState.viaSubstitution);
   };
 
   const referencedModelsParams = {
@@ -277,7 +273,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     complexityRouterConfig,
     keywordTierRules,
     referencedModelsParams,
-    groupsOnlyAvailability,
+    availability.modelGroups,
   );
 
   const complexityRouterConfigParams: BuildComplexityRouterConfigParams = {
@@ -344,7 +340,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     // same handler) fires on Enter regardless of the button's disabled state - without this check,
     // Enter in the name field could still create a router referencing a model that disappeared from
     // availableModelSet after the tiers were filled in.
-    const referencedModelsError = getReferencedModelsError(referencedModelsParams, groupsOnlyAvailability);
+    const referencedModelsError = getReferencedModelsError(referencedModelsParams, availability.modelGroups);
     if (referencedModelsError) {
       setShowValidationErrors(true);
       NotificationManager.fromBackend(referencedModelsError);
@@ -446,7 +442,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 const isDisabled = disabledHint !== null;
                 const hintClass = isPresetHintAlarming(presetState) ? "text-red-500" : "text-gray-400";
                 const matchedHint =
-                  presetState.kind === "available" && presetState.viaDeployments ? "Matches your deployments" : null;
+                  presetState.kind === "available" && presetState.viaSubstitution ? "Matches your models" : null;
 
                 return (
                   <AntdSelect.Option

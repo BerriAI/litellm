@@ -6,6 +6,7 @@ import {
   getMissingModelsInPreset,
   getRequiredModels,
   getMissingModels,
+  getMissingModelGroups,
   getReferencedModelsError,
   buildEmptyPrefill,
   buildPresetPrefill,
@@ -130,7 +131,8 @@ describe("autorouter_presets", () => {
 
     it("never indexes a wildcard deployment", () => {
       const availability = availabilityFor("openai-wild", "openai/*");
-      expect(availability.underlyingIndex.size).toBe(0);
+      const config = { tiers: { SIMPLE: ["gpt-5.4"], MEDIUM: [], COMPLEX: [], REASONING: [] } };
+      expect(getMissingModels(config, availability)).toEqual(["gpt-5.4"]);
     });
 
     it("ignores a deployment whose group is not itself an available model group", () => {
@@ -138,7 +140,8 @@ describe("autorouter_presets", () => {
         ["some-other-group"],
         [{ modelGroup: "orphan-group", underlyingModels: ["anthropic/claude-opus-5"] }],
       );
-      expect(availability.underlyingIndex.size).toBe(0);
+      const config = { tiers: { SIMPLE: ["claude-opus-5"], MEDIUM: [], COMPLEX: [], REASONING: [] } };
+      expect(getMissingModels(config, availability)).toEqual(["claude-opus-5"]);
     });
 
     it("breaks ties between groups serving the same model deterministically, alphabetically", () => {
@@ -191,7 +194,7 @@ describe("autorouter_presets", () => {
     );
   });
 
-  describe("wildcard deployment matching (expanded model groups)", () => {
+  describe("model group name matching (what the tier dropdown lists)", () => {
     const wildcardDeployment = (pattern: string) => ({ modelGroup: pattern, underlyingModels: [pattern] });
 
     const simpleTierConfig = (presetModel: string) => ({
@@ -200,7 +203,34 @@ describe("autorouter_presets", () => {
       session_affinity: false,
     });
 
-    it("resolves a preset model to a group expanded from a wildcard deployment", () => {
+    // The regression this block exists for: /model_group/info fills the tier dropdown while the
+    // deployments come from /v2/model/info, and a team-scoped caller sees every proxy group in the
+    // first and only their team's rows in the second. Before group names counted, the picker
+    // reported a model the caller could select one field below.
+    it("resolves a preset model to a prefixed group the hub lists with no deployment row of its own", () => {
+      const availability = buildModelAvailability(
+        ["claude-haiku-4-5", "anthropic/claude-sonnet-5"],
+        [{ modelGroup: "claude-haiku-4-5", underlyingModels: ["anthropic/claude-haiku-4-5"] }],
+      );
+      const config = simpleTierConfig("claude-sonnet-5");
+      expect(getMissingModels(config, availability)).toEqual([]);
+      expect(buildPresetPrefill(config, availability).complexityRouterConfig.tiers.SIMPLE).toEqual([
+        "anthropic/claude-sonnet-5",
+      ]);
+    });
+
+    // model_name is an admin's label, so a group can name one model while serving another. Where a
+    // deployment row exists it settles what the group carries, and the label gets no vote.
+    it("lets a deployment row override a group name that claims a different model", () => {
+      const availability = buildModelAvailability(
+        ["anthropic/claude-opus-5"],
+        [{ modelGroup: "anthropic/claude-opus-5", underlyingModels: ["anthropic/claude-haiku-4-5"] }],
+      );
+      expect(getMissingModels(simpleTierConfig("claude-opus-5"), availability)).toEqual(["claude-opus-5"]);
+      expect(getMissingModels(simpleTierConfig("claude-haiku-4-5"), availability)).toEqual([]);
+    });
+
+    it("resolves a preset model to a group the hub expanded from a wildcard deployment", () => {
       const availability = buildModelAvailability(
         ["anthropic/*", "anthropic/claude-opus-5", "bedrock/anthropic.claude-opus-5"],
         [wildcardDeployment("anthropic/*")],
@@ -212,7 +242,7 @@ describe("autorouter_presets", () => {
       ]);
     });
 
-    it("normalizes an expanded group's namespaced own name the same way as a deployment's", () => {
+    it("normalizes a group's namespaced own name the same way as a deployment's", () => {
       const availability = buildModelAvailability(
         ["bedrock/*", "bedrock/us.anthropic.claude-sonnet-5"],
         [wildcardDeployment("bedrock/*")],
@@ -220,94 +250,36 @@ describe("autorouter_presets", () => {
       expect(getMissingModels(simpleTierConfig("claude-sonnet-5"), availability)).toEqual([]);
     });
 
-    it("anchors a partial wildcard pattern and treats its dots literally", () => {
-      const availability = buildModelAvailability(
-        ["bedrock/us.anthropic.claude-opus-5", "bedrock/usXanthropic.claude-fable-5"],
-        [wildcardDeployment("bedrock/us.*")],
-      );
-      expect(getMissingModels(simpleTierConfig("claude-opus-5"), availability)).toEqual([]);
-      expect(getMissingModels(simpleTierConfig("claude-fable-5"), availability)).toEqual(["claude-fable-5"]);
-    });
-
     it.each([
       ["gpt-5.4", "openai/gpt-5.4-mini"],
       ["gpt-5.4-mini", "openai/gpt-5.4"],
       ["o3", "openai/o3-mini"],
-    ])("never lets %s be satisfied by the expanded group %s", (presetModel, expandedGroup) => {
-      const availability = buildModelAvailability(["openai/*", expandedGroup], [wildcardDeployment("openai/*")]);
+    ])("never lets %s be satisfied by the group %s", (presetModel, group) => {
+      const availability = buildModelAvailability(["openai/*", group], [wildcardDeployment("openai/*")]);
       expect(getMissingModels(simpleTierConfig(presetModel), availability)).toEqual([presetModel]);
     });
 
-    it("anchors the pattern's suffix and keeps middle segments in order", () => {
-      const availability = buildModelAvailability(
-        ["bedrock/us.anthropic.claude-opus-5", "bedrock/anthropic.us.claude-sonnet-5"],
-        [wildcardDeployment("bedrock/*.anthropic.*")],
-      );
-      expect(getMissingModels(simpleTierConfig("claude-opus-5"), availability)).toEqual([]);
-      expect(getMissingModels(simpleTierConfig("claude-sonnet-5"), availability)).toEqual(["claude-sonnet-5"]);
-    });
-
-    it("matches a pathological many-star pattern in linear time instead of backtracking", () => {
-      const hostile = `prov/a*${"a*".repeat(30)}b`;
-      const nonMatching = `prov/${"a".repeat(120)}`;
-      const availability = buildModelAvailability([nonMatching], [wildcardDeployment(hostile)]);
-      expect(availability.underlyingIndex.size).toBe(0);
-    });
-
-    it("expands a bare-star model_name through its underlying wildcard, not as match-all", () => {
-      const availability = buildModelAvailability(
-        ["openai/gpt-5.4", "team-a/claude-opus-5"],
-        [{ modelGroup: "*", underlyingModels: ["openai/*"] }],
-      );
-      expect(getMissingModels(simpleTierConfig("gpt-5.4"), availability)).toEqual([]);
-      expect(getMissingModels(simpleTierConfig("claude-opus-5"), availability)).toEqual(["claude-opus-5"]);
-    });
-
+    // A group whose name is or contains a pattern is not a servable model name, so it can never
+    // stand in for one however the hub lists it.
     it.each([
-      ["a bare-star underlying", "*"],
-      ["a non-wildcard underlying", "openai/gpt-4o"],
-      ["a slashless wildcard underlying", "gpt*"],
-    ])("derives no pattern from a bare-star model_name with %s", (_label, underlying) => {
-      const availability = buildModelAvailability(
-        ["openai/gpt-5.4"],
-        [{ modelGroup: "*", underlyingModels: [underlying] }],
-      );
-      expect(availability.underlyingIndex.size).toBe(0);
-    });
-
-    it("derives no pattern from a slashless wildcard model_name", () => {
-      const availability = buildModelAvailability(["gpt-5.4"], [wildcardDeployment("gpt*")]);
-      expect(availability.underlyingIndex.size).toBe(0);
-    });
-
-    it("does not trust a group's name when no wildcard deployment covers it", () => {
-      const availability = buildModelAvailability(
-        ["team-a/claude-opus-5", "openai/*"],
-        [wildcardDeployment("openai/*")],
-      );
-      expect(getMissingModels(simpleTierConfig("claude-opus-5"), availability)).toEqual(["claude-opus-5"]);
-    });
-
-    it("never resolves to the wildcard group itself when the hub lists no expansions", () => {
-      const availability = buildModelAvailability(["openai/*"], [wildcardDeployment("openai/*")]);
+      ["a bare star", "*"],
+      ["a provider wildcard", "openai/*"],
+      ["a slashless wildcard", "gpt*"],
+    ])("never satisfies a preset model from %s group", (_label, group) => {
+      const availability = buildModelAvailability([group], [wildcardDeployment(group)]);
       expect(getMissingModels(simpleTierConfig("gpt-5.4"), availability)).toEqual(["gpt-5.4"]);
-      expect(availability.underlyingIndex.size).toBe(0);
     });
 
-    it("applies a wildcard deployment's pattern even when the wildcard group is not itself listed", () => {
-      const availability = buildModelAvailability(["anthropic/claude-opus-5"], [wildcardDeployment("anthropic/*")]);
-      expect(getMissingModels(simpleTierConfig("claude-opus-5"), availability)).toEqual([]);
+    it("prefers an exact group name over a group that merely carries the model", () => {
+      const availability = buildModelAvailability(["anthropic/claude-opus-5", "claude-opus-5"], []);
+      const config = simpleTierConfig("claude-opus-5");
+      expect(buildPresetPrefill(config, availability).complexityRouterConfig.tiers.SIMPLE).toEqual(["claude-opus-5"]);
     });
 
-    it("keeps the groups-only availability strict even when expanded groups are listed", () => {
-      const availability = groupsOnly(["anthropic/*", "anthropic/claude-opus-5"]);
-      expect(getMissingModels(simpleTierConfig("claude-opus-5"), availability)).toEqual(["claude-opus-5"]);
-    });
-
-    it("prefers the alphabetically first covered group when several expansions serve the model", () => {
+    it("prefers the alphabetically first group when several carry the same model", () => {
       const availability = buildModelAvailability(
         ["bedrock/us.anthropic.claude-opus-5", "anthropic/claude-opus-5", "bedrock/anthropic.claude-opus-5"],
-        [wildcardDeployment("anthropic/*"), wildcardDeployment("bedrock/*")],
+        [],
       );
       const config = simpleTierConfig("claude-opus-5");
       expect(buildPresetPrefill(config, availability).complexityRouterConfig.tiers.SIMPLE).toEqual([
@@ -315,15 +287,21 @@ describe("autorouter_presets", () => {
       ]);
     });
 
+    // The submit gate stays on literal model groups: what lands in the config has to be a name the
+    // router can resolve per request, and a preset's bare name is only ever submitted after
+    // buildPresetPrefill rewrote it to the group's real name.
+    it("keeps the submit gate on literal model group names", () => {
+      const groups = new Set(["anthropic/claude-opus-5"]);
+      expect(getMissingModelGroups(simpleTierConfig("claude-opus-5"), groups)).toEqual(["claude-opus-5"]);
+      expect(getMissingModelGroups(simpleTierConfig("anthropic/claude-opus-5"), groups)).toEqual([]);
+    });
+
     it.each(getAllPresets().map((preset) => [preset.key, preset] as const))(
-      "fully resolves the %s preset through wildcard-expanded groups only",
+      "fully resolves the %s preset through prefixed group names only",
       (_key, preset) => {
         const required = [...getRequiredModelsInPreset(preset)];
         const expandedGroups = required.map((model) => `someprovider/${model}`);
-        const availability = buildModelAvailability(
-          ["someprovider/*", ...expandedGroups],
-          [wildcardDeployment("someprovider/*")],
-        );
+        const availability = buildModelAvailability(expandedGroups, []);
         expect(getMissingModelsInPreset(preset, availability)).toEqual([]);
         const prefilled = buildPresetPrefill(preset.complexity_router_config, availability);
         const prefilledModels = Object.values(prefilled.complexityRouterConfig.tiers).flat();
@@ -379,7 +357,7 @@ describe("autorouter_presets", () => {
 
   describe("getReferencedModelsError", () => {
     const tiers = { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] };
-    const available = groupsOnly(["gpt-5-nano"]);
+    const available = new Set(["gpt-5-nano"]);
     // Both fields are always populated with a model missing from `available`; only the
     // enabled/disabled toggles below decide whether that missing model gets reported.
     const params = {
