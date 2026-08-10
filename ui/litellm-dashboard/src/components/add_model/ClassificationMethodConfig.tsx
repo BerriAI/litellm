@@ -1,6 +1,8 @@
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Select as AntdSelect, Card, InputNumber, Radio, Space, Switch, Tooltip, Typography } from "antd";
 import React from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
 import {
   ClassifierFallback,
@@ -10,36 +12,22 @@ import {
   DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
   DEFAULT_CLASSIFIER_FALLBACK,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
-  effectiveTierLabel,
 } from "./ComplexityRouterConfig";
 
 const { Text } = Typography;
-
-const DEFAULT_SCORING_EXPLANATION =
-  "The router scores each request across 7 dimensions: token count, code presence, reasoning markers, technical " +
-  "terms, simple indicators, multi-step patterns, and question complexity. The weighted score determines the tier:";
-
-const CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK =
-  "This router classifies with your own prompt, so the tier comes from whatever rubric it states. The four tier " +
-  "names stay fixed. The scoring below is the heuristic, which now runs only when the classifier call fails:";
-
-const CUSTOM_PROMPT_WITH_DEFAULT_MODEL_FALLBACK =
-  "This router classifies with your own prompt, so the tier comes from whatever rubric it states. The four tier " +
-  "names stay fixed. The scoring below no longer runs at all, since a failed classifier routes to the default " +
-  "model instead:";
 
 /**
  * What the scoring breakdown below it actually describes. A custom prompt means the score no longer
  * decides the tier, and pairing one with the default-model fallback means the heuristic never runs
  * at all, so the panel must not keep implying a score is involved on either router.
  */
-const scoringExplanation = (value: ComplexityRouterConfigValue): string => {
+const scoringExplanation = (value: ComplexityRouterConfigValue, t: TFunction<"gateway">): string => {
   const usesCustomPrompt =
     value.classifier_type === "llm" && Boolean(value.classifier_llm_config?.system_prompt?.trim());
-  if (!usesCustomPrompt) return DEFAULT_SCORING_EXPLANATION;
+  if (!usesCustomPrompt) return t("models.autoRouters.details.classification.scoringDefault");
   return value.classifier_fallback === "default_model"
-    ? CUSTOM_PROMPT_WITH_DEFAULT_MODEL_FALLBACK
-    : CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK;
+    ? t("models.autoRouters.details.classification.scoringCustomDefault")
+    : t("models.autoRouters.details.classification.scoringCustomHeuristic");
 };
 
 interface ClassificationMethodConfigProps {
@@ -62,8 +50,12 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   showValidationErrors = false,
   hasDefaultModel = false,
 }) => {
+  const { t } = useTranslation("gateway");
   const classifierModelMissing =
     showValidationErrors && value.classifier_type === "llm" && !value.classifier_llm_config?.model;
+  const displayTierLabel = (tier: "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING") =>
+    value.tier_labels?.[tier]?.trim() ||
+    t(`models.autoRouters.details.tiers.${tier.toLowerCase()}.label`, { defaultValue: tier });
 
   const handleClassifierTypeChange = (classifierType: ClassifierType) => {
     const nextValue: ComplexityRouterConfigValue = {
@@ -156,12 +148,12 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
       >
         <Space direction="vertical" className="w-full">
           <Radio value="heuristic">
-            <Text strong>Heuristic</Text>{" "}
-            <Text type="secondary">(default) — rule-based scoring, no API calls, &lt;1ms latency</Text>
+            <Text strong>{t("models.autoRouters.details.classification.heuristic")}</Text>{" "}
+            <Text type="secondary">{t("models.autoRouters.details.classification.heuristicDescription")}</Text>
           </Radio>
           <Radio value="llm">
-            <Text strong>LLM Classifier</Text>{" "}
-            <Text type="secondary">— use a model to decide the tier (e.g. a small/fast model)</Text>
+            <Text strong>{t("models.autoRouters.details.classification.llm")}</Text>{" "}
+            <Text type="secondary">{t("models.autoRouters.details.classification.llmDescription")}</Text>
           </Radio>
         </Space>
       </Radio.Group>
@@ -170,12 +162,12 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         <div className="mt-4 space-y-3">
           <div>
             <Text strong style={{ display: "block", marginBottom: 4 }}>
-              Classifier Model
+              {t("models.autoRouters.details.classification.model")}
             </Text>
             <AntdSelect
               value={value.classifier_llm_config?.model || undefined}
               onChange={handleClassifierModelChange}
-              placeholder="Select the model that will classify request complexity"
+              placeholder={t("models.autoRouters.details.classification.modelPlaceholder")}
               showSearch
               style={{ width: "100%" }}
               options={modelOptions}
@@ -183,13 +175,13 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             />
             {classifierModelMissing && (
               <Text type="danger" style={{ fontSize: 12 }}>
-                A classifier model is required
+                {t("models.autoRouters.details.classification.modelRequired")}
               </Text>
             )}
           </div>
           <div>
             <Text strong style={{ display: "block", marginBottom: 4 }}>
-              Timeout (ms)
+              {t("models.autoRouters.details.classification.timeout")}
             </Text>
             <InputNumber
               value={value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS}
@@ -198,12 +190,12 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               style={{ width: "100%" }}
             />
             <Text type="secondary" style={{ fontSize: 12 }}>
-              How long the classifier call has before it fails and the fallback below takes over.
+              {t("models.autoRouters.details.classification.timeoutDescription")}
             </Text>
           </div>
           <div>
             <Text strong style={{ display: "block", marginBottom: 4 }}>
-              Classifier Prompt
+              {t("models.autoRouters.details.classification.prompt")}
             </Text>
             <ClassifierPromptEditor
               systemPrompt={value.classifier_llm_config?.system_prompt}
@@ -214,7 +206,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           </div>
           <div>
             <Text strong style={{ display: "block", marginBottom: 4 }}>
-              If the classifier fails
+              {t("models.autoRouters.details.classification.failure")}
             </Text>
             <Radio.Group
               value={value.classifier_fallback ?? DEFAULT_CLASSIFIER_FALLBACK}
@@ -222,28 +214,32 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             >
               <Space direction="vertical">
                 <Radio value="heuristic">
-                  <Text>Score with the heuristic</Text>{" "}
-                  <Text type="secondary">— right when the classifier grades complexity too</Text>
+                  <Text>{t("models.autoRouters.details.classification.heuristicFallback")}</Text>{" "}
+                  <Text type="secondary">
+                    {t("models.autoRouters.details.classification.heuristicFallbackDescription")}
+                  </Text>
                 </Radio>
                 <Radio value="default_model" disabled={!hasDefaultModel}>
                   <Tooltip
-                    title={hasDefaultModel ? undefined : "Set a default model on this router to use this option"}
+                    title={hasDefaultModel ? undefined : t("models.autoRouters.details.classification.defaultRequired")}
                   >
                     <span>
-                      <Text>Route to the default model</Text>{" "}
-                      <Text type="secondary">— right when your prompt grades something other than complexity</Text>
+                      <Text>{t("models.autoRouters.details.classification.defaultFallback")}</Text>{" "}
+                      <Text type="secondary">
+                        {t("models.autoRouters.details.classification.defaultFallbackDescription")}
+                      </Text>
                     </span>
                   </Tooltip>
                 </Radio>
               </Space>
             </Radio.Group>
             <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
-              Applies when the classifier call errors, times out, or returns an unparseable response.
+              {t("models.autoRouters.details.classification.fallbackDescription")}
             </Text>
           </div>
           <div>
             <Text strong style={{ display: "block", marginBottom: 4 }}>
-              Context Window Size
+              {t("models.autoRouters.details.classification.contextWindow")}
             </Text>
             <InputNumber
               value={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
@@ -252,14 +248,12 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               style={{ width: "100%" }}
             />
             <Text type="secondary" style={{ fontSize: 12 }}>
-              Number of prior user turns (tool output and harness reminders excluded) sent to the classifier as context,
-              so a referring follow-up like &quot;now do the same for the streaming path&quot; is classified against
-              what it refers to. Set to 0 to send only the current message.
+              {t("models.autoRouters.details.classification.contextWindowDescription")}
             </Text>
           </div>
           <div>
             <Text strong style={{ display: "block", marginBottom: 4 }}>
-              Context Per-Turn Character Limit
+              {t("models.autoRouters.details.classification.perTurnLimit")}
             </Text>
             <InputNumber
               value={value.classifier_context_per_turn_chars ?? DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS}
@@ -268,7 +262,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               style={{ width: "100%" }}
             />
             <Text type="secondary" style={{ fontSize: 12 }}>
-              Prior turns longer than this are truncated.
+              {t("models.autoRouters.details.classification.perTurnLimitDescription")}
             </Text>
           </div>
           <div>
@@ -277,18 +271,15 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
                 checked={value.classifier_context_include_assistant_turns ?? false}
                 onChange={handleClassifierContextIncludeAssistantTurnsChange}
                 size="small"
-                aria-label="Include Assistant Turns"
+                aria-label={t("models.autoRouters.details.classification.includeAssistant")}
               />
-              <Text strong>Include Assistant Turns</Text>
-              <Tooltip title="Off by default. Enabling it changes tier decisions, and therefore spend, for an existing router, and sends assistant text to the classifier model, which may be a different provider than the routed model.">
+              <Text strong>{t("models.autoRouters.details.classification.includeAssistant")}</Text>
+              <Tooltip title={t("models.autoRouters.details.classification.includeAssistantTooltip")}>
                 <InfoCircleOutlined className="text-gray-400" />
               </Tooltip>
             </div>
             <Text type="secondary" style={{ fontSize: 12 }}>
-              Let the classifier read the assistant&apos;s replies, so difficulty the model stated rather than the user
-              stays visible: a plan the assistant calls complex, approved with &quot;yes&quot;, is classified on the
-              work being approved. Context Window Size then counts the last N turns across both roles rather than the
-              last N user turns.
+              {t("models.autoRouters.details.classification.includeAssistantDescription")}
             </Text>
           </div>
         </div>
@@ -297,20 +288,19 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
       {value.classifier_type === "heuristic" && (
         <div className="mt-4">
           <div className="flex items-center gap-2 mb-1">
-            <Text strong>Custom Technical Keywords</Text>
-            <Tooltip title="Domain-specific terms appended to the built-in technical keyword list. Prompts containing these terms score higher on the technical dimension and route to more capable models.">
+            <Text strong>{t("models.autoRouters.details.classification.customKeywords")}</Text>
+            <Tooltip title={t("models.autoRouters.details.classification.customKeywordsTooltip")}>
               <InfoCircleOutlined className="text-gray-400" />
             </Tooltip>
           </div>
           <Text type="secondary" style={{ display: "block", marginBottom: 8, fontSize: 12 }}>
-            Optional: Add terms to the built-in list to improve classification accuracy on the technical dimension.
-            (e.g., udp, kafka, terraform).
+            {t("models.autoRouters.details.classification.customKeywordsDescription")}
           </Text>
           <AntdSelect
             mode="tags"
             value={customTechnicalKeywords ?? []}
             onChange={(keywords: string[]) => onCustomTechnicalKeywordsChange?.(keywords)}
-            placeholder="Type a keyword and press Enter, or paste a comma-separated list"
+            placeholder={t("models.autoRouters.details.classification.customKeywordsPlaceholder")}
             tokenSeparators={[","]}
             open={false}
             suffixIcon={null}
@@ -322,24 +312,27 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
 
       <Card className="bg-gray-50 mt-4">
         <Text strong style={{ display: "block", marginBottom: 8 }}>
-          How Classification Works
+          {t("models.autoRouters.details.classification.howItWorks")}
         </Text>
         <Text type="secondary" style={{ fontSize: 13 }}>
-          {scoringExplanation(value)}
+          {scoringExplanation(value, t)}
         </Text>
         <ul style={{ marginTop: 8, marginBottom: 0, paddingLeft: 20, fontSize: 13, color: "rgba(0, 0, 0, 0.45)" }}>
           <li>
-            <strong>{effectiveTierLabel("SIMPLE", value.tier_labels)}</strong>: Score &lt; 0.15
+            <strong>{displayTierLabel("SIMPLE")}</strong>: {t("models.autoRouters.details.classification.score")} &lt;
+            0.15
           </li>
           <li>
-            <strong>{effectiveTierLabel("MEDIUM", value.tier_labels)}</strong>: Score 0.15 - 0.35
+            <strong>{displayTierLabel("MEDIUM")}</strong>: {t("models.autoRouters.details.classification.score")} 0.15 -
+            0.35
           </li>
           <li>
-            <strong>{effectiveTierLabel("COMPLEX", value.tier_labels)}</strong>: Score 0.35 - 0.60
+            <strong>{displayTierLabel("COMPLEX")}</strong>: {t("models.autoRouters.details.classification.score")} 0.35
+            - 0.60
           </li>
           <li>
-            <strong>{effectiveTierLabel("REASONING", value.tier_labels)}</strong>: Score &gt; 0.60 (or 2+ reasoning
-            markers)
+            <strong>{displayTierLabel("REASONING")}</strong>: {t("models.autoRouters.details.classification.score")}{" "}
+            &gt; 0.60 ({t("models.autoRouters.details.classification.reasoningMarkers")})
           </li>
         </ul>
       </Card>

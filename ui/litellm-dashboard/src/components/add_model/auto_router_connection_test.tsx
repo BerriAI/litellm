@@ -3,6 +3,7 @@ import { Typography } from "antd";
 import { CheckCircleTwoTone, CloseCircleTwoTone, LoadingOutlined } from "@ant-design/icons";
 import { testModelGroupConnection, ModelGroupConnectionResult } from "../networking";
 import { AutoRouterTestTarget } from "./build_auto_router_test_targets";
+import { useTranslation } from "react-i18next";
 
 const { Text } = Typography;
 
@@ -24,6 +25,7 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
   targets,
   onTestComplete,
 }) => {
+  const { t } = useTranslation("gateway");
   const [results, setResults] = React.useState<TargetResult[]>(() => targets.map(() => ({ status: "pending" })));
 
   React.useEffect(() => {
@@ -48,14 +50,13 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
   }, []);
 
   if (targets.length === 0) {
-    return <Text type="secondary">No complexity tiers are configured yet, so there is nothing to test.</Text>;
+    return <Text type="secondary">{t("models.autoRouters.details.connectionTest.empty")}</Text>;
   }
 
   return (
     <div className="space-y-3">
       <Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
-        Each configured tier routes to a saved model group. Test Connection sends a minimal request through the proxy to
-        each one, exactly as the auto router would.
+        {t("models.autoRouters.details.connectionTest.description")}
       </Text>
       {targets.map((target, index) => {
         const result = results[index] ?? { status: "pending" };
@@ -85,7 +86,7 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
               <Text strong>{target.labels.join(", ")}</Text>{" "}
               <Text type="secondary">
                 {"->"} {target.modelGroup}
-                {target.mode === "embedding" ? " (embedding)" : ""}
+                {target.mode === "embedding" ? ` (${t("models.autoRouters.details.connectionTest.embedding")})` : ""}
               </Text>
               {result.status === "error" && (
                 <Text

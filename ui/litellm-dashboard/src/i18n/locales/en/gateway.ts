@@ -372,6 +372,193 @@ export const enGateway = {
             "Routes across the GPT model family: gpt-5.4-nano for simple queries, gpt-5.4-mini for medium, gpt-5.4 for complex, o3 for reasoning-heavy requests.",
         },
       },
+      details: {
+        title: "Complexity Tier Configuration",
+        titleTooltip:
+          "Map each complexity tier to one or more models. Simple queries use cheaper and faster models; complex queries use more capable models.",
+        description:
+          "The complexity router automatically classifies requests using rule-based scoring (no API calls, under 1 ms latency). Configure which models handle each tier.",
+        renameHint:
+          "Rename a tier to use your own vocabulary in the dashboard and spend logs. Renaming does not change classification, and callers never see these names.",
+        llmRenameHint: "Your classifier model reads these names, so clearer names can improve its choices.",
+        tierTitle: "{{label}} Tier",
+        tierPosition: "Tier {{current}} of {{total}} · {{key}}",
+        examples: "Examples: {{examples}}",
+        displayName: "Display name (default: {{label}})",
+        displayNameAria: "Display name for the {{label}} tier",
+        selectModels: "Select models for {{label}} queries",
+        multipleModels:
+          "Multiple models selected — the router randomly picks among them per request, or uses Thompson sampling when adaptive routing is enabled.",
+        tierRequired: "The {{label}} tier is required",
+        tiers: {
+          simple: {
+            label: "Simple",
+            description: "Basic questions, greetings, and simple factual queries",
+            examples: "“Hello!”, “What is Python?”, “Thanks!”",
+          },
+          medium: {
+            label: "Medium",
+            description: "Standard queries requiring some reasoning or explanation",
+            examples: "“Explain how REST APIs work”, “Debug this error”",
+          },
+          complex: {
+            label: "Complex",
+            description: "Technical, multi-part requests requiring deep knowledge",
+            examples: "“Design a microservices architecture”, “Implement a rate limiter”",
+          },
+          reasoning: {
+            label: "Reasoning",
+            description: "Analysis and explicit reasoning requests",
+            examples: "“Think step by step…”, “Analyze the pros and cons…”",
+          },
+        },
+        sections: {
+          classification: "Advanced: Classification Method",
+          adaptive: "Advanced: Adaptive Routing",
+          sessionAffinity: "Advanced: Session Affinity",
+          responseFormat: "Advanced: Response Format",
+          escalation: "Advanced: Escalation Keywords",
+          keywordSemantic: "Advanced: Keyword/Semantic Matching",
+        },
+        sessionAffinity: "Pin a session to its first model",
+        sessionAffinityDescription:
+          "Off by default: every turn is classified independently. Enable this to reuse the first selected model for later turns, preserving provider prompt caches and avoiding cross-model history errors, at the cost of keeping the session on its first tier.",
+        rawModelName: "Return raw model name",
+        rawModelNameDescription:
+          "Return the resolved underlying model name in responses instead of the auto-router alias.",
+        classification: {
+          heuristic: "Heuristic",
+          heuristicDescription: "(default) — rule-based scoring, no API calls, under 1 ms latency",
+          llm: "LLM Classifier",
+          llmDescription: "— use a model to decide the tier, such as a small and fast model",
+          model: "Classifier Model",
+          modelPlaceholder: "Select the model that will classify request complexity",
+          modelRequired: "A classifier model is required",
+          timeout: "Timeout (ms)",
+          timeoutDescription: "How long the classifier call can run before the fallback takes over.",
+          prompt: "Classifier Prompt",
+          failure: "If the classifier fails",
+          heuristicFallback: "Score with the heuristic",
+          heuristicFallbackDescription: "— appropriate when the classifier also grades complexity",
+          defaultFallback: "Route to the default model",
+          defaultFallbackDescription: "— appropriate when your prompt grades something other than complexity",
+          defaultRequired: "Set a default model on this router to use this option",
+          fallbackDescription:
+            "Applies when the classifier call errors, times out, or returns an unparseable response.",
+          contextWindow: "Context Window Size",
+          contextWindowDescription:
+            "Number of prior user turns sent to the classifier as context. Set to 0 to send only the current message.",
+          perTurnLimit: "Context Per-Turn Character Limit",
+          perTurnLimitDescription: "Prior turns longer than this are truncated.",
+          includeAssistant: "Include Assistant Turns",
+          includeAssistantTooltip:
+            "Off by default. Enabling this can change tier decisions and spend, and sends assistant text to the classifier model, which may use a different provider.",
+          includeAssistantDescription:
+            "Let the classifier read assistant replies so that difficulty described by the model remains visible in short follow-up messages.",
+          customKeywords: "Custom Technical Keywords",
+          customKeywordsTooltip:
+            "Domain-specific terms added to the built-in technical keyword list. Matching prompts receive a higher technical score.",
+          customKeywordsDescription:
+            "Optional: add terms to improve classification on the technical dimension, for example udp, kafka, or terraform.",
+          customKeywordsPlaceholder: "Type a keyword and press Enter, or paste a comma-separated list",
+          howItWorks: "How Classification Works",
+          scoringDefault:
+            "The router scores each request across seven dimensions. The weighted score determines the tier:",
+          scoringCustomHeuristic:
+            "Your prompt defines the classification rubric. The scoring below is used only when the classifier call fails:",
+          scoringCustomDefault:
+            "Your prompt defines the classification rubric. The scoring below is not used because failures route to the default model:",
+          score: "Score",
+          reasoningMarkers: "or 2+ reasoning markers",
+        },
+        adaptive: {
+          enable: "Enable adaptive bandit selection",
+          disabledDescription: "When disabled, each request uses a model assigned to its classified tier.",
+          howItWorks: "How Adaptive Routing Works",
+          description:
+            "The router learns from conversation outcomes and combines live quality feedback with cost. As feedback accumulates, it shifts routing toward models that perform well. Until enough data exists, it uses the classified tier.",
+          qualityCost: "Quality vs. Cost ({{quality}}% quality / {{cost}}% cost)",
+          tooltip: "{{quality}}% quality / {{cost}}% cost",
+          weightDescription:
+            "More quality favors stronger models; more cost favors cheaper models. Recommended split: 30% quality and 70% cost.",
+          pool: "Eligible Model Pool",
+          allTiers: "All tiers (soft floor)",
+          allTiersDescription: "— the router can select across tiers based on the prompt",
+          classifiedTier: "Classified tier only",
+          classifiedTierDescription: "— the router selects only models within that tier",
+          distancePenalty: "Tier Distance Penalty",
+          distancePenaltyDescription: "Score penalty for each step away from the classified tier.",
+        },
+        escalation: {
+          title: "Escalation Keywords",
+          tooltip:
+            "Case-sensitive phrases users can include to move a request to the next-higher tier. They can request a stronger model but cannot choose it.",
+          description:
+            "Optional: when a message contains one of these exact phrases, routing moves one tier higher. Matching is case-sensitive. Leave empty to disable.",
+          placeholder: "e.g., LITELLM ESCALATE",
+        },
+        keywordRules: {
+          title: "Keyword Tier Overrides",
+          tooltip: "Match known terms and route directly to a chosen tier, bypassing rule-based scoring.",
+          add: "Add keyword rule",
+          description: "Optional: route requests containing specific keywords directly to a tier.",
+          empty: "No keyword tier overrides configured",
+          keywords: "Keywords {{number}}",
+          placeholder: "e.g., invoice, refund, billing",
+          required: "At least one keyword is required",
+          routeTo: "Route to tier",
+          remove: "Remove keyword rule {{number}}",
+        },
+        semantic: {
+          title: "Semantic keyword matching",
+          tooltip:
+            "Recognize related phrasing by comparing embeddings instead of exact text. Overrides direct keyword matching.",
+          description: "Uses the keyword-tier pairs above and adds latency for the embedding model network request.",
+          embeddingModel: "Embedding model",
+          modelPlaceholder: "Select an embedding model",
+          modelRequired: "An embedding model is required",
+          minimumScore: "Minimum match score",
+          scoreDescription: "Match only at or above this similarity score.",
+        },
+        promptEditor: {
+          loadFailed: "Could not load the default classifier prompt",
+          edit: "Edit custom prompt",
+          change: "Change default prompt",
+          reset: "Reset to default",
+          overriddenDescription: "This router uses your rubric instead of the built-in complexity rubric.",
+          defaultDescription:
+            "Replace the built-in complexity rubric to classify by another property, such as data sensitivity.",
+          title: "Classifier prompt",
+          warning: "Proceed with caution",
+          warningInjection:
+            "This prompt becomes the classifier's entire system role. Keep the final prompt-injection protection paragraph so quoted user instructions are treated as content to classify, never as classifier instructions.",
+          warningTiers:
+            "There are always four tiers. The prompt must return the displayed tier names, or SIMPLE, MEDIUM, COMPLEX, and REASONING when they have not been renamed.",
+          warningFallback:
+            "The heuristic fallback still scores complexity. If your prompt classifies another property, use the default-model fallback.",
+          aria: "Classifier system prompt",
+          prefilled: "Prefilled from the rubric used with a context window of {{size}}.",
+          restore: "Restore default text",
+          cancel: "Cancel",
+          save: "Save prompt",
+        },
+        routingTest: {
+          description:
+            "Send a prompt through the classifier to see which model it would select and why. The prompt is only classified and is not sent to the selected model.",
+          placeholder: "Paste a prompt an end user would send",
+          routing: "Routing...",
+          send: "Send Test Prompt",
+          failed: "Could not route this prompt",
+          routedTo: "Routed to",
+          unconfigured: "This proxy has no model group by that name",
+        },
+        connectionTest: {
+          empty: "No complexity tiers are configured yet, so there is nothing to test.",
+          description:
+            "Each configured tier routes to a saved model group. The connection test sends a minimal request through the proxy to each group.",
+          embedding: "embedding",
+        },
+      },
     },
   },
   virtualKeys: {

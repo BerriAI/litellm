@@ -7,6 +7,7 @@ import ClassificationMethodConfig from "./ClassificationMethodConfig";
 import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
+import { useTranslation } from "react-i18next";
 
 const { Text } = Typography;
 
@@ -133,6 +134,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onEscalationKeywordsChange,
   showValidationErrors = false,
 }) => {
+  const { t } = useTranslation("gateway");
   // The deployment's default model is derived from the tiers on submit, mirroring the order
   // add_auto_router_tab uses, so the fallback option is offered exactly when one will exist.
   const hasDefaultModel = Boolean(
@@ -165,29 +167,36 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
     <div className="w-full max-w-none">
       <Space align="center" style={{ marginBottom: 16 }}>
         <Typography.Title level={4} style={{ margin: 0 }}>
-          Complexity Tier Configuration
+          {t("models.autoRouters.details.title")}
         </Typography.Title>
-        <Tooltip title="Map each complexity tier to one or more models. Simple queries use cheaper/faster models, complex queries use more capable models.">
+        <Tooltip title={t("models.autoRouters.details.titleTooltip")}>
           <InfoCircleOutlined className="text-gray-400" />
         </Tooltip>
       </Space>
 
       <Text type="secondary" style={{ display: "block", marginBottom: 24 }}>
-        The complexity router automatically classifies requests by complexity using rule-based scoring (no API calls,
-        &lt;1ms latency). Configure which model(s) handle each tier.
+        {t("models.autoRouters.details.description")}
       </Text>
 
       <Text type="secondary" style={{ display: "block", marginBottom: 16, fontSize: 12 }}>
-        Rename a tier to use your own vocabulary in the dashboard and your spend logs. Renaming doesn&apos;t change how
-        requests are classified, and callers never see these names.
-        {value.classifier_type === "llm" &&
-          " Your classifier model reads these names, so clearer ones can sharpen its choices."}
+        {t("models.autoRouters.details.renameHint")}{" "}
+        {value.classifier_type === "llm" && t("models.autoRouters.details.llmRenameHint")}
       </Text>
 
       <Card>
         {TIER_KEYS.map((tier, index) => {
           const tierInfo = TIER_DESCRIPTIONS[tier];
-          const label = effectiveTierLabel(tier, value.tier_labels);
+          const tierKey = tier.toLowerCase();
+          const defaultLabel = t(`models.autoRouters.details.tiers.${tierKey}.label`, {
+            defaultValue: tierInfo.label,
+          });
+          const label = value.tier_labels?.[tier]?.trim() || defaultLabel;
+          const description = t(`models.autoRouters.details.tiers.${tierKey}.description`, {
+            defaultValue: tierInfo.description,
+          });
+          const examples = t(`models.autoRouters.details.tiers.${tierKey}.examples`, {
+            defaultValue: tierInfo.examples,
+          });
           const tierMissing = showValidationErrors && value.tiers[tier].length === 0;
           return (
             <div key={tier}>
@@ -195,23 +204,27 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
               <div className="mb-4">
                 <div className="flex items-center gap-2 mb-2">
                   <Text strong style={{ fontSize: 16 }}>
-                    {label} Tier
+                    {t("models.autoRouters.details.tierTitle", { label })}
                   </Text>
-                  <Tooltip title={tierInfo.description}>
+                  <Tooltip title={description}>
                     <InfoCircleOutlined className="text-gray-400" />
                   </Tooltip>
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    Tier {index + 1} of {TIER_KEYS.length} &middot; {tier}
+                    {t("models.autoRouters.details.tierPosition", {
+                      current: index + 1,
+                      total: TIER_KEYS.length,
+                      key: tier,
+                    })}
                   </Text>
                 </div>
                 <Text type="secondary" style={{ display: "block", marginBottom: 8, fontSize: 12 }}>
-                  Examples: {tierInfo.examples}
+                  {t("models.autoRouters.details.examples", { examples })}
                 </Text>
                 <Input
                   value={value.tier_labels?.[tier] ?? ""}
                   onChange={(event) => handleTierLabelChange(tier, event.target.value)}
-                  placeholder={`Display name (default: ${tierInfo.label})`}
-                  aria-label={`Display name for the ${tierInfo.label} tier`}
+                  placeholder={t("models.autoRouters.details.displayName", { label: defaultLabel })}
+                  aria-label={t("models.autoRouters.details.displayNameAria", { label: defaultLabel })}
                   style={{ marginBottom: 8 }}
                   allowClear
                 />
@@ -219,7 +232,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   mode="multiple"
                   value={value.tiers[tier]}
                   onChange={(models) => handleTierChange(tier, models)}
-                  placeholder={`Select model(s) for ${label.toLowerCase()} queries`}
+                  placeholder={t("models.autoRouters.details.selectModels", { label: label.toLowerCase() })}
                   showSearch
                   style={{ width: "100%" }}
                   options={modelOptions}
@@ -227,13 +240,12 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 />
                 {value.tiers[tier].length > 1 && (
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    Multiple models selected — the router randomly picks among them per request (or Thompson-samples
-                    within the pool when adaptive routing is on).
+                    {t("models.autoRouters.details.multipleModels")}
                   </Text>
                 )}
                 {tierMissing && (
                   <Text type="danger" style={{ fontSize: 12 }}>
-                    The {label} tier is required
+                    {t("models.autoRouters.details.tierRequired", { label })}
                   </Text>
                 )}
               </div>
@@ -252,7 +264,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             key: "classifier",
             label: (
               <Text strong style={{ color: "#374151" }}>
-                Advanced: Classification Method
+                {t("models.autoRouters.details.sections.classification")}
               </Text>
             ),
             children: (
@@ -271,7 +283,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             key: "adaptive",
             label: (
               <Text strong style={{ color: "#374151" }}>
-                Advanced: Adaptive Routing
+                {t("models.autoRouters.details.sections.adaptive")}
               </Text>
             ),
             children: <AdaptiveRoutingConfig value={value} onChange={onChange} />,
@@ -280,7 +292,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             key: "session-affinity",
             label: (
               <Text strong style={{ color: "#374151" }}>
-                Advanced: Session Affinity
+                {t("models.autoRouters.details.sections.sessionAffinity")}
               </Text>
             ),
             children: (
@@ -289,15 +301,12 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   <Switch
                     checked={value.session_affinity ?? DEFAULT_SESSION_AFFINITY}
                     onChange={(sessionAffinity) => onChange({ ...value, session_affinity: sessionAffinity })}
-                    aria-label="Pin a session to its first model"
+                    aria-label={t("models.autoRouters.details.sessionAffinity")}
                   />
-                  <Text strong>Pin a session to its first model</Text>
+                  <Text strong>{t("models.autoRouters.details.sessionAffinity")}</Text>
                 </div>
                 <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
-                  Off by default: every turn is classified on its own merits and routed to the cheapest adequate tier.
-                  Turn this on to reuse the model chosen on a session&apos;s first turn for every later turn, which
-                  preserves provider prompt caches and avoids cross-model conversation-history errors, at the cost of
-                  keeping the whole session on the first turn&apos;s tier.
+                  {t("models.autoRouters.details.sessionAffinityDescription")}
                 </Text>
               </>
             ),
@@ -306,7 +315,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             key: "response",
             label: (
               <Text strong style={{ color: "#374151" }}>
-                Advanced: Response Format
+                {t("models.autoRouters.details.sections.responseFormat")}
               </Text>
             ),
             children: (
@@ -315,11 +324,12 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   <Switch
                     checked={value.return_raw_model_name ?? false}
                     onChange={(returnRawModelName) => onChange({ ...value, return_raw_model_name: returnRawModelName })}
+                    aria-label={t("models.autoRouters.details.rawModelName")}
                   />
-                  <Text strong>Return raw model name</Text>
+                  <Text strong>{t("models.autoRouters.details.rawModelName")}</Text>
                 </div>
                 <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
-                  Return the resolved underlying model name in responses instead of the autorouter alias.
+                  {t("models.autoRouters.details.rawModelNameDescription")}
                 </Text>
               </>
             ),
@@ -330,7 +340,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   key: "escalation",
                   label: (
                     <Text strong style={{ color: "#374151" }}>
-                      Advanced: Escalation Keywords
+                      {t("models.autoRouters.details.sections.escalation")}
                     </Text>
                   ),
                   children: <EscalationKeywords keywords={escalationKeywords} onChange={onEscalationKeywordsChange} />,
@@ -343,7 +353,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   key: "keyword-semantic",
                   label: (
                     <Text strong style={{ color: "#374151" }}>
-                      Advanced: Keyword/Semantic Matching
+                      {t("models.autoRouters.details.sections.keywordSemantic")}
                     </Text>
                   ),
                   children: (

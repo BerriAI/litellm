@@ -1,6 +1,7 @@
 import { DeleteOutlined, InfoCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { Button, Card, Empty, Select as AntdSelect, Tooltip, Typography } from "antd";
 import React from "react";
+import { useTranslation } from "react-i18next";
 
 import { emptyKeywordTierRuleIndexes } from "./complexity_router_keywords";
 
@@ -38,6 +39,7 @@ export const tierOptions = (
 // rather than waiting for a submit; the submit button is disabled while one is outstanding, so
 // there is no failed attempt left to surface it.
 const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, tierLabels }) => {
+  const { t } = useTranslation("gateway");
   const emptyRuleIndexes = new Set(emptyKeywordTierRuleIndexes(rules));
   const [drafts, setDrafts] = React.useState<Record<string, string>>({});
 
@@ -81,24 +83,26 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, ti
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <Typography.Title level={4} style={{ margin: 0 }}>
-            Keyword Tier Overrides
+            {t("models.autoRouters.details.keywordRules.title")}
           </Typography.Title>
-          <Tooltip title="Match known terms and force the request straight to a chosen complexity tier, bypassing rule-based scoring.">
+          <Tooltip title={t("models.autoRouters.details.keywordRules.tooltip")}>
             <InfoCircleOutlined className="text-gray-400" />
           </Tooltip>
         </div>
         <Button icon={<PlusOutlined />} onClick={addRule}>
-          Add keyword rule
+          {t("models.autoRouters.details.keywordRules.add")}
         </Button>
       </div>
       <Text type="secondary" style={{ display: "block", marginBottom: 16 }}>
-        Optional: route requests containing specific keywords directly to a tier, e.g. route &quot;invoice, refund,
-        billing&quot; to the medium tier.
+        {t("models.autoRouters.details.keywordRules.description")}
       </Text>
 
       {rules.length === 0 ? (
         <Card className="bg-gray-50">
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No keyword tier overrides configured" />
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={t("models.autoRouters.details.keywordRules.empty")}
+          />
         </Card>
       ) : (
         <div className="flex flex-col gap-3">
@@ -107,7 +111,7 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, ti
               <div className="flex items-end gap-3">
                 <div className="flex-1">
                   <Text strong style={{ display: "block", marginBottom: 8 }}>
-                    Keywords {index + 1}
+                    {t("models.autoRouters.details.keywordRules.keywords", { number: index + 1 })}
                   </Text>
                   <AntdSelect
                     mode="tags"
@@ -117,7 +121,7 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, ti
                     onSearch={(text) => setDraft(rule.id, text)}
                     onInputKeyDown={commitDraftOnEnter(rule)}
                     onBlur={() => commitDraft(rule)}
-                    placeholder="e.g., invoice, refund, billing"
+                    placeholder={t("models.autoRouters.details.keywordRules.placeholder")}
                     tokenSeparators={[","]}
                     open={false}
                     suffixIcon={null}
@@ -127,18 +131,25 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, ti
                   />
                   {emptyRuleIndexes.has(index) && (
                     <Text type="danger" style={{ fontSize: 12 }}>
-                      At least one keyword is required
+                      {t("models.autoRouters.details.keywordRules.required")}
                     </Text>
                   )}
                 </div>
                 <div style={{ width: 220 }}>
                   <Text strong style={{ display: "block", marginBottom: 8 }}>
-                    Route to tier
+                    {t("models.autoRouters.details.keywordRules.routeTo")}
                   </Text>
                   <AntdSelect
                     value={rule.tier}
                     onChange={(tier: ComplexityTier) => updateRule(rule.id, { tier })}
-                    options={tierOptions(tierLabels)}
+                    options={tierOptions(tierLabels).map((option) => ({
+                      ...option,
+                      label:
+                        tierLabels?.[option.value]?.trim() ||
+                        t(`models.autoRouters.details.tiers.${option.value.toLowerCase()}.label`, {
+                          defaultValue: option.label,
+                        }),
+                    }))}
                     style={{ width: "100%" }}
                   />
                 </div>
@@ -146,7 +157,7 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, ti
                   danger
                   type="text"
                   icon={<DeleteOutlined />}
-                  aria-label={`Remove keyword rule ${index + 1}`}
+                  aria-label={t("models.autoRouters.details.keywordRules.remove", { number: index + 1 })}
                   onClick={() => removeRule(rule.id)}
                 />
               </div>
