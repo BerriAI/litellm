@@ -3,7 +3,6 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
@@ -16,7 +15,8 @@ from litellm.router_utils.add_retry_fallback_headers import (
 )
 from litellm.router_utils.batch_utils import _get_router_metadata_variable_name
 from litellm.router_utils.cooldown_handlers import (
-    _set_cooldown_deployments,
+    _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper, used across router_utils
+    _set_cooldown_deployments,  # pyright: ignore[reportPrivateUsage] - shared helper, used across router_utils
     cast_exception_status_to_int,
     is_advisor_orchestration_failure,
 )
@@ -97,19 +97,24 @@ def _trigger_cooldown_for_failed_deployment(
             verbose_router_logger.debug("Cannot trigger cooldown for fallback: no failed_deployment_id on exception")
             return
 
+        # Priority: deployment config > response header > router default, matching
+        # Router.deployment_callback_on_failure's precedence for the primary path.
         deployment_dict: Final = litellm_router.get_model_info(id=deployment_id)
         deployment_cooldown: Final = (
-            (deployment_dict.get("litellm_params") or MappingProxyType({})).get("cooldown_time")
+            _first_present(
+                deployment_dict.get("model_info"), deployment_dict.get("litellm_params"), key="cooldown_time"
+            )
             if deployment_dict is not None
             else None
         )
         exception_headers: Final = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
             original_exception=exception
         )
+        _get_retry_after: Final = (
+            litellm.utils._get_retry_after_from_exception_header  # pyright: ignore[reportPrivateUsage] - as router.py
+        )
         header_cooldown: Final = (
-            litellm.utils._get_retry_after_from_exception_header(response_headers=exception_headers)
-            if exception_headers is not None
-            else None
+            _get_retry_after(response_headers=exception_headers) if exception_headers is not None else None
         )
         time_to_cooldown: Final = (
             deployment_cooldown

@@ -7530,6 +7530,47 @@ class TestAutoRouterMaxInputCharsWiring:
         assert self._registered_auto_router(router).max_input_chars == DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
 
 
+class TestGetAllowedFailsFromPolicy:
+    def _make_router(self, **policy_kwargs) -> litellm.Router:
+        from litellm.types.router import AllowedFailsPolicy
+
+        return litellm.Router(
+            model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4", "api_key": "fake"}}],
+            allowed_fails_policy=AllowedFailsPolicy(**policy_kwargs),
+        )
+
+    def test_no_policy_returns_none(self):
+        router = litellm.Router(
+            model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4", "api_key": "fake"}}],
+        )
+        assert router.get_allowed_fails_from_policy(litellm.RateLimitError("429", "openai", "gpt-4")) is None
+
+    def test_internal_server_error_allowed_fails(self):
+        router = self._make_router(InternalServerErrorAllowedFails=7)
+        exc = litellm.InternalServerError("500", "openai", "gpt-4")
+        assert router.get_allowed_fails_from_policy(exc) == 7
+
+    def test_service_unavailable_error_allowed_fails(self):
+        router = self._make_router(ServiceUnavailableErrorAllowedFails=4)
+        exc = litellm.ServiceUnavailableError("503", "openai", "gpt-4")
+        assert router.get_allowed_fails_from_policy(exc) == 4
+
+    def test_bad_gateway_error_allowed_fails(self):
+        router = self._make_router(BadGatewayErrorAllowedFails=2)
+        exc = litellm.BadGatewayError("502", "openai", "gpt-4")
+        assert router.get_allowed_fails_from_policy(exc) == 2
+
+    def test_not_found_error_allowed_fails(self):
+        router = self._make_router(NotFoundErrorAllowedFails=1)
+        exc = litellm.NotFoundError("404", "openai", "gpt-4")
+        assert router.get_allowed_fails_from_policy(exc) == 1
+
+    def test_unmatched_exception_returns_none(self):
+        router = self._make_router(InternalServerErrorAllowedFails=5)
+        exc = litellm.RateLimitError("429", "openai", "gpt-4")
+        assert router.get_allowed_fails_from_policy(exc) is None
+
+
 class _LogCapture(logging.Handler):
     def __init__(self, level):
         super().__init__(level=level)
@@ -7661,6 +7702,8 @@ async def test_fallback_failure_detail_from_upstream_is_bounded():
     assert capture.messages, "the fallback failure path did not log at ERROR"
     assert huge_message not in "".join(capture.messages)
     assert max(len(message) for message in capture.messages) < 5_000
+
+
 def test_stamp_or_clear_metadata_key_writes_and_clears_both_buckets():
     request_kwargs = {"metadata": {}}
     litellm.Router._stamp_or_clear_metadata_key(request_kwargs=request_kwargs, key="probe", value=7)

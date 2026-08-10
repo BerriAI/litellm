@@ -135,6 +135,34 @@ def test_stamp_failed_deployment_id_with_effective_model_info_falls_back_to_depl
 
 
 @pytest.mark.asyncio
+async def test_ageneric_api_call_with_fallbacks_helper_stamps_failed_deployment_id():
+    """_ageneric_api_call_with_fallbacks_helper must stamp failed_deployment_id on a
+    failure, same as _completion/_acompletion, so callers identifying the failed
+    deployment (cooldown, weighted failover) work for this call type too instead of
+    depending on which metadata bucket ("metadata" vs "litellm_metadata") it uses."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "test-key"},
+                "model_info": {"id": "dep-a"},
+            }
+        ],
+    )
+
+    async def _failing_original_function(**kwargs):
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await router._ageneric_api_call_with_fallbacks_helper(
+            model="test-model",
+            original_generic_function=_failing_original_function,
+        )
+
+    assert getattr(exc_info.value, "failed_deployment_id", None) == "dep-a"
+
+
+@pytest.mark.asyncio
 async def test_ageneric_api_call_with_fallbacks_helper_stamps_dynamic_id_for_clientside_credentials():
     """A client-side-credential call (tenant-supplied api_key) generates a dynamic
     deployment id distinct from the shared static deployment. Stamping the static id

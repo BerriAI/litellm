@@ -5,7 +5,7 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 import datetime
 import enum
 from dataclasses import dataclass
-from typing import Any, Final, Generic, Literal, TypeVar, get_type_hints
+from typing import Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -127,6 +127,14 @@ class UpdateRouterConfig(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
 
+def _as_utc(value: datetime.datetime | None) -> datetime.datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=datetime.timezone.utc)
+    return value.astimezone(datetime.timezone.utc)
+
+
 class ModelInfo(MirroredPricingParams):
     id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
@@ -151,12 +159,40 @@ class ModelInfo(MirroredPricingParams):
     # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked
     blocked: bool | None = None
 
+    # Bounds live on the model rather than litellm.constants: names there reach
+    # litellm/__init__ through several modules' star re-exports, and a Final rebound that
+    # way trips the basedpyright gate.
+    MAX_PTU_COUNT: ClassVar[int] = 1_000_000
+    MAX_COST_PER_PTU_PER_HOUR: ClassVar[float] = 1_000_000.0
+
+    ptu_count: int | None = None
+    cost_per_ptu_per_hour: float | None = None
+    ptu_effective_from: datetime.datetime | None = None
+    ptu_effective_to: datetime.datetime | None = None
+
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided
         elif isinstance(id, int):
             id = str(id)
         super().__init__(id=id, **params)
+
+    @model_validator(mode="after")
+    def _validate_ptu_bounds(self) -> "ModelInfo":
+        if self.ptu_count is not None and not 0 < self.ptu_count <= self.MAX_PTU_COUNT:
+            raise ValueError(f"ptu_count must be a positive integer no greater than {self.MAX_PTU_COUNT}")
+        if (
+            self.cost_per_ptu_per_hour is not None
+            and not 0 <= self.cost_per_ptu_per_hour <= self.MAX_COST_PER_PTU_PER_HOUR
+        ):
+            raise ValueError(
+                f"cost_per_ptu_per_hour must be a finite number between 0 and {self.MAX_COST_PER_PTU_PER_HOUR}"
+            )
+        start: Final = _as_utc(self.ptu_effective_from)
+        end: Final = _as_utc(self.ptu_effective_to)
+        if start is not None and end is not None and end <= start:
+            raise ValueError("ptu_effective_to must be after ptu_effective_from")
+        return self
 
     model_config = ConfigDict(extra="allow")
 
@@ -422,6 +458,9 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     max_budget: float | None
     budget_duration: str | None
 
+    # per-deployment cooldown override
+    cooldown_time: float | None
+
 
 class DeploymentTypedDict(TypedDict, total=False):
     model_name: Required[str]
@@ -513,6 +552,9 @@ class AllowedFailsPolicy(BaseModel):
     RateLimitErrorAllowedFails: int | None = None
     ContentPolicyViolationErrorAllowedFails: int | None = None
     InternalServerErrorAllowedFails: int | None = None
+    ServiceUnavailableErrorAllowedFails: int | None = None
+    BadGatewayErrorAllowedFails: int | None = None
+    NotFoundErrorAllowedFails: int | None = None
 
 
 class AlertingConfig(BaseModel):

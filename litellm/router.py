@@ -118,6 +118,7 @@ from litellm.router_utils.cooldown_handlers import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
     _async_get_cooldown_deployments,
     _async_get_cooldown_deployments_with_debug_info,
+    _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper across router_utils submodules, matching the other cooldown_handlers imports on this line
     _get_cooldown_deployments,
     _set_cooldown_deployments,
     is_advisor_orchestration_failure,
@@ -4532,11 +4533,11 @@ class Router:
 
         passthrough_on_no_deployment: Final = kwargs.pop("passthrough_on_no_deployment", False)
         function_name: Final = "_ageneric_api_call_with_fallbacks"
-        deployment = None
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
             try:
-                deployment = await self.async_get_available_deployment(
+                deployment = await self.async_get_available_deployment(  # rebind-ok: set on success, see pre-init above
                     model=model,
                     request_kwargs=kwargs,
                     messages=kwargs.get("messages", None),
@@ -7092,7 +7093,9 @@ class Router:
             )
 
             # Determine cooldown time with priority: deployment config > response header > router default
-            deployment_cooldown: Final = litellm_params.get("cooldown_time", None)
+            deployment_cooldown: Final = _first_present(
+                _model_info if isinstance(_model_info, dict) else None, litellm_params, key="cooldown_time"
+            )
 
             header_cooldown = None
             if exception_headers is not None:
@@ -11814,6 +11817,23 @@ class Router:
             and allowed_fails_policy.BadRequestErrorAllowedFails is not None
         ):
             return allowed_fails_policy.BadRequestErrorAllowedFails
+        if (
+            isinstance(exception, litellm.InternalServerError)
+            and allowed_fails_policy.InternalServerErrorAllowedFails is not None
+        ):
+            return allowed_fails_policy.InternalServerErrorAllowedFails
+        if (
+            isinstance(exception, litellm.ServiceUnavailableError)
+            and allowed_fails_policy.ServiceUnavailableErrorAllowedFails is not None
+        ):
+            return allowed_fails_policy.ServiceUnavailableErrorAllowedFails
+        if (
+            isinstance(exception, litellm.BadGatewayError)
+            and allowed_fails_policy.BadGatewayErrorAllowedFails is not None
+        ):
+            return allowed_fails_policy.BadGatewayErrorAllowedFails
+        if isinstance(exception, litellm.NotFoundError) and allowed_fails_policy.NotFoundErrorAllowedFails is not None:
+            return allowed_fails_policy.NotFoundErrorAllowedFails
 
     def _initialize_alerting(self):
         from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting

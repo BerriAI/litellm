@@ -711,14 +711,71 @@ def _remove_thought_signatures_from_messages(messages: list, thought_signature_s
     return processed_messages
 
 
+def _restore_correlation_context_if_supported(logging_obj: object) -> None:
+    """Call logging_obj._restore_correlation_context() if it's actually there.
+
+    Some call sites (tests, narrow unit paths) inject a minimal stand-in
+    object as litellm_logging_obj instead of a real Logging instance - this
+    method is new plumbing specific to request_correlation_in_logs, not part
+    of any pre-existing stand-in's expected interface. `object` (not `Any`)
+    is deliberate: the getattr() below is exactly how this stays type-safe
+    while still tolerating a stand-in that lacks the method.
+    """
+    restore: Final = getattr(logging_obj, "_restore_correlation_context", None)
+    if restore is not None:
+        restore()
+
+
+def _is_streaming_response_for_correlation(result: object) -> bool:
+    """True if `result` is a lazy stream wrapper rather than an already-complete response.
+
+    Only wrapper_async() consults this - it must NOT restore the originating
+    Task's trace_id/session_id as soon as a streaming call returns this: the
+    caller is about to iterate it over however many subsequent lines of their
+    own code, and those log lines should still show this call's ids, not the
+    pre-call ones. This is safe specifically because each async call already
+    runs in its own asyncio Task with its own copy of the contextvars, so
+    leaving it "open" can only affect that one Task, never a different,
+    unrelated future request - Tasks, unlike a thread pool's worker threads,
+    are never recycled across requests. The corresponding terminal handler
+    (async_success_handler, dispatched once the full stream is actually
+    assembled) is what restores it once streaming genuinely finishes.
+
+    wrapper() (the sync path) does NOT consult this at all: sync calls pass
+    supports_correlation_logging=False into function_setup()/Logging(), so
+    they never stamp trace_id/session_id in the first place - a plain OS
+    thread has no per-call isolation the way an asyncio Task does, and a
+    thread pool's worker threads *are* recycled across unrelated requests, so
+    stamping ids there without a safe restore mechanism could permanently
+    misattribute a later, unrelated request's logs. Full sync support is
+    deferred to a follow-up PR with its own restore mechanism; see
+    Logging.__init__'s supports_correlation_logging parameter.
+
+    Genuinely circular otherwise: utils.py -> streaming_handler.py ->
+    redact_messages.py -> llms/vertex_ai/common_utils.py -> utils.py, which
+    needs names (supports_response_schema, etc.) this module hasn't finished
+    defining yet at that point in its own top-to-bottom execution.
+    """
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    return isinstance(result, CustomStreamWrapper)
+
+
+# Runs once per call to check if the user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
 def function_setup(
-    original_function: str, rules_obj, start_time, *args, **kwargs
-):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
+    original_function: str,
+    rules_obj: Rules,
+    start_time: datetime.datetime,
+    *args: Any,  # positional passthrough to the wrapped LLM call (ANN401 ignored, see ruff-strict.toml)
+    is_async_call: bool = True,
+    **kwargs: Any,  # kwargs-ok: forwarded to Logging()/callbacks, varies per call_type
+) -> tuple[LiteLLMLoggingObject, dict[str, Any]]:
     ### NOTICES ###
     if litellm.set_verbose is True:
         verbose_logger.warning(
             "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
         )
+    logging_obj: LiteLLMLoggingObject | None = None  # rebind-ok: set to the real object further down on success
     try:
         global callback_list, add_breadcrumb, user_logger_fn, Logging
 
@@ -1001,7 +1058,8 @@ def function_setup(
         ):
             stream = True
         get_litellm_logging_class: Final = getattr(sys.modules[__name__], "get_litellm_logging_class")
-        logging_obj: Final = get_litellm_logging_class()(  # Victim for object pool
+        # Victim for object pool
+        logging_obj = get_litellm_logging_class()(  # rebind-ok: 2nd assignment to logging_obj (see initial None above)
             model=model,
             messages=messages,
             stream=stream,
@@ -1016,6 +1074,7 @@ def function_setup(
             dynamic_async_failure_callbacks=dynamic_async_failure_callbacks,
             kwargs=kwargs,
             applied_guardrails=applied_guardrails,
+            supports_correlation_logging=is_async_call,
         )
 
         ## check if metadata is passed in
@@ -1040,6 +1099,15 @@ def function_setup(
         )
         return logging_obj, kwargs
     except Exception as e:
+        # If Logging() was constructed above before this failed, its __init__ already
+        # mutated trace_id_var/session_id_var - restore them *before* logging the
+        # exception below, since we're about to raise without ever returning
+        # logging_obj to the caller's wrapper()/wrapper_async() (which would
+        # otherwise be the one doing this restore). Restoring first means this
+        # diagnostic log line itself doesn't get stamped with a call's ids when
+        # that call never actually produced a usable logging object.
+        if logging_obj is not None:
+            _restore_correlation_context_if_supported(logging_obj)
         verbose_logger.exception("litellm.utils.py::function_setup() - [Non-Blocking] Error in function_setup")
         raise e
 
@@ -1296,7 +1364,9 @@ def client(original_function):
 
         try:
             if logging_obj is None:
-                logging_obj, kwargs = function_setup(original_function.__name__, rules_obj, start_time, *args, **kwargs)
+                logging_obj, kwargs = function_setup(
+                    original_function.__name__, rules_obj, start_time, *args, is_async_call=False, **kwargs
+                )
 
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
@@ -1807,9 +1877,11 @@ def client(original_function):
                             kwargs["retry_strategy"] = "exponential_backoff_retry"
                         elif isinstance(e, openai.APIError):  # generic api error
                             kwargs["retry_strategy"] = "constant_retry"
-                        return await litellm.acompletion_with_retries(*args, **kwargs)
+                        result = await litellm.acompletion_with_retries(*args, **kwargs)
                     except Exception:
                         pass
+                    else:
+                        return result
                 elif (
                     isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict
@@ -1820,7 +1892,8 @@ def client(original_function):
                         args[0] = context_window_fallback_dict[model]
                     else:
                         kwargs["model"] = context_window_fallback_dict[model]
-                    return await original_function(*args, **kwargs)
+                    result = await original_function(*args, **kwargs)
+                    return result
             elif call_type == CallTypes.aresponses.value:
                 _is_litellm_router_call = "model_group" in (
                     kwargs.get("metadata") or {}
@@ -1837,9 +1910,11 @@ def client(original_function):
                             kwargs["retry_strategy"] = "exponential_backoff_retry"
                         elif isinstance(e, openai.APIError):  # generic api error
                             kwargs["retry_strategy"] = "constant_retry"
-                        return await litellm.aresponses_with_retries(*args, **kwargs)
+                        result = await litellm.aresponses_with_retries(*args, **kwargs)
                     except Exception:
                         pass
+                    else:
+                        return result
 
             deployment_num_retries: Final = kwargs.get("num_retries")
             if deployment_num_retries is not None:
@@ -1848,6 +1923,21 @@ def client(original_function):
             timeout: Final = _get_wrapper_timeout(kwargs=kwargs, exception=e)
             setattr(e, "timeout", timeout)
             raise e
+
+        finally:
+            # Restore trace_id/session_id contextvars to their pre-call value once
+            # this call (in this asyncio Task) is fully done - see
+            # request_correlation_in_logs. Unlike wrapper()'s sync path, it's safe to
+            # skip restoring when returning a stream: each async call already runs in
+            # its own Task with its own copy of the contextvars (asyncio.create_task
+            # copies context at creation), so leaving this Task's own view "open"
+            # while the caller iterates the stream can only affect that one Task -
+            # never a different, unrelated future request, since Tasks (unlike a
+            # thread pool's worker threads) are never recycled across requests. The
+            # corresponding terminal handler (async_success_handler) restores it once
+            # streaming genuinely finishes; aclose()/__del__ cover early termination.
+            if not _is_streaming_response_for_correlation(result):
+                _restore_correlation_context_if_supported(logging_obj)
 
     get_coroutine_checker: Final = getattr(sys.modules[__name__], "get_coroutine_checker")
     is_coroutine: Final = get_coroutine_checker().is_async_callable(original_function)
