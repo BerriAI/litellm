@@ -3,6 +3,25 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import LoginPage from "./LoginPage";
 
+const translationState = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: () => ({
+      t: (key: string) =>
+        key.split(".").reduce<unknown>((copy, segment) => {
+          if (typeof copy !== "object" || copy === null) return undefined;
+          return (copy as Record<string, unknown>)[segment];
+        }, resources[translationState.language].auth) ?? key,
+    }),
+  };
+});
+
+vi.mock("@/components/LanguageSelector/LanguageSelector", () => ({
+  default: () => <button aria-label="Language selector">RU</button>,
+}));
+
 const mockPush = vi.fn();
 const mockReplace = vi.fn();
 
@@ -72,6 +91,27 @@ describe("LoginPage", () => {
     vi.clearAllMocks();
     mockPush.mockClear();
     mockReplace.mockClear();
+    translationState.language = "en";
+  });
+
+  it("renders the Russian login form and keeps technical credential names unchanged", async () => {
+    translationState.language = "ru";
+    (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { auto_redirect_to_sso: false, sso_configured: false },
+      isLoading: false,
+    });
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
+
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <LoginPage />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Вход" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Имя пользователя")).toBeEnabled();
+    expect(screen.getByText("MASTER_KEY")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Language selector" })).toBeInTheDocument();
   });
 
   it("should render", async () => {

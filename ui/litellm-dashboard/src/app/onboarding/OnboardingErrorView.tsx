@@ -1,18 +1,20 @@
 import React from "react";
 import { Alert, Button } from "antd";
 import { getLoginUrl } from "@/utils/returnUrlUtils";
+import { useTranslation } from "react-i18next";
 
 export function OnboardingErrorView() {
+  const { t } = useTranslation("auth");
   return (
     <div className="mx-auto w-full max-w-md mt-10">
       <Alert
         type="error"
-        message="Failed to load invitation"
-        description="The invitation link may be invalid or expired."
+        message={t("onboarding.loadErrorTitle")}
+        description={t("onboarding.loadErrorDescription")}
         showIcon
       />
       <div className="mt-4">
-        <Button href={getLoginUrl()}>Back to Login</Button>
+        <Button href={getLoginUrl()}>{t("onboarding.backToLogin")}</Button>
       </div>
     </div>
   );

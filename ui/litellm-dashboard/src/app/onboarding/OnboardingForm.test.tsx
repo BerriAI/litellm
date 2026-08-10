@@ -3,6 +3,23 @@ import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OnboardingForm } from "./OnboardingForm";
 
+vi.mock("@/components/LanguageSelector/LanguageSelector", () => ({
+  default: () => <button aria-label="Language selector">RU</button>,
+}));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: () => ({
+      t: (key: string) =>
+        key.split(".").reduce<unknown>((copy, segment) => {
+          if (typeof copy !== "object" || copy === null) return undefined;
+          return (copy as Record<string, unknown>)[segment];
+        }, resources.en.auth) ?? key,
+    }),
+  };
+});
+
 const mockUseOnboardingCredentials = vi.fn();
 const mockClaimToken = vi.fn();
 
@@ -58,6 +75,12 @@ vi.mock("./OnboardingFormBody", () => ({
 }));
 
 describe("OnboardingForm", () => {
+  it("keeps the language selector visible while invitation data loads", () => {
+    mockUseOnboardingCredentials.mockReturnValue({ data: undefined, isLoading: true, isError: false });
+    render(<OnboardingForm variant="signup" />);
+
+    expect(screen.getByRole("button", { name: "Language selector" })).toBeInTheDocument();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";

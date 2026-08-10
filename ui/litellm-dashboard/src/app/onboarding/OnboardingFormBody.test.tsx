@@ -4,6 +4,21 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { OnboardingFormBody } from "./OnboardingFormBody";
 
+const translationState = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: () => ({
+      t: (key: string) =>
+        key.split(".").reduce<unknown>((copy, segment) => {
+          if (typeof copy !== "object" || copy === null) return undefined;
+          return (copy as Record<string, unknown>)[segment];
+        }, resources[translationState.language].auth) ?? key,
+    }),
+  };
+});
+
 const defaultProps = {
   variant: "signup" as const,
   userEmail: "test@example.com",
@@ -15,6 +30,17 @@ const defaultProps = {
 describe("OnboardingFormBody", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    translationState.language = "en";
+  });
+
+  it("renders the signup form in Russian", () => {
+    translationState.language = "ru";
+
+    render(<OnboardingFormBody {...defaultProps} />);
+
+    expect(screen.getByRole("heading", { name: "Регистрация" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Эл. почта")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Зарегистрироваться" })).toBeInTheDocument();
   });
 
   it("should show 'Sign Up' heading for signup variant", () => {

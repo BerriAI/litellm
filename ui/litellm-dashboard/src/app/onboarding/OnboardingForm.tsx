@@ -8,12 +8,15 @@ import { clearTokenCookies, storeLoginToken } from "@/utils/cookieUtils";
 import { OnboardingLoadingView } from "./OnboardingLoadingView";
 import { OnboardingErrorView } from "./OnboardingErrorView";
 import { OnboardingFormBody } from "./OnboardingFormBody";
+import LanguageSelector from "@/components/LanguageSelector/LanguageSelector";
+import { useTranslation } from "react-i18next";
 
 type OnboardingFormProps = {
   variant: "signup" | "reset_password";
 };
 
 export function OnboardingForm({ variant }: OnboardingFormProps) {
+  const { t } = useTranslation("auth");
   const searchParams = useSearchParams()!;
   const inviteId = searchParams.get("invitation_id");
   const [claimError, setClaimError] = React.useState<string | null>(null);
@@ -41,7 +44,7 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
       {
         onSuccess: (data: { token?: string }) => {
           if (!data?.token) {
-            setClaimError("Failed to start session. Please try again.");
+            setClaimError(t("onboarding.sessionStartError"));
             return;
           }
           // Invite signup is a principal-change boundary — the prior admin's
@@ -54,22 +57,43 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
           window.location.href = proxyBaseUrl ? `${proxyBaseUrl}/ui/?login=success` : "/ui/?login=success";
         },
         onError: (error: Error) => {
-          setClaimError(error.message || "Failed to submit. Please try again.");
+          setClaimError(error.message || t("onboarding.submitError"));
         },
       },
     );
   };
 
-  if (isCredentialsLoading) return <OnboardingLoadingView />;
-  if (isCredentialsError) return <OnboardingErrorView />;
+  const languageToolbar = (
+    <div className="fixed right-4 top-4 z-50 rounded-lg border border-gray-200 bg-white p-1 shadow-sm">
+      <LanguageSelector />
+    </div>
+  );
+
+  if (isCredentialsLoading)
+    return (
+      <>
+        {languageToolbar}
+        <OnboardingLoadingView />
+      </>
+    );
+  if (isCredentialsError)
+    return (
+      <>
+        {languageToolbar}
+        <OnboardingErrorView />
+      </>
+    );
 
   return (
-    <OnboardingFormBody
-      variant={variant}
-      userEmail={userEmail}
-      isPending={isPending}
-      claimError={claimError}
-      onSubmit={handleSubmit}
-    />
+    <>
+      {languageToolbar}
+      <OnboardingFormBody
+        variant={variant}
+        userEmail={userEmail}
+        isPending={isPending}
+        claimError={claimError}
+        onSubmit={handleSubmit}
+      />
+    </>
   );
 }

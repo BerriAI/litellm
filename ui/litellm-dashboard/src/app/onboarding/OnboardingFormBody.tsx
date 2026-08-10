@@ -1,5 +1,6 @@
 import React from "react";
 import { Alert, Button, Card, Form, Input, Typography } from "antd";
+import { useTranslation } from "react-i18next";
 
 type OnboardingFormBodyProps = {
   variant: "signup" | "reset_password";
@@ -10,6 +11,7 @@ type OnboardingFormBodyProps = {
 };
 
 export function OnboardingFormBody({ variant, userEmail, isPending, claimError, onSubmit }: OnboardingFormBodyProps) {
+  const { t } = useTranslation("auth");
   const [form] = Form.useForm();
 
   React.useEffect(() => {
@@ -22,11 +24,11 @@ export function OnboardingFormBody({ variant, userEmail, isPending, claimError, 
         <Typography.Title level={5} className="text-center mb-5">
           🚅 LiteLLM
         </Typography.Title>
-        <Typography.Title level={3}>{variant === "reset_password" ? "Reset Password" : "Sign Up"}</Typography.Title>
+        <Typography.Title level={3}>
+          {variant === "reset_password" ? t("onboarding.resetTitle") : t("onboarding.signupTitle")}
+        </Typography.Title>
         <Typography.Text>
-          {variant === "reset_password"
-            ? "Reset your password to access Admin UI."
-            : "Claim your user account to login to Admin UI."}
+          {variant === "reset_password" ? t("onboarding.resetDescription") : t("onboarding.signupDescription")}
         </Typography.Text>
 
         {variant === "signup" && (
@@ -36,9 +38,9 @@ export function OnboardingFormBody({ variant, userEmail, isPending, claimError, 
             message="SSO"
             description={
               <div className="flex justify-between items-center">
-                <span>SSO is under the Enterprise Tier.</span>
+                <span>{t("onboarding.ssoTier")}</span>
                 <Button type="primary" size="small" href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-                  Get Free Trial
+                  {t("onboarding.freeTrial")}
                 </Button>
               </div>
             }
@@ -52,15 +54,15 @@ export function OnboardingFormBody({ variant, userEmail, isPending, claimError, 
           form={form}
           onFinish={(values) => onSubmit({ password: values.password })}
         >
-          <Form.Item label="Email Address" name="user_email">
+          <Form.Item label={t("onboarding.email")} name="user_email">
             <Input type="email" disabled />
           </Form.Item>
 
           <Form.Item
-            label="Password"
+            label={t("onboarding.password")}
             name="password"
-            rules={[{ required: true, message: "password required to sign up" }]}
-            help={variant === "reset_password" ? "Enter your new password" : "Create a password for your account"}
+            rules={[{ required: true, message: t("onboarding.passwordRequired") }]}
+            help={variant === "reset_password" ? t("onboarding.newPasswordHelp") : t("onboarding.createPasswordHelp")}
           >
             <Input.Password />
           </Form.Item>
@@ -69,7 +71,7 @@ export function OnboardingFormBody({ variant, userEmail, isPending, claimError, 
 
           <div className="mt-10">
             <Button htmlType="submit" loading={isPending}>
-              {variant === "reset_password" ? "Reset Password" : "Sign Up"}
+              {variant === "reset_password" ? t("onboarding.resetSubmit") : t("onboarding.signupSubmit")}
             </Button>
           </div>
         </Form>
