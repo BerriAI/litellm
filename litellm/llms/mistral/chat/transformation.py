@@ -6,7 +6,8 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from types import MappingProxyType
 from typing import Any, Final, Literal, cast, get_type_hints, overload
 
 import httpx
@@ -188,12 +189,12 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["parallel_tool_calls"] = value
         return optional_params
 
-    def _map_reasoning_param(self, param: str, value: object, model: str) -> dict:
+    def _map_reasoning_param(self, param: str, value: object, model: str) -> Mapping[str, object]:
         if self._is_magistral_model(model):
-            return {"_add_reasoning_prompt": True}
+            return MappingProxyType({"_add_reasoning_prompt": True})
         if param == "reasoning_effort" and value is not None and self._supports_native_reasoning_effort(model):
-            return {"reasoning_effort": value}
-        return {}
+            return MappingProxyType({"reasoning_effort": value})
+        return MappingProxyType({})
 
     def _get_openai_compatible_provider_info(self, api_base: str | None, api_key: str | None) -> tuple[str, str | None]:
         # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
