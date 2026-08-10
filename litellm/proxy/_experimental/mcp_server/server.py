@@ -429,6 +429,7 @@ if MCP_AVAILABLE:
         _caller_authorization_fans_out,
         _client_forwarded_authorization_headers,
         _is_gateway_attribution_header,
+        _openapi_forwarded_extra_headers,
         _should_strip_caller_authorization,
         _without_authorization,
         global_mcp_server_manager,
@@ -2854,30 +2855,11 @@ if MCP_AVAILABLE:
                 else:
                     auth_header_value = f"Bearer {mcp_auth_header}"
 
-            # Forward named client headers to OpenAPI tool upstream requests.
-            # MCPServer.extra_headers lists header names to copy from raw_headers.
-            # The strip decision is centralized in _should_strip_caller_authorization so this
-            # OpenAPI/local path agrees with the managed paths: M2M and the resolver-owned modes
-            # (token_exchange's raw subject token, authorization_code's stored token) must never
-            # have the caller's Authorization forwarded verbatim upstream.
-            forwarded_headers: dict[str, str] | None = None
-            if mcp_server and mcp_server.extra_headers and raw_headers:
-                normalized_raw: Final = {str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)}
-                skip_caller_authorization: Final = _should_strip_caller_authorization(
-                    mcp_server=mcp_server,
-                    raw_headers=raw_headers,
-                    user_api_key_auth=user_api_key_auth,
-                )
-                for header_name in mcp_server.extra_headers:
-                    if not isinstance(header_name, str):
-                        continue
-                    if skip_caller_authorization and header_name.lower() == "authorization":
-                        continue
-                    value = normalized_raw.get(header_name.lower())
-                    if value is not None:
-                        if forwarded_headers is None:
-                            forwarded_headers = {}
-                        forwarded_headers[header_name] = value
+            forwarded_headers: Final = _openapi_forwarded_extra_headers(
+                mcp_server=mcp_server,
+                raw_headers=raw_headers,
+                user_api_key_auth=user_api_key_auth,
+            )
 
             resolved_auth_headers: dict[str, str] | None = None
             if mcp_server:

@@ -6676,6 +6676,75 @@ async def test_execute_mcp_tool_sets_model_in_model_call_details():
 
 
 @pytest.mark.asyncio
+async def test_execute_mcp_tool_local_openapi_does_not_forward_gateway_attribution_headers():
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+        _request_extra_headers,
+    )
+
+    server = MCPServer(
+        server_id="local-openapi-server",
+        name="local_openapi",
+        server_name="local_openapi",
+        url="https://example.com",
+        transport=MCPTransport.http,
+        spec_path="/specs/openapi.yaml",
+        extra_headers=["x-request-id", "X-LiteLLM-Tags", "X-LiteLLM-End-User-Id"],
+    )
+    captured_extra_headers = None
+
+    async def capture_local_tool(*args, **kwargs):
+        nonlocal captured_extra_headers
+        captured_extra_headers = _request_extra_headers.get()
+        return []
+
+    with (
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_get_mcp_server_from_tool_name",
+            return_value=server,
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "pre_call_tool_check",
+            new=AsyncMock(return_value={}),
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "resolve_openapi_upstream_auth",
+            new=AsyncMock(side_effect=lambda **kwargs: (None, kwargs["forwarded_headers"])),
+        ),
+        patch.object(
+            mcp_module.global_mcp_tool_registry,
+            "get_tool",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_local_mcp_tool",
+            new=AsyncMock(side_effect=capture_local_tool),
+        ),
+        patch.object(
+            mcp_module.MCPRequestHandler,
+            "is_tool_allowed",
+            return_value=True,
+        ),
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="local_openapi-list_pets",
+            arguments={},
+            allowed_mcp_servers=[server],
+            start_time=datetime.now(),
+            raw_headers={
+                "x-request-id": "request-123",
+                "x-litellm-tags": "application:orders,service:checkout",
+                "x-litellm-end-user-id": "user-123",
+            },
+        )
+
+    assert captured_extra_headers == {"x-request-id": "request-123"}
+
+
+@pytest.mark.asyncio
 async def test_execute_mcp_tool_rest_unresolved_prefixed_name_routes_to_requested_server():
     """A prefixed REST name that resolves to no tool must still dispatch to the server_id.
 
