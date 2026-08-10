@@ -1,6 +1,6 @@
 {
   "ANN001": {
-    "limit": 3114
+    "limit": 3112
   },
   "ANN002": {
     "limit": 71
@@ -12,7 +12,7 @@
     "limit": 2031
   },
   "ANN202": {
-    "limit": 865
+    "limit": 863
   },
   "ANN204": {
     "limit": 713
@@ -78,7 +78,7 @@
     "limit": 1
   },
   "C901": {
-    "limit": 314
+    "limit": 312
   },
   "D419": {
     "limit": 6
@@ -171,7 +171,7 @@
     "limit": 3
   },
   "RET504": {
-    "limit": 177
+    "limit": 175
   },
   "RUF012": {
     "limit": 241
@@ -243,7 +243,7 @@
     "limit": 96
   },
   "TRY201": {
-    "limit": 407
+    "limit": 403
   },
   "TRY203": {
     "limit": 113

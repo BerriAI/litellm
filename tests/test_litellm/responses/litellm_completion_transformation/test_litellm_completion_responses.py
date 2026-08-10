@@ -11,10 +11,6 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALLS_CACHE,
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.types.llms.openai import (
-    ChatCompletionResponseMessage,
-    ChatCompletionToolMessage,
-)
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
@@ -2185,7 +2181,7 @@ class TestStreamingIDConsistency:
         # Transform chunks to response API events
         event1 = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk1)
         event2 = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk2)
-        event3 = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk3)
+        iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk3)
 
         # Assert: All events should use the same item_id (from the first chunk)
         assert event1 is not None, "First event should not be None"
@@ -2612,7 +2608,6 @@ class TestEnsureOutputItemContentPartAdded:
 
     def _make_iterator(self):
         """Create a minimal LiteLLMCompletionStreamingIterator for testing."""
-        from unittest.mock import MagicMock
 
         from litellm.responses.litellm_completion_transformation.streaming_iterator import (
             LiteLLMCompletionStreamingIterator,
@@ -2627,6 +2622,13 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._cached_item_id = None
         iterator._cached_reasoning_item_id = None
         iterator._reasoning_active = False
+        iterator._reasoning_done_emitted = False
+        iterator._reasoning_item_id = None
+        iterator._reasoning_output_index = None
+        iterator._message_output_index = None
+        iterator._next_output_index = 0
+        iterator._allocated_output_indexes = ()
+        iterator._sent_reasoning_output_item_added_event = False
         iterator._pending_response_events = []
         return iterator
 
@@ -2723,16 +2725,27 @@ class TestEnsureOutputItemContentPartAdded:
 
     def test_reasoning_item_does_not_emit_content_part_added(self):
         """Reasoning items should not get a content_part.added event."""
-        from litellm.types.llms.openai import OutputItemAddedEvent
+        from litellm.types.llms.openai import (
+            OutputItemAddedEvent,
+            ResponsePartAddedEvent,
+            ResponsesAPIStreamEvents,
+        )
 
         iterator = self._make_iterator()
         chunk = self._make_reasoning_chunk()
 
         iterator._ensure_output_item_for_chunk(chunk)
+        iterator._ensure_output_item_for_chunk(chunk)
 
         events = iterator._pending_response_events
-        assert len(events) == 1
+        assert len(events) == 2
         assert isinstance(events[0], OutputItemAddedEvent)
+        assert isinstance(events[1], ResponsePartAddedEvent)
+        assert events[1].type == ResponsesAPIStreamEvents.RESPONSE_PART_ADDED
+        assert getattr(events[1], "summary_index", None) == 0
+        assert events[1].part == {"type": "summary_text", "text": ""}
+        assert events[1].item_id == getattr(events[0].item, "id", None)
+        assert events[1].output_index == events[0].output_index
         assert iterator.sent_content_part_added_event is False
 
     def test_only_emits_once(self):

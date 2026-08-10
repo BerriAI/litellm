@@ -78,8 +78,6 @@ def test_tool_calls_present_only_in_final_response_are_emitted_before_completed(
         responses_api_request={},
     )
 
-    # Construct a final ModelResponse with tool_calls on the message.
-    # We bypass the stream builder and directly set iterator.litellm_model_response.
     response = ModelResponse(
         id="resp-1",
         created=123,
@@ -106,36 +104,26 @@ def test_tool_calls_present_only_in_final_response_are_emitted_before_completed(
     )
     iterator.litellm_model_response = response
 
-    # First common_done_event_logic call should yield tool events, not response.completed.
-    evt1 = iterator.common_done_event_logic(sync_mode=True)
-    assert evt1.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
-    assert evt1.output_index == 1
-
-    # Now delta events are emitted (arguments split into chunks)
-    # Collect all delta events
-    delta_events = []
+    events = []
     while True:
-        evt = iterator.common_done_event_logic(sync_mode=True)
-        if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA:
-            delta_events.append(evt)
-        else:
+        event = iterator.common_done_event_logic(sync_mode=True)
+        events.append(event)
+        if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
             break
 
-    # Verify we got delta events
-    assert len(delta_events) > 0
-    # Verify they reconstruct the original arguments
-    concatenated_args = "".join(evt.delta for evt in delta_events)
-    assert concatenated_args == '{"y":2}'
-
-    # The last event should be FUNCTION_CALL_ARGUMENTS_DONE
-    assert evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE
-    assert evt.item_id == "call_2"
-    assert evt.output_index == 1
-    assert evt.arguments == '{"y":2}'
-
-    evt_final = iterator.common_done_event_logic(sync_mode=True)
-    assert evt_final.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
-    assert evt_final.output_index == 1
+    added_events = [event for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
+    done_events = [event for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
+    assert [(event.output_index, event.item.type) for event in added_events] == [(0, "message"), (1, "function_call")]
+    assert [(event.output_index, event.item.type) for event in done_events] == [(0, "message"), (1, "function_call")]
+    assert all(
+        any(
+            added.output_index == done.output_index and events.index(added) < events.index(done)
+            for added in added_events
+        )
+        for done in done_events
+    )
+    assert [event.model_dump()["sequence_number"] for event in events] == list(range(1, len(events) + 1))
+    assert events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
 
 
 def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
@@ -191,7 +179,7 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
     assert evt is not None
     assert evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
     assert evt.output_index == 1
-    assert hasattr(evt, "__dict__") and "sequence_number" in evt.__dict__
+    assert "sequence_number" in evt.model_dump()
 
     # Collect all remaining delta events from the pending queue by creating empty chunks
     delta_events = []
@@ -225,14 +213,14 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
         assert len(evt.delta) <= 10
         assert evt.item_id == "call_test"
         assert evt.output_index == 1
-        assert hasattr(evt, "__dict__") and "sequence_number" in evt.__dict__
+        assert "sequence_number" in evt.model_dump()
 
     # Verify all deltas concatenated equal the original arguments
     concatenated = "".join(evt.delta for evt in delta_events)
     assert concatenated == large_arguments
 
     # Verify sequence numbers are increasing
-    sequence_numbers = [evt.__dict__["sequence_number"] for evt in delta_events]
+    sequence_numbers = [evt.model_dump()["sequence_number"] for evt in delta_events]
     assert sequence_numbers == sorted(sequence_numbers)
     assert len(set(sequence_numbers)) == len(sequence_numbers)  # All unique
 
