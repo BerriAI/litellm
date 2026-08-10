@@ -60,18 +60,23 @@ func Provider() *schema.Provider {
 
 // providerConfigure configures the provider with the given schema data.
 func providerConfigure(d *schema.ResourceData) (interface{}, error) {
-	customHeaders := map[string]string{}
-	if v, ok := d.GetOk("custom_headers"); ok {
-		for k, val := range v.(map[string]interface{}) {
-			customHeaders[k] = val.(string)
-		}
-	}
+	return NewClient(ProviderConfig{
+		APIBase:            d.Get("api_base").(string),
+		APIKey:             d.Get("api_key").(string),
+		InsecureSkipVerify: d.Get("insecure_skip_verify").(bool),
+		CustomHeaders:      customHeadersFromSchema(d),
+	}), nil
+}
 
-	client := NewClient(
-		d.Get("api_base").(string),
-		d.Get("api_key").(string),
-		d.Get("insecure_skip_verify").(bool),
-	)
-	client.CustomHeaders = customHeaders
-	return client, nil
+func customHeadersFromSchema(d *schema.ResourceData) map[string]string {
+	v, ok := d.GetOk("custom_headers")
+	if !ok {
+		return map[string]string{}
+	}
+	raw := v.(map[string]interface{})
+	headers := make(map[string]string, len(raw))
+	for k, val := range raw {
+		headers[k] = val.(string)
+	}
+	return headers
 }

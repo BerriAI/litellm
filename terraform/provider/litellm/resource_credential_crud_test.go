@@ -39,7 +39,7 @@ func TestRetryCredentialRead_SuccessOnFirstAttempt(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "test-key", true)
+	client := NewClient(ProviderConfig{APIBase: srv.URL, APIKey: "test-key", InsecureSkipVerify: true})
 	d := newTestResourceData(t, "test-cred")
 
 	err := retryCredentialRead(d, client, 3)
@@ -72,7 +72,7 @@ func TestRetryCredentialRead_SuccessAfterRetries(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "test-key", true)
+	client := NewClient(ProviderConfig{APIBase: srv.URL, APIKey: "test-key", InsecureSkipVerify: true})
 	d := newTestResourceData(t, "test-cred")
 
 	err := retryCredentialRead(d, client, 3)
@@ -93,7 +93,7 @@ func TestRetryCredentialRead_ExhaustsRetries(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "test-key", true)
+	client := NewClient(ProviderConfig{APIBase: srv.URL, APIKey: "test-key", InsecureSkipVerify: true})
 	d := newTestResourceData(t, "test-cred")
 
 	err := retryCredentialRead(d, client, 2)
@@ -118,7 +118,7 @@ func TestRetryCredentialRead_NonRetryableError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "test-key", true)
+	client := NewClient(ProviderConfig{APIBase: srv.URL, APIKey: "test-key", InsecureSkipVerify: true})
 	d := newTestResourceData(t, "test-cred")
 
 	err := retryCredentialRead(d, client, 3)
@@ -154,7 +154,7 @@ func TestRetryCredentialRead_IDRestoredBetweenRetries(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "test-key", true)
+	client := NewClient(ProviderConfig{APIBase: srv.URL, APIKey: "test-key", InsecureSkipVerify: true})
 	d := newTestResourceData(t, "my-cred")
 
 	err := retryCredentialRead(d, client, 2)
@@ -172,7 +172,7 @@ func TestRetryCredentialRead_MaxRetriesOne(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "test-key", true)
+	client := NewClient(ProviderConfig{APIBase: srv.URL, APIKey: "test-key", InsecureSkipVerify: true})
 	d := newTestResourceData(t, "test-cred")
 
 	err := retryCredentialRead(d, client, 1)
@@ -189,7 +189,7 @@ func TestRetryCredentialRead_ConnectionError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	srv.Close()
 
-	client := NewClient(srv.URL, "test-key", true)
+	client := NewClient(ProviderConfig{APIBase: srv.URL, APIKey: "test-key", InsecureSkipVerify: true})
 	d := newTestResourceData(t, "test-cred")
 
 	err := retryCredentialRead(d, client, 1)

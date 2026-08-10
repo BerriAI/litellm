@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **provider**: Optional `custom_headers` map to send extra HTTP headers on every LiteLLM API request (e.g. proxy or gateway headers). `x-api-key` from `api_key` always takes precedence
+- **provider**: Optional `custom_headers` map to send extra HTTP headers on every LiteLLM API request (e.g. proxy or gateway headers). Applied by both request helpers. `x-api-key` from `api_key` always takes precedence. Cross-origin redirects drop custom headers and `x-api-key`
 
 ## [0.4.0] - 2026-08-06
 

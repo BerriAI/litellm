@@ -20,18 +20,48 @@ type Client struct {
 	CustomHeaders      map[string]string
 }
 
-func NewClient(apiBase, apiKey string, insecureSkipVerify bool) *Client {
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: insecureSkipVerify},
+func NewClient(cfg ProviderConfig) *Client {
+	headers := make(map[string]string, len(cfg.CustomHeaders))
+	for k, v := range cfg.CustomHeaders {
+		headers[k] = v
 	}
 
-	return &Client{
-		APIBase:            apiBase,
-		APIKey:             apiKey,
-		httpClient:         &http.Client{Transport: tr},
-		InsecureSkipVerify: insecureSkipVerify,
-		CustomHeaders:      map[string]string{},
+	c := &Client{
+		APIBase:            cfg.APIBase,
+		APIKey:             cfg.APIKey,
+		InsecureSkipVerify: cfg.InsecureSkipVerify,
+		CustomHeaders:      headers,
 	}
+	c.httpClient = &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.InsecureSkipVerify},
+		},
+		CheckRedirect: c.checkRedirect,
+	}
+	return c
+}
+
+func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("stopped after 10 redirects")
+	}
+	orig := via[0].URL
+	if req.URL.Scheme != orig.Scheme || req.URL.Host != orig.Host {
+		for k := range c.CustomHeaders {
+			req.Header.Del(k)
+		}
+		req.Header.Del("x-api-key")
+	}
+	return nil
+}
+
+func (c *Client) applyRequestHeaders(req *http.Request) {
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("accept", "application/json")
+	for k, v := range c.CustomHeaders {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("x-api-key", c.APIKey)
 }
 
 // Organization member methods
@@ -281,12 +311,7 @@ func (c *Client) sendRequest(method, path string, body interface{}) (map[string]
 		return nil, fmt.Errorf("error creating request: %v", err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("accept", "application/json")
-	for k, v := range c.CustomHeaders {
-		req.Header.Set(k, v)
-	}
-	req.Header.Set("x-api-key", c.APIKey)
+	c.applyRequestHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
