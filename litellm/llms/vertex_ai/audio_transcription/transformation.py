@@ -34,6 +34,29 @@ AUTO_LANGUAGE_CODE: Final = "auto"
 SUPPORTED_RESPONSE_FORMATS: Final = ("json", "text")
 _URL_UNSAFE_PROJECT_CHARS: Final = ("/", "?", "#", "\\", ":", " ", "\t", "\n", "\r")
 
+# Models that use the Speech-to-Text v2 gRPC StreamingRecognize path. These
+# require the global recognizer endpoint (locations/global/recognizers/_).
+# Note: "chirp-3-hd" is a TTS voice concept; there is no such STT model.
+_CHIRP_GRPC_STT_MODELS: Final = frozenset({"chirp", "chirp-2", "chirp_2", "chirp-telephony", "chirp_telephony"})
+
+_VERTEX_TO_SPEECH_V2_MODEL: Final[dict[str, str]] = {
+    "chirp-2": "chirp_2",
+    "chirp_2": "chirp_2",
+    "chirp-telephony": "chirp_telephony",
+    "chirp_telephony": "chirp_telephony",
+    "chirp": "chirp",
+}
+
+
+def is_chirp_grpc_model(model: str) -> bool:
+    bare: Final = model.removeprefix("vertex_ai/").lower()
+    return bare in _CHIRP_GRPC_STT_MODELS
+
+
+def vertex_model_to_speech_v2_name(model: str) -> str:
+    bare: Final = model.removeprefix("vertex_ai/").lower()
+    return _VERTEX_TO_SPEECH_V2_MODEL.get(bare, bare)
+
 
 class VertexAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase):
     def __init__(self) -> None:

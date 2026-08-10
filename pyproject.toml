@@ -123,6 +123,16 @@ stt-nvidia-riva = [
     "audioread>=3.0.1",
     "numpy>=1.26.0",
 ]
+stt-vertex-chirp-grpc = [
+    # Vertex AI Chirp 3 HD STT provider (gRPC streaming). Imported lazily inside
+    # the gRPC handler so litellm core stays usable without it.
+    "google-cloud-speech>=2.28.0,<3.0",
+]
+tts-vertex-chirp-grpc = [
+    # Vertex AI Chirp 3 HD TTS provider (gRPC streaming). Imported lazily inside
+    # the gRPC handler so litellm core stays usable without it.
+    "google-cloud-texttospeech>=2.22.0,<3.0",
+]
 google = ["google-cloud-aiplatform>=1.133.0,<2.0"]
 bedrock-realtime = [
     # Bedrock Nova Sonic realtime (speech-to-speech) uses the

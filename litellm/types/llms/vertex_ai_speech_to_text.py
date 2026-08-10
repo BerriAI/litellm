@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
@@ -38,3 +40,12 @@ class VertexSpeechToTextResponseMetadata(BaseModel):
 class VertexSpeechToTextRecognizeResponse(BaseModel):
     results: list[VertexSpeechToTextResult] = []
     metadata: VertexSpeechToTextResponseMetadata | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ChirpGrpcRequestConfig:
+    recognizer: str
+    model_name: str
+    language_codes: tuple[str, ...]
+    enable_automatic_punctuation: bool
+    chunk_bytes: int
