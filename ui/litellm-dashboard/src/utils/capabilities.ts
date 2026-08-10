@@ -1,4 +1,6 @@
-import { all_admin_roles } from "./roles";
+import { all_admin_roles, old_admin_roles } from "./roles";
+
+const proxyAdminOnlyRoles = [...old_admin_roles, "proxy_admin", "proxy_admin_viewer"];
 
 const CAPABILITY_ROLES = {
   viewToolPolicies: all_admin_roles,
@@ -8,10 +10,11 @@ const CAPABILITY_ROLES = {
   viewPrompts: all_admin_roles,
   viewOrganizationUsage: all_admin_roles,
   viewAgentUsage: all_admin_roles,
-  viewWorkflowRuns: all_admin_roles,
-  viewMemory: all_admin_roles,
-  viewGuardrailUsage: all_admin_roles,
-  viewProxyWideCostData: all_admin_roles,
+  viewGlobalSpend: proxyAdminOnlyRoles,
+  viewWorkflowRuns: proxyAdminOnlyRoles,
+  viewMemory: proxyAdminOnlyRoles,
+  viewGuardrailUsage: proxyAdminOnlyRoles,
+  viewProxyWideCostData: proxyAdminOnlyRoles,
 } as const satisfies Record<string, readonly string[]>;
 
 export type Capability = keyof typeof CAPABILITY_ROLES;

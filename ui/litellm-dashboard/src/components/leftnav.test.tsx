@@ -6,6 +6,7 @@ import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
 vi.mock("../utils/roles", () => {
   return {
     all_admin_roles: ["admin", "admin_viewer"],
+    old_admin_roles: ["admin", "admin_viewer"],
     internalUserRoles: ["internal"],
     rolesWithWriteAccess: ["admin", "internal"],
     rolesAllowedToViewWriteScopedPages: ["admin", "internal", "admin_viewer"],
@@ -265,6 +266,30 @@ describe("Sidebar (leftnav)", () => {
         expect(screen.getByText("API Playground")).toBeInTheDocument();
       });
       expect(screen.queryByText("Prompts")).not.toBeInTheDocument();
+    });
+
+    it("should hide Old Usage from internal users while keeping other Experimental children", async () => {
+      mockUseAuthorized.mockReturnValue(internalAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByText("Experimental"));
+      });
+      await waitFor(() => {
+        expect(screen.getByText("API Playground")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("Old Usage")).not.toBeInTheDocument();
+    });
+
+    it("should show Old Usage to admins", async () => {
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByText("Experimental"));
+      });
+      await waitFor(() => {
+        expect(screen.getByText("Old Usage")).toBeInTheDocument();
+      });
     });
   });
 
