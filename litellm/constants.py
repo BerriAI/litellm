@@ -752,6 +752,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.libertai.io/v1",
     "https://pinstripes.io/v1",
     "https://api.meta.ai/v1",
+    "https://api.impossibl.com/v1",
 ]
 
 
@@ -797,6 +798,7 @@ openai_compatible_providers: Final[list] = [
     "chutes",  # Chutes - JSON-configured provider
     "parasail",  # Parasail - JSON-configured provider
     "libertai",  # LibertAI - JSON-configured provider
+    "impossibl",  # Impossibl - JSON-configured provider
     "featherless_ai",
     "nscale",
     "nebius",
