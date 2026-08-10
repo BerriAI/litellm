@@ -8,6 +8,7 @@ import VectorStoreSelector from "@/components/vector_store_management/VectorStor
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
 import { Checkbox, Divider, Popover, Slider } from "antd";
 import { SelectorOption, EndpointConfig, isAgentEndpoint, getComparisonSelection } from "../endpoint_config";
+import { useTranslation } from "react-i18next";
 
 interface ComparisonPanelProps {
   comparison: ComparisonInstance;
@@ -32,6 +33,7 @@ export function ComparisonPanel({
   endpointConfig,
   apiKey,
 }: ComparisonPanelProps) {
+  const { t } = useTranslation("chat");
   const isA2AMode = isAgentEndpoint(endpointConfig.id);
   const currentSelection = getComparisonSelection(comparison, endpointConfig.id);
   const [popoverVisible, setPopoverVisible] = useState(false);
@@ -104,7 +106,7 @@ export function ComparisonPanel({
         {/* Sync Checkbox */}
         <div className="flex items-center gap-2">
           <Checkbox checked={comparison.applyAcrossModels} onChange={(e) => handleSyncChange(e.target.checked)}>
-            <span className="text-xs font-medium">Sync Settings Across Models</span>
+            <span className="text-xs font-medium">{t("playground.compare.syncSettings")}</span>
           </Checkbox>
         </div>
 
@@ -112,50 +114,64 @@ export function ComparisonPanel({
 
         {/* General Settings */}
         <div>
-          <h4 className="text-xs font-semibold text-gray-700 mb-1.5 uppercase tracking-wide">General Settings</h4>
+          <h4 className="text-xs font-semibold text-gray-700 mb-1.5 uppercase tracking-wide">
+            {t("playground.compare.generalSettings")}
+          </h4>
           <div className="space-y-2">
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-0.5">Tags</label>
+              <label className="text-xs font-medium text-gray-600 block mb-0.5">{t("playground.compare.tags")}</label>
               <TagSelector
                 value={comparison.tags}
                 onChange={(value) => handleSettingChange("tags", value)}
                 accessToken={apiKey}
+                placeholder={t("playground.compare.selectTags")}
               />
             </div>
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-0.5">Vector Stores</label>
+              <label className="text-xs font-medium text-gray-600 block mb-0.5">
+                {t("playground.compare.vectorStores")}
+              </label>
               <VectorStoreSelector
                 value={comparison.vectorStores}
                 onChange={(value) => handleSettingChange("vectorStores", value)}
                 accessToken={apiKey}
+                placeholder={t("playground.compare.selectVectorStores")}
               />
             </div>
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-0.5">Guardrails</label>
+              <label className="text-xs font-medium text-gray-600 block mb-0.5">
+                {t("playground.compare.guardrails")}
+              </label>
               <GuardrailSelector
                 value={comparison.guardrails}
                 onChange={(value) => handleSettingChange("guardrails", value)}
                 accessToken={apiKey}
+                placeholder={t("playground.compare.selectGuardrails")}
+                disabledPlaceholder={t("playground.compare.selectGuardrails")}
               />
             </div>
           </div>
         </div>
         {/* Advanced Settings */}
         <div>
-          <h4 className="text-xs font-semibold text-gray-700 mb-1.5 uppercase tracking-wide">Advanced Settings</h4>
+          <h4 className="text-xs font-semibold text-gray-700 mb-1.5 uppercase tracking-wide">
+            {t("playground.compare.advancedSettings")}
+          </h4>
           <div className="space-y-2">
             <div className="flex items-center gap-2 pb-1">
               <Checkbox
                 checked={comparison.useAdvancedParams}
                 onChange={(e) => handleAdvancedParamsChange(e.target.checked)}
               >
-                <span className="text-sm font-medium">Use Advanced Parameters</span>
+                <span className="text-sm font-medium">{t("playground.compare.useAdvancedParameters")}</span>
               </Checkbox>
             </div>
             <div className="space-y-2 transition-opacity duration-200" style={{ opacity: disabledOpacity }}>
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className={`text-xs font-medium ${disabledTextColor}`}>Temperature</label>
+                  <label className={`text-xs font-medium ${disabledTextColor}`}>
+                    {t("playground.compare.temperature")}
+                  </label>
                   <span className={`text-xs ${disabledTextColor}`}>{comparison.temperature.toFixed(2)}</span>
                 </div>
                 <Slider
@@ -173,7 +189,9 @@ export function ComparisonPanel({
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className={`text-xs font-medium ${disabledTextColor}`}>Max Tokens</label>
+                  <label className={`text-xs font-medium ${disabledTextColor}`}>
+                    {t("playground.compare.maxTokens")}
+                  </label>
                   <span className={`text-xs ${disabledTextColor}`}>{comparison.maxTokens}</span>
                 </div>
                 <Slider

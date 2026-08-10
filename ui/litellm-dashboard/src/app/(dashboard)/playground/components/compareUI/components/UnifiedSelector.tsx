@@ -5,6 +5,7 @@
 
 import { Select, Spin } from "antd";
 import { SelectorOption, EndpointConfig } from "../endpoint_config";
+import { useTranslation } from "react-i18next";
 
 interface UnifiedSelectorProps {
   value: string;
@@ -15,10 +16,15 @@ interface UnifiedSelectorProps {
 }
 
 export function UnifiedSelector({ value, options, loading, config, onChange }: UnifiedSelectorProps) {
+  const { t } = useTranslation("chat");
   return (
     <Select
       value={value || undefined}
-      placeholder={loading ? `Loading ${config.selectorLabel.toLowerCase()}s...` : config.selectorPlaceholder}
+      placeholder={
+        loading
+          ? t("playground.compare.loadingSelector", { item: config.selectorLabel.toLowerCase() })
+          : config.selectorPlaceholder
+      }
       onChange={onChange}
       loading={loading}
       showSearch
@@ -31,7 +37,7 @@ export function UnifiedSelector({ value, options, loading, config, onChange }: U
             <Spin size="small" />
           </div>
         ) : (
-          `No ${config.selectorLabel.toLowerCase()}s available`
+          t("playground.compare.noSelectorOptions", { item: config.selectorLabel.toLowerCase() })
         )
       }
     />
