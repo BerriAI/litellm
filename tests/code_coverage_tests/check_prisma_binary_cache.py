@@ -20,11 +20,12 @@ Three invariants keep that download off the critical path:
 
 import re
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Final
 
 import yaml
+from pydantic import BaseModel, Field, ValidationError
 
 REPO_ROOT: Final = Path(__file__).resolve().parent.parent.parent
 WORKFLOWS_DIR: Final = REPO_ROOT / ".github" / "workflows"
@@ -50,25 +51,38 @@ def resolve_prisma_version(lock_text: str) -> str | None:
     return match.group("version") if match else None
 
 
-def iter_jobs(workflow: object) -> Iterator[tuple[str, dict]]:
-    jobs: Final = workflow.get("jobs") if isinstance(workflow, dict) else None
-    if not isinstance(jobs, dict):
-        return
-    yield from ((name, job) for name, job in jobs.items() if isinstance(job, dict))
+class WorkflowStep(BaseModel):
+    """The two step fields this guard reads; every other key is ignored."""
+
+    run: str | None = None
+    uses: str | None = None
+
+    def generates_prisma_client(self) -> bool:
+        return self.run is not None and any(m in self.run for m in PRISMA_GENERATE_MARKERS)
+
+    def restores_cache(self) -> bool:
+        return self.uses == CACHE_ACTION
 
 
-def job_steps(job: dict) -> tuple[dict, ...]:
-    steps: Final = job.get("steps")
-    return tuple(s for s in steps if isinstance(s, dict)) if isinstance(steps, list) else ()
+class WorkflowJob(BaseModel):
+    # Absent for jobs that delegate to a reusable workflow via a job-level `uses`.
+    steps: tuple[WorkflowStep, ...] = ()
 
 
-def step_generates_prisma_client(step: dict) -> bool:
-    run: Final = step.get("run")
-    return isinstance(run, str) and any(m in run for m in PRISMA_GENERATE_MARKERS)
+class Workflow(BaseModel):
+    jobs: Mapping[str, WorkflowJob] = Field(default_factory=dict)
 
 
-def step_restores_cache(step: dict) -> bool:
-    return step.get("uses") == CACHE_ACTION
+def parse_workflow(text: str) -> Workflow | str:
+    """Validate untyped YAML at the boundary so the checks below stay typed.
+
+    Returns the parsed workflow, or a description of why it could not be read.
+    """
+    parsed: Final = yaml.safe_load(text)
+    try:
+        return Workflow.model_validate(parsed if isinstance(parsed, dict) else {})
+    except ValidationError as exc:
+        return f"does not parse as a workflow: {exc.error_count()} schema error(s)"
 
 
 def lock_errors(lock_text: str) -> Iterator[str]:
@@ -87,10 +101,14 @@ def workflow_errors(rel: Path, text: str) -> Iterator[str]:
             f"land in the version-keyed default path the {CACHE_ACTION} action restores."
         )
 
-    for job_name, job in iter_jobs(yaml.safe_load(text)):
-        steps: Final = job_steps(job)
-        if any(map(step_generates_prisma_client, steps)) and not any(
-            map(step_restores_cache, steps)
+    workflow: Final = parse_workflow(text)
+    if isinstance(workflow, str):
+        yield f"{rel}: {workflow}"
+        return
+
+    for job_name, job in workflow.jobs.items():
+        if any(s.generates_prisma_client() for s in job.steps) and not any(
+            s.restores_cache() for s in job.steps
         ):
             yield (
                 f"{rel}: job `{job_name}` generates the Prisma client without a "
