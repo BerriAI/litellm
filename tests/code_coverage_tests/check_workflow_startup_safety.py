@@ -13,10 +13,10 @@ because CI cannot enforce them on itself.
    and ``/`` inside ref strings, so neither can be told apart from arithmetic by
    inspection alone.
 2. Callers of the reusable unit-test workflow keep the job timeout at or above
-   the test budget plus the setup ceilings. Otherwise the job deadline preempts
-   pytest inside its own advertised budget, which is the failure the split
-   timeouts exist to prevent, and it shows up as a cancelled shard whose tests
-   were passing.
+   the test budget plus the setup ceilings plus the runner overhead below.
+   Otherwise the job deadline preempts pytest inside its own advertised budget,
+   which is the failure the split timeouts exist to prevent, and it shows up as
+   a cancelled shard whose tests were passing.
 """
 
 import re
