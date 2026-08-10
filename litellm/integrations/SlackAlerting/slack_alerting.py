@@ -5,6 +5,7 @@ import datetime
 import os
 import random
 import time
+from collections.abc import Callable
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -54,6 +55,12 @@ if TYPE_CHECKING:
     Router = _Router
 else:
     Router = Any
+
+
+def _proxy_llm_router() -> Router | None:
+    from litellm.proxy.proxy_server import llm_router
+
+    return llm_router
 
 
 class SlackAlerting(CustomBatchLogger):
@@ -1070,14 +1077,13 @@ Model Info:
         )
         return True
 
-    async def _run_scheduled_deprecation_check(self, llm_router: Router | None = None) -> None:
-        """Alert once on startup, then daily, so operators see the current state"""
-        if self.alerting is None or AlertType.model_deprecation_warnings not in self.alert_types:
-            return
-
+    async def _run_scheduled_deprecation_check(
+        self, get_llm_router: Callable[[], Router | None] = _proxy_llm_router
+    ) -> None:
+        """Alert once on startup, then daily, re-reading the router and alert types each pass"""
         while True:
             try:
-                await self.send_model_deprecation_alert(llm_router=llm_router)
+                await self.send_model_deprecation_alert(llm_router=get_llm_router())
             except Exception as e:  # noqa: BLE001  # a failed alert must not kill the daily loop
                 verbose_proxy_logger.exception("Error in model deprecation alert loop: %s", e)
             await asyncio.sleep(DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS)

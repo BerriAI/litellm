@@ -482,14 +482,8 @@ class ProxyLogging:
             )  # RUN HANGING REQUEST CHECK (if user wants to alert on hanging requests)
             self.hanging_requests_check_started = True
 
-        if (
-            self.slack_alerting_instance is not None
-            and AlertType.model_deprecation_warnings in self.slack_alerting_instance.alert_types
-            and not self.deprecation_check_started
-        ):
-            asyncio.create_task(
-                self.slack_alerting_instance._run_scheduled_deprecation_check(llm_router=llm_router)
-            )  # RUN MODEL DEPRECATION ALERT LOOP (if scheduled)
+        if self.slack_alerting_instance is not None and not self.deprecation_check_started:
+            asyncio.create_task(self.slack_alerting_instance._run_scheduled_deprecation_check())
             self.deprecation_check_started = True
 
     def update_values(
