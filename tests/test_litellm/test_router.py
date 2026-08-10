@@ -7419,6 +7419,38 @@ class TestAutoRouterMaxInputCharsWiring:
         assert self._registered_auto_router(router).max_input_chars == DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
 
 
+def test_get_fallback_model_group_from_fallbacks_honors_wildcard_and_stripped_keys():
+    """_get_fallback_model_group_from_fallbacks (used for context_window_fallbacks and
+    content_policy_fallbacks) did an exact-key match only, while the canonical
+    get_fallback_model_group resolver used by the regular fallbacks path also honors
+    provider-stripped keys and the "*" wildcard. A "*" or provider-prefixed fallback
+    config was silently ignored, and the original exception was re-raised as if no
+    fallback were configured."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+    )
+
+    assert router._get_fallback_model_group_from_fallbacks(
+        fallbacks=[{"gpt-3.5-turbo": ["gpt-4"]}],
+        model_group="gpt-3.5-turbo",
+    ) == ["gpt-4"]
+
+    assert router._get_fallback_model_group_from_fallbacks(
+        fallbacks=[{"*": ["gpt-4"]}],
+        model_group="gpt-3.5-turbo",
+    ) == ["gpt-4"]
+
+    assert router._get_fallback_model_group_from_fallbacks(
+        fallbacks=[{"gpt-3.5-turbo": ["gpt-4"]}],
+        model_group="openai/gpt-3.5-turbo",
+    ) == ["gpt-4"]
+
+
 class _LogCapture(logging.Handler):
     def __init__(self, level):
         super().__init__(level=level)
@@ -7550,6 +7582,8 @@ async def test_fallback_failure_detail_from_upstream_is_bounded():
     assert capture.messages, "the fallback failure path did not log at ERROR"
     assert huge_message not in "".join(capture.messages)
     assert max(len(message) for message in capture.messages) < 5_000
+
+
 def test_stamp_or_clear_metadata_key_writes_and_clears_both_buckets():
     request_kwargs = {"metadata": {}}
     litellm.Router._stamp_or_clear_metadata_key(request_kwargs=request_kwargs, key="probe", value=7)
