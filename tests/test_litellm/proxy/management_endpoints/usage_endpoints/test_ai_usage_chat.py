@@ -466,3 +466,99 @@ class TestUsageAiChatServiceAccountGuard:
                 is_admin=False,
             )
         assert "Endpoint-level guard missing" in str(exc_info.value)
+
+
+class TestProxyAliasRouting:
+    """The selected model comes from the proxy's model_list, so an alias like
+    `kr/gpt-5.6-luna` only resolves through llm_router, never through bare
+    litellm.acompletion."""
+
+    @staticmethod
+    def _single_turn_response():
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.tool_calls = None
+        response.choices[0].message.content = "done"
+        return response
+
+    @pytest.mark.asyncio
+    async def test_registered_alias_goes_through_the_router(self):
+        mock_router = MagicMock()
+        mock_router.get_model_names.return_value = ["kr/gpt-5.6-luna"]
+        mock_router.acompletion = AsyncMock(return_value=self._single_turn_response())
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+            ) as mock_litellm,
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        ):
+            mock_litellm.acompletion = AsyncMock(
+                side_effect=AssertionError("alias must not reach bare litellm.acompletion")
+            )
+
+            events = [
+                json.loads(event.replace("data: ", "").strip())
+                async for event in stream_usage_ai_chat(
+                    messages=[{"role": "user", "content": "spend?"}],
+                    model="kr/gpt-5.6-luna",
+                    user_id="user-123",
+                    is_admin=True,
+                )
+            ]
+
+        assert mock_router.acompletion.await_count == 1
+        assert mock_router.acompletion.await_args.kwargs["model"] == "kr/gpt-5.6-luna"
+        assert [e["type"] for e in events] == ["status", "chunk", "done"]
+
+    @pytest.mark.asyncio
+    async def test_native_provider_model_still_uses_bare_litellm(self):
+        mock_router = MagicMock()
+        mock_router.get_model_names.return_value = ["kr/gpt-5.6-luna"]
+        mock_router.acompletion = AsyncMock(
+            side_effect=AssertionError("unregistered model must not reach the router")
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+            ) as mock_litellm,
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        ):
+            mock_litellm.acompletion = AsyncMock(return_value=self._single_turn_response())
+
+            events = [
+                json.loads(event.replace("data: ", "").strip())
+                async for event in stream_usage_ai_chat(
+                    messages=[{"role": "user", "content": "spend?"}],
+                    model="gpt-4o-mini",
+                    user_id="user-123",
+                    is_admin=True,
+                )
+            ]
+
+        assert mock_litellm.acompletion.await_count == 1
+        assert [e["type"] for e in events] == ["status", "chunk", "done"]
+
+    @pytest.mark.asyncio
+    async def test_no_router_configured_falls_back_to_bare_litellm(self):
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+            ) as mock_litellm,
+            patch("litellm.proxy.proxy_server.llm_router", None),
+        ):
+            mock_litellm.acompletion = AsyncMock(return_value=self._single_turn_response())
+
+            events = [
+                json.loads(event.replace("data: ", "").strip())
+                async for event in stream_usage_ai_chat(
+                    messages=[{"role": "user", "content": "spend?"}],
+                    model="kr/gpt-5.6-luna",
+                    user_id="user-123",
+                    is_admin=True,
+                )
+            ]
+
+        assert mock_litellm.acompletion.await_count == 1
+        assert [e["type"] for e in events] == ["status", "chunk", "done"]
