@@ -56,6 +56,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password
 from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
     InvitationLinkRepository,
     OrganizationMembershipRepository,
@@ -84,14 +85,6 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
 if TYPE_CHECKING:
     from prisma import models as prisma_models
     from prisma import types as prisma_types
-    from prisma.actions import (
-        LiteLLM_InvitationLinkActions,
-        LiteLLM_OrganizationMembershipActions,
-        LiteLLM_TeamMembershipActions,
-        LiteLLM_TeamTableActions,
-        LiteLLM_UserTableActions,
-        LiteLLM_VerificationTokenActions,
-    )
 
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.proxy_server import PrismaClient
@@ -102,31 +95,40 @@ router: Final = APIRouter()
 
 def _user_table(
     prisma_client: "PrismaClient | None",
-) -> "LiteLLM_UserTableActions[prisma_models.LiteLLM_UserTable]":
-    user_table: Final[LiteLLM_UserTableActions[prisma_models.LiteLLM_UserTable]] = UserRepository(prisma_client).table
+) -> "TableActions[prisma_models.LiteLLM_UserTable]":
+    user_table: Final[TableActions[prisma_models.LiteLLM_UserTable]] = UserRepository(prisma_client).table
     return user_table
 
 
 def _team_table(
     prisma_client: "PrismaClient | None",
-) -> "LiteLLM_TeamTableActions[prisma_models.LiteLLM_TeamTable]":
-    team_table: Final[LiteLLM_TeamTableActions[prisma_models.LiteLLM_TeamTable]] = TeamRepository(prisma_client).table
+) -> "TableActions[prisma_models.LiteLLM_TeamTable]":
+    team_table: Final[TableActions[prisma_models.LiteLLM_TeamTable]] = TeamRepository(prisma_client).table
     return team_table
+
+
+def _organization_table(
+    prisma_client: "PrismaClient | None",
+) -> "TableActions[prisma_models.LiteLLM_OrganizationTable]":
+    organization_table: Final[TableActions[prisma_models.LiteLLM_OrganizationTable]] = OrganizationRepository(
+        prisma_client
+    ).table
+    return organization_table
 
 
 def _verification_token_table(
     prisma_client: "PrismaClient | None",
-) -> "LiteLLM_VerificationTokenActions[prisma_models.LiteLLM_VerificationToken]":
-    token_table: Final[LiteLLM_VerificationTokenActions[prisma_models.LiteLLM_VerificationToken]] = (
-        VerificationTokenRepository(prisma_client).table
-    )
+) -> "TableActions[prisma_models.LiteLLM_VerificationToken]":
+    token_table: Final[TableActions[prisma_models.LiteLLM_VerificationToken]] = VerificationTokenRepository(
+        prisma_client
+    ).table
     return token_table
 
 
 def _organization_membership_table(
     prisma_client: "PrismaClient | None",
-) -> "LiteLLM_OrganizationMembershipActions[prisma_models.LiteLLM_OrganizationMembership]":
-    membership_table: Final[LiteLLM_OrganizationMembershipActions[prisma_models.LiteLLM_OrganizationMembership]] = (
+) -> "TableActions[prisma_models.LiteLLM_OrganizationMembership]":
+    membership_table: Final[TableActions[prisma_models.LiteLLM_OrganizationMembership]] = (
         OrganizationMembershipRepository(prisma_client).table
     )
     return membership_table
@@ -134,8 +136,8 @@ def _organization_membership_table(
 
 def _invitation_link_table(
     prisma_client: "PrismaClient | None",
-) -> "LiteLLM_InvitationLinkActions[prisma_models.LiteLLM_InvitationLink]":
-    invitation_table: LiteLLM_InvitationLinkActions[prisma_models.LiteLLM_InvitationLink] = InvitationLinkRepository(
+) -> "TableActions[prisma_models.LiteLLM_InvitationLink]":
+    invitation_table: Final[TableActions[prisma_models.LiteLLM_InvitationLink]] = InvitationLinkRepository(
         prisma_client
     ).table
     return invitation_table
@@ -143,10 +145,10 @@ def _invitation_link_table(
 
 def _team_membership_table(
     prisma_client: "PrismaClient | None",
-) -> "LiteLLM_TeamMembershipActions[prisma_models.LiteLLM_TeamMembership]":
-    team_membership_table: Final[LiteLLM_TeamMembershipActions[prisma_models.LiteLLM_TeamMembership]] = (
-        TeamMembershipRepository(prisma_client).table
-    )
+) -> "TableActions[prisma_models.LiteLLM_TeamMembership]":
+    team_membership_table: Final[TableActions[prisma_models.LiteLLM_TeamMembership]] = TeamMembershipRepository(
+        prisma_client
+    ).table
     return team_membership_table
 
 
@@ -233,7 +235,7 @@ async def _check_duplicate_user_field(
         if case_insensitive:
             where_clause[field_name]["mode"] = "insensitive"
 
-        existing_user: Final = await UserRepository(prisma_client).table.find_first(where=where_clause)
+        existing_user: Final = await _user_table(prisma_client).find_first(where=where_clause)
 
         if existing_user is not None:
             existing_value: Final = getattr(existing_user, field_name, value)
@@ -1881,7 +1883,7 @@ async def get_user_key_counts(
 
     # Get count for each user_id individually
     for user_id in user_ids:
-        count = await VerificationTokenRepository(prisma_client).table.count(
+        count = await _verification_token_table(prisma_client).count(
             where={
                 "user_id": user_id,
                 "OR": [
@@ -2118,7 +2120,7 @@ async def get_users(
         _validate_sort_params(sort_by, sort_order) if sort_by is not None and isinstance(sort_by, str) else None
     )
 
-    users: Sequence[prisma_models.LiteLLM_UserTable] | None = await UserRepository(prisma_client).table.find_many(
+    users: Final[Sequence[prisma_models.LiteLLM_UserTable]] = await _user_table(prisma_client).find_many(
         where=where_conditions,
         skip=skip,
         take=page_size,
@@ -2126,13 +2128,10 @@ async def get_users(
     )
 
     # Get total count of user rows
-    total_count: Final[int] = await UserRepository(prisma_client).table.count(where=where_conditions)
+    total_count: Final[int] = await _user_table(prisma_client).count(where=where_conditions)
 
     # Get key count for each user
-    if users is not None:
-        user_key_counts = await get_user_key_counts(prisma_client, [user.user_id for user in users])
-    else:
-        user_key_counts = {}
+    user_key_counts: Final = await get_user_key_counts(prisma_client, [user.user_id for user in users])
 
     verbose_proxy_logger.debug("Total count of users: %s", total_count)
 
@@ -2140,18 +2139,16 @@ async def get_users(
     total_pages: Final = -(-total_count // page_size)  # Ceiling division
 
     # Prepare response
-    user_list: list[LiteLLM_UserTableWithKeyCount] = []
-    if users is not None:
-        for user in users:
-            user_dump = user.model_dump()
-            user_dump["metadata"] = _redact_scim_enterprise_metadata(user_dump.get("metadata"))
-            user_list.append(
-                LiteLLM_UserTableWithKeyCount.model_validate(
-                    {**user_dump, "key_count": user_key_counts.get(user.user_id, 0)}
-                )
-            )
-    else:
-        user_list = []
+    user_list: Final = [
+        LiteLLM_UserTableWithKeyCount.model_validate(
+            {
+                **user_dump,
+                "metadata": _redact_scim_enterprise_metadata(user_dump.get("metadata")),
+                "key_count": user_key_counts.get(user.user_id, 0),
+            }
+        )
+        for user, user_dump in ((user, user.model_dump()) for user in users)
+    ]
 
     return {
         "users": user_list,
@@ -2252,7 +2249,7 @@ async def delete_user(
 
     # check that all teams passed exist
     for user_id in data.user_ids:
-        user_row = await UserRepository(prisma_client).table.find_unique(where={"user_id": user_id})
+        user_row = await _user_table(prisma_client).find_unique(where={"user_id": user_id})
 
         if user_row is None:
             raise HTTPException(
@@ -2281,7 +2278,7 @@ async def delete_user(
         # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
         if litellm.store_audit_logs is True:
             # make an audit log for each team deleted
-            _user_row = user_row.json(exclude_none=True)
+            _user_row = user_row.model_dump_json(exclude_none=True)
 
             asyncio.create_task(
                 create_audit_log_for_update(
@@ -2304,8 +2301,8 @@ async def delete_user(
             )
 
         ## CLEANUP MEMBERS_WITH_ROLES
-        fetch_all_teams = await TeamRepository(prisma_client).table.find_many(where={"team_id": {"in": user_row.teams}})
-        teams_to_update = []
+        fetch_all_teams = await _team_table(prisma_client).find_many(where={"team_id": {"in": user_row.teams}})
+        teams_to_update: list[tuple[str, str]] = []
         for team in fetch_all_teams:
             is_member_in_team, new_team_members = _cleanup_members_with_roles(
                 existing_team_row=LiteLLM_TeamTable.model_validate(team.model_dump()),
@@ -2316,16 +2313,14 @@ async def delete_user(
                 ),
             )
             if is_member_in_team:
-                _db_new_team_members: list[dict] = [m.model_dump() for m in new_team_members]
-                team.members_with_roles = json.dumps(_db_new_team_members)
-                teams_to_update.append(team)
+                teams_to_update.append((team.team_id, json.dumps([m.model_dump() for m in new_team_members])))
 
         ## update teams
 
-        for team in teams_to_update:
-            await TeamRepository(prisma_client).table.update(
-                where={"team_id": team.team_id},
-                data={"members_with_roles": team.members_with_roles},
+        for team_id, members_with_roles in teams_to_update:
+            await _team_table(prisma_client).update(
+                where={"team_id": team_id},
+                data={"members_with_roles": members_with_roles},
             )
     # End of Audit logging
 
@@ -2378,14 +2373,14 @@ async def add_internal_user_to_organization(
 
     try:
         # Check if organization_id exists
-        organization_row: Final = await OrganizationRepository(prisma_client).table.find_unique(
+        organization_row: Final = await _organization_table(prisma_client).find_unique(
             where={"organization_id": organization_id}
         )
         if organization_row is None:
             raise Exception(f"Organization not found, passed organization_id={organization_id}")
 
         # Create a new organization membership entry
-        new_membership: Final = await OrganizationMembershipRepository(prisma_client).table.create(
+        new_membership: Final = await _organization_membership_table(prisma_client).create(
             data={
                 "user_id": user_id,
                 "organization_id": organization_id,

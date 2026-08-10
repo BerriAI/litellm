@@ -192,21 +192,27 @@ class _TxTables(Protocol):
 def _prisma_table(
     repository: BaseRepository[_RepositoryModelT],
 ) -> _PrismaTableActions[_RepositoryModelT]:
-    return repository.table
+    table: Final[_PrismaTableActions[_RepositoryModelT]] = repository.table
+    return table
 
 
 def _deleted_verification_token_table(
     prisma_client: PrismaClient,
 ) -> _PrismaTableActions[LiteLLM_DeletedVerificationToken]:
-    return DeletedVerificationTokenRepository(prisma_client).table
+    table: Final[_PrismaTableActions[LiteLLM_DeletedVerificationToken]] = DeletedVerificationTokenRepository(
+        prisma_client
+    ).table
+    return table
 
 
 def _credentials_table(prisma_client: PrismaClient) -> _PrismaTableActions[CredentialItem]:
-    return CredentialsRepository(prisma_client).table
+    table: Final[_PrismaTableActions[CredentialItem]] = CredentialsRepository(prisma_client).table
+    return table
 
 
 def _config_table(prisma_client: PrismaClient) -> _PrismaTableActions[ConfigParam]:
-    return ConfigRepository(prisma_client).table
+    table: Final[_PrismaTableActions[ConfigParam]] = ConfigRepository(prisma_client).table
+    return table
 
 
 async def _check_custom_key_allowed(custom_key_value: str | None) -> None:
@@ -5229,11 +5235,9 @@ async def _fetch_user_team_objects(
     if complete_user_info is None or not complete_user_info.teams:
         return []
 
-    teams: Final[list[BaseModel] | None] = await TeamRepository(prisma_client).table.find_many(
+    teams: Final = await _prisma_table(TeamRepository(prisma_client)).find_many(
         where={"team_id": {"in": complete_user_info.teams}}
     )
-    if teams is None:
-        return []
 
     return [LiteLLM_TeamTable.model_validate(team.model_dump()) for team in teams]
 
