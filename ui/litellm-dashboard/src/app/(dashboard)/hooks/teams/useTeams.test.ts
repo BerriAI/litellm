@@ -913,8 +913,6 @@ describe("useAllTeams", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    // A scoped call that comes back empty is the failure this guards against: the
-    // 401 disappears but the page still shows no teams.
     expect(result.current.data).toEqual(mockTeams);
     expect(result.current.data?.length).toBeGreaterThan(0);
     expect(requestedUserId(fetchMock.mock.calls[0][0] as string)).toBe("member-7");
