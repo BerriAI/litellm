@@ -4,6 +4,16 @@ import { Role, users } from "../../fixtures/users";
 import { navigateToPage } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
 import { captureRequestBody, readBack } from "../../helpers/roundTrip";
+import { sendChatCompletion } from "../../helpers/traffic";
+
+/**
+ * The harness's mock LLM, as the *proxy* has to reach it.
+ *
+ * Loopback is right in both places this runs: run_e2e.sh starts the mock on the
+ * same host as the proxy, and in the deployed e2e stack it is a sidecar in the
+ * proxy's own pod. The port is overridable so two checkouts can run at once.
+ */
+const MOCK_LLM_BASE = `http://127.0.0.1:${process.env.MOCK_LLM_PORT ?? "8090"}/v1`;
 
 /** GET /model/info?litellm_model_id= returns {data: [row]} — the deployment as stored. */
 async function readDeployment(page: PlaywrightPage, modelId: string): Promise<Record<string, any> | undefined> {
@@ -30,6 +40,31 @@ async function selectProvider(page: any, providerName: string) {
 
 test.describe("Add Model", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
+
+  // Set by the UI-add test below. A local run throws its database away, but the
+  // deployed e2e stack does not: a deployment left behind lands in every later
+  // Models table and in every /v2/model/info readback, so it has to go even
+  // when the test that made it failed part-way through.
+  let uiAddedModelName = "";
+
+  test.afterEach(async ({ page }) => {
+    if (!uiAddedModelName) return;
+    const name = uiAddedModelName;
+    uiAddedModelName = "";
+    try {
+      const stored = await findDeploymentByName(page, name);
+      const id = stored?.model_info?.id;
+      if (id) {
+        await page.request.post("/model/delete", {
+          headers: { Authorization: `Bearer ${users[Role.ProxyAdmin].password}` },
+          data: { id },
+        });
+      }
+    } catch {
+      // Teardown must never turn a passing test red, or mask why a failing one
+      // failed. A leaked deployment is a cost, not a correctness problem.
+    }
+  });
 
   test("Able to see all models for a specific provider in the model dropdown", async ({ page }) => {
     await navigateToPage(page, Page.Models);
@@ -131,6 +166,84 @@ test.describe("Add Model", () => {
     const after = await readDeployment(page, createdModelId);
     expect(after?.litellm_params?.model, "upstream model untouched by a limits edit").toBe("openai/fake-gpt-4");
     expect(after?.model_info?.team_id, "team ownership untouched by a limits edit").toBe(E2E_TEAM_CRUD_ID);
+  });
+
+  test("Add a model through the UI, pass Test Connect, and serve traffic with it", async ({ page, request }) => {
+    // The manual-QA item this replaces is "add a model, test connection, add it,
+    // confirm it works". Every other test in this file stops at "the row shows
+    // up in the table", which a model that cannot serve a single request also
+    // does. This one ends by actually calling the model.
+    //
+    // No provider credential is involved. OpenAI-Compatible is the provider
+    // whose form exposes API Base, so the deployment can point at the harness's
+    // own mock LLM -- which speaks the OpenAI wire format, so Test Connect
+    // performs a real completion against a real endpoint and really succeeds.
+    await navigateToPage(page, Page.Models);
+    await page.getByRole("tab", { name: "Add Model" }).click();
+
+    // The dropdown labels come from the proxy (GET /public/providers/fields),
+    // not from the frontend's Providers enum, and the two differ. "Endpoints"
+    // is what distinguishes this from the sibling "OpenAI-Compatible Text
+    // Completion Models" entry, and selectProvider takes the first match.
+    await selectProvider(page, "OpenAI-Compatible Endpoints");
+
+    const publicName = `e2e-ui-added-${Date.now()}`;
+    uiAddedModelName = publicName;
+
+    // The model picker's "custom" entry reveals the free-text name field.
+    await page.locator(".ant-select-selection-overflow").first().click();
+    await page.locator(".ant-select-dropdown:visible").getByText("Custom Model Name (Enter below)").click();
+    await page.keyboard.press("Escape");
+    await page.getByPlaceholder("Enter custom model name").fill(publicName);
+
+    // api_base and api_key are the two required fields the proxy advertises for
+    // this provider. Address them by Form.Item id rather than placeholder --
+    // the placeholders are provider-specific and change with the selection.
+    await page.locator("#api_base").fill(MOCK_LLM_BASE);
+    await page.locator("#api_key").fill("fake-key");
+
+    await page.getByRole("button", { name: "Test Connect" }).click();
+    await expect(page.getByText("Connection Test Results")).toBeVisible({ timeout: 10_000 });
+    // The success and failure panels are different elements, so assert the
+    // success one is present rather than that the failure text is absent --
+    // "no failure yet" is also true while the request is still in flight.
+    await expect(page.getByTestId("connection-success-msg")).toBeVisible({ timeout: 30_000 });
+
+    // The results modal stays open over the form and swallows the Add click.
+    // Scope to the footer: the modal's dismiss "X" also has the name "Close".
+    const resultsModal = page.locator(".ant-modal:visible").filter({ hasText: "Connection Test Results" });
+    await resultsModal.locator(".ant-modal-footer").getByRole("button", { name: "Close" }).click();
+    await expect(resultsModal).toBeHidden({ timeout: 5_000 });
+
+    const created = await captureRequestBody(page, { method: "POST", urlIncludes: "/model/new" }, async () => {
+      await page.getByRole("button", { name: "Add Model" }).last().click();
+    });
+    expect(created.model_name, "the model is created under the name that was typed").toBe(publicName);
+    expect(created.litellm_params?.api_base, "the api base survives the form").toBe(MOCK_LLM_BASE);
+
+    await expect(page.getByText("created successfully")).toBeVisible({ timeout: 15_000 });
+
+    // The whole point. A deployment can be created, listed and still be
+    // unroutable -- wrong provider, dropped api_base, a name the router never
+    // registers. Serving one request is the only assertion that rules all of
+    // that out. sendChatCompletion asserts the completion body, not just a 200.
+    //
+    // Polled because /model/new returns before the router has finished
+    // reloading, so the first call can land on a model the proxy does not know
+    // about yet.
+    await expect
+      .poll(
+        async () => {
+          try {
+            await sendChatCompletion(request, { model: publicName, prompt: `hello from ${publicName}` });
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        { message: `model ${publicName} was added through the UI but never served a request`, timeout: 30_000 },
+      )
+      .toBe(true);
   });
 
   test("Test connection with bad credentials shows failure", async ({ page }) => {
