@@ -220,7 +220,7 @@ async def get_agents(request: Request):
             "url": get_custom_url(str(request.base_url), route=f"a2a/{agent.agent_id}"),
         }
         for agent in agents
-        if agent.agent_id in litellm.public_agent_groups
+        if not global_agent_registry.ids_for_agent(agent.agent_id).isdisjoint(litellm.public_agent_groups)
     ]
 
 
@@ -404,7 +404,7 @@ async def get_supported_endpoints() -> SupportedEndpointsResponse:
     """
     global _cached_endpoints
     if _cached_endpoints is None:
-        _cached_endpoints = SupportedEndpointsResponse(endpoints=_load_endpoints())  # type: ignore[arg-type]
+        _cached_endpoints = SupportedEndpointsResponse(endpoints=_load_endpoints())
     return _cached_endpoints
 
 

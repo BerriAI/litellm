@@ -696,7 +696,7 @@ async def update_organization(
 
     # Handle budget updates if budget fields are provided
     budget_fields: Final = {
-        k: v for k, v in data.model_dump().items() if k in LiteLLM_BudgetTable.model_fields.keys() and v is not None
+        k: v for k, v in data.model_dump().items() if k in LiteLLM_BudgetTable.model_fields and v is not None
     }
 
     if budget_fields and existing_organization_row.budget_id:
@@ -706,7 +706,7 @@ async def update_organization(
         )
 
     # Remove budget fields from organization update data
-    for field in LiteLLM_BudgetTable.model_fields.keys():
+    for field in LiteLLM_BudgetTable.model_fields:
         updated_organization_row.pop(field, None)
 
     response: Final = await _table(OrganizationRepository(prisma_client)).update(
@@ -1534,7 +1534,7 @@ async def add_member_to_organization(
                 user_email=member.user_email,
             )
 
-            _returned_user = await prisma_client.insert_data(data=new_user_defaults, table_name="user")  # type: ignore
+            _returned_user = await prisma_client.insert_data(data=new_user_defaults, table_name="user")
             if _returned_user is not None:
                 user_object = LiteLLM_UserTable.model_validate(_returned_user.model_dump())
         elif existing_user_email_row is not None and len(existing_user_email_row) > 1:
