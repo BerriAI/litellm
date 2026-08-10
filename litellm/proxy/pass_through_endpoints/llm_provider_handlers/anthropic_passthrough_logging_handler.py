@@ -1,5 +1,5 @@
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -74,6 +74,9 @@ class AnthropicPassthroughLoggingHandler:
             )
 
         model: Final = response_body.get("model", "")
+        speed: Final = AnthropicPassthroughLoggingHandler._cost_relevant_speed(
+            request_body or kwargs.get("request_body")
+        )
         anthropic_config: Final = get_anthropic_config(url_route)
         litellm_model_response: Final[ModelResponse] = anthropic_config().transform_response(
             raw_response=httpx_response,
@@ -81,9 +84,7 @@ class AnthropicPassthroughLoggingHandler:
             model=model,
             messages=[],
             logging_obj=logging_obj,
-            optional_params=AnthropicPassthroughLoggingHandler._cost_relevant_request_params(
-                request_body or kwargs.get("request_body")
-            ),
+            optional_params={"speed": speed} if speed else {},
             api_key="",
             request_data={},
             encoding=litellm.encoding,
@@ -106,13 +107,13 @@ class AnthropicPassthroughLoggingHandler:
         }
 
     @staticmethod
-    def _cost_relevant_request_params(request_body: dict | None) -> dict:
+    def _cost_relevant_speed(request_body: Mapping[str, object] | None) -> str | None:
         """
-        Request params that change how the response is priced, and so must reach the
-        usage-building paths. Anthropic's ``speed=fast`` multiplies non-cache token cost.
+        Anthropic's ``speed=fast`` multiplies non-cache token cost, and only the request
+        carries it, so it has to reach the usage-building paths for spend to be right.
         """
         speed: Final = (request_body or {}).get("speed")
-        return {"speed": speed} if isinstance(speed, str) else {}
+        return speed if isinstance(speed, str) else None
 
     @staticmethod
     def _get_user_from_metadata(
@@ -327,7 +328,7 @@ class AnthropicPassthroughLoggingHandler:
         - Logs in litellm callbacks
         """
 
-        speed: Final = AnthropicPassthroughLoggingHandler._cost_relevant_request_params(request_body).get("speed")
+        speed: Final = AnthropicPassthroughLoggingHandler._cost_relevant_speed(request_body)
         model = request_body.get("model", "")
         # Check if it's available in the logging object
         if (
