@@ -255,12 +255,16 @@ curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
     "LiteLLM": {
       "url": "http://localhost:4000/mcp/",
       "headers": {
-        "x-litellm-api-key": "Bearer sk-1234"
+        "x-litellm-api-key": "Bearer sk-1234",
+        "x-litellm-end-user-id": "user-123",
+        "x-litellm-tags": "application:orders,service:checkout"
       }
     }
   }
 }
 ```
+
+`x-litellm-end-user-id` associates the request with a canonical end-user identity. `x-litellm-tags` uses comma-separated tags for additional spend attribution dimensions. LiteLLM does not forward either header to the upstream MCP server.
 
 [**Docs: MCP Gateway**](https://docs.litellm.ai/docs/mcp)
 

@@ -117,6 +117,45 @@ async def test_mcp_server_tool_call_body_contains_request_data():
 
 
 @pytest.mark.asyncio
+async def test_mcp_server_tool_call_uses_canonical_request_tags_header():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            mcp_server_tool_call,
+            set_auth_context,
+        )
+        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    set_auth_context(
+        UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+        raw_headers={"X-LiteLLM-Tags": "application:orders, service:checkout"},
+    )
+    captured_tags = {}
+
+    async def mock_add_litellm_data_to_request(data, request, user_api_key_dict, proxy_config):
+        captured_tags["tags"] = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
+            llm_router=None,
+            headers=dict(request.headers),
+            data={},
+        )
+        return data
+
+    with patch(
+        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request",
+        mock_add_litellm_data_to_request,
+    ):
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.call_mcp_tool",
+            new=AsyncMock(return_value=CallToolResult(content=[])),
+        ):
+            with patch("litellm.proxy.proxy_server.proxy_config", MagicMock()):
+                await mcp_server_tool_call("test_tool", {"value": "test"})
+
+    assert captured_tags["tags"] == ["application:orders", "service:checkout"]
+
+
+@pytest.mark.asyncio
 async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror():
     """The MCP session manager serializes handler exceptions as JSON-RPC errors, so a mid-session
     tool call cannot emit a raw 401 the way the REST path does. mcp_server_tool_call must turn an
@@ -193,6 +232,69 @@ def test_prepare_mcp_server_headers_case_insensitive_extra_headers():
 
     assert server_auth_header is None
     assert extra_headers == {"Authorization": "Bearer token"}
+
+
+def test_prepare_mcp_server_headers_does_not_forward_gateway_attribution_headers():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _prepare_mcp_server_headers,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    server = MCPServer(
+        server_id="server-attribution",
+        name="server",
+        transport=MCPTransport.http,
+        extra_headers=["x-request-id", "X-LiteLLM-Tags", "X-LiteLLM-End-User-Id"],
+    )
+
+    server_auth_header, extra_headers = _prepare_mcp_server_headers(
+        server=server,
+        mcp_server_auth_headers=None,
+        mcp_auth_header=None,
+        oauth2_headers=None,
+        raw_headers={
+            "x-request-id": "request-123",
+            "x-litellm-tags": "application:orders,service:checkout",
+            "x-litellm-end-user-id": "user-123@example",
+        },
+    )
+
+    assert server_auth_header is None
+    assert extra_headers == {"x-request-id": "request-123"}
+
+
+@pytest.mark.asyncio
+async def test_handle_list_tools_uses_canonical_request_tags_header():
+    try:
+        from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
+        from litellm.proxy._experimental.mcp_server.server import handle_list_tools
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    list_tools = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.get_or_extract_auth_context",
+        new=AsyncMock(
+            return_value=(
+                UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+                None,
+                ["server"],
+                None,
+                None,
+                {"X-LiteLLM-Tags": "application:orders, service:checkout"},
+                None,
+            )
+        ),
+    ):
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
+            new=list_tools,
+        ):
+            await handle_list_tools()
+
+    assert list_tools.await_args.kwargs["request_tags"] == ["application:orders", "service:checkout"]
 
 
 def test_prepare_mcp_server_headers_passthrough_strips_authorization_without_admission_header():

@@ -782,6 +782,13 @@ if MCP_AVAILABLE:
 
             # Get mcp_servers from context variable
             verbose_logger.debug("MCP list_tools - Calling _list_mcp_tools")
+            from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+            request_tags: Final = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
+                llm_router=None,
+                headers={key.lower(): value for key, value in (raw_headers or {}).items()},
+                data={},
+            )
             listing: Final = await _list_mcp_tools(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
@@ -791,6 +798,7 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 log_list_tools_to_spendlogs=True,
                 list_tools_log_source="mcp_protocol",
+                request_tags=request_tags,
             )
             verbose_logger.info("MCP list_tools - Successfully returned %s tools", len(listing.tools))
             if not listing.outcomes:
@@ -1030,12 +1038,19 @@ if MCP_AVAILABLE:
                     body_data["litellm_trace_id"] = chain_id
                     body_data["litellm_session_id"] = chain_id
 
+                tags_header: Final = next(
+                    (value for key, value in (raw_headers or {}).items() if key.lower() == "x-litellm-tags"),
+                    None,
+                )
+                tags_scope_header: Final = (
+                    ((b"x-litellm-tags", tags_header.encode("latin-1")),) if tags_header is not None else ()
+                )
                 request: Final = Request(
                     scope={
                         "type": "http",
                         "method": "POST",
                         "path": "/mcp/tools/call",
-                        "headers": [(b"content-type", b"application/json")],
+                        "headers": [(b"content-type", b"application/json"), *tags_scope_header],
                     }
                 )
                 if user_api_key_auth is not None:
@@ -1750,6 +1765,8 @@ if MCP_AVAILABLE:
             for header in server.extra_headers:
                 if not isinstance(header, str):
                     continue
+                if header.lower() in {"x-litellm-tags", "x-litellm-end-user-id"}:
+                    continue
                 if header.lower() == "authorization" and (
                     strip_caller_authorization or withhold_forwarded_authorization
                 ):
@@ -2330,6 +2347,7 @@ if MCP_AVAILABLE:
         raw_headers: dict[str, str] | None = None,
         log_list_tools_to_spendlogs: bool = False,
         list_tools_log_source: str | None = None,
+        request_tags: list[str] | None = None,
         client_ip: str | None = None,
     ) -> AggregateToolListing:
         """
@@ -2359,6 +2377,7 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 log_list_tools_to_spendlogs=log_list_tools_to_spendlogs,
                 list_tools_log_source=list_tools_log_source,
+                request_tags=request_tags,
                 client_ip=client_ip,
             )
             verbose_logger.debug("Successfully fetched %s tools from managed MCP servers", len(listing.tools))
