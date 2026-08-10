@@ -37,8 +37,8 @@ describe("hasCapability", () => {
   });
 });
 
-// An org admin is a membership, not a session role, so their JWT reads "Internal User".
-// Each row was measured on a live proxy with a membership-granted org admin's key.
+const SESSION_ROLE_AN_ORG_ADMIN_ACTUALLY_CARRIES = "Internal User";
+
 const ORG_ADMIN_BACKEND_ACCESS: ReadonlyArray<readonly [Capability, string, boolean]> = [
   ["viewDeletedTeams", "GET /v2/team/list?status=deleted -> 200 (scoped to their orgs)", true],
   ["viewToolPolicies", "GET /v1/tool/list -> 401", false],
@@ -49,7 +49,7 @@ const ORG_ADMIN_BACKEND_ACCESS: ReadonlyArray<readonly [Capability, string, bool
 
 describe("hasCapability for organization admins", () => {
   it.each(ORG_ADMIN_BACKEND_ACCESS)("%s matches the backend: %s", (capability, _endpoint, isEntitled) => {
-    expect(hasCapability("Internal User", capability, true)).toBe(isEntitled);
+    expect(hasCapability(SESSION_ROLE_AN_ORG_ADMIN_ACTUALLY_CARRIES, capability, true)).toBe(isEntitled);
   });
 
   it.each(NON_ADMIN_ROLES)("grants viewDeletedTeams to an org admin whose session role is %s", (role) => {
@@ -57,13 +57,13 @@ describe("hasCapability for organization admins", () => {
   });
 
   it.each(ADMIN_ONLY_CAPABILITIES)("leaves %s denied when the caller is not an org admin", (capability) => {
-    expect(hasCapability("Internal User", capability, false)).toBe(false);
-    expect(hasCapability("Internal User", capability)).toBe(false);
+    expect(hasCapability(SESSION_ROLE_AN_ORG_ADMIN_ACTUALLY_CARRIES, capability, false)).toBe(false);
+    expect(hasCapability(SESSION_ROLE_AN_ORG_ADMIN_ACTUALLY_CARRIES, capability)).toBe(false);
   });
 
   it("keeps the org-admin allowance opt-in per capability", () => {
     const orgAdminCapabilities = ADMIN_ONLY_CAPABILITIES.filter((capability) =>
-      hasCapability("Internal User", capability, true),
+      hasCapability(SESSION_ROLE_AN_ORG_ADMIN_ACTUALLY_CARRIES, capability, true),
     );
     expect(orgAdminCapabilities).toEqual(["viewDeletedTeams"]);
   });
