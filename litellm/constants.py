@@ -1721,3 +1721,18 @@ BROWSER_SECURITY_HEADERS: Final[frozenset[str]] = frozenset(
 )
 
 UNSAFE_PROXY_RESPONSE_HEADERS: Final[frozenset[str]] = HTTP_FRAMING_HEADERS | BROWSER_SECURITY_HEADERS
+
+# PTU reservation rollup writes rows to LiteLLM_DailyTeamSpend with this
+# sentinel api_key so PTU flat cost stays distinguishable from real per-request
+# spend under the table's composite unique constraint.
+PTU_SENTINEL_API_KEY: Final[str] = "__ptu_flat_cost__"
+PTU_ROLLUP_JOB_ID: Final[str] = "ptu_flat_cost_rollup_job"
+PTU_ROLLUP_LOCK_TTL_SECONDS: Final[int] = 900
+# Furthest back the catch-up pass looks for unpriced PTU days when a deployment
+# declares no ptu_effective_from, bounding the scan for an open-ended window.
+PTU_ROLLUP_MAX_BACKFILL_DAYS: Final[int] = 90
+# Slack allowed when deciding a sentinel row is stale. The row's updated_at and the
+# run's cutoff are stamped by different hosts, so clock skew between them must not let
+# one run delete a charge another just wrote. A stale row is hours old and a concurrent
+# one is seconds old, so a few minutes separates them.
+PTU_PRUNE_SKEW_GRACE_SECONDS: Final[int] = 300

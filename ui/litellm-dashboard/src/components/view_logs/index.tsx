@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import useCan from "@/app/(dashboard)/hooks/useCan";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
 import AuditLogsPanel from "./AuditLogsPanel";
@@ -14,8 +15,22 @@ interface SpendLogsTableProps {
   premiumUser: boolean;
 }
 
+type LogsTabId = "request logs" | "audit logs" | "deleted keys" | "deleted teams";
+
+interface LogsTab {
+  id: LogsTabId;
+  label: string;
+}
+
+const REQUEST_LOGS_TAB: LogsTab = { id: "request logs", label: "Request Logs" };
+const AUDIT_LOGS_TAB: LogsTab = { id: "audit logs", label: "Audit Logs" };
+const DELETED_KEYS_TAB: LogsTab = { id: "deleted keys", label: "Deleted Keys" };
+const DELETED_TEAMS_TAB: LogsTab = { id: "deleted teams", label: "Deleted Teams" };
+
 export default function SpendLogsTable({ accessToken, token, userRole, userID, premiumUser }: SpendLogsTableProps) {
-  const [activeTab, setActiveTab] = useState("request logs");
+  const [activeTab, setActiveTab] = useState<LogsTabId>(REQUEST_LOGS_TAB.id);
+  const canViewAuditLogs = useCan("viewAuditLogs");
+  const canViewDeletedTeams = useCan("viewDeletedTeams");
 
   if (!accessToken || !token || !userRole || !userID) {
     return (
@@ -25,41 +40,55 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     );
   }
 
+  const tabs: LogsTab[] = [
+    REQUEST_LOGS_TAB,
+    ...(canViewAuditLogs ? [AUDIT_LOGS_TAB] : []),
+    DELETED_KEYS_TAB,
+    ...(canViewDeletedTeams ? [DELETED_TEAMS_TAB] : []),
+  ];
+
+  const renderPanel = (tabId: LogsTabId) => {
+    switch (tabId) {
+      case "request logs":
+        return (
+          <RequestLogsPanel
+            accessToken={accessToken}
+            token={token}
+            userRole={userRole}
+            userID={userID}
+            isActive={activeTab === "request logs"}
+          />
+        );
+      case "audit logs":
+        return (
+          <AuditLogsPanel
+            userID={userID}
+            userRole={userRole}
+            token={token}
+            accessToken={accessToken}
+            isActive={activeTab === "audit logs"}
+            premiumUser={premiumUser}
+          />
+        );
+      case "deleted keys":
+        return <DeletedKeysPage />;
+      case "deleted teams":
+        return <DeletedTeamsPage />;
+    }
+  };
+
   return (
     <div className="w-full p-6 overflow-x-hidden box-border">
-      <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "request logs" : "audit logs")}>
+      <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(tabs[index].id)}>
         <TabList>
-          <Tab>Request Logs</Tab>
-          <Tab>Audit Logs</Tab>
-          <Tab>Deleted Keys</Tab>
-          <Tab>Deleted Teams</Tab>
+          {tabs.map((tab) => (
+            <Tab key={tab.id}>{tab.label}</Tab>
+          ))}
         </TabList>
         <TabPanels>
-          <TabPanel>
-            <RequestLogsPanel
-              accessToken={accessToken}
-              token={token}
-              userRole={userRole}
-              userID={userID}
-              isActive={activeTab === "request logs"}
-            />
-          </TabPanel>
-          <TabPanel>
-            <AuditLogsPanel
-              userID={userID}
-              userRole={userRole}
-              token={token}
-              accessToken={accessToken}
-              isActive={activeTab === "audit logs"}
-              premiumUser={premiumUser}
-            />
-          </TabPanel>
-          <TabPanel>
-            <DeletedKeysPage />
-          </TabPanel>
-          <TabPanel>
-            <DeletedTeamsPage />
-          </TabPanel>
+          {tabs.map((tab) => (
+            <TabPanel key={tab.id}>{renderPanel(tab.id)}</TabPanel>
+          ))}
         </TabPanels>
       </TabGroup>
     </div>

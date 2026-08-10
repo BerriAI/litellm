@@ -16,6 +16,55 @@ describe("hasCapability", () => {
       expect(hasCapability(role, "viewToolPolicies")).toBe(false);
     },
   );
+
+  it.each(["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer"])("should grant viewPolicies to %s", (role) => {
+    expect(hasCapability(role, "viewPolicies")).toBe(true);
+  });
+
+  it.each([
+    "Internal User",
+    "Internal Viewer",
+    "internal_user",
+    "App User",
+    "Org Admin",
+    "Unknown Role",
+    "",
+    null,
+    undefined,
+  ])("should deny viewPolicies to %s", (role) => {
+    expect(hasCapability(role, "viewPolicies")).toBe(false);
+  });
+
+  it.each(["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer"])("should grant viewPrompts to %s", (role) => {
+    expect(hasCapability(role, "viewPrompts")).toBe(true);
+  });
+
+  it.each([
+    "Internal User",
+    "Internal Viewer",
+    "internal_user",
+    "App User",
+    "Org Admin",
+    "Unknown Role",
+    "",
+    null,
+    undefined,
+  ])("should deny viewPrompts to %s", (role) => {
+    expect(hasCapability(role, "viewPrompts")).toBe(false);
+  });
+});
+
+describe.each(["viewAuditLogs", "viewDeletedTeams"] as const)("hasCapability - %s", (capability) => {
+  it.each(["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer"])("should grant it to %s", (role) => {
+    expect(hasCapability(role, capability)).toBe(true);
+  });
+
+  it.each(["Internal User", "Internal Viewer", "App User", "Org Admin", "Unknown Role", "", null, undefined])(
+    "should deny it to %s",
+    (role) => {
+      expect(hasCapability(role, capability)).toBe(false);
+    },
+  );
 });
 
 describe("rolesWithCapability", () => {
