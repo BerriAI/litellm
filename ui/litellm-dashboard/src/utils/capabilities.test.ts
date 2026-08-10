@@ -67,6 +67,36 @@ describe.each(["viewAuditLogs", "viewDeletedTeams"] as const)("hasCapability - %
   );
 });
 
+// `useAuthorized` supplies `userRole` as the formatted session role from
+// `effectiveSessionRole`, which collapses proxy_admin_viewer to "Admin" and
+// renders an org admin as "Org Admin". The four sidebar pages behind these
+// capabilities call proxy-admin-only routes: `_user_is_org_admin` needs an
+// `organization_id` in the request data, which a page-load GET never carries,
+// so an org admin is denied at the proxy exactly as it is here.
+describe.each(["viewWorkflowRuns", "viewMemory", "viewGuardrailUsage", "viewProxyWideCostData"] as const)(
+  "hasCapability - %s",
+  (capability) => {
+    it.each(["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer"])("should grant it to %s", (role) => {
+      expect(hasCapability(role, capability)).toBe(true);
+    });
+
+    it.each([
+      "Internal User",
+      "Internal Viewer",
+      "internal_user",
+      "internal_user_viewer",
+      "Org Admin",
+      "App User",
+      "Unknown Role",
+      "",
+      null,
+      undefined,
+    ])("should deny it to %s", (role) => {
+      expect(hasCapability(role, capability)).toBe(false);
+    });
+  },
+);
+
 describe("rolesWithCapability", () => {
   it("should return a copy so callers cannot mutate the capability map", () => {
     const roles = rolesWithCapability("viewToolPolicies");
