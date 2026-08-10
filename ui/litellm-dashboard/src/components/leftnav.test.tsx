@@ -81,6 +81,10 @@ vi.mock("@/app/(dashboard)/hooks/useLogout", () => ({
 const collectNavKeys = (): string[] =>
   menuGroups.flatMap((group) => group.items.flatMap((item) => [item.key, ...(item.children ?? []).map((c) => c.key)]));
 
+const flattenedMenuItems = menuGroups.flatMap((group) =>
+  group.items.flatMap((item) => [item, ...(item.children ?? [])]),
+);
+
 // Every place a page id appears in the nav, as "GROUP" for a top-level item or
 // "GROUP > parentKey" for a child.
 const placementsOf = (page: string): string[] =>
@@ -156,14 +160,11 @@ describe("Sidebar (leftnav)", () => {
     menuGroups.forEach((group) => {
       expect(translations.en.translation.sidebar.groups[group.groupLabel]).toBeTruthy();
       expect(translations.ru.translation.sidebar.groups[group.groupLabel]).toBeTruthy();
-      group.items.forEach((item) => {
-        expect(translations.en.translation.sidebar.items[item.key]).toBeTruthy();
-        expect(translations.ru.translation.sidebar.items[item.key]).toBeTruthy();
-        item.children?.forEach((child) => {
-          expect(translations.en.translation.sidebar.items[child.key]).toBeTruthy();
-          expect(translations.ru.translation.sidebar.items[child.key]).toBeTruthy();
-        });
-      });
+    });
+
+    flattenedMenuItems.forEach((item) => {
+      expect(translations.en.translation.sidebar.items[item.key]).toBeTruthy();
+      expect(translations.ru.translation.sidebar.items[item.key]).toBeTruthy();
     });
   });
 

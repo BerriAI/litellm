@@ -22,19 +22,18 @@ export const I18nProvider = ({ children }: PropsWithChildren) => {
   useEffect(() => {
     let active = true;
     const initialLanguage = resolveLanguage(getLocalStorageItem(LANGUAGE_STORAGE_KEY), navigator.language);
+    const initializationOptions = {
+      resources,
+      lng: initialLanguage,
+      fallbackLng: "en",
+      interpolation: { escapeValue: false },
+    };
 
-    void i18n
-      .init({
-        resources,
-        lng: initialLanguage,
-        fallbackLng: "en",
-        interpolation: { escapeValue: false },
-      })
-      .then(() => {
-        if (!active) return;
-        document.documentElement.lang = initialLanguage;
-        setActiveLanguage(initialLanguage);
-      });
+    void i18n.init(initializationOptions).then(() => {
+      if (!active) return;
+      document.documentElement.lang = initialLanguage;
+      setActiveLanguage(initialLanguage);
+    });
 
     return () => {
       active = false;
@@ -51,10 +50,7 @@ export const I18nProvider = ({ children }: PropsWithChildren) => {
     [i18n],
   );
 
-  const value = useMemo(
-    () => (language === null ? null : { language, setLanguage }),
-    [language, setLanguage],
-  );
+  const value = useMemo(() => (language === null ? null : { language, setLanguage }), [language, setLanguage]);
 
   if (value === null) return <LoadingScreen />;
 
