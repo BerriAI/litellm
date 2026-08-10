@@ -41,7 +41,7 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
 def assert_proxy_admin_for_vector_store_index_management(
     user_api_key_dict: UserAPIKeyAuth,
     *,
-    operation: Literal["create", "delete", "update"] = "create",
+    operation: Literal["create", "delete", "update", "list"] = "create",
 ) -> None:
     """Raise 403 unless the caller is a proxy admin."""
     if _is_proxy_admin(user_api_key_dict):
