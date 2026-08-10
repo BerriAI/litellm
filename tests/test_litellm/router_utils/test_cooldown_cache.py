@@ -349,3 +349,26 @@ class TestCooldownCacheTTLCorrection:
 
         assert active == [], "Expired entry must not appear in async active cooldowns"
         assert cc.cache.in_memory_cache.get_cache(key) is None
+
+    @pytest.mark.asyncio
+    async def test_async_active_entry_is_returned(self):
+        """
+        Async counterpart of test_active_entry_is_returned: an entry whose cooldown
+        window has not elapsed must appear in the async active list too.
+        """
+        cc = self._make_cooldown_cache()
+        model_id = "async-active-deployment"
+        key = CooldownCache.get_cooldown_cache_key(model_id)
+
+        active_value: CooldownCacheValue = {
+            "exception_received": "Rate limit",
+            "status_code": "429",
+            "timestamp": time.time(),
+            "cooldown_time": 60.0,
+        }
+        cc.cache.in_memory_cache.set_cache(key, active_value, ttl=60)
+
+        active = await cc.async_get_active_cooldowns(model_ids=[model_id], parent_otel_span=None)
+
+        assert len(active) == 1
+        assert active[0][0] == model_id
