@@ -1,7 +1,9 @@
+import ast
 import asyncio
 import json
 import os
 import sys
+from pathlib import Path
 from typing import List
 
 import pytest
@@ -15,9 +17,15 @@ import sys
 import litellm
 from litellm._logging import (
     ALL_LOGGERS,
+    CorrelationContextFilter,
+    CorrelationPlainFormatter,
     JsonFormatter,
     _initialize_loggers_with_handler,
     _turn_on_json,
+    session_id_var,
+    set_session_id,
+    set_trace_id,
+    trace_id_var,
     verbose_logger,
     verbose_proxy_logger,
     verbose_router_logger,
@@ -328,3 +336,307 @@ async def test_cache_hit_includes_custom_llm_provider():
         # Clean up
         litellm.callbacks = original_callbacks
         litellm.cache = None
+
+
+LITELLM_LOGGER_NAMES = frozenset(
+    {"verbose_logger", "verbose_proxy_logger", "verbose_router_logger", "logger", "logging"}
+)
+LOG_LEVEL_METHODS = frozenset({"debug", "info", "warning", "error", "exception", "critical"})
+LITELLM_PACKAGE_ROOT = Path(__file__).resolve().parents[2] / "litellm"
+
+
+def _receiver_name(node: ast.expr) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return ""
+
+
+def _is_logging_call(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in LOG_LEVEL_METHODS
+        and _receiver_name(node.func.value) in LITELLM_LOGGER_NAMES
+    )
+
+
+def _has_format_spec(message: ast.JoinedStr) -> bool:
+    return any(isinstance(value, ast.FormattedValue) and value.format_spec is not None for value in message.values)
+
+
+def _eager_logging_calls(source: str, path: Path) -> tuple[str, ...]:
+    return tuple(
+        f"{path}:{node.lineno}"
+        for node in ast.walk(ast.parse(source))
+        if _is_logging_call(node)
+        and node.args
+        and isinstance(node.args[0], ast.JoinedStr)
+        and not _has_format_spec(node.args[0])
+    )
+
+
+def test_logging_calls_do_not_build_their_message_eagerly():
+    """A discarded log record must not have cost anything to build.
+
+    `log.debug(f"payload: {body}")` interpolates before the call runs, so the message is
+    built and thrown away on every request the level filters out; `log.debug("payload: %s", body)`
+    defers that to `record.getMessage()`, which only runs once the record passes the level check.
+
+    f-strings carrying a format spec are exempt: `%`-style has no faithful equivalent for
+    specs like `{ratio:.1%}`, and those sites interpolate scalars rather than payloads.
+    """
+    offenders = tuple(
+        offender
+        for path in sorted(LITELLM_PACKAGE_ROOT.rglob("*.py"))
+        for offender in _eager_logging_calls(
+            path.read_text(encoding="utf-8"), path.relative_to(LITELLM_PACKAGE_ROOT.parent)
+        )
+    )
+
+    assert offenders == (), (
+        "these logging calls build their message eagerly; pass the values as %-style arguments instead:\n"
+        + "\n".join(offenders)
+    )
+
+
+class _JsonCapture(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.formatter = JsonFormatter()
+        self.records: list[dict] = []
+        self.addFilter(CorrelationContextFilter())
+
+    def emit(self, record):
+        self.records.append(json.loads(self.formatter.format(record)))
+
+
+def _make_capture_logger(name: str) -> tuple[logging.Logger, _JsonCapture]:
+    lg = logging.getLogger(name)
+    cap = _JsonCapture()
+    lg.addHandler(cap)
+    lg.setLevel(logging.DEBUG)
+    return lg, cap
+
+
+def test_trace_id_injected_into_json_record(monkeypatch):
+    """trace_id set via set_trace_id() appears in every JSON record in that context."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    lg, cap = _make_capture_logger("test.trace_inject")
+    set_trace_id("trace-abc-123")
+    try:
+        lg.info("test message")
+        assert len(cap.records) == 1
+        assert cap.records[0]["trace_id"] == "trace-abc-123"
+    finally:
+        trace_id_var.set("")
+
+
+def test_session_id_injected_when_set(monkeypatch):
+    """session_id set via set_session_id() appears in JSON record."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    lg, cap = _make_capture_logger("test.session_inject")
+    set_session_id("sess-xyz-456")
+    try:
+        lg.info("another message")
+        assert cap.records[0]["session_id"] == "sess-xyz-456"
+    finally:
+        session_id_var.set("")
+
+
+def test_trace_id_and_session_id_cannot_be_spoofed_by_message_content(monkeypatch):
+    """A log message that happens to parse as JSON/dict with "trace_id"/"session_id"
+    keys (e.g. the proxy logging a raw request-header dict) must not override the
+    real correlation ids set via set_trace_id()/set_session_id()."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    lg, cap = _make_capture_logger("test.spoof_attempt")
+    set_trace_id("real-trace-id")
+    set_session_id("real-session-id")
+    try:
+        lg.info('{"trace_id": "attacker-supplied-trace", "session_id": "attacker-supplied-session"}')
+        assert cap.records[0]["trace_id"] == "real-trace-id"
+        assert cap.records[0]["session_id"] == "real-session-id"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_trace_id_and_session_id_cannot_be_injected_with_no_active_context(monkeypatch):
+    """A message that happens to parse as JSON/dict with "trace_id"/"session_id" keys
+    must not surface those fields at all when CorrelationContextFilter hasn't stamped
+    this record - e.g. a log line emitted before Logging.__init__() runs for a request
+    (request_correlation_in_logs on, but no genuine trace/session id active yet)."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    lg, cap = _make_capture_logger("test.no_context_spoof_attempt")
+    trace_id_var.set("")
+    session_id_var.set("")
+    lg.info('{"trace_id": "attacker-supplied-trace", "session_id": "attacker-supplied-session"}')
+    assert "trace_id" not in cap.records[0]
+    assert "session_id" not in cap.records[0]
+
+
+def test_trace_id_and_session_id_are_redacted_when_credential_shaped(monkeypatch):
+    """A caller-controlled trace_id/session_id (e.g. from x-litellm-trace-id or a W3C
+    baggage header) that happens to look like a real credential must not reach log
+    records unredacted. CorrelationContextFilter stamps trace_id/session_id onto the
+    record after SecretRedactionFilter has already run, so those two fields would
+    otherwise bypass credential redaction entirely - the fix redacts at set_trace_id()/
+    set_session_id() time instead, before the value ever reaches a log record."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    lg, cap = _make_capture_logger("test.credential_shaped_correlation_id")
+    poisoned_trace_id = "sk-ant-api03-" + "A" * 40
+    poisoned_session_id = "AKIA" + "B" * 16
+    set_trace_id(poisoned_trace_id)
+    set_session_id(poisoned_session_id)
+    try:
+        lg.info("some benign log line")
+        assert cap.records[0]["trace_id"] == "REDACTED"
+        assert cap.records[0]["session_id"] == "REDACTED"
+        assert poisoned_trace_id not in json.dumps(cap.records[0])
+        assert poisoned_session_id not in json.dumps(cap.records[0])
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_session_id_absent_when_not_set():
+    """session_id must NOT appear in JSON record when not set for this context."""
+    lg, cap = _make_capture_logger("test.no_session")
+    session_id_var.set("")
+    lg.info("no session message")
+    assert "session_id" not in cap.records[0]
+
+
+def test_trace_id_absent_when_not_set():
+    """trace_id must NOT appear when not set."""
+    lg, cap = _make_capture_logger("test.no_trace")
+    trace_id_var.set("")
+    lg.info("no trace message")
+    assert "trace_id" not in cap.records[0]
+
+
+@pytest.mark.asyncio
+async def test_contextvar_isolation_between_tasks():
+    """Two concurrent async tasks each see only their own trace_id."""
+    results: dict[str, str] = {}
+
+    async def task(task_id: str, trace_id: str) -> None:
+        set_trace_id(trace_id)
+        await asyncio.sleep(0)
+        results[task_id] = trace_id_var.get()
+
+    await asyncio.gather(
+        task("A", "trace-for-A"),
+        task("B", "trace-for-B"),
+    )
+
+    assert results["A"] == "trace-for-A"
+    assert results["B"] == "trace-for-B"
+
+
+def test_trace_id_not_in_log_when_flag_disabled(monkeypatch):
+    """When request_correlation_in_logs is False (default), trace_id must not appear in JSON records even when set."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", False)
+    lg, cap = _make_capture_logger("test.no_trace_gated")
+    set_trace_id("trace-should-not-appear")
+    try:
+        lg.info("message")
+        assert "trace_id" not in cap.records[0]
+    finally:
+        trace_id_var.set("")
+
+
+def test_session_id_not_in_log_when_flag_disabled(monkeypatch):
+    """When request_correlation_in_logs is False (default), session_id must not appear in JSON records even when set."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", False)
+    lg, cap = _make_capture_logger("test.no_session_gated")
+    set_session_id("sess-should-not-appear")
+    try:
+        lg.info("message")
+        assert "session_id" not in cap.records[0]
+    finally:
+        session_id_var.set("")
+
+
+class _PlainCapture(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.formatter = CorrelationPlainFormatter("%(message)s")
+        self.records: list[str] = []
+        self.addFilter(CorrelationContextFilter())
+
+    def emit(self, record):
+        self.records.append(self.formatter.format(record))
+
+
+def _make_plain_capture_logger(name: str) -> tuple[logging.Logger, _PlainCapture]:
+    lg = logging.getLogger(name)
+    cap = _PlainCapture()
+    lg.addHandler(cap)
+    lg.setLevel(logging.DEBUG)
+    return lg, cap
+
+
+def test_plain_formatter_appends_trace_id_and_session_id(monkeypatch):
+    """CorrelationPlainFormatter must append trace_id/session_id to non-JSON log lines too."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    lg, cap = _make_plain_capture_logger("test.plain_trace_session")
+    set_trace_id("plain-trace-1")
+    set_session_id("plain-session-1")
+    try:
+        lg.info("plaintext message")
+        assert cap.records[0] == "plaintext message [trace_id=plain-trace-1 session_id=plain-session-1]"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_plain_formatter_appends_only_trace_id_when_session_id_absent(monkeypatch):
+    """Only trace_id is appended when session_id was never set."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    lg, cap = _make_plain_capture_logger("test.plain_trace_only")
+    set_trace_id("plain-trace-2")
+    session_id_var.set("")
+    try:
+        lg.info("plaintext message")
+        assert cap.records[0] == "plaintext message [trace_id=plain-trace-2]"
+    finally:
+        trace_id_var.set("")
+
+
+def test_plain_formatter_unchanged_when_flag_disabled(monkeypatch):
+    """When request_correlation_in_logs is False, plain log lines are unmodified even if the contextvars are set."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", False)
+    lg, cap = _make_plain_capture_logger("test.plain_flag_off")
+    set_trace_id("should-not-appear")
+    set_session_id("should-not-appear")
+    try:
+        lg.info("plaintext message")
+        assert cap.records[0] == "plaintext message"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_set_trace_id_strips_control_characters():
+    """set_trace_id() must strip \\r/\\n/escape sequences so a caller-controlled
+    trace id can't forge fake log entries when interpolated into plain-text logs."""
+    token = set_trace_id('evil\r\n{"level": "CRITICAL", "message": "forged"}')
+    try:
+        value = trace_id_var.get()
+        assert "\r" not in value
+        assert "\n" not in value
+    finally:
+        trace_id_var.reset(token)
+
+
+def test_set_session_id_bounds_length():
+    """set_session_id() must bound length so an oversized caller-supplied value
+    isn't repeated across every log line for the request."""
+    token = set_session_id("a" * 1000)
+    try:
+        assert len(session_id_var.get()) == 256
+    finally:
+        session_id_var.reset(token)
+
