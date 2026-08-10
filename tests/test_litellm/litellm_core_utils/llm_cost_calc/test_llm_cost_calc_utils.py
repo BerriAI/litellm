@@ -2446,6 +2446,60 @@ def test_token_type_cost_breakdown_applies_regional_uplift():
     assert text_input_cost + eu.cache_read_cost == pytest.approx(prompt_cost)
 
 
+@pytest.mark.parametrize("details_as_dict", [True, False])
+def test_image_response_input_image_tokens_priced_at_image_rate(details_as_dict):
+    """
+    Image input tokens must be priced at input_cost_per_image_token even when
+    input_tokens_details is a plain dict, as in OpenAI image edit responses.
+
+    Regression test: dict-shaped input_tokens_details was read with getattr(),
+    which returns None for dicts, so image input tokens silently fell back to
+    the text input rate (e.g. $5/M instead of $8/M for gpt-image-2).
+    """
+    from unittest.mock import patch
+
+    from litellm.litellm_core_utils.llm_cost_calc.utils import (
+        calculate_image_response_cost_from_usage,
+    )
+    from litellm.types.utils import Usage
+
+    mock_model_info = {
+        "input_cost_per_token": 5e-6,
+        "input_cost_per_image_token": 8e-6,
+        "output_cost_per_image_token": 3e-5,
+    }
+
+    input_details = {"text_tokens": 19, "image_tokens": 512}
+    image_response = ImageResponse(data=[ImageObject(b64_json="x")])
+    # Mirror the usage shape of a real OpenAI images.edit response:
+    # a Usage object carrying input_tokens/output_tokens with detail dicts.
+    image_response.usage = Usage(
+        prompt_tokens=0,
+        completion_tokens=0,
+        total_tokens=689,
+        input_tokens=531,
+        input_tokens_details=(
+            input_details
+            if details_as_dict
+            else ImageUsageInputTokensDetails(**input_details)
+        ),
+        output_tokens=158,
+        output_tokens_details={"image_tokens": 158, "text_tokens": 0},
+    )
+
+    with patch(
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
+        return_value=mock_model_info,
+    ):
+        cost = calculate_image_response_cost_from_usage(
+            model="gpt-image-2",
+            image_response=image_response,
+            custom_llm_provider="openai",
+        )
+
+    expected = 19 * 5e-6 + 512 * 8e-6 + 158 * 3e-5
+    assert cost is not None
+    assert round(cost, 12) == round(expected, 12)
 GEMINI_DAY0_LAUNCH_PRICING = [
     ("gemini-3.6-flash", 1.5e-06, 7.5e-06, 1.5e-07),
     ("gemini/gemini-3.6-flash", 1.5e-06, 7.5e-06, 1.5e-07),
