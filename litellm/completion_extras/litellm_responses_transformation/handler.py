@@ -187,9 +187,11 @@ class ResponsesToCompletionBridgeHandler:
         # than adding an explicit kwarg) avoids the duplicate-keyword
         # TypeError that would otherwise fire on the real bridge path.
         request_data["custom_llm_provider"] = custom_llm_provider
+        _saved_stream = getattr(logging_obj, "stream", None)
         result = responses(
             **request_data,
         )
+        logging_obj.stream = _saved_stream
 
         from litellm.types.utils import ModelResponse
 
@@ -276,10 +278,12 @@ class ResponsesToCompletionBridgeHandler:
         # keyword TypeError when `sanitized_litellm_params` already
         # carries `custom_llm_provider`.
         request_data["custom_llm_provider"] = custom_llm_provider
+        _saved_stream = getattr(logging_obj, "stream", None)
         result = await aresponses(
             **request_data,
             aresponses=True,
         )
+        logging_obj.stream = _saved_stream
 
         from litellm.types.utils import ModelResponse
 

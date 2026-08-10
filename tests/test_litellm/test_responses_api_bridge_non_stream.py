@@ -410,6 +410,98 @@ def test_all_providers_transformation_scenarios():
     print("\n✓ All provider scenarios work correctly")
 
 
+@pytest.mark.asyncio
+async def test_acompletion_restores_stream_flag_after_forced_provider_stream():
+    """
+    Regression test for: bridge drops SpendLogs row when provider forces stream=True.
+
+    When a non-streaming /v1/chat/completions request goes through the bridge and
+    the provider forces stream=True on the inner aresponses() call, the inner
+    @client wrapper mutates logging_obj.stream = True on the shared logging object.
+    The bridge must restore logging_obj.stream to its original value so the outer
+    success handler builds standard_logging_object and writes the SpendLogs row.
+    """
+    import datetime
+    from unittest.mock import patch
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import ModelResponse, Usage
+
+    handler = ResponsesToCompletionBridgeHandler()
+
+    model_response = ModelResponse(
+        id="chatcmpl-test",
+        created=1234567890,
+        model="chatgpt/gpt-5.6-terra",
+        object="chat.completion",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="hello", role="assistant"),
+            )
+        ],
+        usage=Usage(prompt_tokens=5, completion_tokens=3, total_tokens=8),
+    )
+
+    responses_api_response = ResponsesAPIResponse.model_construct(
+        id="resp-x",
+        created_at=0,
+        output=[],
+        object="response",
+        model="chatgpt/gpt-5.6-terra",
+        usage=None,
+    )
+
+    logging_obj = LiteLLMLoggingObj(
+        model="chatgpt/gpt-5.6-terra",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime.now(tz=datetime.timezone.utc),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+
+    def _fake_transform_request(**kwargs):
+        return {
+            "model": "chatgpt/gpt-5.6-terra",
+            "input": [],
+            "litellm_logging_obj": logging_obj,
+        }
+
+    def _fake_transform_response(**kwargs):
+        return model_response
+
+    handler.transformation_handler.transform_request = Mock(side_effect=_fake_transform_request)
+    handler.transformation_handler.transform_response = Mock(side_effect=_fake_transform_response)
+
+    async def _fake_aresponses(**kwargs):
+        logging_obj.stream = True
+        return responses_api_response
+
+    with patch(
+        "litellm.aresponses",
+        side_effect=_fake_aresponses,
+    ):
+        result = await handler.acompletion(
+            model="chatgpt/gpt-5.6-terra",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            headers={},
+            model_response=model_response,
+            logging_obj=logging_obj,
+            custom_llm_provider="chatgpt",
+        )
+
+    assert logging_obj.stream is False, (
+        "bridge must restore logging_obj.stream to its pre-call value; "
+        "if it stays True the outer success handler skips building standard_logging_object"
+    )
+    assert isinstance(result, ModelResponse)
+
+
 if __name__ == "__main__":
     # Run all tests
     test_transform_usage_no_token_details()
