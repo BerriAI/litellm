@@ -77,6 +77,15 @@ class AmazonAnthropicClaudeMessagesConfig(
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
         AmazonInvokeConfig.__init__(self, **kwargs)
 
+    def handles_web_search_natively(self) -> bool:
+        """
+        Bedrock does not host Anthropic's ``web_search_20250305`` server tool on
+        any of its APIs, so forwarding it reaches AWS and is rejected. Reporting
+        False keeps the web-search interception short-circuit in play, which is
+        the only way this tool can be served on Bedrock.
+        """
+        return False
+
     def validate_anthropic_messages_environment(
         self,
         headers: dict,

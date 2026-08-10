@@ -122,27 +122,41 @@ class TestTryShortCircuitSearch:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_does_not_short_circuit_bedrock(self):
-        """Bedrock has native agentic loop support → NOT short-circuited.
+    async def test_short_circuits_bedrock(self):
+        """Bedrock → short-circuit fires.
 
-        Providers with a BaseAnthropicMessagesConfig (bedrock, vertex_ai, etc.)
-        use the agentic loop which includes a follow-up LLM synthesis step.
-        The short-circuit must not fire for them.
+        Bedrock does not host Anthropic's web_search_20250305 server tool on any
+        of its APIs, so forwarding the request reaches AWS and is rejected with a
+        400. Short-circuiting is the only way the tool can be served there, so a
+        regression that makes the bedrock config claim native handling again puts
+        the deterministic 400 straight back.
         """
         logger = WebSearchInterceptionLogger(
             enabled_providers=["bedrock", "github_copilot"]
         )
 
-        result = await logger.try_short_circuit_search(
-            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-            messages=[{"role": "user", "content": "Search for something"}],
-            tools=[
-                {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
-            ],
-            custom_llm_provider="bedrock",
-        )
+        with patch.object(
+            logger, "_execute_search", new_callable=AsyncMock
+        ) as mock_search:
+            mock_search.return_value = (
+                "Title: Result\nURL: https://example.com\nSnippet: test",
+                None,
+            )
 
-        assert result is None
+            result = await logger.try_short_circuit_search(
+                model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                messages=[{"role": "user", "content": "Search for something"}],
+                tools=[
+                    {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
+                ],
+                custom_llm_provider="bedrock",
+            )
+
+        assert result is not None
+        block_types = [b["type"] for b in result["content"]]
+        assert "server_tool_use" in block_types
+        assert "web_search_tool_result" in block_types
+        mock_search.assert_called_once_with("Search for something")
 
     @pytest.mark.asyncio
     async def test_does_not_short_circuit_no_messages(self):

@@ -2580,3 +2580,22 @@ def test_replayed_intercepted_search_turn_leaves_no_unsupported_block_for_bedroc
     assert "server_tool_use" not in serialized
     assert expected_evidence in serialized
     assert "Rome was founded in 753 BC." in serialized
+
+
+def test_bedrock_messages_config_does_not_handle_web_search_natively():
+    """Bedrock hosts none of Anthropic's ``web_search_*`` server tools, so the
+    config must report ``handles_web_search_natively() is False``. That is what
+    keeps the web-search interception short-circuit in play; when it reported
+    True the tool was forwarded verbatim and AWS rejected the request. The
+    mantle subclass inherits the same answer, and the direct Anthropic config
+    must keep reporting True so the fix stays scoped to Bedrock."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+        AnthropicMessagesConfig,
+    )
+    from litellm.llms.bedrock.messages.mantle_transformation import (
+        AmazonMantleMessagesConfig,
+    )
+
+    assert AmazonAnthropicClaudeMessagesConfig().handles_web_search_natively() is False
+    assert AmazonMantleMessagesConfig().handles_web_search_natively() is False
+    assert AnthropicMessagesConfig().handles_web_search_natively() is True
