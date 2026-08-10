@@ -49,10 +49,7 @@ const renderUsage = (overrides: Partial<React.ComponentProps<typeof UsagePage>> 
     />,
   );
 
-// Mount fires two effects whose requests sit behind a promise chain
-// (proxy settings, then the spend query). "proves the flush window is wide
-// enough" below keeps this honest: it asserts the same flush surfaces those
-// requests for an admin, so a denied role's silence means the gate held.
+// Width of this window is guarded by "proves the flush window is wide enough".
 const flushPendingRequests = async () => {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -196,9 +193,7 @@ describe("old usage page", () => {
     });
   });
 
-  // Every role below is served 401 on /global/spend/* by the proxy. Org admins
-  // and team admins reach the UI as "Internal User" — `org_admin` is an
-  // organization membership role, never a top-level user_role.
+  // org_admin is an organization membership role; those users reach the UI as "Internal User".
   describe.each(["Internal User", "Internal Viewer", "internal_user", "internal_user_viewer", "Org Admin"])(
     "as %s",
     (userRole) => {
