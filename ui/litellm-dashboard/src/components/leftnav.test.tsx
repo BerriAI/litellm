@@ -3,8 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
 
-vi.mock("../utils/roles", () => {
+vi.mock("../utils/roles", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../utils/roles")>();
   return {
+    ...actual,
     all_admin_roles: ["admin", "admin_viewer"],
     internalUserRoles: ["internal"],
     rolesWithWriteAccess: ["admin", "internal"],
@@ -64,8 +66,12 @@ vi.mock("@/contexts/ThemeContext", () => ({
 }));
 
 // Version tag + logout target come from network hooks; keep them inert in unit tests.
+const useHealthReadinessDetailsSpy = vi.hoisted(() => vi.fn());
 vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails", () => ({
-  useHealthReadinessDetails: () => ({ data: undefined }),
+  useHealthReadinessDetails: (accessToken: string | null, userRole: string | null) => {
+    useHealthReadinessDetailsSpy(accessToken, userRole);
+    return { data: undefined };
+  },
 }));
 vi.mock("@/app/(dashboard)/hooks/useLogout", () => ({
   useLogout: () => vi.fn(),
@@ -243,6 +249,15 @@ describe("Sidebar (leftnav)", () => {
       await waitFor(() => {
         expect(screen.getByText("Tool Policies")).toBeInTheDocument();
       });
+    });
+
+    it("should forward the user role to the readiness hook so it can gate the admin-only call", () => {
+      mockUseAuthorized.mockReturnValue(internalAuth);
+      useHealthReadinessDetailsSpy.mockClear();
+
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      expect(useHealthReadinessDetailsSpy).toHaveBeenCalledWith("test-access-token", "internal");
     });
   });
 

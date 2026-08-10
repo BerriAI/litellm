@@ -21,8 +21,12 @@ const pluginApiClient = createApiClient({ getBaseUrl: () => getProxyBaseUrl() ??
 // Wrapper so PluginModeProvider receives the live accessToken from auth context,
 // which means plugin data refreshes on login/logout without stale cookie reads.
 function PluginModeProviderWithAuth({ children }: { children: React.ReactNode }) {
-  const { accessToken } = useAuth();
-  return <PluginModeProvider accessToken={accessToken}>{children}</PluginModeProvider>;
+  const { accessToken, userRole } = useAuth();
+  return (
+    <PluginModeProvider accessToken={accessToken} userRole={userRole}>
+      {children}
+    </PluginModeProvider>
+  );
 }
 
 export function AgentControlPlaneView() {
@@ -99,7 +103,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
-  const { accessToken } = useAuth();
+  const { accessToken, userRole } = useAuth();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { mode } = usePluginMode();
 
@@ -118,9 +122,9 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   if (!isGateway) {
     return (
       <div className="flex h-screen flex-col overflow-hidden bg-background">
-        <Navbar accessToken={accessToken} isPublicPage={false} />
-        <DebugWarningBanner accessToken={accessToken} />
-        <LicenseExpiryBanner accessToken={accessToken} />
+        <Navbar accessToken={accessToken} userRole={userRole} isPublicPage={false} />
+        <DebugWarningBanner accessToken={accessToken} userRole={userRole} />
+        <LicenseExpiryBanner accessToken={accessToken} userRole={userRole} />
         <UserBanner accessToken={accessToken} />
         <main className="flex min-h-0 flex-1 overflow-hidden">
           <AgentControlPlaneView />
@@ -142,8 +146,8 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
       />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <DashboardHeader page={page} />
-        <DebugWarningBanner accessToken={accessToken} />
-        <LicenseExpiryBanner accessToken={accessToken} />
+        <DebugWarningBanner accessToken={accessToken} userRole={userRole} />
+        <LicenseExpiryBanner accessToken={accessToken} userRole={userRole} />
         <UserBanner accessToken={accessToken} />
         <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
       </div>

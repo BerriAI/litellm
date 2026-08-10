@@ -22,6 +22,7 @@ import WorkerDropdown from "./Navbar/WorkerDropdown/WorkerDropdown";
 
 interface NavbarProps {
   accessToken: string | null;
+  userRole: string | null;
   isPublicPage: boolean;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
@@ -29,6 +30,7 @@ interface NavbarProps {
 
 const Navbar: React.FC<NavbarProps> = ({
   accessToken,
+  userRole,
   isPublicPage = false,
   sidebarCollapsed = false,
   onToggleSidebar,
@@ -36,7 +38,7 @@ const Navbar: React.FC<NavbarProps> = ({
   const baseUrl = getProxyBaseUrl();
   const proxySettings = useProxySettings(accessToken);
   const { logoUrl } = useTheme();
-  const { data: healthData } = useHealthReadinessDetails(accessToken);
+  const { data: healthData } = useHealthReadinessDetails(accessToken, userRole);
   const version = healthData?.litellm_version;
   const disableBouncingIcon = useDisableBouncingIcon();
   const hideCommunityLinks = useDisableShowPrompts();

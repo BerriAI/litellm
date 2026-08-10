@@ -9,6 +9,7 @@ import { getRemainingUsers } from "./networking";
 
 interface SidebarUsageCardProps {
   accessToken: string | null;
+  userRole: string | null;
   collapsed: boolean;
   onExpandRail: () => void;
 }
@@ -67,8 +68,8 @@ const buildMeters = (data: RemainingUsage | null): MeterData[] => {
  * plus the license expiry. There is no plan-level spend or request cap, so the
  * design's Spend / API-request meters are intentionally omitted.
  */
-export default function SidebarUsageCard({ accessToken, collapsed, onExpandRail }: SidebarUsageCardProps) {
-  const licenseInfo = useLicenseInfo(accessToken).data ?? null;
+export default function SidebarUsageCard({ accessToken, userRole, collapsed, onExpandRail }: SidebarUsageCardProps) {
+  const licenseInfo = useLicenseInfo(accessToken, userRole).data ?? null;
   const { data: usageData, isLoading } = useQuery(remainingUsersQuery(accessToken));
   const data = usageData ?? null;
 
