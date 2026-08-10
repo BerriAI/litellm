@@ -1,19 +1,19 @@
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 from pydantic import BaseModel, Field
 
 from .base import GuardrailConfigModel
 
-SingulrCallType = Literal["model", "agent"]
+SingulrCallType: TypeAlias = Literal["model", "agent"]
 
 
 class SingulrGuardrailRequest(BaseModel):
     model: str | None = None
     messages: list[dict[str, Any]] | None = None
     tools: list[dict[str, Any]] | None = None
-    model_response: dict[str, Any] | str | None = None
+    model_response: dict[str, Any] | str | None = None  # mutable-ok: pydantic dict field
     litellm_metadata: dict[str, Any] | None = None
-    call_type: SingulrCallType = "model"
+    call_type: SingulrCallType = "model"  # mutable-ok: type alias definition
 
 
 class SingulrGuardrailPayload(BaseModel):

@@ -50,7 +50,7 @@ class SingulrGuardrail(CustomGuardrail):
         self.singulr_api_base = (singulr_api_base or os.environ.get("SINGULR_API_BASE") or _DEFAULT_API_BASE).rstrip(
             "/"
         )
-        parsed = urlparse(self.singulr_api_base)
+        parsed: Final = urlparse(self.singulr_api_base)
         if parsed.scheme == "http" and parsed.hostname not in (
             "localhost",
             "127.0.0.1",
@@ -102,11 +102,13 @@ class SingulrGuardrail(CustomGuardrail):
         return request_data.get("custom_llm_provider") == "a2a_agent"
 
     @classmethod
-    def _agent_request_messages(cls, request_data: Mapping[str, Any]) -> list[dict[str, Any]] | None:
+    def _agent_request_messages(
+        cls, request_data: Mapping[str, Any]
+    ) -> list[dict[str, Any]] | None:  # mutable-ok: pydantic list field
         if "params" not in request_data:
             return []  # mutable-ok: SingulrGuardrailRequest.messages is a pydantic list field
 
-        message = request_data["params"].get("message")
+        message: Final = request_data["params"].get("message")
         return [message] if message else None  # mutable-ok: pydantic list field, see above
 
     @staticmethod
@@ -115,14 +117,14 @@ class SingulrGuardrail(CustomGuardrail):
 
     @staticmethod
     def _model_response_for_chat(
-        response: ModelResponse | dict[str, Any] | None,
+        response: ModelResponse | dict[str, Any] | None,  # mutable-ok: pydantic dict field
     ) -> dict[str, Any] | None:  # mutable-ok: SingulrGuardrailRequest.model_response is a pydantic dict field
         if response is None:
             return None
         return response.model_dump(mode="json") if isinstance(response, ModelResponse) else response
 
     def _build_playground_payload(self, inputs: GenericGuardrailAPIInputs, input_type: str) -> SingulrGuardrailPayload:
-        texts = inputs.get("texts", ())
+        texts: Final = inputs.get("texts", ())
         return SingulrGuardrailPayload(
             input_type=input_type,
             is_playground_request=True,
@@ -135,23 +137,25 @@ class SingulrGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         input_type: str,
     ) -> SingulrGuardrailPayload:
-        is_a2a_call = self._is_a2a_call(request_data)
+        is_a2a_call: Final = self._is_a2a_call(request_data)
 
         model_response: dict[str, Any] | str | None = (
             None  # mutable-ok: pydantic dict field, see _model_response_for_chat
         )
         if input_type == "response":
             if is_a2a_call:
-                model_response = self._model_response_for_a2a(inputs)
+                model_response = self._model_response_for_a2a(inputs)  # rebind-ok: single write per branch
             else:
-                model_response = self._model_response_for_chat(request_data.get("response"))
+                model_response = self._model_response_for_chat(  # rebind-ok: single write per branch
+                    request_data.get("response")
+                )
 
         if is_a2a_call:
-            messages = self._agent_request_messages(request_data)
+            messages = self._agent_request_messages(request_data)  # rebind-ok: single write per branch
         else:
-            messages = request_data.get("messages")
+            messages = request_data.get("messages")  # rebind-ok: single write per branch
 
-        singulr_req_object = SingulrGuardrailRequest(
+        singulr_req_object: Final = SingulrGuardrailRequest(  # mutable-ok: pydantic model instantiation
             model=request_data.get("model"),
             messages=messages,
             tools=request_data.get("tools"),
@@ -167,16 +171,16 @@ class SingulrGuardrail(CustomGuardrail):
 
     def _build_payload(
         self,
-        request_data: dict[str, Any],
+        request_data: dict[str, Any],  # mutable-ok: mirrors apply_guardrail's request_data param
         inputs: GenericGuardrailAPIInputs,
         input_type: str,
-    ) -> dict[str, Any]:
-        payload = (
+    ) -> dict[str, Any]:  # mutable-ok: JSON payload for httpx
+        payload: Final = (
             self._build_playground_payload(inputs, input_type)
             if not request_data
             else self._build_request_payload(request_data, inputs, input_type)
         )
-        return payload.model_dump(mode="json")
+        return payload.model_dump(mode="json")  # mutable-ok: model serialization
 
     def _build_headers(self) -> dict[str, str]:
         return dict(
