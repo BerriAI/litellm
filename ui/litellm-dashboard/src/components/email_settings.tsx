@@ -1,7 +1,12 @@
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
 import { Eye, EyeOff } from "lucide-react";
 import NotificationManager from "./molecules/notifications_manager";
 import { serviceHealthCheck, setCallbacksCall } from "./networking";
@@ -124,29 +129,23 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
                       ) : (
                         <p className="text-sm">{key}</p>
                       )}
-                      <div className="relative">
-                        <Input
+                      <InputGroup className="max-w-100">
+                        <InputGroupInput
                           name={key}
                           defaultValue={value as string}
                           type={isVisible ? "text" : "password"}
                           disabled={isLocked}
-                          className="max-w-100 pr-10"
                         />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => toggleFieldVisibility(key)}
-                          className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
-                          aria-label={isVisible ? "Hide credential" : "Show credential"}
-                        >
-                          {isVisible ? (
-                            <EyeOff className="h-4 w-4 text-muted-foreground" />
-                          ) : (
-                            <Eye className="h-4 w-4 text-muted-foreground" />
-                          )}
-                        </Button>
-                      </div>
+                        <InputGroupAddon align="inline-end">
+                          <InputGroupButton
+                            size="icon-xs"
+                            onClick={() => toggleFieldVisibility(key)}
+                            aria-label={isVisible ? "Hide credential" : "Show credential"}
+                          >
+                            {isVisible ? <EyeOff /> : <Eye />}
+                          </InputGroupButton>
+                        </InputGroupAddon>
+                      </InputGroup>
                       <div className="text-xs text-muted-foreground italic">{FIELD_HELP[key]}</div>
                     </div>
                   );
