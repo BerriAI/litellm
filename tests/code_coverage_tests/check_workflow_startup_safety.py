@@ -16,12 +16,15 @@ because CI cannot enforce them on itself.
    the test budget plus the setup ceilings plus the runner overhead below.
    Otherwise the job deadline preempts pytest inside its own advertised budget,
    which is the failure the split timeouts exist to prevent, and it shows up as
-   a cancelled shard whose tests were passing.
+   a cancelled shard whose tests were passing. A budget this check cannot resolve
+   is reported rather than skipped, so a mistyped input or matrix column surfaces
+   here instead of leaving the pair silently unchecked.
 """
 
 import re
 import sys
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -92,8 +95,19 @@ def base_default(base_text: str, name: str) -> int:
     return base[True]["workflow_call"]["inputs"][name]["default"]
 
 
-def budget_source(job: ReusableCall, key: str, fallback: int) -> int | str | None:
-    """A caller passes a literal, or `${{ matrix.x }}` naming a column of its matrix."""
+@dataclass(frozen=True, slots=True)
+class Column:
+    """A budget the caller reads from one column of its own matrix."""
+
+    name: str
+
+
+def budget_source(job: ReusableCall, key: str, fallback: int) -> int | Column | str:
+    """A caller passes a literal, or `${{ matrix.x }}` naming a column of its matrix.
+
+    Anything else comes back as the reason it could not be read, since a budget
+    nothing can resolve has to be reported rather than passed over.
+    """
     value: Final = job.with_.get(key)
     if value is None:
         return fallback
@@ -101,7 +115,9 @@ def budget_source(job: ReusableCall, key: str, fallback: int) -> int | str | Non
         return value
 
     matrix_ref: Final = MATRIX_REF.match(str(value))
-    return matrix_ref.group("key") if matrix_ref else None
+    if not matrix_ref:
+        return f"passes `{key}: {value}`, which is neither a number nor a `matrix` reference."
+    return Column(matrix_ref.group("key"))
 
 
 def matrix_rows(job: ReusableCall) -> Sequence[Mapping[str, object]]:
@@ -110,7 +126,7 @@ def matrix_rows(job: ReusableCall) -> Sequence[Mapping[str, object]]:
     return tuple(e for e in entries if isinstance(e, dict))
 
 
-def budget_pairs(job: ReusableCall, test_source: int | str, job_source: int | str) -> Iterator[tuple[int, int]]:
+def budget_pairs(job: ReusableCall, test_source: int | Column, job_source: int | Column) -> Iterator[tuple[int, int]]:
     """Pair each shard's test budget with the job budget of that same shard.
 
     Matrix-sourced budgets resolve per `include` row, so two matrix columns are
@@ -121,31 +137,66 @@ def budget_pairs(job: ReusableCall, test_source: int | str, job_source: int | st
         return
 
     for row in matrix_rows(job):
-        test_budget = row.get(test_source) if isinstance(test_source, str) else test_source
-        job_budget = row.get(job_source) if isinstance(job_source, str) else job_source
+        test_budget = row.get(test_source.name) if isinstance(test_source, Column) else test_source
+        job_budget = row.get(job_source.name) if isinstance(job_source, Column) else job_source
         if isinstance(test_budget, int) and isinstance(job_budget, int):
             yield test_budget, job_budget
 
 
+def unresolved_message(where: str, job: ReusableCall, sources: Sequence[int | Column]) -> str:
+    """Why no shard yielded a pair of budgets to compare.
+
+    Naming only the columns that resolve nowhere keeps the message honest: a
+    column every row supplies is not what left the pair unchecked.
+    """
+    rows: Final = matrix_rows(job)
+    missing: Final = tuple(
+        f"`matrix.{s.name}`"
+        for s in sources
+        if isinstance(s, Column) and not any(isinstance(row.get(s.name), int) for row in rows)
+    )
+    if missing:
+        return (
+            f"{where} reads a budget from {', '.join(missing)}, which no `include` row supplies "
+            "as a number, so the pair would go unchecked."
+        )
+    return (
+        f"{where} reads both budgets from its matrix, but no single `include` row supplies both "
+        "as numbers, so the pair would go unchecked."
+    )
+
+
+def job_errors(rel: Path, job_name: str, job: ReusableCall, ceiling: int, base_text: str) -> Iterator[str]:
+    where: Final = f"{rel}: job `{job_name}`"
+    test_source: Final = budget_source(job, "timeout-minutes", base_default(base_text, "timeout-minutes"))
+    job_source: Final = budget_source(job, "job-timeout-minutes", base_default(base_text, "job-timeout-minutes"))
+    sources: Final = (test_source, job_source)
+
+    unreadable: Final = tuple(f"{where} {reason}" for reason in sources if isinstance(reason, str))
+    if unreadable:
+        yield from unreadable
+        return
+
+    pairs: Final = tuple(budget_pairs(job, test_source, job_source))
+    if not pairs:
+        yield unresolved_message(where, job, sources)
+        return
+
+    for test_budget, job_budget in pairs:
+        required = test_budget + ceiling + JOB_OVERHEAD_MINUTES
+        if job_budget < required:
+            yield (
+                f"{where} gives pytest {test_budget}m but caps the job at "
+                f"{job_budget}m. Setup can use up to {ceiling}m plus {JOB_OVERHEAD_MINUTES}m of "
+                f"runner overhead, so the job deadline would preempt pytest; raise "
+                f"job-timeout-minutes to at least {required}."
+            )
+
+
 def timeout_contract_errors(rel: Path, workflow: WorkflowFile, ceiling: int, base_text: str) -> Iterator[str]:
     for job_name, job in workflow.jobs.items():
-        if job.uses != BASE_WORKFLOW:
-            continue
-
-        test_source: Final = budget_source(job, "timeout-minutes", base_default(base_text, "timeout-minutes"))
-        job_source: Final = budget_source(job, "job-timeout-minutes", base_default(base_text, "job-timeout-minutes"))
-        if test_source is None or job_source is None:
-            continue
-
-        for test_budget, job_budget in budget_pairs(job, test_source, job_source):
-            required = test_budget + ceiling + JOB_OVERHEAD_MINUTES
-            if job_budget < required:
-                yield (
-                    f"{rel}: job `{job_name}` gives pytest {test_budget}m but caps the job at "
-                    f"{job_budget}m. Setup can use up to {ceiling}m plus {JOB_OVERHEAD_MINUTES}m of "
-                    f"runner overhead, so the job deadline would preempt pytest; raise "
-                    f"job-timeout-minutes to at least {required}."
-                )
+        if job.uses == BASE_WORKFLOW:
+            yield from job_errors(rel, job_name, job, ceiling, base_text)
 
 
 def workflow_errors(rel: Path, text: str, ceiling: int, base_text: str) -> Iterator[str]:
