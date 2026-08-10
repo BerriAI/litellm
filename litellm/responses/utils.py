@@ -231,32 +231,31 @@ class ResponsesAPIRequestUtils:
             )
             non_default_params["previous_response_id"] = decoded_previous_response_id
 
-        litellm_metadata = params.get("litellm_metadata")
-        if not isinstance(litellm_metadata, dict):
-            litellm_metadata = {}
+        litellm_metadata_raw = params.get("litellm_metadata")
+        litellm_metadata: Final = litellm_metadata_raw if isinstance(litellm_metadata_raw, dict) else {}
 
-        requester_metadata = litellm_metadata.get("requester_metadata")
+        proxy_requester_metadata = litellm_metadata.get("requester_metadata")
         metadata_in_params = non_default_params.get("metadata")
-        is_proxy_internal_metadata = any(key.startswith("user_api_key_") for key in litellm_metadata)
+        is_proxy_internal_metadata: Final = any(key.startswith("user_api_key_") for key in litellm_metadata)
 
         metadata_source: dict | None = None
-        if isinstance(requester_metadata, dict):
-            metadata_source = requester_metadata
+        if isinstance(proxy_requester_metadata, dict):
+            metadata_source = proxy_requester_metadata
         elif not is_proxy_internal_metadata and isinstance(metadata_in_params, dict):
             metadata_source = metadata_in_params
 
-        if metadata_source is not None:
-            from litellm.utils import get_requester_metadata
+        from litellm.utils import add_openai_metadata
 
-            converted_metadata: Final = get_requester_metadata(metadata_source)
-            if converted_metadata:
-                non_default_params["metadata"] = converted_metadata
-            else:
-                non_default_params.pop("metadata", None)
-        else:
-            non_default_params.pop("metadata", None)
+        converted_metadata: Final = (
+            add_openai_metadata(metadata_source) if metadata_source is not None else None
+        )
+        non_default_params_with_metadata: Final = (
+            {**non_default_params, "metadata": converted_metadata}
+            if converted_metadata
+            else {key: value for key, value in non_default_params.items() if key != "metadata"}
+        )
 
-        return cast(ResponsesAPIOptionalRequestParams, non_default_params)
+        return cast(ResponsesAPIOptionalRequestParams, non_default_params_with_metadata)
 
     # fmt: off
     @overload

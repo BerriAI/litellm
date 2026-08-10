@@ -185,6 +185,34 @@ class TestResponsesAPIRequestUtils:
         )
         assert result["metadata"] == {"customer_id": "cust-456"}
 
+    def test_get_requested_response_api_optional_param_preserves_sibling_metadata_keys(self):
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
+            {
+                "temperature": 0.7,
+                "metadata": {
+                    "customer_id": "cust-123",
+                    "requester_metadata": {"nested": "value"},
+                },
+            }
+        )
+        assert result["metadata"] == {"customer_id": "cust-123"}
+
+    def test_get_requested_response_api_optional_param_proxy_snapshot_no_double_unwrap(self):
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
+            {
+                "temperature": 0.7,
+                "metadata": {"model_group": "test-model"},
+                "litellm_metadata": {
+                    "requester_metadata": {
+                        "customer_id": "cust-789",
+                        "requester_metadata": {"nested": "value"},
+                    },
+                    "user_api_key_team_id": "team-1",
+                },
+            }
+        )
+        assert result["metadata"] == {"customer_id": "cust-789"}
+
     def test_decode_previous_response_id_to_original_previous_response_id(self):
         """Test decoding a LiteLLM encoded previous_response_id to the original previous_response_id"""
         # Setup
