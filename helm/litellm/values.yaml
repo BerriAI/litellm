@@ -223,12 +223,28 @@ gateway:
     initialDelaySeconds: 5
     periodSeconds: 10
     timeoutSeconds: 10
+  # Optional startupProbe. Empty by default, so existing installs are unchanged
+  # and liveness/readiness apply from container start. Set it to gate
+  # liveness/readiness until a slow cold start finishes — a high failureThreshold
+  # tolerates long first-boot times without a liveness-kill loop, e.g.:
+  #   httpGet: { path: /health/readiness, port: http }
+  #   failureThreshold: 30
+  #   periodSeconds: 10
+  startupProbe: {}
   hpa:
     enabled: true
     minReplicas: 1
     maxReplicas: 10
     targetCPUUtilizationPercentage: 70
     targetMemoryUtilizationPercentage: 80
+    # Optional autoscaling/v2 scaling behavior (scaleUp / scaleDown policies and
+    # stabilization windows). Empty by default -> Kubernetes' default behavior.
+    # Rendered verbatim under spec.behavior, e.g.:
+    #   scaleUp:
+    #     stabilizationWindowSeconds: 0
+    #     policies:
+    #       - { type: Percent, value: 100, periodSeconds: 30 }
+    behavior: {}
   # PodDisruptionBudget for the gateway pods. Set exactly one of
   # `minAvailable` / `maxUnavailable` (minAvailable wins if both are set;
   # enabling without either falls back to `maxUnavailable: 1`). Disabled by
@@ -319,11 +335,15 @@ backend:
     initialDelaySeconds: 5
     periodSeconds: 10
     timeoutSeconds: 10
+  # Optional startupProbe; same shape as gateway.startupProbe. Empty by default.
+  startupProbe: {}
   hpa:
     enabled: true
     minReplicas: 1
     maxReplicas: 4
     targetCPUUtilizationPercentage: 70
+    # Optional autoscaling/v2 scaling behavior; same shape as gateway.hpa.behavior.
+    behavior: {}
   # Same shape as gateway.pdb.
   pdb:
     enabled: false
@@ -379,11 +399,15 @@ ui:
     httpGet: { path: /, port: http }
     initialDelaySeconds: 2
     periodSeconds: 10
+  # Optional startupProbe; same shape as gateway.startupProbe. Empty by default.
+  startupProbe: {}
   hpa:
     enabled: false
     minReplicas: 1
     maxReplicas: 3
     targetCPUUtilizationPercentage: 80
+    # Optional autoscaling/v2 scaling behavior; same shape as gateway.hpa.behavior.
+    behavior: {}
   # Same shape as gateway.pdb.
   pdb:
     enabled: false

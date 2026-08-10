@@ -83,6 +83,10 @@ spec:
           readinessProbe:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- with .Values.gateway.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           {{- with .Values.gateway.lifecycle }}
           lifecycle:
             {{- toYaml . | nindent 12 }}
