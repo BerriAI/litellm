@@ -418,27 +418,19 @@ def test_bedrock_rerank_forwarded_headers_excluded_from_sigv4_signature():
     balancer), which invalidates the signature if that header was part of
     the signed set. It must still reach Bedrock, just unsigned.
     """
-    from botocore.credentials import Credentials
-
     handler = BedrockRerankHandler()
-    mock_credentials_info = Boto3CredentialsInfo(
-        credentials=Credentials("test-access-key", "test-secret-key", "test-token"),
-        aws_region_name="us-east-1",
-        aws_bedrock_runtime_endpoint=None,
-    )
 
-    with patch.object(
-        BedrockRerankHandler,
-        "_get_boto_credentials_from_optional_params",
-        return_value=mock_credentials_info,
-    ):
-        prepared_request = handler._prepare_request(
-            model="cohere.rerank-v3-5:0",
-            api_base=None,
-            extra_headers={"x-forwarded-for": "203.0.113.5"},
-            data={"query": test_query, "documents": test_documents},
-            optional_params={},
-        )
+    prepared_request = handler._prepare_request(
+        model="cohere.rerank-v3-5:0",
+        api_base=None,
+        extra_headers={"x-forwarded-for": "203.0.113.5"},
+        data={"query": test_query, "documents": test_documents},
+        optional_params={
+            "aws_access_key_id": "test-access-key",
+            "aws_secret_access_key": "test-secret-key",
+            "aws_region_name": "us-east-1",
+        },
+    )
 
     headers = prepared_request["prepped"].headers
     signed_headers = headers["Authorization"].split("SignedHeaders=")[1].split(",")[0].split(";")
