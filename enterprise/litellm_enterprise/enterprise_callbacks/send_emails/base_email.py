@@ -824,12 +824,21 @@ class BaseEmailLogger(CustomLogger):
         """
         Get invitation link for the user
         """
+        verbose_proxy_logger.debug(
+            f"Getting invitation link for user_id: {user_id}, base_url: {base_url}"
+        )
+
         # Early validation
         if not user_id:
-            verbose_proxy_logger.debug("No user_id provided for invitation link")
+            verbose_proxy_logger.warning(
+                "No user_id provided for invitation link. Email will link to base URL instead of onboarding page"
+            )
             return base_url
 
         if not await self._is_prisma_client_available():
+            verbose_proxy_logger.warning(
+                "Prisma client not available. Email will link to base URL instead of onboarding page"
+            )
             return base_url
 
         # Wait for any concurrent invitation creation to complete
@@ -839,11 +848,15 @@ class BaseEmailLogger(CustomLogger):
         invitation = await self._get_or_create_invitation(user_id)
         if not invitation:
             verbose_proxy_logger.warning(
-                f"Failed to get/create invitation for user_id: {user_id}"
+                f"Failed to get/create invitation for user_id: {user_id}. Email will link to base URL instead of onboarding page"
             )
             return base_url
 
-        return self._construct_invitation_link(invitation.id, base_url)
+        invitation_link = self._construct_invitation_link(invitation.id, base_url)
+        verbose_proxy_logger.info(
+            f"Successfully created invitation link for user_id: {user_id}: {invitation_link}"
+        )
+        return invitation_link
 
     async def _is_prisma_client_available(self) -> bool:
         """Check if Prisma client is available"""
@@ -921,7 +934,12 @@ class BaseEmailLogger(CustomLogger):
 
         # http://localhost:4000/ui/onboarding?invitation_id=7a096b3a-37c6-440f-9dd1-ba22e8043f6b
         """
-        return f"{base_url}/ui/onboarding?invitation_id={invitation_id}"
+        base_url = base_url.rstrip("/")
+        invitation_link = f"{base_url}/ui/onboarding?invitation_id={invitation_id}"
+        verbose_proxy_logger.debug(
+            f"Constructed invitation link: {invitation_link} from base_url: {base_url}, invitation_id: {invitation_id}"
+        )
+        return invitation_link
 
     async def send_email(
         self,
