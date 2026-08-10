@@ -1,6 +1,7 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
+import type { TFunction } from "i18next";
 import { Eye, EyeOff, Info, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import React, { useState } from "react";
 
@@ -27,7 +28,7 @@ function HeaderWithTooltip({ title, tooltip }: { title: string; tooltip: string 
   );
 }
 
-function HeadersCell({ value }: { value: object }) {
+function HeadersCell({ value, t }: { value: object; t: TFunction<"gateway"> }) {
   const [showHeaders, setShowHeaders] = useState(false);
   const headerString = JSON.stringify(value);
 
@@ -37,7 +38,9 @@ function HeadersCell({ value }: { value: object }) {
       <button
         type="button"
         onClick={() => setShowHeaders(!showHeaders)}
-        aria-label={showHeaders ? "Hide headers" : "Show headers"}
+        aria-label={t(
+          showHeaders ? "models.passThrough.actions.hideHeaders" : "models.passThrough.actions.showHeaders",
+        )}
         className="rounded-sm p-1 hover:bg-muted"
       >
         {showHeaders ? (
@@ -50,9 +53,9 @@ function HeadersCell({ value }: { value: object }) {
   );
 }
 
-function MethodsCell({ methods }: { methods: string[] | undefined }) {
+function MethodsCell({ methods, t }: { methods: string[] | undefined; t: TFunction<"gateway"> }) {
   if (!methods || methods.length === 0) {
-    return <Badge variant="secondary">ALL</Badge>;
+    return <Badge variant="secondary">{t("models.passThrough.values.all")}</Badge>;
   }
   return (
     <div className="flex flex-wrap gap-1">
@@ -69,14 +72,15 @@ interface EndpointRowActionsProps {
   endpoint: passThroughItem;
   onEndpointClick: (endpointId: string) => void;
   onDeleteClick: (endpointId: string) => void;
+  t: TFunction<"gateway">;
 }
 
-function EndpointRowActions({ endpoint, onEndpointClick, onDeleteClick }: EndpointRowActionsProps) {
+function EndpointRowActions({ endpoint, onEndpointClick, onDeleteClick, t }: EndpointRowActionsProps) {
   const endpointId = endpoint.id;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label="Open endpoint actions"
+        aria-label={t("models.passThrough.actions.open")}
         data-testid={`endpoint-actions-${endpointId || endpoint.path}`}
         className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-muted-foreground")}
       >
@@ -89,7 +93,7 @@ function EndpointRowActions({ endpoint, onEndpointClick, onDeleteClick }: Endpoi
           onClick={() => endpointId && onEndpointClick(endpointId)}
         >
           <Pencil />
-          Edit
+          {t("models.passThrough.actions.edit")}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
@@ -99,7 +103,7 @@ function EndpointRowActions({ endpoint, onEndpointClick, onDeleteClick }: Endpoi
           onClick={() => endpointId && onDeleteClick(endpointId)}
         >
           <Trash2 />
-          Delete
+          {t("models.passThrough.actions.delete")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -109,11 +113,13 @@ function EndpointRowActions({ endpoint, onEndpointClick, onDeleteClick }: Endpoi
 interface PassThroughEndpointsTableColumnsDeps {
   onEndpointClick: (endpointId: string) => void;
   onDeleteClick: (endpointId: string) => void;
+  t: TFunction<"gateway">;
 }
 
 export const getPassThroughEndpointsTableColumns = ({
   onEndpointClick,
   onDeleteClick,
+  t,
 }: PassThroughEndpointsTableColumnsDeps): ColumnDef<passThroughItem>[] => [
   {
     id: "id",
@@ -137,8 +143,8 @@ export const getPassThroughEndpointsTableColumns = ({
   {
     id: "path",
     accessorKey: "path",
-    meta: { title: "Path" },
-    header: "Path",
+    meta: { title: t("models.passThrough.columns.path") },
+    header: t("models.passThrough.columns.path"),
     size: 200,
     enableSorting: false,
     cell: ({ row }) => (
@@ -150,8 +156,8 @@ export const getPassThroughEndpointsTableColumns = ({
   {
     id: "target",
     accessorKey: "target",
-    meta: { title: "Target" },
-    header: "Target",
+    meta: { title: t("models.passThrough.columns.target") },
+    header: t("models.passThrough.columns.target"),
     size: 240,
     enableSorting: false,
     cell: ({ row }) => (
@@ -162,41 +168,59 @@ export const getPassThroughEndpointsTableColumns = ({
   },
   {
     id: "methods",
-    meta: { title: "Methods", skeleton: "chips" },
-    header: () => <HeaderWithTooltip title="Methods" tooltip="HTTP methods supported by this endpoint" />,
+    meta: { title: t("models.passThrough.columns.methods"), skeleton: "chips" },
+    header: () => (
+      <HeaderWithTooltip
+        title={t("models.passThrough.columns.methods")}
+        tooltip={t("models.passThrough.columns.methodsTooltip")}
+      />
+    ),
     size: 150,
     enableSorting: false,
-    cell: ({ row }) => <MethodsCell methods={row.original.methods} />,
+    cell: ({ row }) => <MethodsCell methods={row.original.methods} t={t} />,
   },
   {
     id: "auth",
     accessorKey: "auth",
-    meta: { title: "Authentication", skeleton: "badge" },
-    header: () => <HeaderWithTooltip title="Authentication" tooltip="LiteLLM Virtual Key required to call endpoint" />,
+    meta: { title: t("models.passThrough.columns.authentication"), skeleton: "badge" },
+    header: () => (
+      <HeaderWithTooltip
+        title={t("models.passThrough.columns.authentication")}
+        tooltip={t("models.passThrough.columns.authenticationTooltip")}
+      />
+    ),
     size: 140,
     enableSorting: false,
     cell: ({ row }) => (
-      <StatusBadge tone={row.original.auth ? "success" : "neutral"} label={row.original.auth ? "Yes" : "No"} />
+      <StatusBadge
+        tone={row.original.auth ? "success" : "neutral"}
+        label={t(row.original.auth ? "models.passThrough.values.yes" : "models.passThrough.values.no")}
+      />
     ),
   },
   {
     id: "headers",
-    meta: { title: "Headers" },
-    header: "Headers",
+    meta: { title: t("models.passThrough.columns.headers") },
+    header: t("models.passThrough.columns.headers"),
     size: 180,
     enableSorting: false,
-    cell: ({ row }) => <HeadersCell value={row.original.headers || {}} />,
+    cell: ({ row }) => <HeadersCell value={row.original.headers || {}} t={t} />,
   },
   {
     id: "actions",
     meta: { className: "text-right", headerClassName: "text-right" },
-    header: () => <span className="sr-only">Actions</span>,
+    header: () => <span className="sr-only">{t("models.passThrough.columns.actions")}</span>,
     size: 64,
     enableSorting: false,
     enableHiding: false,
     cell: ({ row }) => (
       <div className="flex justify-end">
-        <EndpointRowActions endpoint={row.original} onEndpointClick={onEndpointClick} onDeleteClick={onDeleteClick} />
+        <EndpointRowActions
+          endpoint={row.original}
+          onEndpointClick={onEndpointClick}
+          onDeleteClick={onDeleteClick}
+          t={t}
+        />
       </div>
     ),
   },

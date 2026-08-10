@@ -20,6 +20,7 @@ import RoutePreview from "./route_preview";
 import NotificationsManager from "./molecules/notifications_manager";
 import PassThroughSecuritySection from "./common_components/PassThroughSecuritySection";
 import PassThroughGuardrailsSection from "./common_components/PassThroughGuardrailsSection";
+import { useTranslation } from "react-i18next";
 
 const HTTP_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH"];
 const { Option } = Select;
@@ -48,6 +49,7 @@ interface PassThroughEndpoint {
 
 // Password field component for headers
 const PasswordField: React.FC<{ value: Record<string, any> }> = ({ value }) => {
+  const { t } = useTranslation("gateway");
   const [showPassword, setShowPassword] = useState(false);
   const headerString = JSON.stringify(value, null, 2);
 
@@ -56,7 +58,12 @@ const PasswordField: React.FC<{ value: Record<string, any> }> = ({ value }) => {
       <pre className="font-mono text-xs bg-gray-50 p-2 rounded-sm max-w-md overflow-auto">
         {showPassword ? headerString : "••••••••"}
       </pre>
-      <button onClick={() => setShowPassword(!showPassword)} className="p-1 hover:bg-gray-100 rounded-sm" type="button">
+      <button
+        onClick={() => setShowPassword(!showPassword)}
+        className="p-1 hover:bg-gray-100 rounded-sm"
+        type="button"
+        aria-label={t(showPassword ? "models.passThrough.info.hideHeaders" : "models.passThrough.info.showHeaders")}
+      >
         {showPassword ? <EyeOff className="w-4 h-4 text-gray-500" /> : <Eye className="w-4 h-4 text-gray-500" />}
       </button>
     </div>
@@ -71,6 +78,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
   premiumUser = false,
   onEndpointUpdated,
 }) => {
+  const { t } = useTranslation("gateway");
   const [endpointData, setEndpointData] = useState<PassThroughEndpoint | null>(initialEndpointData);
   const [loading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -91,7 +99,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
         try {
           headers = typeof values.headers === "string" ? JSON.parse(values.headers) : values.headers;
         } catch (e) {
-          NotificationsManager.fromBackend("Invalid JSON format for headers");
+          NotificationsManager.fromBackend(t("models.passThrough.info.invalidHeaders"));
           return;
         }
       }
@@ -122,7 +130,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
       }
     } catch (error) {
       console.error("Error updating endpoint:", error);
-      NotificationsManager.fromBackend("Failed to update pass through endpoint");
+      NotificationsManager.fromBackend(t("models.passThrough.info.updateFailed"));
     }
   };
 
@@ -131,23 +139,23 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
       if (!accessToken || !endpointData?.id) return;
 
       await deletePassThroughEndpointsCall(accessToken, endpointData.id);
-      NotificationsManager.success("Pass through endpoint deleted successfully");
+      NotificationsManager.success(t("models.passThrough.info.deleted"));
       onClose();
       if (onEndpointUpdated) {
         onEndpointUpdated();
       }
     } catch (error) {
       console.error("Error deleting endpoint:", error);
-      NotificationsManager.fromBackend("Failed to delete pass through endpoint");
+      NotificationsManager.fromBackend(t("models.passThrough.info.deleteFailed"));
     }
   };
 
   if (loading) {
-    return <div className="p-4">Loading...</div>;
+    return <div className="p-4">{t("models.passThrough.info.loading")}</div>;
   }
 
   if (!endpointData) {
-    return <div className="p-4">Pass through endpoint not found</div>;
+    return <div className="p-4">{t("models.passThrough.info.notFound")}</div>;
   }
 
   return (
@@ -155,17 +163,17 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button onClick={onClose} className="mb-4">
-            ← Back
+            {t("models.passThrough.info.back")}
           </Button>
-          <Title>Pass Through Endpoint: {endpointData.path}</Title>
+          <Title>{t("models.passThrough.info.title", { path: endpointData.path })}</Title>
           <Text className="text-gray-500 font-mono">{endpointData.id}</Text>
         </div>
       </div>
 
       <TabGroup>
         <TabList className="mb-4">
-          <Tab key="overview">Overview</Tab>
-          {isAdmin ? <Tab key="settings">Settings</Tab> : <></>}
+          <Tab key="overview">{t("models.passThrough.info.overview")}</Tab>
+          {isAdmin ? <Tab key="settings">{t("models.passThrough.info.settings")}</Tab> : <></>}
         </TabList>
 
         <TabPanels>
@@ -173,35 +181,39 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
           <TabPanel>
             <Grid numItems={1} numItemsSm={2} numItemsLg={3} className="gap-6">
               <Card>
-                <Text>Path</Text>
+                <Text>{t("models.passThrough.info.path")}</Text>
                 <div className="mt-2">
                   <Title className="font-mono">{endpointData.path}</Title>
                 </div>
               </Card>
 
               <Card>
-                <Text>Target</Text>
+                <Text>{t("models.passThrough.info.target")}</Text>
                 <div className="mt-2">
                   <Title>{endpointData.target}</Title>
                 </div>
               </Card>
 
               <Card>
-                <Text>Configuration</Text>
+                <Text>{t("models.passThrough.info.configuration")}</Text>
                 <div className="mt-2 space-y-2">
                   <div>
                     <Badge color={endpointData.include_subpath ? "green" : "gray"}>
-                      {endpointData.include_subpath ? "Include Subpath" : "Exact Path"}
+                      {t(
+                        endpointData.include_subpath
+                          ? "models.passThrough.info.includeSubpath"
+                          : "models.passThrough.info.exactPath",
+                      )}
                     </Badge>
                   </div>
                   <div>
                     <Badge color={endpointData.auth ? "blue" : "gray"}>
-                      {endpointData.auth ? "Auth Required" : "No Auth"}
+                      {t(endpointData.auth ? "models.passThrough.info.authRequired" : "models.passThrough.info.noAuth")}
                     </Badge>
                   </div>
                   {endpointData.methods && endpointData.methods.length > 0 && (
                     <div>
-                      <Text className="text-xs text-gray-500">HTTP Methods:</Text>
+                      <Text className="text-xs text-gray-500">{t("models.passThrough.info.methods")}</Text>
                       <div className="flex flex-wrap gap-1 mt-1">
                         {endpointData.methods.map((method) => (
                           <Badge key={method} color="indigo" size="sm">
@@ -213,12 +225,14 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                   )}
                   {(!endpointData.methods || endpointData.methods.length === 0) && (
                     <div>
-                      <Text className="text-xs text-gray-500">All HTTP methods supported</Text>
+                      <Text className="text-xs text-gray-500">{t("models.passThrough.info.allMethods")}</Text>
                     </div>
                   )}
                   {endpointData.cost_per_request !== undefined && (
                     <div>
-                      <Text>Cost per request: ${endpointData.cost_per_request}</Text>
+                      <Text>
+                        {t("models.passThrough.info.costPerRequest", { cost: endpointData.cost_per_request })}
+                      </Text>
                     </div>
                   )}
                 </div>
@@ -237,8 +251,12 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
             {endpointData.headers && Object.keys(endpointData.headers).length > 0 && (
               <Card className="mt-6">
                 <div className="flex justify-between items-center">
-                  <Text className="font-medium">Headers</Text>
-                  <Badge color="blue">{Object.keys(endpointData.headers).length} headers configured</Badge>
+                  <Text className="font-medium">{t("models.passThrough.info.headers")}</Text>
+                  <Badge color="blue">
+                    {t("models.passThrough.info.headersConfigured", {
+                      count: Object.keys(endpointData.headers).length,
+                    })}
+                  </Badge>
                 </div>
                 <div className="mt-4">
                   <PasswordField value={endpointData.headers} />
@@ -249,8 +267,12 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
             {endpointData.guardrails && Object.keys(endpointData.guardrails).length > 0 && (
               <Card className="mt-6">
                 <div className="flex justify-between items-center">
-                  <Text className="font-medium">Guardrails</Text>
-                  <Badge color="purple">{Object.keys(endpointData.guardrails).length} guardrails configured</Badge>
+                  <Text className="font-medium">{t("models.passThrough.info.guardrails")}</Text>
+                  <Badge color="purple">
+                    {t("models.passThrough.info.guardrailsConfigured", {
+                      count: Object.keys(endpointData.guardrails).length,
+                    })}
+                  </Badge>
                 </div>
                 <div className="mt-4 space-y-2">
                   {Object.entries(endpointData.guardrails).map(([name, settings]) => (
@@ -258,13 +280,25 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                       <div className="font-medium text-sm">{name}</div>
                       {settings && (settings.request_fields || settings.response_fields) && (
                         <div className="mt-2 text-xs text-gray-600 space-y-1">
-                          {settings.request_fields && <div>Request fields: {settings.request_fields.join(", ")}</div>}
+                          {settings.request_fields && (
+                            <div>
+                              {t("models.passThrough.info.requestFields", {
+                                fields: settings.request_fields.join(", "),
+                              })}
+                            </div>
+                          )}
                           {settings.response_fields && (
-                            <div>Response fields: {settings.response_fields.join(", ")}</div>
+                            <div>
+                              {t("models.passThrough.info.responseFields", {
+                                fields: settings.response_fields.join(", "),
+                              })}
+                            </div>
                           )}
                         </div>
                       )}
-                      {!settings && <div className="text-xs text-gray-600 mt-1">Uses entire payload</div>}
+                      {!settings && (
+                        <div className="text-xs text-gray-600 mt-1">{t("models.passThrough.info.entirePayload")}</div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -277,13 +311,15 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
             <TabPanel>
               <Card>
                 <div className="flex justify-between items-center mb-4">
-                  <Title>Pass Through Endpoint Settings</Title>
+                  <Title>{t("models.passThrough.info.settingsTitle")}</Title>
                   <div className="space-x-2">
                     {!isEditing && (
                       <>
-                        <TremorButton onClick={() => setIsEditing(true)}>Edit Settings</TremorButton>
+                        <TremorButton onClick={() => setIsEditing(true)}>
+                          {t("models.passThrough.info.editSettings")}
+                        </TremorButton>
                         <TremorButton onClick={handleDeleteEndpoint} variant="secondary" color="red">
-                          Delete Endpoint
+                          {t("models.passThrough.info.deleteEndpoint")}
                         </TremorButton>
                       </>
                     )}
@@ -306,14 +342,14 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                     layout="vertical"
                   >
                     <Form.Item
-                      label="Target URL"
+                      label={t("models.passThrough.info.targetUrl")}
                       name="target"
-                      rules={[{ required: true, message: "Please input a target URL" }]}
+                      rules={[{ required: true, message: t("models.passThrough.info.targetRequired") }]}
                     >
                       <TextInput placeholder="https://api.example.com" />
                     </Form.Item>
 
-                    <Form.Item label="Headers (JSON)" name="headers">
+                    <Form.Item label={t("models.passThrough.info.headersJson")} name="headers">
                       <Input.TextArea
                         rows={5}
                         placeholder='{"Authorization": "Bearer your-token", "Content-Type": "application/json"}'
@@ -321,17 +357,17 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                     </Form.Item>
 
                     <Form.Item
-                      label="HTTP Methods (Optional)"
+                      label={t("models.passThrough.form.methods")}
                       name="methods"
                       extra={
                         selectedMethods.length === 0
-                          ? "All HTTP methods supported (default)"
-                          : `Only ${selectedMethods.join(", ")} requests will be routed to this endpoint`
+                          ? t("models.passThrough.form.allMethods")
+                          : t("models.passThrough.form.selectedMethods", { methods: selectedMethods.join(", ") })
                       }
                     >
                       <Select
                         mode="multiple"
-                        placeholder="Select methods (leave empty for all)"
+                        placeholder={t("models.passThrough.form.methodsPlaceholder")}
                         value={selectedMethods}
                         onChange={setSelectedMethods}
                         allowClear
@@ -345,18 +381,22 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                       </Select>
                     </Form.Item>
 
-                    <Form.Item label="Include Subpath" name="include_subpath" valuePropName="checked">
+                    <Form.Item
+                      label={t("models.passThrough.info.includeSubpath")}
+                      name="include_subpath"
+                      valuePropName="checked"
+                    >
                       <Switch />
                     </Form.Item>
 
-                    <Form.Item label="Cost per Request" name="cost_per_request">
+                    <Form.Item label={t("models.passThrough.info.cost")} name="cost_per_request">
                       <InputNumber min={0} step={0.01} precision={2} placeholder="0.00" addonBefore="$" />
                     </Form.Item>
 
                     <Form.Item
-                      label="Request Timeout (seconds)"
+                      label={t("models.passThrough.form.timeout")}
                       name="timeout"
-                      extra="Max time to wait for upstream response. Leave empty to use the global pass_through_request_timeout (default 600s)."
+                      extra={t("models.passThrough.form.timeoutTooltip")}
                     >
                       <InputNumber min={1} step={1} precision={0} placeholder="600" style={{ width: "100%" }} />
                     </Form.Item>
@@ -379,50 +419,56 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                     </div>
 
                     <div className="flex justify-end gap-2 mt-6">
-                      <Button onClick={() => setIsEditing(false)}>Cancel</Button>
-                      <TremorButton>Save Changes</TremorButton>
+                      <Button onClick={() => setIsEditing(false)}>{t("models.passThrough.info.cancel")}</Button>
+                      <TremorButton>{t("models.passThrough.info.save")}</TremorButton>
                     </div>
                   </Form>
                 ) : (
                   <div className="space-y-4">
                     <div>
-                      <Text className="font-medium">Path</Text>
+                      <Text className="font-medium">{t("models.passThrough.info.path")}</Text>
                       <div className="font-mono">{endpointData.path}</div>
                     </div>
                     <div>
-                      <Text className="font-medium">Target URL</Text>
+                      <Text className="font-medium">{t("models.passThrough.info.targetUrl")}</Text>
                       <div>{endpointData.target}</div>
                     </div>
                     <div>
-                      <Text className="font-medium">Include Subpath</Text>
+                      <Text className="font-medium">{t("models.passThrough.info.includeSubpath")}</Text>
                       <Badge color={endpointData.include_subpath ? "green" : "gray"}>
-                        {endpointData.include_subpath ? "Yes" : "No"}
+                        {t(
+                          endpointData.include_subpath
+                            ? "models.passThrough.values.yes"
+                            : "models.passThrough.values.no",
+                        )}
                       </Badge>
                     </div>
                     {endpointData.cost_per_request !== undefined && (
                       <div>
-                        <Text className="font-medium">Cost per Request</Text>
+                        <Text className="font-medium">{t("models.passThrough.info.cost")}</Text>
                         <div>${endpointData.cost_per_request}</div>
                       </div>
                     )}
                     {endpointData.timeout !== undefined && endpointData.timeout !== null && (
                       <div>
-                        <Text className="font-medium">Request Timeout</Text>
+                        <Text className="font-medium">{t("models.passThrough.info.timeout")}</Text>
                         <div>{endpointData.timeout}s</div>
                       </div>
                     )}
                     <div>
-                      <Text className="font-medium">Authentication Required</Text>
-                      <Badge color={endpointData.auth ? "green" : "gray"}>{endpointData.auth ? "Yes" : "No"}</Badge>
+                      <Text className="font-medium">{t("models.passThrough.info.authenticationRequired")}</Text>
+                      <Badge color={endpointData.auth ? "green" : "gray"}>
+                        {t(endpointData.auth ? "models.passThrough.values.yes" : "models.passThrough.values.no")}
+                      </Badge>
                     </div>
                     <div>
-                      <Text className="font-medium">Headers</Text>
+                      <Text className="font-medium">{t("models.passThrough.info.headers")}</Text>
                       {endpointData.headers && Object.keys(endpointData.headers).length > 0 ? (
                         <div className="mt-2">
                           <PasswordField value={endpointData.headers} />
                         </div>
                       ) : (
-                        <div className="text-gray-500">No headers configured</div>
+                        <div className="text-gray-500">{t("models.passThrough.info.noHeaders")}</div>
                       )}
                     </div>
                   </div>

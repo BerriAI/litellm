@@ -5,6 +5,7 @@ import AddPassThroughEndpoint from "../add_pass_through";
 import PassThroughInfoView from "../pass_through_info";
 import NotificationsManager from "../molecules/notifications_manager";
 import { PassThroughEndpointsTable } from "./PassThroughEndpointsTable";
+import { useTranslation } from "react-i18next";
 
 interface PassThroughSettingsProps {
   accessToken: string | null;
@@ -28,6 +29,7 @@ export interface passThroughItem {
 }
 
 const PassThroughSettings: React.FC<PassThroughSettingsProps> = ({ accessToken, userRole, userID, premiumUser }) => {
+  const { t } = useTranslation("gateway");
   const [generalSettings, setGeneralSettings] = useState<passThroughItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedEndpointId, setSelectedEndpointId] = useState<string | null>(null);
@@ -74,10 +76,10 @@ const PassThroughSettings: React.FC<PassThroughSettingsProps> = ({ accessToken, 
       const updatedSettings = generalSettings.filter((setting) => setting.id !== endpointToDelete);
       setGeneralSettings(updatedSettings);
 
-      NotificationsManager.success("Endpoint deleted successfully.");
+      NotificationsManager.success(t("models.passThrough.notifications.deleted"));
     } catch (error) {
       console.error("Error deleting the endpoint:", error);
-      NotificationsManager.fromBackend("Error deleting the endpoint: " + error);
+      NotificationsManager.fromBackend(t("models.passThrough.notifications.deleteFailed", { error: String(error) }));
     }
 
     setIsDeleteModalOpen(false);
@@ -97,7 +99,7 @@ const PassThroughSettings: React.FC<PassThroughSettingsProps> = ({ accessToken, 
     const selectedEndpoint = generalSettings.find((endpoint) => endpoint.id === selectedEndpointId);
 
     if (!selectedEndpoint) {
-      return <div>Endpoint not found</div>;
+      return <div>{t("models.passThrough.notFound")}</div>;
     }
 
     return (
@@ -115,8 +117,8 @@ const PassThroughSettings: React.FC<PassThroughSettingsProps> = ({ accessToken, 
   return (
     <div>
       <div className="mb-4">
-        <h2 className="text-lg font-semibold text-foreground">Pass Through Endpoints</h2>
-        <p className="text-sm text-muted-foreground">Configure and manage your pass-through endpoints</p>
+        <h2 className="text-lg font-semibold text-foreground">{t("models.passThrough.title")}</h2>
+        <p className="text-sm text-muted-foreground">{t("models.passThrough.description")}</p>
       </div>
 
       <AddPassThroughEndpoint
@@ -148,21 +150,21 @@ const PassThroughSettings: React.FC<PassThroughSettingsProps> = ({ accessToken, 
               <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
                 <div className="sm:flex sm:items-start">
                   <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900">Delete Pass-Through Endpoint</h3>
+                    <h3 className="text-lg leading-6 font-medium text-gray-900">
+                      {t("models.passThrough.deleteDialog.title")}
+                    </h3>
                     <div className="mt-2">
-                      <p className="text-sm text-gray-500">
-                        Are you sure you want to delete this pass-through endpoint? This action cannot be undone.
-                      </p>
+                      <p className="text-sm text-gray-500">{t("models.passThrough.deleteDialog.message")}</p>
                     </div>
                   </div>
                 </div>
               </div>
               <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
                 <Button variant="destructive" onClick={confirmDelete} className="ml-2">
-                  Delete
+                  {t("models.passThrough.deleteDialog.confirm")}
                 </Button>
                 <Button variant="outline" onClick={cancelDelete}>
-                  Cancel
+                  {t("models.passThrough.deleteDialog.cancel")}
                 </Button>
               </div>
             </div>
