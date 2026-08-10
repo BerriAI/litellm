@@ -129,3 +129,56 @@ def test_dated_variants_carry_base_alias_service_tier_pricing(prices: dict):
         "sync the tier keys so service-tier requests against pinned snapshots are not "
         "billed at standard rates:\n" + "\n".join(drifted)
     )
+@pytest.mark.parametrize(
+    "model, expected_pricing",
+    [
+        (
+            "azure/gpt-5.6-luna",
+            {
+                "cache_read_input_token_cost": 1e-07,
+                "cache_read_input_token_cost_above_272k_tokens": 2e-07,
+                "cache_read_input_token_cost_priority": 2e-07,
+                "cache_read_input_token_cost_above_272k_tokens_priority": 4e-07,
+                "input_cost_per_token": 1e-06,
+                "input_cost_per_token_above_272k_tokens": 2e-06,
+                "input_cost_per_token_priority": 2e-06,
+                "input_cost_per_token_above_272k_tokens_priority": 4e-06,
+                "output_cost_per_token": 6e-06,
+                "output_cost_per_token_above_272k_tokens": 9e-06,
+                "output_cost_per_token_priority": 1.2e-05,
+                "output_cost_per_token_above_272k_tokens_priority": 1.8e-05,
+            },
+        ),
+        (
+            "azure/us/gpt-5.6-luna",
+            {
+                "cache_read_input_token_cost": 1.1e-07,
+                "cache_read_input_token_cost_above_272k_tokens": 2.2e-07,
+                "cache_read_input_token_cost_priority": 2.75e-07,
+                "input_cost_per_token": 1.1e-06,
+                "input_cost_per_token_above_272k_tokens": 2.2e-06,
+                "input_cost_per_token_priority": 2.75e-06,
+                "output_cost_per_token": 6.6e-06,
+                "output_cost_per_token_above_272k_tokens": 9.9e-06,
+                "output_cost_per_token_priority": 1.65e-05,
+            },
+        ),
+    ],
+)
+def test_azure_gpt_5_6_luna_pricing(prices: dict, model: str, expected_pricing: dict):
+    assert model in prices
+    for key, expected_value in expected_pricing.items():
+        assert prices[model][key] == expected_value
+
+
+def test_azure_gpt_5_6_luna_backup_matches_main():
+    """Ensure Azure GPT-5.6 Luna pricing stays in sync between main and backup cost maps."""
+    main_cost = json.loads(PRICES_PATH.read_text())
+    backup_cost = json.loads(
+        (REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json").read_text()
+    )
+
+    for model in ("azure/gpt-5.6-luna", "azure/us/gpt-5.6-luna"):
+        assert backup_cost.get(model) == main_cost.get(
+            model
+        ), f"{model} differs between main and backup model cost maps"
