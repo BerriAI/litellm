@@ -1,10 +1,12 @@
 import React, { useState } from "react";
 import { CommentOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 
 const STORAGE_KEY = "hideCostOptimizationFeedbackBanner";
 const DISCUSSION_URL = "https://github.com/BerriAI/litellm/discussions/32172";
 
 const CostOptimizationFeedbackBanner: React.FC = () => {
+  const { t } = useTranslation("common");
   const [dismissed, setDismissed] = useState(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem(STORAGE_KEY) === "true";
@@ -22,11 +24,8 @@ const CostOptimizationFeedbackBanner: React.FC = () => {
         <CommentOutlined style={{ fontSize: "18px", color: "#6366f1" }} />
       </div>
       <div className="flex-1 min-w-0">
-        <h4 className="text-gray-900 font-semibold text-sm m-0">Help shape cost optimization</h4>
-        <p className="text-gray-500 text-xs m-0 mt-0.5">
-          We&apos;re collecting suggestions for cost optimization improvements across routing, budgets, and more. Let us
-          know what you&apos;d like to see.
-        </p>
+        <h4 className="text-gray-900 font-semibold text-sm m-0">{t("costFeedback.title")}</h4>
+        <p className="text-gray-500 text-xs m-0 mt-0.5">{t("costFeedback.description")}</p>
       </div>
       <a
         href={DISCUSSION_URL}
@@ -34,7 +33,7 @@ const CostOptimizationFeedbackBanner: React.FC = () => {
         rel="noopener noreferrer"
         className="shrink-0 inline-flex items-center gap-2 px-4 py-2 bg-[#6366f1] hover:bg-[#5558e3] text-white text-sm font-medium rounded-lg transition-colors"
       >
-        Share Feedback
+        {t("costFeedback.share")}
         <svg
           xmlns="http://www.w3.org/2000/svg"
           className="h-4 w-4"
@@ -56,7 +55,7 @@ const CostOptimizationFeedbackBanner: React.FC = () => {
           localStorage.setItem(STORAGE_KEY, "true");
         }}
         className="shrink-0 p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors"
-        aria-label="Dismiss banner"
+        aria-label={t("costFeedback.dismiss")}
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"

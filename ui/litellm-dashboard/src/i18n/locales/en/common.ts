@@ -46,6 +46,7 @@ export const enCommon = {
     reset: "Reset",
     rowsPerPage: "Rows per page",
     noResults: "No results",
+    emptyDescription: "No rows match your search or filters.",
     range: "Showing {{start}}-{{end}} of {{total}}",
     page: "Page {{current}} of {{total}}",
     firstPage: "Go to first page",
@@ -55,6 +56,14 @@ export const enCommon = {
     ascending: "ascending",
     descending: "descending",
     sortOptions: "Sort options for {{fields}}",
+  },
+  badges: { beta: "Beta" },
+  costFeedback: {
+    title: "Help shape cost optimization",
+    description:
+      "We're collecting suggestions for cost optimization improvements across routing, budgets, and more. Let us know what you'd like to see.",
+    share: "Share Feedback",
+    dismiss: "Dismiss banner",
   },
   publicHub: {
     embeddedDescription: "These models, agents, and MCP servers were made available by your proxy administrator.",

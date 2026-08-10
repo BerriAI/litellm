@@ -25,6 +25,7 @@ import {
   type VisibilityState,
 } from "@tanstack/react-table";
 import { SearchX } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import * as React from "react";
 import { Fragment, useState } from "react";
 
@@ -344,13 +345,14 @@ function MessageRow({ colSpan, children }: { colSpan: number; children: React.Re
 }
 
 function DefaultEmptyState() {
+  const { t } = useTranslation("common");
   return (
     <div className="flex flex-col items-center gap-1 py-6">
       <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
         <SearchX className="size-5 text-muted-foreground" />
       </div>
-      <div className="text-sm font-medium text-foreground">No results</div>
-      <div className="text-sm text-muted-foreground">No rows match your search or filters.</div>
+      <div className="text-sm font-medium text-foreground">{t("table.noResults")}</div>
+      <div className="text-sm text-muted-foreground">{t("table.emptyDescription")}</div>
     </div>
   );
 }

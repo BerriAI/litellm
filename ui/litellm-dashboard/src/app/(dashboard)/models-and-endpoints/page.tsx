@@ -24,6 +24,7 @@ import HealthStatusPanel from "@/app/(dashboard)/models-and-endpoints/panels/Hea
 import ModelRetrySettingsPanel from "@/app/(dashboard)/models-and-endpoints/panels/ModelRetrySettingsPanel";
 import ModelGroupAliasPanel from "@/app/(dashboard)/models-and-endpoints/panels/ModelGroupAliasPanel";
 import PriceDataPanel from "@/app/(dashboard)/models-and-endpoints/panels/PriceDataPanel";
+import { useTranslation } from "react-i18next";
 
 type ModelTabSlug =
   | "add"
@@ -37,15 +38,15 @@ type ModelTabSlug =
 
 const BASE_TAB_KEY = "all-models";
 
-const TAB_LABELS: Record<ModelTabSlug, string> = {
-  add: "Add Model",
-  "auto-routers": "Auto-Routers",
-  "llm-credentials": "LLM Credentials",
-  "pass-through": "Pass-Through Endpoints",
-  health: "Health Status",
-  "retry-settings": "Model Retry Settings",
-  "model-group-alias": "Model Group Alias",
-  "price-data": "Price Data Reload",
+const TAB_LABEL_KEYS: Record<ModelTabSlug, string> = {
+  add: "add",
+  "auto-routers": "autoRouters",
+  "llm-credentials": "credentials",
+  "pass-through": "passThrough",
+  health: "health",
+  "retry-settings": "retry",
+  "model-group-alias": "alias",
+  "price-data": "priceData",
 };
 
 const renderPanel = (key: string) => {
@@ -74,6 +75,7 @@ const renderPanel = (key: string) => {
 };
 
 export default function ModelsAndEndpointsPage() {
+  const { t } = useTranslation("gateway");
   const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
   const { data: teams } = useTeams();
   const { data: uiSettings } = useUISettings();
@@ -107,18 +109,18 @@ export default function ModelsAndEndpointsPage() {
     [canCreate, isAdmin],
   );
 
-  const allModelsLabel = isAdmin ? "All Models" : "Your Models";
+  const allModelsLabel = isAdmin ? t("models.tabs.all") : t("models.tabs.yours");
   // Auto-Routers carries a Beta badge; BetaBadge honours the admin setting that hides these.
   const tabLabel = (slug: "" | ModelTabSlug): React.ReactNode => {
     if (!slug) return allModelsLabel;
     if (slug === "auto-routers") {
       return (
         <span className="flex items-center gap-2">
-          {TAB_LABELS[slug]} <BetaBadge />
+          {t(`models.tabs.${TAB_LABEL_KEYS[slug]}`)} <BetaBadge />
         </span>
       );
     }
-    return TAB_LABELS[slug];
+    return t(`models.tabs.${TAB_LABEL_KEYS[slug]}`);
   };
 
   const tabItems = visibleSlugs.map((slug) => {
@@ -160,11 +162,11 @@ export default function ModelsAndEndpointsPage() {
       <div className="flex flex-col gap-2 p-8 w-full mt-2">
         <div className="flex justify-between items-center mb-4">
           <div>
-            <h2 className="text-lg font-semibold">Model Management</h2>
+            <h2 className="text-lg font-semibold">{t("models.title")}</h2>
             {isAdmin ? (
-              <p className="text-sm text-gray-600">Add and manage models for the proxy</p>
+              <p className="text-sm text-gray-600">{t("models.adminSubtitle")}</p>
             ) : (
-              <p className="text-sm text-gray-600">Add models for teams you are an admin for.</p>
+              <p className="text-sm text-gray-600">{t("models.teamSubtitle")}</p>
             )}
           </div>
         </div>
@@ -189,11 +191,13 @@ export default function ModelsAndEndpointsPage() {
             tabBarExtraContent={{
               right: (
                 <div className="flex items-center space-x-2 self-center">
-                  {lastRefreshed && <span className="text-xs text-gray-500">Last Refreshed: {lastRefreshed}</span>}
+                  {lastRefreshed && (
+                    <span className="text-xs text-gray-500">{t("models.lastRefreshed", { time: lastRefreshed })}</span>
+                  )}
                   <button
                     type="button"
                     onClick={handleRefreshClick}
-                    aria-label="Refresh models"
+                    aria-label={t("models.refresh")}
                     className="cursor-pointer"
                   >
                     <RefreshIcon className="h-4 w-4 text-gray-500" />

@@ -46,6 +46,7 @@ export const ruCommon = {
     reset: "Сбросить",
     rowsPerPage: "Строк на странице",
     noResults: "Нет результатов",
+    emptyDescription: "Нет строк, соответствующих поиску или фильтрам.",
     range: "Показано {{start}}–{{end}} из {{total}}",
     page: "Страница {{current}} из {{total}}",
     firstPage: "На первую страницу",
@@ -55,6 +56,14 @@ export const ruCommon = {
     ascending: "по возрастанию",
     descending: "по убыванию",
     sortOptions: "Параметры сортировки: {{fields}}",
+  },
+  badges: { beta: "Бета" },
+  costFeedback: {
+    title: "Помогите улучшить оптимизацию затрат",
+    description:
+      "Мы собираем предложения по улучшению маршрутизации, бюджетов и других способов оптимизации затрат. Расскажите, чего вам не хватает.",
+    share: "Оставить отзыв",
+    dismiss: "Скрыть баннер",
   },
   publicHub: {
     embeddedDescription: "Эти модели, агенты и MCP-серверы доступны по решению администратора прокси.",
