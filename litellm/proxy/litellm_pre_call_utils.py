@@ -1845,6 +1845,24 @@ async def add_litellm_data_to_request(
             tags_to_add=project_metadata["tags"],
         )
 
+    # inherited_tags: every tag key/team/project policy contributed, read
+    # directly from those three sources rather than snapshotted off the shared
+    # "tags" list. A pre-auth pass (apply_client_tag_policy_pre_auth, run from
+    # user_api_key_auth for _tag_max_budget_check) may already have merged the
+    # caller's own header tags into that same list before this function ever
+    # runs, so a snapshot taken here -- at any point in this function -- would
+    # misattribute caller-supplied tags as policy-backed. tag_based_routing.py's
+    # allow_fail_open reads this (rather than subtracting caller_tags from the
+    # final merged set) so a caller can't strip an inherited "!"/"&"
+    # constraint's protection just by resubmitting its exact value alongside a
+    # conflicting one.
+    _key_tags: Final = (key_metadata or {}).get("tags") or []
+    _team_tags: Final = team_metadata.get("tags") or []
+    _project_tags: Final = project_metadata.get("tags") or []
+    data[_metadata_variable_name]["inherited_tags"] = tuple(  # rebind-ok: matches this file's data[...] mutation idiom
+        dict.fromkeys((*_key_tags, *_team_tags, *_project_tags))
+    )
+
     ## TEAM-LEVEL METADATA
     data = LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
         data=data,
@@ -1927,15 +1945,6 @@ async def add_litellm_data_to_request(
     if should_auto_drop_params_for_agentic_cli(user_agent, data, proxy_config):
         data["drop_params"] = True
 
-    # inherited_tags: a snapshot of "tags" as merged from key/team/project policy
-    # above, taken *before* this request's own caller-supplied tags are merged in
-    # below. A tag value present here is policy-backed no matter what the caller
-    # separately submits, including the identical value -- tag_based_routing.py's
-    # allow_fail_open uses this (rather than subtracting caller_tags from the
-    # final merged set) so a caller can't strip an inherited "!"/"&" constraint's
-    # protection just by resubmitting its exact value alongside a conflicting one.
-    data[_metadata_variable_name]["inherited_tags"] = tuple(data[_metadata_variable_name].get("tags") or ())
-
     # Merge caller-supplied tags (x-litellm-tags header, data["tags"] root-level)
     # into request metadata for tag-based routing and spend attribution.
     tags: Final = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
@@ -1964,11 +1973,11 @@ async def add_litellm_data_to_request(
 
     # caller_tags: exactly what this request itself supplied (x-litellm-tags header,
     # body "tags", or body "metadata.tags" on litellm_metadata routes), never
-    # anything from key/team metadata. Kept as the complementary record to
-    # inherited_tags above (together they partition "tags" by origin), though
-    # tag_based_routing.py's allow_fail_open reads inherited_tags directly rather
-    # than deriving "not inherited" by subtracting this from the final merged set
-    # from key/team policy, both merged into "tags" above.
+    # anything from key/team/project metadata. Read directly from the header and
+    # body values here, the same way inherited_tags above is read directly from
+    # key/team/project metadata -- neither is derived by inspecting the shared
+    # "tags" list, which a pre-auth pass (apply_client_tag_policy_pre_auth) may
+    # have already merged caller header tags into before this function runs.
     data[_metadata_variable_name]["caller_tags"] = tuple(dict.fromkeys((*(tags or ()), *(_caller_body_tags or ()))))
 
     # Team Callbacks controls

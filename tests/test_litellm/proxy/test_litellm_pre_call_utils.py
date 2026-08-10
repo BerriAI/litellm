@@ -6313,6 +6313,62 @@ async def test_add_litellm_data_to_request_inherited_tags_excludes_caller_tags()
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_inherited_tags_survives_pre_auth_header_merge():
+    """Regression: apply_client_tag_policy_pre_auth (run from user_api_key_auth,
+    for _tag_max_budget_check) merges the caller's x-litellm-tags header into the
+    same metadata.tags list this function later reads from -- before this
+    function ever runs. A snapshot-based inherited_tags would misattribute that
+    caller-controlled value as policy-backed; inherited_tags must instead be read
+    directly from key/team/project metadata, immune to whatever the pre-auth pass
+    already merged into "tags"."""
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json", "x-litellm-tags": "caller-invented-tag"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data: dict = {"model": "gpt-3.5-turbo"}
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        user_id="real-user",
+        metadata={"tags": ["key-supplied"]},
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    # Simulate the real request pipeline: the pre-auth merge runs first, on the
+    # same data dict, before add_litellm_data_to_request is ever called.
+    LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+        request=request_mock,
+        request_data=data,
+        user_api_key_dict=user_api_key_dict,
+    )
+    assert data["metadata"]["tags"] == ["caller-invented-tag"]
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert set(updated["metadata"]["tags"]) == {"caller-invented-tag", "key-supplied"}
+    assert updated["metadata"]["inherited_tags"] == ("key-supplied",)
+    assert updated["metadata"]["caller_tags"] == ("caller-invented-tag",)
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_caller_tags_excludes_key_and_team_tags():
     """caller_tags must carry only what the caller itself sent (header + body
     tags), never anything merged in from key/team metadata, even though the
