@@ -30637,6 +30637,10 @@ export interface components {
          *     at `limit` units per rolling `period_seconds`-second window. Bucketing is
          *     `epoch_second // period_seconds`, so `period_seconds=86400` resets at UTC
          *     midnight and `period_seconds=60` resets on real clock-minute boundaries.
+         *
+         *     For a `concurrency_limits` entry specifically, `period_seconds` is not a
+         *     window: it is the safety TTL a reserved in-flight slot self-heals after,
+         *     in case a worker crashes before releasing it (the counter, not a window).
          */
         TagRateLimitEntry: {
             /** Limit */
@@ -30663,6 +30667,7 @@ export interface components {
          *     entries of the same unit on the same chain can key by different tags.
          */
         TagRateLimits: {
+            concurrency_limits?: components["schemas"]["TagRateLimitGroup"] | null;
             dollar_limits?: components["schemas"]["TagRateLimitGroup"] | null;
             request_limits?: components["schemas"]["TagRateLimitGroup"] | null;
             token_limits?: components["schemas"]["TagRateLimitGroup"] | null;

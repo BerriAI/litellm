@@ -128,6 +128,10 @@ class TagRateLimitEntry(BaseModel):
     at `limit` units per rolling `period_seconds`-second window. Bucketing is
     `epoch_second // period_seconds`, so `period_seconds=86400` resets at UTC
     midnight and `period_seconds=60` resets on real clock-minute boundaries.
+
+    For a `concurrency_limits` entry specifically, `period_seconds` is not a
+    window: it is the safety TTL a reserved in-flight slot self-heals after,
+    in case a worker crashes before releasing it (the counter, not a window).
     """
 
     name: str
@@ -152,6 +156,7 @@ class TagRateLimits(BaseModel):
     token_limits: TagRateLimitGroup | None = None
     request_limits: TagRateLimitGroup | None = None
     dollar_limits: TagRateLimitGroup | None = None
+    concurrency_limits: TagRateLimitGroup | None = None
 
 
 class ModelInfo(BaseModel):

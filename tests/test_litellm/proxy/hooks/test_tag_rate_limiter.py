@@ -9,6 +9,7 @@ import pytest
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.tag_rate_limiter import (
     _build_group_limits,
@@ -139,6 +140,14 @@ async def test_filter_deployments_noop_without_config(time_controller):
 
 @pytest.mark.asyncio
 async def test_filter_deployments_allows_under_limit_and_rejects_at_limit(time_controller):
+    """
+    "requests" admission is atomic check-and-increment at the filter step
+    itself (not a separate read-then-account-later pass), so two concurrent
+    requests can never both read "1 under limit" and both get admitted past
+    a limit of 2 -- each call's own increment is immediately visible to the
+    next. Calling the filter 3 times with limit=2 must admit exactly 2 and
+    reject the 3rd.
+    """
     limiter = _make_limiter(time_controller)
     router = litellm.Router(
         model_list=[
@@ -151,23 +160,22 @@ async def test_filter_deployments_allows_under_limit_and_rejects_at_limit(time_c
     )
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
-    request_kwargs = {"metadata": {"tags": ["end_user_id:u1"]}}
 
-    # Under limit: allowed, no bucket seeded yet.
-    result = await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
-    )
-    assert result == healthy
-
-    # Seed the bucket at the limit (2 requests already accounted).
-    now = time_controller.now().timestamp()
-    bucket_id = int(now) // 60
-    key = f"{{tag_rl:grp:requests:per_minute:chain:u1}}:{bucket_id}"
-    await limiter.internal_usage_cache.async_set_cache(key=key, value=2, ttl=60, litellm_parent_otel_span=None)
+    for _ in range(2):
+        result = await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+        )
+        assert result == healthy
 
     with pytest.raises(ProxyRateLimitError) as exc_info:
         await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
         )
     assert exc_info.value.status_code == 429
     assert exc_info.value.detail["tag_value"] == "u1"
@@ -297,9 +305,233 @@ async def test_log_success_event_increments_configured_units(time_controller):
 
     now = time_controller.now().timestamp()
     token_key = f"{{tag_rl:grp:tokens:daily:chain:u1}}:{int(now) // 86400}"
-    request_key = f"{{tag_rl:grp:requests:daily:chain:u1}}:{int(now) // 86400}"
     dollar_key = f"{{tag_rl:grp:dollars:monthly:chain:u1}}:{int(now) // 2592000}"
 
     assert float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
-    assert float(await limiter.internal_usage_cache.async_get_cache(key=request_key, litellm_parent_otel_span=None)) == 1.0
     assert float(await limiter.internal_usage_cache.async_get_cache(key=dollar_key, litellm_parent_otel_span=None)) == 0.01
+
+    # "requests" is accounted atomically at admission (async_filter_deployments),
+    # not here -- async_log_success_event must not touch its bucket at all.
+    request_key = f"{{tag_rl:grp:requests:daily:chain:u1}}:{int(now) // 86400}"
+    assert await limiter.internal_usage_cache.async_get_cache(key=request_key, litellm_parent_otel_span=None) is None
+
+
+# ---------------------------------------------------------------------------
+# concurrency limits -- reserve at admission, release on success/failure
+# ---------------------------------------------------------------------------
+
+
+def _concurrency_router(limit: int) -> "litellm.Router":
+    return litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "concurrency_limits": {
+                        "limits": [{"name": "inflight", "tag_id": "end_user_id", "limit": limit, "period_seconds": 300}]
+                    }
+                },
+            )
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_cross_unit_rejection_does_not_leave_a_phantom_increment(time_controller):
+    """
+    Regression test: a chain with BOTH a requests limit and a concurrency
+    limit on the same tag checks both atomically in one
+    async_filter_deployments call. If the concurrency check rejects the hop,
+    the requests-unit check (evaluated in the same call, and which would have
+    been admitted on its own) must NOT have incremented its counter --
+    otherwise a rejected hop silently burns through the caller's requests
+    budget for a call that never actually went through.
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "request_limits": {
+                        "limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 10, "period_seconds": 60}]
+                    },
+                    "concurrency_limits": {
+                        "limits": [{"name": "inflight", "tag_id": "end_user_id", "limit": 1, "period_seconds": 300}]
+                    },
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    # Occupy the one concurrency slot.
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+    )
+
+    # A second attempt: requests-unit alone would admit (well under 10), but
+    # concurrency is exhausted, so the whole hop must reject -- and the
+    # requests counter must remain untouched by this rejected attempt.
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        )
+    assert exc_info.value.detail["type"] == "concurrency"
+
+    now = time_controller.now().timestamp()
+    request_key = f"{{tag_rl:grp:requests:per_minute:chain:u1}}:{int(now) // 60}"
+    requests_value = await limiter.internal_usage_cache.async_get_cache(key=request_key, litellm_parent_otel_span=None)
+    assert (float(requests_value) if requests_value is not None else 0.0) == 1.0
+
+
+@pytest.mark.asyncio
+async def test_concurrency_limit_rejects_third_concurrent_reservation(time_controller):
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=2)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    kwargs_1 = {"metadata": {"tags": ["end_user_id:u1"]}}
+    kwargs_2 = {"metadata": {"tags": ["end_user_id:u1"]}}
+    await limiter.async_filter_deployments(model="grp", healthy_deployments=healthy, messages=None, request_kwargs=kwargs_1)
+    await limiter.async_filter_deployments(model="grp", healthy_deployments=healthy, messages=None, request_kwargs=kwargs_2)
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        )
+    assert exc_info.value.detail["type"] == "concurrency"
+
+
+@pytest.mark.asyncio
+async def test_requests_admission_is_race_free_under_genuine_concurrency(time_controller):
+    """
+    The concrete race a read-then-account-later design would allow: N
+    coroutines all read "under limit" before any of them increments, and all
+    N get admitted even past the limit. Firing many concurrent filter calls
+    at once (asyncio.gather, not sequential awaits) must admit exactly
+    `limit`, never more -- the atomic check-and-increment closes the window
+    a plain GET-then-SET could not.
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {"request_limits": {"limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 5, "period_seconds": 60}]}},
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    async def attempt():
+        try:
+            await limiter.async_filter_deployments(
+                model="grp",
+                healthy_deployments=healthy,
+                messages=None,
+                request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+            )
+            return True
+        except ProxyRateLimitError:
+            return False
+
+    results = await asyncio.gather(*(attempt() for _ in range(20)))
+    assert sum(results) == 5
+
+
+@pytest.mark.asyncio
+async def test_index_refreshes_after_ttl_for_length_preserving_update(time_controller):
+    """
+    Editing an existing deployment's tag_rate_limits in place (same
+    len(model_list), so the (id(router), len) staleness check alone can't
+    detect it) must eventually be picked up -- bounded by the index TTL,
+    not indefinitely stale.
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {"request_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]}},
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+    )
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        )
+
+    # Same length, deployment mutated in place -- raise the limit to 100.
+    router.model_list[0]["model_info"]["tag_rate_limits"] = {
+        "request_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 100, "period_seconds": 86400}]}
+    }
+
+    time_controller.advance(6)  # past _INDEX_TTL_SECONDS
+
+    result = await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=router.model_list, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+    )
+    assert result == router.model_list
+
+
+@pytest.mark.asyncio
+async def test_concurrency_slot_released_on_success_frees_capacity(time_controller):
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=1)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    kwargs = {"metadata": {"tags": ["end_user_id:u1"]}}
+    await limiter.async_filter_deployments(model="grp", healthy_deployments=healthy, messages=None, request_kwargs=kwargs)
+
+    # At capacity: a second concurrent request is rejected.
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        )
+
+    # The first request completes -- its slot is released -- freeing capacity again.
+    kwargs["standard_logging_object"] = {"model_group": "grp", "model_id": "dep-1", "total_tokens": 0, "response_cost": 0}
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    result = await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+    )
+    assert result == healthy
+
+
+@pytest.mark.asyncio
+async def test_concurrency_slot_released_on_failure_frees_capacity(time_controller):
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=1)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    kwargs = {"metadata": {"tags": ["end_user_id:u1"]}}
+    await limiter.async_filter_deployments(model="grp", healthy_deployments=healthy, messages=None, request_kwargs=kwargs)
+
+    await limiter.async_post_call_failure_hook(
+        request_data=kwargs,
+        original_exception=Exception("provider error"),
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    result = await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+    )
+    assert result == healthy
