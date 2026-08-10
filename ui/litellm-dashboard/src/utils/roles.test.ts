@@ -242,8 +242,6 @@ describe("roles", () => {
   describe("teamListScopeUserId", () => {
     const SESSION_USER_ID = "user-1";
 
-    // The truth table is driven through effectiveSessionRole rather than hand-written
-    // labels, so it keeps holding if the raw -> display mapping ever moves.
     it.each(["proxy_admin", "proxy_admin_viewer", "org_admin"])(
       "leaves %s unscoped so the endpoint keeps returning its broad list",
       (rawRole) => {
@@ -268,9 +266,6 @@ describe("roles", () => {
     });
 
     it("keeps Org Admin broad even though all_admin_roles carries only the raw org_admin", () => {
-      // all_admin_roles mixes display labels with raw role names, so isAdminRole is
-      // false for the value useAuthorized actually supplies for an org admin. Relying
-      // on it here would scope org admins down to their direct memberships.
       expect(all_admin_roles).not.toContain(effectiveSessionRole("org_admin"));
       expect(isAdminRole(effectiveSessionRole("org_admin"))).toBe(false);
       expect(teamListScopeUserId(effectiveSessionRole("org_admin"), SESSION_USER_ID)).toBeNull();

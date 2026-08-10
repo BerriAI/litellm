@@ -210,8 +210,6 @@ describe("useLogFilterLogic", () => {
 
       await waitFor(() => expect(fetchAllTeams).toHaveBeenCalled());
       expect(fetchAllTeams).toHaveBeenCalledWith("test-token", null, "member-7");
-      // Without the scope the request 401s and the filter falls back to an empty
-      // list, so the rows matter as much as the argument.
       await waitFor(() => expect(result.current.allTeams).toEqual(callerTeams));
     });
 
