@@ -46762,5 +46762,240 @@
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
         "supports_response_schema": true,
         "supports_vision": true
+    },
+    "gpt-transcribe": {
+        "input_cost_per_second": 7.5e-05,
+        "litellm_provider": "openai",
+        "mode": "audio_transcription",
+        "source": "https://platform.openai.com/docs/models/gpt-transcribe",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions",
+            "/v1/realtime/transcription_sessions"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
+    "gpt-live-transcribe": {
+        "input_cost_per_second": 0.0002833333333333333,
+        "litellm_provider": "openai",
+        "mode": "audio_transcription",
+        "source": "https://platform.openai.com/docs/models/gpt-live-transcribe",
+        "supported_endpoints": [
+            "/v1/realtime",
+            "/v1/realtime/transcription_sessions"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
+    "gpt-realtime-translate": {
+        "input_cost_per_second": 0.0005666666666666667,
+        "litellm_provider": "openai",
+        "max_input_tokens": 16000,
+        "max_output_tokens": 2000,
+        "max_tokens": 2000,
+        "mode": "realtime",
+        "source": "https://platform.openai.com/docs/models/gpt-realtime-translate",
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true
+    },
+    "claude-mythos-5": {
+        "cache_creation_input_token_cost": 1.25e-05,
+        "cache_creation_input_token_cost_above_1hr": 2e-05,
+        "cache_read_input_token_cost": 1e-06,
+        "input_cost_per_token": 1e-05,
+        "litellm_provider": "anthropic",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-05,
+        "prompt_cache_min_tokens": 512,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "source": "https://docs.claude.com/en/docs/about-claude/models/overview",
+        "supports_adaptive_thinking": true,
+        "supports_assistant_prefill": false,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_output_config": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "claude-mythos-preview": {
+        "cache_creation_input_token_cost": 1.25e-05,
+        "cache_creation_input_token_cost_above_1hr": 2e-05,
+        "cache_read_input_token_cost": 1e-06,
+        "input_cost_per_token": 1e-05,
+        "litellm_provider": "anthropic",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-05,
+        "prompt_cache_min_tokens": 512,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "source": "https://docs.claude.com/en/docs/about-claude/models/overview",
+        "supports_adaptive_thinking": true,
+        "supports_assistant_prefill": false,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_output_config": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "gemini/gemini-robotics-er-2-streaming-preview": {
+        "input_cost_per_audio_token": 2e-06,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "gemini",
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.014,
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014
+        },
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "web_search_billing_unit": "per_query"
+    },
+    "mistral/mistral-small-2603": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "source": "https://docs.mistral.ai/models/model-cards/mistral-small-4-0-26-03",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "mistral/labs-leanstral-1-5": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.mistral.ai/models/model-cards/leanstral-1-5",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "mistral/mistral-moderation-2603": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 131072,
+        "mode": "moderation",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.mistral.ai/models/model-cards/mistral-moderation-26-03"
+    },
+    "mistral/voxtral-mini-2602": {
+        "input_cost_per_second": 5e-05,
+        "litellm_provider": "mistral",
+        "mode": "audio_transcription",
+        "source": "https://docs.mistral.ai/models/model-cards/voxtral-mini-transcribe-26-02",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
+    "mistral/voxtral-mini-transcribe-realtime-2602": {
+        "input_cost_per_second": 0.0001,
+        "litellm_provider": "mistral",
+        "mode": "audio_transcription",
+        "source": "https://docs.mistral.ai/models/model-cards/voxtral-mini-transcribe-realtime-26-02",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
+    "mistral/voxtral-mini-tts-2603": {
+        "litellm_provider": "mistral",
+        "mode": "audio_speech",
+        "output_cost_per_character": 1.6e-05,
+        "source": "https://docs.mistral.ai/models/model-cards/voxtral-tts-26-03",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ],
+        "supports_audio_output": true
     }
 }
