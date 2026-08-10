@@ -628,6 +628,58 @@ class TestValidateFiniteSpendErrorDetail:
         }
 
 
+class TestValidateBudgetDuration:
+    """`validate_budget_duration` keeps durations that never advance out of the
+    database.
+
+    A duration of "0s" resolves to a reset time of now, so the row is due again
+    the instant it is written. The reset job re-reads such rows on every tick
+    and, once one tenant owns enough of them, they fill each batch and starve
+    every other tenant's reset.
+    """
+
+    def test_none_is_allowed(self):
+        from litellm.proxy.management_endpoints.common_utils import (
+            validate_budget_duration,
+        )
+
+        assert validate_budget_duration(None) is None
+
+    @pytest.mark.parametrize("duration", ["30s", "5m", "1h", "1d", "7d", "30d", "1mo"])
+    def test_positive_durations_are_allowed(self, duration):
+        from litellm.proxy.management_endpoints.common_utils import (
+            validate_budget_duration,
+        )
+
+        assert validate_budget_duration(duration) is None
+
+    @pytest.mark.parametrize("duration", ["0s", "0m", "0h", "0d", "-5m", "abc", ""])
+    def test_non_advancing_durations_are_rejected(self, duration):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            validate_budget_duration,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            validate_budget_duration(duration)
+        assert exc_info.value.status_code == 400
+
+    def test_rejection_detail_is_exact(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            validate_budget_duration,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            validate_budget_duration("0s")
+
+        assert exc_info.value.detail == {
+            "error": "Invalid budget_duration '0s'. Use a format like '1h', '24h', '7d', or '30d'."
+        }
+
+
 class TestRequireCallerUserIdErrorDetail:
     """The 403 for a service-account key must carry the exact error body."""
 
