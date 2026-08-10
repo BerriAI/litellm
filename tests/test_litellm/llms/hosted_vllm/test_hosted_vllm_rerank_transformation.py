@@ -144,7 +144,30 @@ class TestHostedVLLMRerankTransform:
         }
         with pytest.raises(ValueError, match="Missing required fields in the result="):
             self.config._transform_response(response_dict)
+            
+    def test_transform_response_reads_usage_from_meta(self):
+        response_dict = {
+            "id": "abc123",
+            "results": [
+                {"index": 0, "relevance_score": 0.9, "document": {"text": "doc1 text"}},
+            ],
+            "meta": {"billed_units": {"total_tokens": 42}, "tokens": {"input_tokens": 42}},
+        }
+        result = self.config._transform_response(response_dict)
+        assert result.meta["billed_units"]["total_tokens"] == 42
+        assert result.meta["tokens"]["input_tokens"] == 42
 
+    def test_transform_response_prefers_usage_over_meta_when_both_present(self):
+        response_dict = {
+            "id": "abc123",
+            "results": [
+                {"index": 0, "relevance_score": 0.9, "document": {"text": "doc1 text"}},
+            ],
+            "usage": {"total_tokens": 5},
+            "meta": {"billed_units": {"total_tokens": 42}, "tokens": {"input_tokens": 42}},
+        }
+        result = self.config._transform_response(response_dict)
+        assert result.meta["billed_units"]["total_tokens"] == 5
 
 class TestGetOptionalRerankParamsInstruction:
     """`instruction` is threaded through get_optional_rerank_params only when set."""
