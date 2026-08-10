@@ -181,16 +181,19 @@ proxy_config:
 
 resources:
   {}
-  # We usually recommend not to specify default resources and to leave this as a conscious
-  # choice for the user. This also increases chances charts run on environments with little
-  # resources, such as Minikube. If you do want to specify resources, uncomment the following
-  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
-  # limits:
-  #   cpu: 100m
-  #   memory: 128Mi
+  # Unset by default so the chart installs on small clusters such as Minikube, and so an
+  # upgrade never leaves a running pod Pending. Production deployments should set these.
+  # A proxy at DB-connected steady state needs about 1 CPU and 4Gi of memory per worker;
+  # sizing below that gets the pod OOMKilled once traffic and DB connections ramp up.
+  # Scale both figures with --num_workers, then uncomment the lines below and remove the
+  # curly braces after 'resources:'. See "Recommended Machine Specifications" in
+  # https://docs.litellm.ai/docs/proxy/prod.
   # requests:
-  #   cpu: 100m
-  #   memory: 128Mi
+  #   cpu: "1"
+  #   memory: 4Gi
+  # limits:
+  #   cpu: "1"
+  #   memory: 4Gi
 
 autoscaling:
   enabled: false
@@ -432,9 +435,9 @@ migrationJob:
   annotations: {}
   ttlSecondsAfterFinished: 120
   resources: {}
-  #  requests:
-  #    cpu: 100m
-  #    memory: 100Mi
+  #  Unset by default. This job runs the database migration and exits, so it does not
+  #  need the steady-state headroom the proxy does; size it from your own migration
+  #  runs rather than from the proxy figures above.
   extraContainers: []
   extraInitContainers: []
 

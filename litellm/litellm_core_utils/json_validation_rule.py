@@ -1,5 +1,5 @@
 import json
-from typing import Any
+from typing import Any, Final
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
@@ -33,7 +33,7 @@ def normalize_json_schema_types(
         return schema
 
     # Type mapping from uppercase to lowercase
-    type_mapping = {
+    type_mapping: Final = {
         "BOOLEAN": "boolean",
         "STRING": "string",
         "ARRAY": "array",
@@ -47,7 +47,7 @@ def normalize_json_schema_types(
         return [normalize_json_schema_types(item, depth + 1, max_depth) for item in schema]
 
     if isinstance(schema, dict):
-        normalized_schema: dict[str, Any] = {}
+        normalized_schema: Final[dict[str, Any]] = {}
 
         for key, value in schema.items():
             if key == "type" and isinstance(value, str) and value in type_mapping:
@@ -57,7 +57,7 @@ def normalize_json_schema_types(
                 # to mark a field nullable (e.g. ["STRING", "NULL"]). Without this
                 # branch those entries fall through to the generic list recursion,
                 # which leaves the bare strings uppercase.
-                normalized_schema[key] = [  # mutable-ok: a JSON Schema type array must round-trip as a JSON list
+                normalized_schema[key] = [
                     type_mapping.get(entry, entry) for entry in value
                 ]
             elif key == "properties" and isinstance(value, dict):
@@ -93,7 +93,7 @@ def normalize_tool_schema(tool: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(tool, dict):
         return tool
 
-    normalized_tool = tool.copy()
+    normalized_tool: Final = tool.copy()
 
     # Normalize function parameters if present
     if "function" in tool and isinstance(tool["function"], dict):
@@ -117,7 +117,7 @@ def validate_schema(schema: dict, response: str):
     from litellm import JSONSchemaValidationError
 
     try:
-        response_dict = json.loads(response)
+        response_dict: Final = json.loads(response)
     except json.JSONDecodeError:
         raise JSONSchemaValidationError(model="", llm_provider="", raw_response=response, schema=json.dumps(schema))
 

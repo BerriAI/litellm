@@ -4,11 +4,11 @@ import json
 import os
 from collections import Counter
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Final, Protocol, TypeVar
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
-from pydantic import ConfigDict, ValidationError, create_model
+from pydantic import ConfigDict, JsonValue, ValidationError, create_model
 from pydantic.fields import FieldInfo
 
 import litellm
@@ -23,6 +23,7 @@ from litellm.proxy.config_resolvers.sso import (
 )
 from litellm.proxy.utils import invalidate_config_param
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.table_repositories import (
     SSOConfigRepository,
     UISettingsRepository,
@@ -33,13 +34,80 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     SSOConfig,
 )
 
-router = APIRouter()
+router: Final = APIRouter()
+
+_DbRecordT: Final = TypeVar("_DbRecordT", covariant=True)
+
+
+class _PrismaTableActions(Protocol[_DbRecordT]):
+    async def find_unique(self, where: Mapping[str, object]) -> _DbRecordT | None: ...
+
+    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> _DbRecordT: ...
+
+    async def upsert(self, where: Mapping[str, object], data: Mapping[str, object]) -> _DbRecordT: ...
+
+
+class _SsoSettingsMappingRow(Protocol):
+    @property
+    def sso_settings(self) -> Mapping[str, object] | None: ...
+
+
+class _HasSsoSettingsMappingTable(Protocol):
+    @property
+    def table(self) -> _PrismaTableActions[_SsoSettingsMappingRow]: ...
+
+
+def _sso_settings_mapping_db(repo: _HasSsoSettingsMappingTable) -> _PrismaTableActions[_SsoSettingsMappingRow]:
+    return repo.table
+
+
+class _StoredSsoSettingsRow(Protocol):
+    @property
+    def sso_settings(self) -> object: ...
+
+
+class _HasStoredSsoSettingsTable(Protocol):
+    @property
+    def table(self) -> _PrismaTableActions[_StoredSsoSettingsRow]: ...
+
+
+def _stored_sso_settings_db(repo: _HasStoredSsoSettingsTable) -> _PrismaTableActions[_StoredSsoSettingsRow]:
+    return repo.table
+
+
+class _UiSettingsRow(Protocol):
+    @property
+    def ui_settings(self) -> str | Mapping[str, JsonValue] | None: ...
+
+
+class _HasUiSettingsTable(Protocol):
+    @property
+    def table(self) -> _PrismaTableActions[_UiSettingsRow]: ...
+
+
+def _ui_settings_db(repo: _HasUiSettingsTable) -> _PrismaTableActions[_UiSettingsRow]:
+    return repo.table
+
+
+class _ConfigParamRow(Protocol):
+    @property
+    def param_value(self) -> str | Mapping[str, object] | None: ...
+
+
+class _HasConfigParamTable(Protocol):
+    @property
+    def table(self) -> _PrismaTableActions[_ConfigParamRow]: ...
+
+
+def _config_param_db(repo: _HasConfigParamTable) -> _PrismaTableActions[_ConfigParamRow]:
+    return repo.table
+
 
 # Maps each UIThemeConfig field to the env var the UI branding path reads it
 # from. /update/ui_theme_settings writes both the stored ui_theme_config and
 # these env vars, so /get/ui_theme_settings resolves the same env vars to
 # reflect a deployment branded purely through process env.
-_UI_THEME_FIELD_ENV_VARS: dict[str, str] = {
+_UI_THEME_FIELD_ENV_VARS: Final[dict[str, str]] = {
     "logo_url": "UI_LOGO_PATH",
     "favicon_url": "LITELLM_FAVICON_URL",
 }
@@ -49,11 +117,11 @@ def _is_public_http_url(value: str | None) -> bool:
     """Whether a value is a plain http(s) URL with a host, safe to disclose publicly."""
     if not isinstance(value, str) or not value.strip():
         return False
-    parsed = urlparse(value.strip())
+    parsed: Final = urlparse(value.strip())
     return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
 
-def _resolve_ui_theme_field(stored_values: Mapping[str, Any], field_name: str) -> str | None:
+def _resolve_ui_theme_field(stored_values: Mapping[str, object], field_name: str) -> str | None:
     """Resolve one UI theme field to the value the branding path actually uses.
 
     The stored ui_theme_config wins; a field absent or blank there falls back to
@@ -67,10 +135,10 @@ def _resolve_ui_theme_field(stored_values: Mapping[str, Any], field_name: str) -
     disclosed to anonymous callers. A stored value is already validated as a
     public URL on write, so it passes through.
     """
-    stored = stored_values.get(field_name)
+    stored: Final = stored_values.get(field_name)
     if isinstance(stored, str) and stored.strip():
         return stored
-    env_value = os.environ.get(_UI_THEME_FIELD_ENV_VARS[field_name])
+    env_value: Final = os.environ.get(_UI_THEME_FIELD_ENV_VARS[field_name])
     return env_value if _is_public_http_url(env_value) else None
 
 
@@ -221,7 +289,7 @@ class UISettingsResponse(SettingsResponse):
 
 
 # Allowlist of UI settings that can be stored
-ALLOWED_UI_SETTINGS_FIELDS = {
+ALLOWED_UI_SETTINGS_FIELDS: Final = {
     "disable_model_add_for_internal_users",
     "disable_team_admin_delete_team_user",
     "enabled_ui_pages_internal_users",
@@ -241,7 +309,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
 
 # Flags that must be synced from the persisted UISettings into
 # general_settings at runtime (on both read and write).
-_RUNTIME_GENERAL_SETTINGS_FLAGS = [
+_RUNTIME_GENERAL_SETTINGS_FLAGS: Final = [
     "allow_public_health_readiness_details",
     "forward_client_headers_to_llm_api",
     "forward_llm_provider_auth_headers",
@@ -262,19 +330,19 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS = [
 # include generics like ``Optional[int]`` / ``List[str]`` that are not
 # instances of ``type`` — so tightening this to ``type`` would reject
 # valid inputs.
-_EXTRA_UI_SETTINGS_FIELDS: dict[str, tuple[Any, FieldInfo]] = {}
+_EXTRA_UI_SETTINGS_FIELDS: Final[dict[str, tuple[object, FieldInfo]]] = {}
 
 # Settings OSS knows about as enterprise-gated. If a caller sends one of
 # these keys and no extension package has registered it, the PATCH
 # endpoint returns 403 instead of silently dropping the value, so the
 # client gets a clear signal that the feature requires LiteLLM Enterprise.
-_ENTERPRISE_ONLY_UI_SETTINGS: set[str] = {"enable_projects_ui"}
+_ENTERPRISE_ONLY_UI_SETTINGS: Final[set[str]] = {"enable_projects_ui"}
 
 # Memoized effective class; invalidated on registration.
 _EFFECTIVE_UI_SETTINGS_CLASS: type[UISettings] | None = None
 
 
-def register_extra_ui_setting(name: str, annotation: Any, field: FieldInfo) -> None:
+def register_extra_ui_setting(name: str, annotation: object, field: FieldInfo) -> None:
     """Register an additional UI settings field contributed by an extension package.
 
     ``field`` must be a ``FieldInfo`` instance — construct it directly
@@ -299,7 +367,7 @@ def _get_effective_ui_settings_class() -> type[UISettings]:
         return _EFFECTIVE_UI_SETTINGS_CLASS
     if not _EXTRA_UI_SETTINGS_FIELDS:
         return UISettings
-    _EFFECTIVE_UI_SETTINGS_CLASS = create_model(  # type: ignore[call-overload]
+    _EFFECTIVE_UI_SETTINGS_CLASS = create_model(
         "EffectiveUISettings",
         __base__=UISettings,
         __doc__=UISettings.__doc__,
@@ -349,7 +417,7 @@ class MCPSemanticFilterSettingsResponse(SettingsResponse):
 async def get_allowed_ips():
     from litellm.proxy.proxy_server import general_settings
 
-    _allowed_ip = general_settings.get("allowed_ips")
+    _allowed_ip: Final = general_settings.get("allowed_ips")
     return {"data": _allowed_ip}
 
 
@@ -373,7 +441,7 @@ async def add_allowed_ip(
     if prisma_client is None:
         raise Exception("No DB Connected")
 
-    _allowed_ips: list = general_settings.get("allowed_ips", [])
+    _allowed_ips: Final[list] = general_settings.get("allowed_ips", [])
     if ip_address.ip not in _allowed_ips:
         _allowed_ips.append(ip_address.ip)
         general_settings["allowed_ips"] = _allowed_ips
@@ -387,7 +455,7 @@ async def add_allowed_ip(
         )
 
     # Load existing config
-    config = await proxy_config.get_config()
+    config: Final = await proxy_config.get_config()
     verbose_proxy_logger.debug("Loaded config: %s", config)
     if "general_settings" not in config:
         config["general_settings"] = {}
@@ -395,7 +463,7 @@ async def add_allowed_ip(
     if "allowed_ips" not in config["general_settings"]:
         config["general_settings"]["allowed_ips"] = []
 
-    before_allowed_ips = list(config["general_settings"]["allowed_ips"])
+    before_allowed_ips: Final = list(config["general_settings"]["allowed_ips"])
     if ip_address.ip not in config["general_settings"]["allowed_ips"]:
         config["general_settings"]["allowed_ips"].append(ip_address.ip)
 
@@ -432,7 +500,7 @@ async def delete_allowed_ip(
         proxy_config,
     )
 
-    _allowed_ips: list = general_settings.get("allowed_ips", [])
+    _allowed_ips: Final[list] = general_settings.get("allowed_ips", [])
     if ip_address.ip in _allowed_ips:
         _allowed_ips.remove(ip_address.ip)
         general_settings["allowed_ips"] = _allowed_ips
@@ -440,7 +508,7 @@ async def delete_allowed_ip(
         raise HTTPException(status_code=404, detail="IP address not found")
 
     # Load existing config
-    config = await proxy_config.get_config()
+    config: Final = await proxy_config.get_config()
     verbose_proxy_logger.debug("Loaded config: %s", config)
     if "general_settings" not in config:
         config["general_settings"] = {}
@@ -448,7 +516,7 @@ async def delete_allowed_ip(
     if "allowed_ips" not in config["general_settings"]:
         config["general_settings"]["allowed_ips"] = []
 
-    before_allowed_ips = list(config["general_settings"]["allowed_ips"])
+    before_allowed_ips: Final = list(config["general_settings"]["allowed_ips"])
     if ip_address.ip in config["general_settings"]["allowed_ips"]:
         config["general_settings"]["allowed_ips"].remove(ip_address.ip)
 
@@ -469,7 +537,7 @@ async def delete_allowed_ip(
 
 async def _get_settings_with_schema(
     settings_key: str,
-    settings_class: Any,
+    settings_class: type[BaseModel],
     config: dict,
 ) -> dict:
     """
@@ -482,19 +550,19 @@ async def _get_settings_with_schema(
     """
     from pydantic import TypeAdapter
 
-    litellm_settings = config.get("litellm_settings", {}) or {}
-    settings_data = litellm_settings.get(settings_key, {}) or {}
+    litellm_settings: Final = config.get("litellm_settings", {}) or {}
+    settings_data: Final = litellm_settings.get(settings_key, {}) or {}
 
     # Create the settings object
-    settings = settings_class(**(settings_data))
+    settings: Final = settings_class(**(settings_data))
     # Get the schema
-    schema = TypeAdapter(settings_class).json_schema(by_alias=True)
+    schema: Final = TypeAdapter(settings_class).json_schema(by_alias=True)
 
     # Convert to dict for response
-    settings_dict = settings.model_dump()
+    settings_dict: Final = settings.model_dump()
 
     # Add descriptions to the response
-    result = {
+    result: Final = {
         "values": settings_dict,
         "field_schema": {
             "description": schema.get("description", ""),
@@ -503,7 +571,7 @@ async def _get_settings_with_schema(
     }
 
     # Add property descriptions
-    defs = schema.get("$defs", schema.get("definitions", {}))
+    defs: Final = schema.get("$defs", schema.get("definitions", {}))
     for field_name, field_info in schema["properties"].items():
         # For Optional fields, Pydantic v2 uses anyOf with [actual_type, null].
         # Resolve the non-null variant to get the real type and items.
@@ -559,7 +627,7 @@ async def get_internal_user_settings():
     from litellm.proxy.proxy_server import proxy_config
 
     # Load existing config
-    config = await proxy_config.get_config()
+    config: Final = await proxy_config.get_config()
 
     return await _get_settings_with_schema(
         settings_key="default_internal_user_params",
@@ -582,7 +650,7 @@ async def get_default_team_settings():
     from litellm.proxy.proxy_server import proxy_config
 
     # Load existing config
-    config = await proxy_config.get_config()
+    config: Final = await proxy_config.get_config()
 
     return await _get_settings_with_schema(
         settings_key="default_team_params",
@@ -602,11 +670,11 @@ async def _validate_default_teams_exist(teams: list[str] | list[NewUserRequestTe
     consume path swallows the resulting 404, so an unknown team id would silently
     drop every future user's team assignment unless it is caught here.
     """
-    team_ids = _default_team_ids(teams)
+    team_ids: Final = _default_team_ids(teams)
     if not team_ids:
         return
 
-    duplicate_ids = tuple(team_id for team_id, count in Counter(team_ids).items() if count > 1)
+    duplicate_ids: Final = tuple(team_id for team_id, count in Counter(team_ids).items() if count > 1)
     if duplicate_ids:
         raise HTTPException(
             status_code=400,
@@ -623,15 +691,45 @@ async def _validate_default_teams_exist(teams: list[str] | list[NewUserRequestTe
             detail={"error": "Database not connected. Please connect a database."},
         )
 
-    existing_teams = await TeamRepository(prisma_client).find_many(where={"team_id": {"in": list(team_ids)}})
-    existing_team_ids = {team.team_id for team in existing_teams}
-    missing_ids = tuple(team_id for team_id in team_ids if team_id not in existing_team_ids)
+    existing_teams: Final = await TeamRepository(prisma_client).find_many(where={"team_id": {"in": list(team_ids)}})
+    existing_team_ids: Final = {team.team_id for team in existing_teams}
+    missing_ids: Final = tuple(team_id for team_id in team_ids if team_id not in existing_team_ids)
     if missing_ids:
         raise HTTPException(
             status_code=400,
             detail={
                 "error": f"Team(s) not found: {', '.join(missing_ids)}. "
                 "A team must exist before it can be set as a default team for new users."
+            },
+        )
+
+
+async def _validate_default_organization_exists(organization_id: str) -> None:
+    """Reject a default organization that cannot be assigned.
+
+    Teams are created from these settings long after they are saved, and an unknown
+    organization id would fail every future team creation instead of here, where the
+    admin who typed it can still fix it.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={  # mutable-ok: HTTPException detail must be a plain dict for FastAPI JSON serialization
+                "error": "Database not connected. Please connect a database."
+            },
+        )
+
+    organization_exists: Final = await OrganizationRepository(prisma_client).exists(
+        organization_id, id_field="organization_id"
+    )
+    if not organization_exists:
+        raise HTTPException(
+            status_code=400,
+            detail={  # mutable-ok: HTTPException detail must be a plain dict for FastAPI JSON serialization
+                "error": f"Organization not found: {organization_id}. "
+                "An organization must exist before it can be set as the default organization for new teams."
             },
         )
 
@@ -658,7 +756,10 @@ async def update_default_team_member_budget(teams: list[NewUserRequestTeam], use
             )
         except Exception as e:
             verbose_proxy_logger.info(
-                f"Error updating team {team_id} with team member budget {max_budget_in_team} with error: {e}, skipping.."
+                "Error updating team %s with team member budget %s with error: %s, skipping..",
+                team_id,
+                max_budget_in_team,
+                e,
             )
             continue
 
@@ -690,13 +791,13 @@ async def _update_litellm_setting(
             detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
 
-    in_memory_var = settings.model_dump(exclude_none=True)
+    in_memory_var: Final = settings.model_dump(exclude_none=True)
 
     # Load existing config first, then set in-memory value after,
     # because get_config() may overwrite litellm.<key> with stale DB values
     # via LITELLM_SETTINGS_SAFE_DB_OVERRIDES.
-    config = await proxy_config.get_config()
-    before_value = config.get("litellm_settings", {}).get(settings_key)
+    config: Final = await proxy_config.get_config()
+    before_value: Final = config.get("litellm_settings", {}).get(settings_key)
 
     # Update the in-memory settings (after get_config to avoid stale override)
     setattr(litellm, settings_key, in_memory_var)
@@ -750,7 +851,7 @@ async def update_internal_user_settings(
     if settings.teams is not None and all(isinstance(team, NewUserRequestTeam) for team in settings.teams):
         await update_default_team_member_budget(
             settings.teams,
-            user_api_key_dict=user_api_key_dict,  # type: ignore
+            user_api_key_dict=user_api_key_dict,
         )
 
     return await _update_litellm_setting(
@@ -774,6 +875,9 @@ async def update_default_team_settings(
     Update the default team parameters for SSO users.
     These settings will be applied to new teams created from SSO.
     """
+    if settings.organization_id is not None:
+        await _validate_default_organization_exists(settings.organization_id)
+
     return await _update_litellm_setting(
         settings=settings,
         settings_key="default_team_params",
@@ -805,21 +909,23 @@ async def get_sso_settings():
     # Resolve the effective SSO config: the stored row wins, else the process
     # environment, else each field's default. Unlike the legacy read path this
     # does not write os.environ; a GET has no business mutating the environment.
-    sso_db_record = await SSOConfigRepository(prisma_client).table.find_unique(where={"id": "sso_config"})
-    sso_db_settings = dict(sso_db_record.sso_settings) if sso_db_record and sso_db_record.sso_settings else None
-    resolved = resolve_sso_config(sso_db_settings, os.environ)
+    sso_db_record: Final = await _sso_settings_mapping_db(SSOConfigRepository(prisma_client)).find_unique(
+        where={"id": "sso_config"}
+    )
+    sso_db_settings: Final = dict(sso_db_record.sso_settings) if sso_db_record and sso_db_record.sso_settings else None
+    resolved: Final = resolve_sso_config(sso_db_settings, os.environ)
 
     # Get the schema for UI display
     from pydantic import TypeAdapter
 
-    schema = TypeAdapter(SSOConfig).json_schema(by_alias=True)
+    schema: Final = TypeAdapter(SSOConfig).json_schema(by_alias=True)
 
     # Convert to dict for response, masking OAuth client secrets so plaintext
     # is never sent to the UI.
-    sso_dict = mask_sensitive_keys(resolved.config.model_dump(), set(SSO_SECRET_FIELDS))
+    sso_dict: Final = mask_sensitive_keys(resolved.config.model_dump(), set(SSO_SECRET_FIELDS))
 
     # Add descriptions to the response
-    result = {
+    result: Final = {
         "values": sso_dict,
         "provenance": resolved.provenance,
         "field_schema": {
@@ -877,8 +983,10 @@ async def update_sso_settings(
     # before-snapshot has the same shape as after_value, and rely on
     # create_config_audit_log's secret-name redaction to mask the
     # *_client_secret fields before the audit row is written.
-    existing_sso_record = await SSOConfigRepository(prisma_client).table.find_unique(where={"id": "sso_config"})
-    before_sso_data: dict[str, Any] | None = None
+    existing_sso_record: Final = await _stored_sso_settings_db(SSOConfigRepository(prisma_client)).find_unique(
+        where={"id": "sso_config"}
+    )
+    before_sso_data: dict[str, JsonValue] | None = None
     if existing_sso_record and existing_sso_record.sso_settings:
         stored = existing_sso_record.sso_settings
         if isinstance(stored, str):
@@ -887,7 +995,7 @@ async def update_sso_settings(
             before_sso_data = proxy_config._decrypt_db_variables(stored)
 
     # Load existing config
-    config = await proxy_config.get_config()
+    config: Final = await proxy_config.get_config()
 
     # Update config with new environment variables
     if "environment_variables" not in config:
@@ -898,7 +1006,7 @@ async def update_sso_settings(
         config["general_settings"] = {}
 
     # Update environment variables in config and in memory
-    sso_data = sso_config.model_dump()
+    sso_data: Final = sso_config.model_dump()
     for field_name, value in sso_data.items():
         if field_name in SSO_FIELD_ENV_VARS:
             env_var_name = SSO_FIELD_ENV_VARS[field_name]
@@ -908,10 +1016,10 @@ async def update_sso_settings(
                 # Clear environment variable if value is null/empty
                 os.environ.pop(env_var_name, None)
 
-    encrypted_sso_data = proxy_config._encrypt_env_variables(environment_variables=sso_data)
+    encrypted_sso_data: Final = proxy_config._encrypt_env_variables(environment_variables=sso_data)
 
     # Save to dedicated SSO table
-    await SSOConfigRepository(prisma_client).table.upsert(
+    await _stored_sso_settings_db(SSOConfigRepository(prisma_client)).upsert(
         where={"id": "sso_config"},
         data={
             "create": {
@@ -937,7 +1045,7 @@ async def update_sso_settings(
 
     # Remove SSO-related env vars from config.environment_variables
     try:
-        env_var_entry = await ConfigRepository(prisma_client).table.find_unique(
+        env_var_entry: Final = await _config_param_db(ConfigRepository(prisma_client)).find_unique(
             where={"param_name": "environment_variables"}
         )
 
@@ -945,18 +1053,18 @@ async def update_sso_settings(
         if env_var_entry is not None:
             if env_var_entry.param_value is not None:
                 if isinstance(env_var_entry.param_value, str):
-                    environment_variables = json.loads(env_var_entry.param_value)
+                    environment_variables: Mapping[str, object] = json.loads(env_var_entry.param_value)
                 else:
                     environment_variables = dict(env_var_entry.param_value)
             else:
                 environment_variables = {}
 
-            env_vars_to_remove = set(SSO_FIELD_ENV_VARS.values())
-            filtered_env_vars = {
+            env_vars_to_remove: Final = set(SSO_FIELD_ENV_VARS.values())
+            filtered_env_vars: Final = {
                 key: value for key, value in environment_variables.items() if key not in env_vars_to_remove
             }
 
-            await ConfigRepository(prisma_client).table.update(
+            await _config_param_db(ConfigRepository(prisma_client)).update(
                 where={"param_name": "environment_variables"},
                 data={
                     "param_value": json.dumps(filtered_env_vars, default=str),
@@ -966,7 +1074,7 @@ async def update_sso_settings(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Error updating environment_variables: {e!s}"},
+            detail={"error": f"Error updating environment_variables: {e}"},
         )
 
     return {
@@ -992,15 +1100,15 @@ async def get_ui_theme_settings():
     from litellm.proxy.proxy_server import proxy_config
 
     # Load existing config
-    config = await proxy_config.get_config()
+    config: Final = await proxy_config.get_config()
 
-    result = await _get_settings_with_schema(
+    result: Final = await _get_settings_with_schema(
         settings_key="ui_theme_config",
         settings_class=UIThemeConfig,
         config=config,
     )
 
-    stored_values = result.get("values", {})
+    stored_values: Final = result.get("values", {})
     result["values"] = {
         **stored_values,
         **{field: _resolve_ui_theme_field(stored_values, field) for field in _UI_THEME_FIELD_ENV_VARS},
@@ -1018,7 +1126,7 @@ def _validate_public_image_url(value: str | None, field_name: str) -> None:
         return
     if not isinstance(value, str) or not value.strip():
         return
-    parsed = urlparse(value.strip())
+    parsed: Final = urlparse(value.strip())
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise HTTPException(
             status_code=400,
@@ -1062,11 +1170,11 @@ async def update_ui_theme_settings(
         )
 
     # Load existing config
-    config = await proxy_config.get_config()
-    before_theme = config.get("litellm_settings", {}).get("ui_theme_config")
+    config: Final = await proxy_config.get_config()
+    before_theme: Final = config.get("litellm_settings", {}).get("ui_theme_config")
 
     # Convert theme config to dict
-    theme_data = theme_config.model_dump(exclude_none=True)
+    theme_data: Final = theme_config.model_dump(exclude_none=True)
 
     # Store UI theme config in litellm_settings (where it's retrieved from)
     if "litellm_settings" not in config:
@@ -1081,7 +1189,7 @@ async def update_ui_theme_settings(
     def _clean(url: str | None) -> str | None:
         return url if url is not None and url.strip() else None
 
-    env_updates: dict[str, str | None] = {
+    env_updates: Final[dict[str, str | None]] = {
         "UI_LOGO_PATH": _clean(theme_config.logo_url),
         "LITELLM_FAVICON_URL": _clean(theme_config.favicon_url),
     }
@@ -1135,7 +1243,7 @@ async def get_mcp_semantic_filter_settings(
             detail={"error": "Database not connected. Please connect a database."},
         )
 
-    config = await proxy_config.get_config()
+    config: Final = await proxy_config.get_config()
 
     return await _get_settings_with_schema(
         settings_key="mcp_semantic_tool_filter",
@@ -1163,7 +1271,7 @@ async def update_mcp_semantic_filter_settings(
             detail="Only proxy admins can update MCP semantic filter settings.",
         )
 
-    result = await _update_litellm_setting(
+    result: Final = await _update_litellm_setting(
         settings=settings,
         settings_key="mcp_semantic_tool_filter",
         success_message="MCP Semantic Filter settings updated successfully. Changes will be applied across all pods within 10 seconds.",
@@ -1175,13 +1283,13 @@ async def update_mcp_semantic_filter_settings(
         if prisma_client is not None:
             await proxy_config._init_semantic_filter_settings_in_db(prisma_client=prisma_client)
     except Exception as e:
-        verbose_proxy_logger.warning(f"Failed to reinitialize MCP semantic filter settings immediately: {e}")
+        verbose_proxy_logger.warning("Failed to reinitialize MCP semantic filter settings immediately: %s", e)
 
     return result
 
 
-UI_SETTINGS_CACHE_KEY = "ui_settings:settings_dict"
-UI_SETTINGS_CACHE_TTL = 600  # 10 minutes
+UI_SETTINGS_CACHE_KEY: Final = "ui_settings:settings_dict"
+UI_SETTINGS_CACHE_TTL: Final = 600  # 10 minutes
 
 
 async def get_ui_settings_cached() -> dict[str, Any]:
@@ -1194,7 +1302,7 @@ async def get_ui_settings_cached() -> dict[str, Any]:
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     # 1. Try cache
-    cached = await user_api_key_cache.async_get_cache(key=UI_SETTINGS_CACHE_KEY)
+    cached: Final = await user_api_key_cache.async_get_cache(key=UI_SETTINGS_CACHE_KEY)
     if cached is not None and isinstance(cached, dict):
         return cached
 
@@ -1202,10 +1310,12 @@ async def get_ui_settings_cached() -> dict[str, Any]:
     if prisma_client is None:
         return {}
 
-    db_record = await UISettingsRepository(prisma_client).table.find_unique(where={"id": "ui_settings"})
-    ui_settings: dict[str, Any] = {}
+    db_record: Final = await _ui_settings_db(UISettingsRepository(prisma_client)).find_unique(
+        where={"id": "ui_settings"}
+    )
+    ui_settings: dict[str, JsonValue] = {}
     if db_record and db_record.ui_settings:
-        raw = db_record.ui_settings
+        raw: Final = db_record.ui_settings
         ui_settings = json.loads(raw) if isinstance(raw, str) else dict(raw)
 
     # Sanitize
@@ -1235,12 +1345,14 @@ async def get_ui_settings():
             detail={"error": "Database not connected. Please connect a database."},
         )
 
-    ui_settings: dict[str, Any] = {}
+    ui_settings: Mapping[str, JsonValue] = {}
 
-    db_record = await UISettingsRepository(prisma_client).table.find_unique(where={"id": "ui_settings"})
+    db_record: Final = await _ui_settings_db(UISettingsRepository(prisma_client)).find_unique(
+        where={"id": "ui_settings"}
+    )
 
     if db_record and db_record.ui_settings:
-        ui_settings_json = db_record.ui_settings
+        ui_settings_json: Final = db_record.ui_settings
         if isinstance(ui_settings_json, str):
             ui_settings = json.loads(ui_settings_json)
         else:
@@ -1251,7 +1363,7 @@ async def get_ui_settings():
 
     # Sync runtime flags into general_settings so the proxy picks them up
     # at runtime (covers server restart scenarios).
-    _flags_to_sync = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
+    _flags_to_sync: Final = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
     if _flags_to_sync:
         from litellm.proxy.proxy_server import general_settings
 
@@ -1263,7 +1375,7 @@ async def get_ui_settings():
     await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
 
     # Build config-like object for schema helper
-    config: dict[str, Any] = {"litellm_settings": {"ui_settings": ui_settings}}
+    config: Final[dict[str, object]] = {"litellm_settings": {"ui_settings": ui_settings}}
 
     return await _get_settings_with_schema(
         settings_key="ui_settings",
@@ -1278,7 +1390,7 @@ async def get_ui_settings():
     dependencies=[Depends(user_api_key_auth)],
 )
 async def update_ui_settings(
-    settings_body: dict[str, Any] = Body(...),
+    settings_body: dict[str, object] = Body(...),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1308,14 +1420,14 @@ async def update_ui_settings(
 
     # Validate against the same effective class GET advertises, so
     # enterprise-registered fields are typed consistently on both sides.
-    effective_cls = _get_effective_ui_settings_class()
+    effective_cls: Final = _get_effective_ui_settings_class()
     try:
-        settings = effective_cls.model_validate(settings_body)
+        settings: Final = effective_cls.model_validate(settings_body)
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=e.errors())
 
     # Only include fields the caller actually sent (not Pydantic defaults).
-    settings_dict = settings.model_dump(exclude_unset=True)
+    settings_dict: Final[Mapping[str, JsonValue]] = settings.model_dump(exclude_unset=True)
 
     # Reject enterprise-only settings up front so the caller gets a clear
     # signal instead of a silent drop.
@@ -1332,19 +1444,21 @@ async def update_ui_settings(
         )
 
     # Enforce allowlist and drop anything unexpected
-    incoming = {k: v for k, v in settings_dict.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
+    incoming: Final = {k: v for k, v in settings_dict.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
 
     # Merge with existing persisted settings so a partial PATCH doesn't
     # overwrite fields the caller didn't send.
-    existing: dict = {}
-    db_existing = await UISettingsRepository(prisma_client).table.find_unique(where={"id": "ui_settings"})
+    existing: dict[str, JsonValue] = {}
+    db_existing: Final = await _ui_settings_db(UISettingsRepository(prisma_client)).find_unique(
+        where={"id": "ui_settings"}
+    )
     if db_existing and db_existing.ui_settings:
-        raw = db_existing.ui_settings
+        raw: Final = db_existing.ui_settings
         existing = json.loads(raw) if isinstance(raw, str) else dict(raw)
 
-    ui_settings = {**existing, **incoming}
+    ui_settings: Final = {**existing, **incoming}
 
-    await UISettingsRepository(prisma_client).table.upsert(
+    await _ui_settings_db(UISettingsRepository(prisma_client)).upsert(
         where={"id": "ui_settings"},
         data={
             "create": {
@@ -1359,7 +1473,7 @@ async def update_ui_settings(
 
     # Sync runtime flags to general_settings so the proxy picks them up
     # at runtime (general_settings is checked in pre-call utils).
-    _flags_to_sync = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
+    _flags_to_sync: Final = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
     if _flags_to_sync:
         from litellm.proxy.proxy_server import general_settings
 
@@ -1368,7 +1482,7 @@ async def update_ui_settings(
     # Invalidate + set DualCache so subsequent reads see the new values immediately
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    sanitized = {k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
+    sanitized: Final = {k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
     await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=sanitized, ttl=UI_SETTINGS_CACHE_TTL)
 
     asyncio.create_task(
@@ -1403,8 +1517,8 @@ async def upload_logo(file: UploadFile = File(...)):
     from pathlib import Path
 
     # Validate file type
-    allowed_extensions = {".png", ".jpg", ".jpeg", ".svg"}
-    file_extension = Path(file.filename or "").suffix.lower()
+    allowed_extensions: Final = {".png", ".jpg", ".jpeg", ".svg"}
+    file_extension: Final = Path(file.filename or "").suffix.lower()
 
     if file_extension not in allowed_extensions:
         raise HTTPException(
@@ -1413,20 +1527,20 @@ async def upload_logo(file: UploadFile = File(...)):
         )
 
     # Validate file size (max 5MB)
-    file_content = await file.read()
+    file_content: Final = await file.read()
     if len(file_content) > 5 * 1024 * 1024:  # 5MB
         raise HTTPException(status_code=400, detail="File size too large. Maximum size is 5MB.")
 
     # Create uploads directory if it doesn't exist
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    upload_dir = os.path.join(current_dir, "..", "uploads")
+    current_dir: Final = os.path.dirname(os.path.abspath(__file__))
+    upload_dir: Final = os.path.join(current_dir, "..", "uploads")
     os.makedirs(upload_dir, exist_ok=True)
 
     # Generate unique filename
     from litellm._uuid import uuid
 
-    unique_filename = f"logo_{uuid.uuid4().hex}{file_extension}"
-    file_path = os.path.join(upload_dir, unique_filename)
+    unique_filename: Final = f"logo_{uuid.uuid4().hex}{file_extension}"
+    file_path: Final = os.path.join(upload_dir, unique_filename)
 
     # Save the file
     with open(file_path, "wb") as buffer:

@@ -1343,6 +1343,83 @@ def test_ProxyConfig__load_alerting_settings_does_not_log_general_settings_dict(
 
 
 # ---------------------------------------------------------------------------
+# ProxyConfig._warn_on_misplaced_jwt_keys
+# ---------------------------------------------------------------------------
+
+
+def _capture_proxy_warnings(config: dict) -> tuple[tuple[str, ...], list[str]]:
+    """Run ``_warn_on_misplaced_jwt_keys`` and return (result, warning messages).
+
+    Uses a dedicated handler rather than caplog because caplog is unreliable
+    under pytest-xdist (see the LIT-4152 alerting test above).
+    """
+    import logging
+
+    from litellm._logging import verbose_proxy_logger
+
+    class LogRecordHandler(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.records: list[logging.LogRecord] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append(record)
+
+    handler = LogRecordHandler()
+    handler.setLevel(logging.WARNING)
+    original_level = verbose_proxy_logger.level
+    verbose_proxy_logger.setLevel(logging.WARNING)
+    verbose_proxy_logger.addHandler(handler)
+    try:
+        result = ProxyConfig()._warn_on_misplaced_jwt_keys(config=config)
+    finally:
+        verbose_proxy_logger.removeHandler(handler)
+        verbose_proxy_logger.setLevel(original_level)
+
+    warnings = [r.getMessage() for r in handler.records if r.levelno == logging.WARNING]
+    return result, warnings
+
+
+def test_ProxyConfig__warn_on_misplaced_jwt_keys_warns_on_top_level_keys():
+    """LIT-4584 Issue 3: JWT keys at the YAML top level are silently dropped, so
+    load_config must warn. Both recognized keys are reported."""
+    result, warnings = _capture_proxy_warnings(
+        {"enable_jwt_auth": True, "litellm_jwtauth": {"team_id_jwt_field": "client_id"}}
+    )
+
+    assert result == ("enable_jwt_auth", "litellm_jwtauth")
+    assert len(warnings) == 1
+    assert "enable_jwt_auth" in warnings[0]
+    assert "litellm_jwtauth" in warnings[0]
+    assert "general_settings" in warnings[0]
+
+
+def test_ProxyConfig__warn_on_misplaced_jwt_keys_warns_even_when_also_under_general_settings():
+    """A stale top-level copy is dead config even when the correct copy lives
+    under general_settings, so the warning must still fire on dual placement."""
+    result, warnings = _capture_proxy_warnings(
+        {
+            "enable_jwt_auth": True,
+            "general_settings": {"enable_jwt_auth": True},
+        }
+    )
+
+    assert result == ("enable_jwt_auth",)
+    assert len(warnings) == 1
+    assert "enable_jwt_auth" in warnings[0]
+
+
+def test_ProxyConfig__warn_on_misplaced_jwt_keys_silent_when_correctly_placed():
+    """Keys living only under general_settings are valid, so no warning fires."""
+    result, warnings = _capture_proxy_warnings(
+        {"general_settings": {"enable_jwt_auth": True, "litellm_jwtauth": {}}}
+    )
+
+    assert result == ()
+    assert warnings == []
+
+
+# ---------------------------------------------------------------------------
 # ProxyConfig.initialize_secret_manager
 # ---------------------------------------------------------------------------
 
@@ -2016,6 +2093,48 @@ async def test_ProxyConfig__get_hierarchical_router_settings_missing_returns_non
     assert out is None
 
 
+@pytest.mark.asyncio
+async def test_ProxyConfig__get_hierarchical_router_settings_falls_back_to_team(monkeypatch):
+    """A key with no router_settings inherits the team's, so a team-level
+    model_group_alias reaches the request path at all."""
+    pc = ProxyConfig()
+    fake_key = SimpleNamespace(router_settings=None, team_id="team-1")
+    team_settings = {"model_group_alias": {"group-a": "group-b"}}
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.get_team_object",
+        AsyncMock(return_value=SimpleNamespace(router_settings=team_settings)),
+    )
+
+    out = await pc._get_hierarchical_router_settings(
+        user_api_key_dict=fake_key,
+        prisma_client=None,
+        proxy_logging_obj=None,
+    )
+
+    assert out == team_settings
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__get_hierarchical_router_settings_key_shadows_team_entirely(monkeypatch):
+    """Resolution returns whichever object it finds first, it does not merge
+    per field, so a key that sets any router setting hides every team setting
+    including an alias the key itself never set."""
+    pc = ProxyConfig()
+    fake_key = SimpleNamespace(router_settings={"num_retries": 3}, team_id="team-1")
+    team_lookup = AsyncMock(return_value=SimpleNamespace(router_settings={"model_group_alias": {"group-a": "group-b"}}))
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_team_object", team_lookup)
+
+    out = await pc._get_hierarchical_router_settings(
+        user_api_key_dict=fake_key,
+        prisma_client=None,
+        proxy_logging_obj=None,
+    )
+
+    assert out == {"num_retries": 3}
+    assert "model_group_alias" not in out
+    team_lookup.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._add_router_settings_from_db_config
 # ---------------------------------------------------------------------------
@@ -2519,4 +2638,4 @@ async def test_ProxyConfig__init_non_llm_configs_empty_agents_key_clears_remembe
 
     assert clean_agent_registry.config_agents == ()
     clean_agent_registry.load_agents_from_db_and_config(db_agents=None)
-    assert clean_agent_registry.get_agent_list() == []
+    assert clean_agent_registry.get_agent_list() == ()

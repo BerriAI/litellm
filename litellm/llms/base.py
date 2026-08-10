@@ -73,7 +73,7 @@ class BaseLLM:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if hasattr(self, "_aclient_session"):
-            await self._aclient_session.aclose()  # type: ignore
+            await self._aclient_session.aclose()
 
     def validate_environment(self, *args, **kwargs) -> Any | None:  # set up the environment required to run the model
         return None

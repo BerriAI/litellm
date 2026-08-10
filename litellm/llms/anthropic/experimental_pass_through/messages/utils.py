@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Any, cast, get_type_hints
+from typing import Any, Final, cast, get_type_hints
 
 from litellm.types.llms.anthropic import AnthropicMessagesRequestOptionalParams
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -40,8 +40,8 @@ class AnthropicMessagesRequestUtils:
         Returns:
             AnthropicMessagesRequestOptionalParams instance with only the valid parameters
         """
-        valid_keys = _anthropic_messages_optional_param_keys()
-        filtered_params = {k: v for k, v in params.items() if k in valid_keys and v is not None}
+        valid_keys: Final = _anthropic_messages_optional_param_keys()
+        filtered_params: Final = {k: v for k, v in params.items() if k in valid_keys and v is not None}
         if model is not None:
             from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 

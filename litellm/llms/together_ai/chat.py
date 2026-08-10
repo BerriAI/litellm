@@ -6,6 +6,8 @@ Calls done in OpenAI/openai.py as TogetherAI is openai-compatible.
 Docs: https://docs.together.ai/reference/completions-1
 """
 
+from typing import Final
+
 from litellm._logging import verbose_logger
 from litellm.utils import supports_function_calling
 
@@ -29,9 +31,9 @@ class TogetherAIConfig(OpenAIGPTConfig):
         try:
             supports_fc = supports_function_calling(model, custom_llm_provider="together_ai")
         except Exception as e:
-            verbose_logger.debug(f"Error getting supported openai params: {e}")
+            verbose_logger.debug("Error getting supported openai params: %s", e)
 
-        optional_params = super().get_supported_openai_params(model)
+        optional_params: Final = super().get_supported_openai_params(model)
         if supports_fc is not True:
             verbose_logger.debug(
                 "Only some together models support function calling/response_format. Docs - https://docs.together.ai/docs/function-calling"
@@ -49,7 +51,7 @@ class TogetherAIConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        mapped_openai_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        mapped_openai_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
         if "response_format" in mapped_openai_params and mapped_openai_params["response_format"] == {"type": "text"}:
             mapped_openai_params.pop("response_format")
