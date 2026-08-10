@@ -8,6 +8,8 @@ const CAPABILITY_ROLES = {
   viewDeletedTeams: all_admin_roles,
   viewPolicies: all_admin_roles,
   viewPrompts: all_admin_roles,
+  viewOrganizationUsage: all_admin_roles,
+  viewAgentUsage: all_admin_roles,
   viewGlobalSpend: proxyAdminOnlyRoles,
 } as const satisfies Record<string, readonly string[]>;
 
