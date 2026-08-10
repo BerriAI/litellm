@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  all_admin_roles,
   effectiveSessionRole,
   isAdminRole,
   isProxyAdminRole,
@@ -8,6 +9,7 @@ import {
   isViewOnlySessionRole,
   rolesAllowedToViewWriteScopedPages,
   rolesWithWriteAccess,
+  teamListScopeUserId,
 } from "./roles";
 import { Team } from "@/components/networking";
 
@@ -234,6 +236,44 @@ describe("roles", () => {
     it("stays true for proxy_admin_viewer even though its session role reads as Admin", () => {
       expect(effectiveSessionRole("proxy_admin_viewer")).toBe("Admin");
       expect(isViewOnlySessionRole("proxy_admin_viewer")).toBe(true);
+    });
+  });
+
+  describe("teamListScopeUserId", () => {
+    const SESSION_USER_ID = "user-1";
+
+    // The truth table is driven through effectiveSessionRole rather than hand-written
+    // labels, so it keeps holding if the raw -> display mapping ever moves.
+    it.each(["proxy_admin", "proxy_admin_viewer", "org_admin"])(
+      "leaves %s unscoped so the endpoint keeps returning its broad list",
+      (rawRole) => {
+        expect(teamListScopeUserId(effectiveSessionRole(rawRole), SESSION_USER_ID)).toBeNull();
+      },
+    );
+
+    it.each(["internal_user", "internal_user_viewer", "internal_viewer", "app_user"])(
+      "scopes %s to its own user id, which is what the endpoint authorizes on",
+      (rawRole) => {
+        expect(teamListScopeUserId(effectiveSessionRole(rawRole), SESSION_USER_ID)).toBe(SESSION_USER_ID);
+      },
+    );
+
+    it("also accepts the Admin Viewer label that formatUserRole emits", () => {
+      expect(teamListScopeUserId("Admin Viewer", SESSION_USER_ID)).toBeNull();
+    });
+
+    it("scopes an unknown or absent role rather than assuming a broad list", () => {
+      expect(teamListScopeUserId(null, SESSION_USER_ID)).toBe(SESSION_USER_ID);
+      expect(teamListScopeUserId("Undefined Role", SESSION_USER_ID)).toBe(SESSION_USER_ID);
+    });
+
+    it("keeps Org Admin broad even though all_admin_roles carries only the raw org_admin", () => {
+      // all_admin_roles mixes display labels with raw role names, so isAdminRole is
+      // false for the value useAuthorized actually supplies for an org admin. Relying
+      // on it here would scope org admins down to their direct memberships.
+      expect(all_admin_roles).not.toContain(effectiveSessionRole("org_admin"));
+      expect(isAdminRole(effectiveSessionRole("org_admin"))).toBe(false);
+      expect(teamListScopeUserId(effectiveSessionRole("org_admin"), SESSION_USER_ID)).toBeNull();
     });
   });
 });
