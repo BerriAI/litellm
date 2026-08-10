@@ -4549,7 +4549,7 @@ class StandardLoggingPayloadSetup:
         if kwargs is None:
             return messages
         system: Final = kwargs.get("system")
-        if not system or not isinstance(system, (str, list)):
+        if not isinstance(system, (str, list)) or (isinstance(system, list) and not system):
             return messages
         system_message: Final = {"role": "system", "content": system}
         if messages is None:

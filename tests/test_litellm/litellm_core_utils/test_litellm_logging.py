@@ -2261,16 +2261,18 @@ def test_append_system_prompt_messages_content_blocks():
     )
     assert result == [{"role": "system", "content": system_blocks}, *messages]
 
-    # already-prepended system blocks are not duplicated
     result = StandardLoggingPayloadSetup.append_system_prompt_messages(
         kwargs={"system": system_blocks}, messages=result
     )
     assert len(result) == 2
 
-    # empty system is not logged as an empty system turn
     assert (
         StandardLoggingPayloadSetup.append_system_prompt_messages(kwargs={"system": []}, messages=messages) == messages
     )
+    assert StandardLoggingPayloadSetup.append_system_prompt_messages(kwargs={"system": ""}, messages=messages) == [
+        {"role": "system", "content": ""},
+        *messages,
+    ]
 
 
 @pytest.mark.asyncio
