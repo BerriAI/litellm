@@ -26758,6 +26758,11 @@ export interface components {
             } | null;
             /** Adaptive Router Default Model */
             adaptive_router_default_model?: string | null;
+            /**
+             * Allow Client Keepalive Override
+             * @default false
+             */
+            allow_client_keepalive_override: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
             /** Api Base */
@@ -26906,6 +26911,8 @@ export interface components {
             input_cost_per_video_token?: number | null;
             /** Itpm */
             itpm?: number | null;
+            /** Keepalive Seconds */
+            keepalive_seconds?: number | null;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Trace Id */
@@ -35429,6 +35436,11 @@ export interface components {
             } | null;
             /** Adaptive Router Default Model */
             adaptive_router_default_model?: string | null;
+            /**
+             * Allow Client Keepalive Override
+             * @default false
+             */
+            allow_client_keepalive_override: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
             /** Api Base */
@@ -35577,6 +35589,8 @@ export interface components {
             input_cost_per_video_token?: number | null;
             /** Itpm */
             itpm?: number | null;
+            /** Keepalive Seconds */
+            keepalive_seconds?: number | null;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Trace Id */

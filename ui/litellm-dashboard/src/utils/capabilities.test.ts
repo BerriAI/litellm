@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { hasCapability, rolesWithCapability, type Capability } from "./capabilities";
+import { effectiveSessionRole } from "./roles";
 
 const ADMIN_ROLES = ["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer"];
 const NON_ADMIN_ROLES = [
@@ -66,6 +67,39 @@ describe("hasCapability for organization admins", () => {
       hasCapability(SESSION_ROLE_AN_ORG_ADMIN_ACTUALLY_CARRIES, capability, true),
     );
     expect(orgAdminCapabilities).toEqual(["viewDeletedTeams"]);
+  });
+
+  it("does not let the org-admin allowance reopen the proxy-admin-only viewGlobalSpend gate", () => {
+    expect(hasCapability(SESSION_ROLE_AN_ORG_ADMIN_ACTUALLY_CARRIES, "viewGlobalSpend", true)).toBe(false);
+    expect(hasCapability("Org Admin", "viewGlobalSpend", true)).toBe(false);
+  });
+});
+
+describe("hasCapability - viewGlobalSpend", () => {
+  it.each(ADMIN_ROLES)("should grant it to %s", (role) => {
+    expect(hasCapability(role, "viewGlobalSpend")).toBe(true);
+  });
+
+  it.each([...NON_ADMIN_ROLES, "internal_user_viewer", "org_admin"])("should deny it to %s", (role) => {
+    expect(hasCapability(role, "viewGlobalSpend")).toBe(false);
+  });
+
+  it("should deny it to every role an org admin or team admin can present at runtime", () => {
+    const orgAdminSessionRole = effectiveSessionRole("internal_user");
+    const teamAdminSessionRole = effectiveSessionRole("internal_user");
+
+    expect(orgAdminSessionRole).toBe("Internal User");
+    expect(hasCapability(orgAdminSessionRole, "viewGlobalSpend")).toBe(false);
+    expect(hasCapability(teamAdminSessionRole, "viewGlobalSpend")).toBe(false);
+  });
+
+  it.each([
+    ["proxy_admin", true],
+    ["proxy_admin_viewer", true],
+    ["internal_user", false],
+    ["internal_user_viewer", false],
+  ] as const)("should match the backend for a %s session", (rawRole, expected) => {
+    expect(hasCapability(effectiveSessionRole(rawRole), "viewGlobalSpend")).toBe(expected);
   });
 });
 

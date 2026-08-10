@@ -100,3 +100,12 @@ export const effectiveSessionRole = (rawUserRole?: string): string => {
 
 export const isViewOnlySessionRole = (rawUserRole?: string): boolean =>
   viewOnlyRawRoles.includes(rawUserRole?.toLowerCase() ?? "");
+
+// Session roles (the value `useAuthorized().userRole` supplies) that /team/list and
+// /v2/team/list already answer with a broad list: proxy-wide for admins, org-wide for
+// org admins. Sending a user_id for those narrows the response to direct memberships,
+// so only the roles the endpoints would otherwise reject carry one.
+const sessionRolesWithBroadTeamList: string[] = ["Admin", "Admin Viewer", "Org Admin"];
+
+export const teamListScopeUserId = (userRole: string | null, userId: string | null): string | null =>
+  sessionRolesWithBroadTeamList.includes(userRole ?? "") ? null : userId;
