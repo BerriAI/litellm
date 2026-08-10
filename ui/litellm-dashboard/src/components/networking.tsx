@@ -2098,7 +2098,6 @@ export const adminTopEndUsersCall = async (
 
 export const adminspendByProvider = async (
   accessToken: string,
-  keyToken: string | null,
   startTime: string | undefined,
   endTime: string | undefined,
 ) => {
@@ -2107,7 +2106,6 @@ export const adminspendByProvider = async (
       accessToken,
       query: {
         ...(startTime && endTime ? { start_date: startTime, end_date: endTime } : {}),
-        ...(keyToken ? { api_key: keyToken } : {}),
       },
     });
     return data;

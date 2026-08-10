@@ -1,4 +1,6 @@
-import { all_admin_roles } from "./roles";
+import { all_admin_roles, old_admin_roles } from "./roles";
+
+const proxyAdminOnlyRoles = [...old_admin_roles, "proxy_admin", "proxy_admin_viewer"];
 
 const CAPABILITY_ROLES = {
   viewToolPolicies: all_admin_roles,
@@ -6,6 +8,7 @@ const CAPABILITY_ROLES = {
   viewDeletedTeams: all_admin_roles,
   viewPolicies: all_admin_roles,
   viewPrompts: all_admin_roles,
+  viewGlobalSpend: proxyAdminOnlyRoles,
 } as const satisfies Record<string, readonly string[]>;
 
 export type Capability = keyof typeof CAPABILITY_ROLES;
