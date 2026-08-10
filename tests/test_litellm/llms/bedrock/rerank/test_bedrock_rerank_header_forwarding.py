@@ -17,6 +17,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.bedrock.base_aws_llm import Boto3CredentialsInfo
+from litellm.llms.bedrock.rerank.handler import BedrockRerankHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 # Mock response for Bedrock rerank
@@ -408,3 +409,41 @@ def test_bedrock_rerank_extra_headers_and_headers_merge():
 
         except Exception as e:
             pytest.fail(f"Failed to merge and forward headers: {str(e)}")
+
+
+def test_bedrock_rerank_forwarded_headers_excluded_from_sigv4_signature():
+    """
+    A forwarded header like x-forwarded-for can be rewritten between LiteLLM
+    signing the request and AWS receiving it (e.g. by an intermediate load
+    balancer), which invalidates the signature if that header was part of
+    the signed set. It must still reach Bedrock, just unsigned.
+    """
+    from botocore.credentials import Credentials
+
+    handler = BedrockRerankHandler()
+    mock_credentials_info = Boto3CredentialsInfo(
+        credentials=Credentials("test-access-key", "test-secret-key", "test-token"),
+        aws_region_name="us-east-1",
+        aws_bedrock_runtime_endpoint=None,
+    )
+
+    with patch.object(
+        BedrockRerankHandler,
+        "_get_boto_credentials_from_optional_params",
+        return_value=mock_credentials_info,
+    ):
+        prepared_request = handler._prepare_request(
+            model="cohere.rerank-v3-5:0",
+            api_base=None,
+            extra_headers={"x-forwarded-for": "203.0.113.5"},
+            data={"query": test_query, "documents": test_documents},
+            optional_params={},
+        )
+
+    headers = prepared_request["prepped"].headers
+    signed_headers = headers["Authorization"].split("SignedHeaders=")[1].split(",")[0].split(";")
+
+    assert "x-forwarded-for" not in signed_headers, (
+        f"x-forwarded-for must not be part of the SigV4 signature, got SignedHeaders={signed_headers}"
+    )
+    assert headers["x-forwarded-for"] == "203.0.113.5", "forwarded header must still reach Bedrock, unsigned"
