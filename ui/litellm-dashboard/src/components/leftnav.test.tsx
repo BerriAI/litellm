@@ -158,13 +158,13 @@ describe("Sidebar (leftnav)", () => {
     };
 
     menuGroups.forEach((group) => {
-      expect(translations.en.translation.sidebar.groups[group.groupLabel]).toBeTruthy();
-      expect(translations.ru.translation.sidebar.groups[group.groupLabel]).toBeTruthy();
+      expect(translations.en.navigation.sidebar.groups[group.groupLabel]).toBeTruthy();
+      expect(translations.ru.navigation.sidebar.groups[group.groupLabel]).toBeTruthy();
     });
 
     flattenedMenuItems.forEach((item) => {
-      expect(translations.en.translation.sidebar.items[item.key]).toBeTruthy();
-      expect(translations.ru.translation.sidebar.items[item.key]).toBeTruthy();
+      expect(translations.en.navigation.sidebar.items[item.key]).toBeTruthy();
+      expect(translations.ru.navigation.sidebar.items[item.key]).toBeTruthy();
     });
   });
 

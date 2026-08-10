@@ -8,7 +8,7 @@ import { Languages } from "lucide-react";
 
 const LanguageSelector = () => {
   const { language, setLanguage } = useDashboardLanguage();
-  const copy = resources[language].translation.language;
+  const copy = resources[language].common.language;
   const activeLanguageName = language === "ru" ? copy.russian : copy.english;
 
   return (
