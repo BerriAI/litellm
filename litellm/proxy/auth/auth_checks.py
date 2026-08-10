@@ -1176,7 +1176,6 @@ async def get_end_user_object(
         if _response is None:
             raise Exception
 
-
         # Apply default budget if needed
         _response = await _apply_default_budget_to_end_user(
             end_user_obj=_response,
@@ -2149,7 +2148,6 @@ async def get_access_object(
                 status_code=404,
                 detail={"error": f"Access group doesn't exist in db. Access group={access_group_id}."},
             )
-
 
         # Save to cache
         await _cache_access_object(
