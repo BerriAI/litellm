@@ -1,0 +1,4 @@
+general_settings:
+   database_url: os.environ/DATABASE_URL
+   master_key: "sk-1234"
+

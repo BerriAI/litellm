@@ -1,0 +1,96 @@
+# Isolated local Docker deployment of the litellm gateway at num_workers=4,
+# for running tests/e2e/ against it and comparing behavior against the
+# berrie-litellm-stage EKS cluster (which runs the same litellm_internal_staging
+# code at 1 worker / 1 replica).
+#
+# The gateway image is built out-of-band from a worktree at the staging ref so
+# both sides run identical code:
+#   git worktree add --detach ../../../litellm-staging-wt berri/litellm_internal_staging
+#   docker build -t litellm-gateway:staging-27d2fa84 ../../../litellm-staging-wt
+#
+# Bring up:   docker compose -f docker/e2e-4workers/docker-compose.yml up -d
+# Run suite:  LITELLM_PROXY_URL=http://localhost:4000 uv run pytest tests/e2e/... -v
+#
+# This is NOT the same topology as EKS: 4 gunicorn UvicornWorkers in one
+# container vs N single-worker pods, standalone Redis vs ElastiCache cluster+TLS,
+# local Postgres vs Aurora IAM. Tests that pass on EKS-1-worker but fail here are
+# candidate multi-worker / shared-state issues.
+name: litellm-e2e-4workers
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: dbpassword9090
+    ports:
+      - "5433:5432"   # host 5433 to avoid clashing with a root-compose litellm_db on 5432
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"   # query UI/API (E2E_OTEL_QUERY_URL)
+      - "4318:4318"     # OTLP HTTP ingest
+
+  gateway:
+    image: litellm-gateway:staging-27d2fa84
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Provider keys (OPENAI/ANTHROPIC/GEMINI/AZURE_AI/VERTEXAI/AWS/DD/...) come
+    # from the suite's own env file; the overrides below win over it for the
+    # in-container service coordinates and the multi-worker knobs.
+    env_file:
+      - ../../tests/e2e/.env
+    environment:
+      DATABASE_URL: "postgresql://llmproxy:dbpassword9090@db:5432/litellm"
+      LITELLM_MASTER_KEY: "sk-1234"
+      STORE_MODEL_IN_DB: "True"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      REDIS_SSL: "false"
+      REDIS_CLUSTER: "false"
+      # >1 worker -> prometheus needs a shared multiproc dir; /tmp is writable.
+      PROMETHEUS_MULTIPROC_DIR: "/tmp/litellm_prom"
+      # otel callback exports OTLP to the local jaeger instead of a cluster one.
+      OTEL_EXPORTER: "otlp_http"
+      OTEL_ENDPOINT: "http://jaeger:4318/v1/traces"
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "4"]
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    ports:
+      - "4010:4000"   # host 4010 to avoid clashing with a local proxy already on 4000
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+
+volumes:
+  pgdata:
