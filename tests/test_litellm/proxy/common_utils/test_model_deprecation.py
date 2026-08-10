@@ -6,7 +6,7 @@ Slack integration — so they can run without the full proxy stack.
 
 import os
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 from unittest.mock import MagicMock
 
 
@@ -49,6 +49,11 @@ class TestParseDeprecationDate:
 
     def test_should_return_none_for_unsupported_type(self):
         assert _parse_deprecation_date(12345) is None
+
+    def test_should_narrow_datetime_to_date(self):
+        assert _parse_deprecation_date(
+            datetime(2026, 12, 31, 23, 59, tzinfo=timezone.utc)
+        ) == date(2026, 12, 31)
 
 
 class TestClassify:
@@ -195,6 +200,56 @@ class TestCollectModelDeprecations:
         )
 
         assert len(snapshot.imminent) == 1
+
+    def test_should_resolve_via_unprefixed_model_name(self, monkeypatch):
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {"gpt-4o": {"deprecation_date": "2026-06-10"}},
+        )
+        router = _make_router(
+            [
+                {
+                    "model_name": "alias",
+                    "litellm_params": {"model": "openai/gpt-4o"},
+                    "model_info": {"id": "1"},
+                }
+            ]
+        )
+
+        snapshot = collect_model_deprecations(
+            llm_router=router, warn_within_days=30, today=date(2026, 6, 1)
+        )
+
+        assert [m.litellm_model for m in snapshot.imminent] == ["gpt-4o"]
+
+    def test_should_keep_both_dates_when_group_has_conflicting_dates(self, monkeypatch):
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {"shared-model": {"deprecation_date": "2026-06-10"}},
+        )
+        router = _make_router(
+            [
+                {
+                    "model_name": "alias",
+                    "litellm_params": {"model": "shared-model"},
+                    "model_info": {"id": "1"},
+                },
+                {
+                    "model_name": "alias",
+                    "litellm_params": {"model": "shared-model"},
+                    "model_info": {"id": "2", "deprecation_date": "2027-01-01"},
+                },
+            ]
+        )
+
+        snapshot = collect_model_deprecations(
+            llm_router=router, warn_within_days=30, today=date(2026, 6, 1)
+        )
+
+        assert len(snapshot.imminent) == 1
+        assert len(snapshot.upcoming) == 1
 
     def test_should_resolve_via_base_model(self, monkeypatch):
         today = date(2026, 6, 1)

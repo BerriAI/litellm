@@ -484,14 +484,11 @@ class ProxyLogging:
 
         if (
             self.slack_alerting_instance is not None
-            and AlertType.model_deprecation_warnings
-            in self.slack_alerting_instance.alert_types
+            and AlertType.model_deprecation_warnings in self.slack_alerting_instance.alert_types
             and not self.deprecation_check_started
         ):
             asyncio.create_task(
-                self.slack_alerting_instance._run_scheduled_deprecation_check(
-                    llm_router=llm_router
-                )
+                self.slack_alerting_instance._run_scheduled_deprecation_check(llm_router=llm_router)
             )  # RUN MODEL DEPRECATION ALERT LOOP (if scheduled)
             self.deprecation_check_started = True
 
