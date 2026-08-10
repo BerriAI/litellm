@@ -1063,13 +1063,11 @@ class ResponseAPILoggingUtils:
                 usage_input["input_tokens_details"] = usage_input["input_token_details"]
             if usage_input.get("output_tokens_details") is None and "output_token_details" in usage_input:
                 usage_input["output_tokens_details"] = usage_input["output_token_details"]
-            total_tokens = usage_input.get("total_tokens")
-            if total_tokens is None:
+            if usage_input.get("total_tokens") is None:
                 input_tokens: Final = usage_input.get("input_tokens")
                 output_tokens: Final = usage_input.get("output_tokens")
-                if input_tokens is not None and output_tokens is not None:
-                    total_tokens = input_tokens + output_tokens
-                    usage_input["total_tokens"] = total_tokens
+                if isinstance(input_tokens, int) and isinstance(output_tokens, int):
+                    usage_input["total_tokens"] = input_tokens + output_tokens
             response_api_usage = ResponseAPIUsage(**usage_input)
         else:
             response_api_usage = usage_input
