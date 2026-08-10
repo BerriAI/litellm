@@ -6,11 +6,14 @@ in the litellm hot path: token counting, model info lookup, provider
 resolution, and cost calculation.
 """
 
+import io
 import threading
+import wave
 
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.audio_utils.utils import calculate_request_duration
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.litellm_core_utils.token_counter import token_counter
@@ -208,6 +211,45 @@ def test_get_model_cost_key_exact_match():
 def test_get_model_cost_key_case_insensitive():
     """Benchmark model cost key lookup with case-insensitive fallback."""
     litellm.utils._get_model_cost_key("GPT-4o")
+
+
+# ---------------------------------------------------------------------------
+# Audio duration extraction (budget reservation, auth path)
+# ---------------------------------------------------------------------------
+
+
+def _benchmark_wav(duration_seconds: float, sample_rate: int = 16000) -> bytes:
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(sample_rate)
+        handle.writeframes(b"\x00\x00" * int(sample_rate * duration_seconds))
+    return buffer.getvalue()
+
+
+SHORT_WAV = _benchmark_wav(5.0)
+LONG_WAV = _benchmark_wav(600.0)
+UNREADABLE_UPLOAD = b"\x00\x00\x00\x20ftypM4A " + b"\x11" * (2 * 1024 * 1024)
+
+
+@pytest.mark.benchmark
+def test_audio_duration_short_wav():
+    """Duration read for a 5s WAV, the common transcription upload."""
+    calculate_request_duration(io.BytesIO(SHORT_WAV))
+
+
+@pytest.mark.benchmark
+def test_audio_duration_long_wav():
+    """Duration read for 10 minutes of WAV, ~19 MB, near the provider size cap."""
+    calculate_request_duration(io.BytesIO(LONG_WAV))
+
+
+@pytest.mark.benchmark
+def test_audio_duration_unreadable_container():
+    """Measures the failure path taken by any upload libsndfile declines to
+    decode, before the byte-count ceiling picks it up."""
+    calculate_request_duration(io.BytesIO(UNREADABLE_UPLOAD))
 
 
 # ---------------------------------------------------------------------------

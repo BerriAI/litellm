@@ -1080,8 +1080,8 @@ def test_reservation_uses_most_expensive_deployment_in_group():
             return_value={"max_output_tokens": 200000},
         ),
         patch(
-            "litellm.proxy.spend_tracking.budget_reservation._get_deployment_tiered_pricing_tables",
-            return_value=[cheap, expensive],
+            "litellm.proxy.spend_tracking.budget_reservation._get_deployment_cost_infos",
+            return_value=[{"tiered_pricing": cheap}, {"tiered_pricing": expensive}],
         ),
         patch(
             "litellm.proxy.spend_tracking.budget_reservation._estimate_input_tokens",
@@ -2583,3 +2583,290 @@ async def test_streaming_slow_path_processes_and_yields_chunk(spend_counter_stat
 
     assert received == [{"content": "hi"}]
     streaming_logging_obj.async_post_call_streaming_hook.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Audio transcription
+# ---------------------------------------------------------------------------
+
+WHISPER_COST_INFO = {
+    "mode": "audio_transcription",
+    "input_cost_per_second": 0.0001,
+    "output_cost_per_second": 0.0001,
+}
+
+
+def _wav_bytes(duration_seconds: float, sample_rate: int = 16000) -> bytes:
+    """A real, decodable mono PCM WAV, so the exact-duration path actually runs."""
+    import io
+    import wave
+
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(sample_rate)
+        handle.writeframes(b"\x00\x00" * int(sample_rate * duration_seconds))
+    return buffer.getvalue()
+
+
+def _upload(content: bytes, filename: str = "speech.wav"):
+    import io
+
+    from fastapi import UploadFile
+
+    return UploadFile(file=io.BytesIO(content), filename=filename, size=len(content))
+
+
+def _transcription_body(upload) -> dict:
+    return {"model": "whisper-1", "file": upload}
+
+
+def _estimate_transcription(request_body: dict, cost_info: dict | None = None) -> float | None:
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+        return_value=WHISPER_COST_INFO if cost_info is None else cost_info,
+    ):
+        return estimate_request_max_cost(
+            request_body=request_body,
+            route="/v1/audio/transcriptions",
+            llm_router=None,
+        )
+
+
+def test_should_reserve_transcription_cost_from_exact_audio_duration():
+    """Regression: the estimator returned None for whisper-1, so
+    reserve_budget_for_request never reserved and a key could overspend without
+    limit. The estimate must be the audio's duration times the per-second rate."""
+    estimated = _estimate_transcription(_transcription_body(_upload(_wav_bytes(12.0))))
+
+    assert estimated == pytest.approx(12.0 * 0.0001)
+
+
+def test_transcription_reservation_does_not_sum_input_and_output_per_second_rates():
+    """cost_per_second() prefers output_cost_per_second and never adds
+    input_cost_per_second to it. whisper-1 sets both to 0.0001, so summing them
+    would reserve exactly double what the request is billed."""
+    estimated = _estimate_transcription(_transcription_body(_upload(_wav_bytes(10.0))))
+
+    assert estimated == pytest.approx(10.0 * 0.0001)
+    assert estimated != pytest.approx(10.0 * 0.0002)
+
+
+def test_should_price_transcription_from_input_rate_when_output_rate_absent():
+    """Providers like azure/gpt-realtime-whisper declare only input_cost_per_second."""
+    estimated = _estimate_transcription(
+        _transcription_body(_upload(_wav_bytes(10.0))),
+        cost_info={"mode": "audio_transcription", "input_cost_per_second": 0.0002},
+    )
+
+    assert estimated == pytest.approx(10.0 * 0.0002)
+
+
+def test_should_fall_back_to_byte_ceiling_when_duration_is_unreadable():
+    """An upload whose audio cannot be decoded must still reserve, bounded by its
+    byte count, rather than fall back to no reservation at all. Uses .m4a as a
+    concrete example of a container the installed libsndfile declines."""
+    from litellm.proxy.spend_tracking.budget_reservation import MIN_AUDIO_BYTES_PER_SECOND
+
+    opaque = b"\x00\x00\x00\x20ftypM4A " + b"\x11" * 40000
+    estimated = _estimate_transcription(_transcription_body(_upload(opaque, filename="memo.m4a")))
+
+    assert estimated == pytest.approx(len(opaque) / MIN_AUDIO_BYTES_PER_SECOND * 0.0001)
+
+
+def test_should_prefer_exact_duration_over_the_byte_ceiling():
+    """The ceiling is a fallback, not the primary path: a readable file must be
+    priced on its real duration, which is far cheaper than the ceiling implies."""
+    from litellm.proxy.spend_tracking.budget_reservation import MIN_AUDIO_BYTES_PER_SECOND
+
+    content = _wav_bytes(4.0)
+    estimated = _estimate_transcription(_transcription_body(_upload(content)))
+
+    ceiling_estimate = len(content) / MIN_AUDIO_BYTES_PER_SECOND * 0.0001
+    assert estimated == pytest.approx(4.0 * 0.0001)
+    assert estimated < ceiling_estimate
+
+
+def test_estimating_duration_leaves_the_upload_readable_by_the_endpoint():
+    """Estimation runs during auth, before audio_transcriptions() reads the same
+    UploadFile. Consuming the stream here would send an empty file to the provider."""
+    content = _wav_bytes(3.0)
+    upload = _upload(content)
+
+    assert _estimate_transcription(_transcription_body(upload)) == pytest.approx(3.0 * 0.0001)
+    assert upload.file.read() == content
+
+
+def test_should_skip_reservation_when_audio_file_is_absent():
+    assert _estimate_transcription({"model": "whisper-1"}) is None
+
+
+def test_should_skip_reservation_when_audio_file_has_no_size_or_duration():
+    """Must be None, never 0.0: a zero estimate skips the reservation just as None
+    does, but silently, and reads downstream as 'this request is free'."""
+    import io
+
+    from fastapi import UploadFile
+
+    sizeless = UploadFile(file=io.BytesIO(b""), filename="empty.m4a", size=0)
+
+    assert _estimate_transcription(_transcription_body(sizeless)) is None
+
+
+def test_token_priced_transcription_model_still_uses_the_token_path():
+    """The 11 token-priced transcription models (e.g. gpt-4o-transcribe) carry no
+    per-second rate. They must keep estimating through the token path untouched."""
+    token_priced = {
+        "mode": "audio_transcription",
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 1e-05,
+        "max_input_tokens": 16000,
+        "max_output_tokens": 2000,
+    }
+    estimated = _estimate_transcription(
+        _transcription_body(_upload(_wav_bytes(30.0))),
+        cost_info=token_priced,
+    )
+
+    assert estimated == pytest.approx((16000 * 2.5e-06) + (2000 * 1e-05))
+
+
+def test_per_second_pricing_survives_the_router_model_group_path():
+    """ModelGroupInfo is a pydantic model that drops undeclared fields, and it does
+    not declare the per-second rates. Going through a real Router (as every proxy
+    does) would otherwise strip them and leave the fix inert in production, while
+    tests that patch _get_model_cost_info would still pass."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "whisper-1",
+                "litellm_params": {"model": "openai/whisper-1", "api_key": "sk-test"},
+            }
+        ]
+    )
+
+    estimated = estimate_request_max_cost(
+        request_body=_transcription_body(_upload(_wav_bytes(20.0))),
+        route="/v1/audio/transcriptions",
+        llm_router=router,
+    )
+
+    assert estimated == pytest.approx(20.0 * 0.0001)
+
+
+@pytest.mark.asyncio
+async def test_should_reject_concurrent_transcription_against_depleted_budget(
+    spend_counter_state,
+):
+    """The reported bug: a key at its budget kept admitting whisper requests while
+    chat requests on the same key correctly returned 429. With the reservation in
+    place, a second concurrent transcription against a budget the first already
+    pinned must raise BudgetExceededError."""
+    _, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-audio-deplete", spend=0.0, max_budget=0.001)
+    await key_cache.async_set_cache(key="key-audio-deplete", value=valid_token)
+
+    async def reserve():
+        with patch(
+            "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+            return_value=WHISPER_COST_INFO,
+        ):
+            return await reserve_budget_for_request(
+                request_body=_transcription_body(_upload(_wav_bytes(10.0))),
+                route="/v1/audio/transcriptions",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=None,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    first = await reserve()
+    assert first is not None
+    assert first["reserved_cost"] == pytest.approx(0.001)
+
+    with pytest.raises(litellm.BudgetExceededError):
+        await reserve()
+
+    await release_budget_reservation(first)
+
+
+@pytest.mark.asyncio
+async def test_should_release_over_reserved_transcription_cost_on_reconcile(
+    spend_counter_state,
+):
+    """The byte ceiling deliberately over-reserves for unreadable containers. That is
+    only safe because reconciliation gives the surplus back; if it did not, an
+    over-estimate would permanently inflate recorded spend."""
+    from litellm.proxy.spend_tracking.budget_reservation import reconcile_budget_reservation
+
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-audio-reconcile", spend=0.0, max_budget=10.0)
+    await key_cache.async_set_cache(key="key-audio-reconcile", value=valid_token)
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+        return_value=WHISPER_COST_INFO,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_transcription_body(_upload(b"\x00" * 50000, filename="memo.m4a")),
+            route="/v1/audio/transcriptions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(50000 / 500.0 * 0.0001)
+
+    await reconcile_budget_reservation(budget_reservation=reservation, actual_cost=0.004)
+
+    assert await counter_cache.async_get_cache(key="spend:key:key-audio-reconcile") == pytest.approx(0.004)
+
+
+def test_reasoning_rate_reaches_the_estimator_through_the_router():
+    """ModelGroupInfo drops output_cost_per_reasoning_token along with the
+    per-second rates, so on a routed proxy _max_cost_for_cost_info could never
+    apply the higher reasoning rate its own comment says it reserves at. Pinning
+    this because it is the one non-audio estimate the deployment-cost-info
+    candidates deliberately move."""
+    reasoning_model = {
+        "mode": "chat",
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 2e-07,
+        "output_cost_per_reasoning_token": 5e-07,
+        "max_input_tokens": 1000,
+        "max_output_tokens": 100,
+    }
+    request_body = {"model": "reasoner", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100}
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+            return_value={k: v for k, v in reasoning_model.items() if k != "output_cost_per_reasoning_token"},
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._get_deployment_cost_infos",
+            return_value=[reasoning_model],
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_input_tokens",
+            return_value=10,
+        ),
+    ):
+        estimated = estimate_request_max_cost(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=None,
+        )
+
+    assert estimated == pytest.approx((10 * 2e-07) + (100 * 5e-07))
