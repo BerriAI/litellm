@@ -27,6 +27,7 @@ from litellm.constants import (
     PTU_ROLLUP_MAX_BACKFILL_DAYS,
     PTU_SENTINEL_API_KEY,
 )
+from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.types.router import ModelInfo
 
 if TYPE_CHECKING:
@@ -512,7 +513,15 @@ async def run_scheduled_ptu_rollup(
     duplicate work rather than correctness: the upserts are idempotent on the sentinel
     key and the prune reads only the row's own timestamp, so a second pod arriving
     mid-run cannot corrupt the day.
+
+    Returns None without touching the database when PTU cost attribution is off. Proxy
+    startup already skips scheduling the cron, so this guards the function itself rather
+    than its one caller, and a deployment that never opted in accrues nothing whatever
+    reaches it.
     """
+    if not is_ptu_cost_attribution_enabled():
+        return None
+
     if pod_lock_manager is None or pod_lock_manager.redis_cache is None:
         return await _run_and_alert(prisma_client, target_date=target_date, alert=alert, may_prune=False)
 

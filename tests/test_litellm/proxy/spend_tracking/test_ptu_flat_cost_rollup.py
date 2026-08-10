@@ -8,6 +8,7 @@ import pytest
 
 import litellm.proxy.spend_tracking.ptu_flat_cost_rollup as ptu_rollup
 from litellm.constants import PTU_ROLLUP_MAX_BACKFILL_DAYS, PTU_SENTINEL_API_KEY
+from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
 from litellm.types.router import ModelInfo
 from litellm.proxy.spend_tracking.ptu_flat_cost_rollup import (
     PTUModel,
@@ -27,6 +28,13 @@ TODAY = date(2026, 7, 31)
 # omits it would exercise a shape the write path cannot produce. Tests about the start
 # itself pass with_start=False.
 _DEFAULT_PTU_START = "2020-01-01T00:00:00Z"
+
+
+@pytest.fixture(autouse=True)
+def _ptu_enabled(monkeypatch):
+    """PTU is gated off by default. These cover the rollup's mechanics, not the gate, so
+    they run with it on; the gate itself is covered by its own test below."""
+    monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
 
 
 _VALID_PTU = {"ptu_count": 5, "cost_per_ptu_per_hour": 2.0, "team_id": "t"}
@@ -1479,3 +1487,18 @@ async def test_the_prune_cutoff_allows_for_clock_skew_between_hosts():
         "a charge written 30s ago by a lagging pod was swept"
     )
     assert ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "dep-stale") not in table.rows
+
+
+@pytest.mark.asyncio
+async def test_scheduled_rollup_writes_nothing_when_ptu_attribution_is_disabled(monkeypatch):
+    """Startup already skips scheduling the cron, so this guards the function itself: a
+    deployment that never opted in accrues nothing whatever route reaches the rollup."""
+    monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR, raising=False)
+    table = _FakeSentinelTable()
+    prisma = _prisma_for([_model_row(model_info=_VALID_PTU)], table)
+
+    result = await run_scheduled_ptu_rollup(prisma, pod_lock_manager=None, alert=None)
+
+    assert result is None
+    assert table.rows == {}
+    assert table.upsert_keys == []
