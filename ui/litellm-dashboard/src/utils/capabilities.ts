@@ -12,7 +12,14 @@ const CAPABILITY_ROLES = {
 
 export type Capability = keyof typeof CAPABILITY_ROLES;
 
-export const hasCapability = (userRole: string | null | undefined, capability: Capability): boolean =>
-  userRole != null && CAPABILITY_ROLES[capability].includes(userRole);
+const ORG_ADMIN_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>(["viewDeletedTeams"]);
+
+export const hasCapability = (
+  userRole: string | null | undefined,
+  capability: Capability,
+  isOrgAdmin: boolean = false,
+): boolean =>
+  (isOrgAdmin && ORG_ADMIN_CAPABILITIES.has(capability)) ||
+  (userRole != null && CAPABILITY_ROLES[capability].includes(userRole));
 
 export const rolesWithCapability = (capability: Capability): string[] => [...CAPABILITY_ROLES[capability]];
