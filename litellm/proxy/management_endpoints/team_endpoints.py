@@ -82,6 +82,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
     get_user_object,
 )
+from litellm.proxy.auth.auth_utils import enforce_output_token_estimates_are_admin_only
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
@@ -1153,6 +1154,8 @@ async def new_team(
     - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"extra_info": "some info"}
     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit for this team - applied across all keys for this team.
     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit for this team - applied across all keys for this team.
+    - default_estimated_output_tokens: Optional[int] - Expected output tokens reserved for TPM limiting when a request omits max_tokens, for keys on this team that do not set their own. Positive integer.
+    - default_estimated_output_tokens_per_model: Optional[Dict[str, int]] - Per-model override of the above. Example: {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
     - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
     - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
@@ -1265,6 +1268,13 @@ async def new_team(
                             "error": f"soft_budget ({data.soft_budget}) must be strictly lower than max_budget ({data.max_budget})"
                         },
                     )
+
+        enforce_output_token_estimates_are_admin_only(
+            data=data,
+            existing_metadata=None,
+            user_api_key_dict=user_api_key_dict,
+            entity="team",
+        )
 
         # Check if license is over limit
         total_teams: Final = await _team_db(prisma_client).count()
@@ -1863,6 +1873,8 @@ async def update_team(
     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+    - default_estimated_output_tokens: Optional[int] - Expected output tokens reserved for TPM limiting when a request omits max_tokens, for keys on this team that do not set their own. Positive integer.
+    - default_estimated_output_tokens_per_model: Optional[Dict[str, int]] - Per-model override of the above. Example: {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
     - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
     Example - update team TPM Limit
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
@@ -1947,6 +1959,14 @@ async def update_team(
         await _verify_team_access(
             team_obj=LiteLLM_TeamTable.model_validate(existing_team_row.model_dump()),
             user_api_key_dict=user_api_key_dict,
+        )
+
+        _existing_team_metadata: Final[object] = getattr(existing_team_row, "metadata", None)
+        enforce_output_token_estimates_are_admin_only(
+            data=data,
+            existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,
+            user_api_key_dict=user_api_key_dict,
+            entity="team",
         )
 
         _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")

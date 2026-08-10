@@ -7,7 +7,7 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { TextInput, Button as TremorButton } from "@tremor/react";
 import { Form, Input, Select, Switch, Tooltip } from "antd";
 import { useEffect, useState } from "react";
-import { rolesWithWriteAccess } from "../../utils/roles";
+import { isProxyAdminRole, rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
@@ -17,6 +17,8 @@ import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSel
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
+import { estimateFields, estimateRules, estimateTooltips, withNormalizedEstimates } from "./estimatedOutputTokens";
+import { canonicalBudgetDuration, keyTypeFromRoutes } from "./keyEditFieldNormalizers";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import {
@@ -49,29 +51,6 @@ interface KeyEditViewProps {
   premiumUser?: boolean;
 }
 
-// Add this helper function
-
-// Helper function to determine key_type display value from allowed_routes
-const getKeyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): string => {
-  if (!allowedRoutes || allowedRoutes.length === 0) {
-    return "default";
-  }
-
-  if (allowedRoutes.includes("llm_api_routes")) {
-    return "llm_api";
-  }
-
-  if (allowedRoutes.includes("management_routes")) {
-    return "management";
-  }
-
-  if (allowedRoutes.includes("info_routes")) {
-    return "read_only";
-  }
-
-  return "default";
-};
-
 export function KeyEditView({
   keyData,
   onCancel,
@@ -83,6 +62,8 @@ export function KeyEditView({
   premiumUser = false,
 }: KeyEditViewProps) {
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
+  const canEditEstimates = userRole != null && isProxyAdminRole(userRole);
+  const estimateTooltip = estimateTooltips(canEditEstimates);
   const [form] = Form.useForm();
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
@@ -157,27 +138,16 @@ export function KeyEditView({
     form.setFieldValue("disabled_callbacks", disabledCallbacks);
   }, [form, disabledCallbacks]);
 
-  // Normalize any legacy word-form budget duration to the canonical value the dropdown uses
-  const getBudgetDuration = (duration: string | null) => {
-    if (!duration) return null;
-    const wordToCanonical: Record<string, string> = {
-      hourly: "1h",
-      daily: "24h",
-      weekly: "7d",
-      monthly: "30d",
-    };
-    return wordToCanonical[duration] ?? duration;
-  };
-
   // Set initial form values
   const initialValues = {
     ...keyData,
     token: keyData.token || keyData.token_id,
-    budget_duration: getBudgetDuration(keyData.budget_duration),
+    budget_duration: canonicalBudgetDuration(keyData.budget_duration),
     metadata: formatMetadataForDisplay(stripTagsFromMetadata(keyData.metadata)),
     guardrails: keyData.metadata?.guardrails,
     disable_global_guardrails: keyData.metadata?.disable_global_guardrails || false,
     throttle_on_budget_exceeded: keyData.metadata?.throttle_on_budget_exceeded || false,
+    ...estimateFields(keyData.metadata),
     prompts: keyData.metadata?.prompts,
     tags: keyData.metadata?.tags,
     vector_stores: keyData.object_permission?.vector_stores || [],
@@ -208,7 +178,7 @@ export function KeyEditView({
     form.setFieldsValue({
       ...keyData,
       token: keyData.token || keyData.token_id,
-      budget_duration: getBudgetDuration(keyData.budget_duration),
+      budget_duration: canonicalBudgetDuration(keyData.budget_duration),
       metadata: formatMetadataForDisplay(stripTagsFromMetadata(keyData.metadata)),
       guardrails: keyData.metadata?.guardrails,
       disable_global_guardrails: keyData.metadata?.disable_global_guardrails || false,
@@ -222,6 +192,7 @@ export function KeyEditView({
       },
       mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
       throttle_on_budget_exceeded: keyData.metadata?.throttle_on_budget_exceeded || false,
+      ...estimateFields(keyData.metadata),
       logging_settings: extractLoggingSettings(keyData.metadata),
       disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
         ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
@@ -339,7 +310,7 @@ export function KeyEditView({
         values.budget_fallbacks = {};
       }
 
-      await onSubmit(values);
+      await onSubmit(withNormalizedEstimates(values));
     } finally {
       setIsKeySaving(false);
     }
@@ -418,7 +389,7 @@ export function KeyEditView({
         >
           {({ getFieldValue, setFieldValue }) => {
             const allowedRoutesValue = getFieldValue("allowed_routes") || "";
-            // Convert string to array for getKeyTypeFromRoutes
+            // Convert string to array for keyTypeFromRoutes
             const allowedRoutes =
               typeof allowedRoutesValue === "string" && allowedRoutesValue.trim() !== ""
                 ? allowedRoutesValue
@@ -426,7 +397,7 @@ export function KeyEditView({
                     .map((r: string) => r.trim())
                     .filter((r: string) => r.length > 0)
                 : [];
-            const keyTypeValue = getKeyTypeFromRoutes(allowedRoutes);
+            const keyTypeValue = keyTypeFromRoutes(allowedRoutes);
 
             return (
               <Select
@@ -568,6 +539,24 @@ export function KeyEditView({
 
       <Form.Item label="Model RPM Limit" name="model_rpm_limit">
         <Input.TextArea rows={4} placeholder='{"gpt-4": 100, "claude-v1": 200}' />
+      </Form.Item>
+
+      <Form.Item
+        label="Estimated Output Tokens"
+        name="default_estimated_output_tokens"
+        tooltip={estimateTooltip.estimate}
+        rules={[estimateRules.positive]}
+      >
+        <NumericalInput min={1} step={1} disabled={!canEditEstimates} />
+      </Form.Item>
+
+      <Form.Item
+        label="Estimated Output Tokens Per Model"
+        name="default_estimated_output_tokens_per_model"
+        tooltip={estimateTooltip.perModel}
+        rules={[estimateRules.perModel]}
+      >
+        <Input.TextArea rows={4} placeholder='{"gpt-4": 4096}' disabled={!canEditEstimates} />
       </Form.Item>
 
       <Form.Item
