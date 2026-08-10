@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import traceback
+from typing import Final
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -2812,6 +2813,63 @@ class TestOpenAIPassthroughRoute:
 
             # Verify result
             assert result == {"id": "asst_123", "object": "assistant"}
+
+
+def _resolve_route_name(method: str, path: str) -> str | None:
+    from starlette.routing import Match
+
+    from litellm.proxy.proxy_server import app
+
+    scope: Final = {
+        "type": "http",
+        "method": method,
+        "path": path,
+        "headers": [],
+        "query_string": b"",
+        "root_path": "",
+    }
+    for route in app.router.routes:
+        if route.matches(scope)[0] == Match.FULL:
+            return getattr(route, "name", None)
+    return None
+
+
+@pytest.mark.parametrize(
+    "method, path",
+    [
+        ("POST", "/openai_passthrough/v1/files"),
+        ("GET", "/openai_passthrough/v1/files"),
+        ("GET", "/openai_passthrough/v1/files/file-abc123"),
+        ("DELETE", "/openai_passthrough/v1/files/file-abc123"),
+        ("GET", "/openai_passthrough/v1/files/file-abc123/content"),
+        ("POST", "/openai_passthrough/v1/batches"),
+        ("GET", "/openai_passthrough/v1/batches"),
+        ("GET", "/openai_passthrough/v1/batches/batch_abc123"),
+        ("POST", "/openai_passthrough/v1/batches/batch_abc123/cancel"),
+        ("POST", "/openai_passthrough/v1/responses"),
+    ],
+)
+def test_openai_passthrough_prefix_wins_over_native_provider_routes(method, path):
+    """
+    /openai_passthrough exists to guarantee passthrough, so the native
+    /{provider}/v1/files and /{provider}/v1/batches routes must never capture it
+    with provider="openai_passthrough" (which 500s on the LlmProviders lookup).
+    """
+    assert _resolve_route_name(method, path) == "openai_proxy_route"
+
+
+@pytest.mark.parametrize(
+    "method, path, expected_name",
+    [
+        ("POST", "/openai/v1/files", "create_file"),
+        ("GET", "/azure/v1/files", "list_files"),
+        ("POST", "/v1/files", "create_file"),
+        ("POST", "/v1/batches", "create_batch"),
+        ("POST", "/openai/v1/chat/completions", "openai_proxy_route"),
+    ],
+)
+def test_native_provider_routes_are_unchanged(method, path, expected_name):
+    assert _resolve_route_name(method, path) == expected_name
 
 
 class TestCursorProxyRoute:

@@ -2,6 +2,8 @@ import { all_admin_roles } from "./roles";
 
 const CAPABILITY_ROLES = {
   viewToolPolicies: all_admin_roles,
+  viewAuditLogs: all_admin_roles,
+  viewDeletedTeams: all_admin_roles,
   viewOrganizationUsage: all_admin_roles,
   viewAgentUsage: all_admin_roles,
 } as const satisfies Record<string, readonly string[]>;

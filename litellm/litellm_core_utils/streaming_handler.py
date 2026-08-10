@@ -213,7 +213,75 @@ class CustomStreamWrapper:
     def __aiter__(self) -> AsyncIterator["ModelResponseStream"]:
         return self
 
+    def _restore_consumer_correlation_context(self, *, guarded: bool = False) -> None:
+        """Restore trace_id/session_id in the *consuming* thread/task/context.
+
+        wrapper_async() deliberately skips restoring correlation context when
+        it returns a stream, so log lines emitted while the caller iterates it
+        still carry this call's ids (see request_correlation_in_logs).
+        wrapper() (the sync path) never stamps anything in the first place -
+        see Logging.__init__'s supports_correlation_logging - so this method
+        is an inert no-op for sync-created streams, harmless to call anyway
+        since the class is shared between __next__ and __anext__.
+        But the terminal success/failure handlers this stream dispatches to
+        finish the job run on a *different* Task/thread (asyncio.create_task,
+        threading.Thread, or the shared executor) - restoring there fixes up
+        that detached context, not the one actually running the caller's
+        `for`/`async for` loop. Call this at every point control genuinely
+        returns to that consuming context: natural exhaustion (StopIteration/
+        StopAsyncIteration), a raised failure, or explicit aclose(). Never let
+        this raise - it must not break the caller's actual stream handling.
+
+        guarded=True (only __del__ uses this) skips the restore unless the
+        contextvars still hold the ids this stream's own call set, so a
+        delayed finalizer never overwrites a different, still-active call
+        that has since taken over the same Task/thread's context.
+        """
+        try:
+            logging_obj: Final = getattr(self, "logging_obj", None)
+            if logging_obj is None:
+                return
+            method_name: Final = (
+                "_restore_correlation_context_if_unclaimed" if guarded else "_restore_correlation_context"
+            )
+            restore: Final = getattr(logging_obj, method_name, None)
+            if restore is not None:
+                restore()
+        except Exception as restore_error:  # noqa: BLE001  # best-effort cleanup; must not raise into the caller
+            verbose_logger.debug("could not restore correlation context: %s", restore_error)
+
+    def __del__(self) -> None:
+        """Best-effort correlation-context cleanup for an abandoned async stream.
+
+        Only meaningfully applies to streams created by wrapper_async(): it
+        leaves contextvars "open" across the caller's iteration, so if the
+        caller never fully consumes the stream - stops early, drops the
+        reference, cancels it - none of the exit points
+        _restore_consumer_correlation_context() is called from ever run. For a
+        sync stream (wrapper()), this is a no-op in practice: wrapper() never
+        stamps trace_id/session_id for sync calls in the first place (see
+        Logging.__init__'s supports_correlation_logging), so there is nothing
+        for this to clean up.
+
+        This is a best-effort fallback, not a guarantee: __del__ timing is
+        unpredictable (delayed by cyclic GC, not guaranteed at interpreter
+        shutdown, and may run on a different thread), so this can only reduce
+        how long the leak persists, not eliminate it. That's an acceptable
+        trade specifically because its blast radius is bounded to the one
+        asyncio Task this stream's own call ran in - each async call has its
+        own copy of the contextvars, and Tasks (unlike a thread pool's worker
+        threads) are never recycled across requests, so a delayed or missed
+        cleanup here can never misattribute a *different* request's logs.
+        guarded=True additionally ensures it never clobbers a different,
+        still-active call's context within that same Task if this fires late.
+        """
+        self._restore_consumer_correlation_context(guarded=True)
+
     async def aclose(self):
+        # Restore the consumer's outer context only after the underlying
+        # provider stream's own close (and its diagnostic logging below, if
+        # closing fails) completes - not before - so those log lines still
+        # carry this closing stream's own trace_id/session_id.
         if self.completion_stream is not None:
             stream_to_close: Final = self.completion_stream
             self.completion_stream = None
@@ -233,6 +301,7 @@ class CustomStreamWrapper:
                         "CustomStreamWrapper.aclose: error closing completion_stream: %s",
                         e,
                     )
+        self._restore_consumer_correlation_context()
 
     def check_send_stream_usage(self, stream_options: dict | None):
         return stream_options is not None and stream_options.get("include_usage", False) is True
@@ -1839,6 +1908,7 @@ class CustomStreamWrapper:
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
                     return response
+                self._restore_consumer_correlation_context()
                 raise  # Re-raise StopIteration
             else:
                 self.sent_last_chunk = True
@@ -1852,6 +1922,19 @@ class CustomStreamWrapper:
                     processed_chunk,
                     cache_hit,
                 )  # log response
+                # Deliberately do NOT restore context here even though
+                # completion_stream is already exhausted: this chunk is still
+                # real data belonging to this call, and the caller's own
+                # (application-level) log statements processing it run
+                # immediately after this return, in this same synchronous
+                # frame - restoring first would make those lines carry the
+                # wrong ids, which is exactly what leaving context open during
+                # iteration is meant to prevent (see
+                # _restore_consumer_correlation_context's docstring). A caller
+                # that keeps iterating gets cleaned up on its next __next__()
+                # call (immediate StopIteration, handled above); one that
+                # stops right here relies on aclose() or the best-effort
+                # __del__ guard instead.
                 return processed_chunk
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
@@ -1879,8 +1962,12 @@ class CustomStreamWrapper:
         cache_hit = False
         if self.custom_llm_provider is not None and self.custom_llm_provider == "cached_response":
             cache_hit = True
-        self._check_max_streaming_duration()
         try:
+            # Inside the try (not before it) so a raised litellm.Timeout flows
+            # through the same except Exception -> _handle_stream_fallback_error
+            # path as every other failure, restoring the consumer's correlation
+            # context - a check before the try would bypass that entirely.
+            self._check_max_streaming_duration()
             if self.completion_stream is None:
                 await self.fetch_stream()
 
@@ -2083,10 +2170,17 @@ class CustomStreamWrapper:
                     )
                 )
 
+            self._restore_consumer_correlation_context()
             raise StopAsyncIteration  # Re-raise StopIteration
         else:
             self.sent_last_chunk = True
             processed_chunk: Final = self.finish_reason_handler()
+            # see sync __next__'s sibling branch: deliberately do NOT restore
+            # here - this chunk is still this call's own data, and restoring
+            # before returning it would corrupt the caller's own log
+            # statements processing it. A caller that keeps iterating gets
+            # cleaned up on the next __anext__() call; one that stops here
+            # relies on aclose() or the best-effort __del__ guard.
             return processed_chunk
 
     def _log_stream_failure_and_raise(self, e: Exception) -> NoReturn:
@@ -2138,7 +2232,12 @@ class CustomStreamWrapper:
         """
         from litellm.exceptions import MidStreamFallbackError
 
-        # Map to OpenAI exception format
+        # Map to OpenAI exception format. Some providers' mappers (e.g.
+        # _map_anthropic_exception, _map_aleph_alpha_exception) synchronously
+        # log a debug diagnostic (the raw status code) as part of mapping -
+        # restore the consumer's outer context only after this completes, so
+        # that diagnostic log line still carries the failing stream's own
+        # trace_id/session_id instead of the consumer's (or an empty one).
         if isinstance(e, OpenAIError):
             mapped_exception: Exception = e
         else:
@@ -2152,6 +2251,7 @@ class CustomStreamWrapper:
                 )
             except Exception as mapping_error:
                 mapped_exception = mapping_error
+        self._restore_consumer_correlation_context()
 
         def _normalize_status_code(exc: Exception) -> int | None:
             """Best-effort status_code extraction."""

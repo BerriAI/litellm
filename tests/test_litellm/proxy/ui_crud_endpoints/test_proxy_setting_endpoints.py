@@ -2928,3 +2928,143 @@ def test_update_mcp_semantic_filter_settings_requires_proxy_admin(monkeypatch):
         assert "proxy admin" in resp.json()["detail"].lower()
     finally:
         app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+class TestPtuCostAttributionUISetting:
+    """``enable_ptu_cost_attribution`` is derived from the environment on every GET.
+
+    It is deliberately not an allowlisted, persisted setting: the point of gating PTU
+    flat cost on an env var is that an admin cannot flip it at runtime from the UI.
+    """
+
+    @staticmethod
+    def _mock_prisma(monkeypatch, stored=None):
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_prisma = MagicMock()
+        mock_record = None
+        if stored is not None:
+            mock_record = MagicMock()
+            mock_record.ui_settings = stored
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=mock_record)
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+        return mock_prisma
+
+    def test_reported_false_when_the_env_var_is_unset(self, mock_auth, monkeypatch):
+        from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
+
+        monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR, raising=False)
+        self._mock_prisma(monkeypatch)
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        assert response.json()["values"]["enable_ptu_cost_attribution"] is False
+
+    def test_reported_true_once_the_env_var_is_set(self, mock_auth, monkeypatch):
+        from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
+
+        monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
+        self._mock_prisma(monkeypatch)
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        assert response.json()["values"]["enable_ptu_cost_attribution"] is True
+
+    def test_a_persisted_true_cannot_forge_the_derived_value(self, mock_auth, monkeypatch):
+        """A row written before the allowlist existed must not be able to turn the feature on."""
+        from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
+
+        monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR, raising=False)
+        self._mock_prisma(monkeypatch, stored={"enable_ptu_cost_attribution": True})
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        assert response.json()["values"]["enable_ptu_cost_attribution"] is False
+
+    def test_is_not_an_allowlisted_persisted_setting(self):
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+            ALLOWED_UI_SETTINGS_FIELDS,
+        )
+
+        assert "enable_ptu_cost_attribution" not in ALLOWED_UI_SETTINGS_FIELDS
+
+    def test_the_body_get_returns_is_a_valid_patch_body(self, mock_auth, monkeypatch):
+        """Read-modify-write is how a client edits one setting. GET injects the derived key,
+        so rejecting it on presence made GET's own output an invalid PATCH body: the caller
+        got a 400 and silently lost the edit it actually wanted."""
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR, raising=False)
+        mock_prisma = self._mock_prisma(monkeypatch)
+
+        try:
+            round_tripped = client.get("/get/ui_settings").json()["values"]
+            assert "enable_ptu_cost_attribution" in round_tripped
+            response = client.patch("/update/ui_settings", json=round_tripped)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        assert mock_prisma.db.litellm_uisettings.upsert.called
+
+    def test_a_co_submitted_setting_still_applies_alongside_the_derived_key(self, mock_auth, monkeypatch):
+        """The derived key riding along must not discard the caller's real edit."""
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR, raising=False)
+        mock_prisma = self._mock_prisma(monkeypatch)
+
+        try:
+            response = client.patch(
+                "/update/ui_settings",
+                json={"enable_ptu_cost_attribution": False, "enable_chat_ui": True},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        upsert_data = mock_prisma.db.litellm_uisettings.upsert.call_args.kwargs["data"]
+        persisted = json.loads(upsert_data["create"]["ui_settings"])
+        assert persisted["enable_chat_ui"] is True
+        assert "enable_ptu_cost_attribution" not in persisted
+
+    def test_patch_rejects_the_derived_setting(self, mock_auth, monkeypatch):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma = self._mock_prisma(monkeypatch)
+
+        try:
+            response = client.patch(
+                "/update/ui_settings",
+                json={"enable_ptu_cost_attribution": True},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 400
+        assert "enable_ptu_cost_attribution" in str(response.json()["detail"])
+        assert not mock_prisma.db.litellm_uisettings.upsert.called

@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime as dt_object
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
@@ -25,7 +25,15 @@ from litellm import (
     log_raw_request_response,
     turn_off_message_logging,
 )
-from litellm._logging import _is_debugging_on, _redact_string, verbose_logger
+from litellm._logging import (
+    _is_debugging_on,
+    _redact_string,
+    session_id_var,
+    set_session_id,
+    set_trace_id,
+    trace_id_var,
+    verbose_logger,
+)
 from litellm._uuid import uuid
 from litellm.batches.batch_utils import _handle_completed_batch
 from litellm.caching.caching import DualCache, InMemoryCache
@@ -313,6 +321,7 @@ class Logging(LiteLLMLoggingBaseClass):
         applied_guardrails: list[str] | None = None,
         kwargs: dict | None = None,
         log_raw_request_response: bool = False,
+        supports_correlation_logging: bool = True,
     ):
         _input: Final[str | None] = messages  # save original value of messages
         if messages is not None:
@@ -338,6 +347,36 @@ class Logging(LiteLLMLoggingBaseClass):
         self.call_type = call_type
         self.litellm_call_id = litellm_call_id
         self.litellm_trace_id: str = litellm_trace_id if litellm_trace_id else str(uuid.uuid4())
+
+        # Capture the pre-call *value* (not a contextvars.Token) so restoration works
+        # even if this attempt's own logging ends up dispatched onto a different
+        # asyncio Task/context (e.g. via asyncio.create_task or the logging worker) -
+        # a Token can only be reset in the exact Context where it was created.
+        self._pre_call_trace_id: str = trace_id_var.get()
+        self._pre_call_session_id: str = session_id_var.get()
+        _sid: Final = kwargs.get("litellm_session_id") if kwargs else None
+        self.litellm_session_id: str = str(_sid) if _sid else ""
+        # supports_correlation_logging is False for calls originating from the
+        # sync client entry point (wrapper() in utils.py): a plain OS thread
+        # has no per-call context isolation the way an asyncio Task does, and
+        # a thread pool's worker threads are recycled across unrelated
+        # requests, so stamping trace_id/session_id there risks one request's
+        # ids leaking into a different, later request on the same thread. Sync
+        # support is deferred to a follow-up PR with its own safe-restore
+        # mechanism; async calls (the proxy's only call path) are unaffected.
+        if supports_correlation_logging:
+            set_trace_id(self.litellm_trace_id)
+            set_session_id(self.litellm_session_id)
+        # set_trace_id()/set_session_id() sanitize (strip control chars, bound
+        # length) before storing, so the contextvar's actual value can differ
+        # from self.litellm_trace_id/litellm_session_id. Capture what was
+        # really stored - _restore_correlation_context_if_unclaimed() must
+        # compare against this, not the raw ids, or a caller-supplied id
+        # containing control characters/oversized input would never match
+        # and cleanup would be skipped forever.
+        self._own_trace_id: str = trace_id_var.get()
+        self._own_session_id: str = session_id_var.get()
+
         self.function_id = function_id
         self.streaming_chunks: list[Any] = []  # for generating complete stream response
         self.sync_streaming_chunks: list[Any] = []  # for generating complete stream response
@@ -1992,7 +2031,67 @@ class Logging(LiteLLMLoggingBaseClass):
         if complete_streaming_response is not None:
             await self.async_success_handler(result=complete_streaming_response)
 
-    def success_handler(self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs):
+    def _restore_correlation_context(self) -> None:
+        """Restore trace_id/session_id contextvars to their pre-call value.
+
+        Without this, a nested LiteLLM call sharing the same asyncio Task as an
+        outer request (e.g. a guardrail's own LLM-as-judge call, an MCP sampling
+        call) would leave the outer request's subsequent log lines stamped with
+        the nested call's trace_id/session_id instead of its own.
+
+        Uses a plain set() of the captured pre-call value rather than
+        contextvars.Token-based reset(), since this can end up called from a
+        different asyncio Task/context than __init__ ran in (e.g. the request
+        task's own wrapper() finally block, plus async_success_handler
+        dispatched separately via asyncio.create_task/the logging worker) -
+        reset() only works in the exact Context a Token was created in and
+        raises otherwise. Deliberately NOT idempotent/guarded: each distinct
+        Task that calls this needs its own restore to actually take effect in
+        that Task's view of the contextvars, so calling it multiple times
+        (once per Task involved in this attempt) is required, not just safe.
+        """
+        set_trace_id(self._pre_call_trace_id)
+        set_session_id(self._pre_call_session_id)
+
+    def _restore_correlation_context_if_unclaimed(self) -> None:
+        """Guarded variant for __del__-triggered cleanup only.
+
+        __del__ can fire arbitrarily late (delayed by cyclic GC, possibly
+        after the consuming Task/thread has already moved on to a different,
+        still-active call). Unconditionally restoring in that case would
+        stomp the active call's trace_id/session_id with this abandoned
+        stream's stale pre-call snapshot. Only restore if the contextvars
+        still hold the ids *this* call set - i.e. nothing has claimed them
+        since - so an unrelated active call is never overwritten.
+        """
+        if trace_id_var.get() == self._own_trace_id and session_id_var.get() == self._own_session_id:
+            self._restore_correlation_context()
+
+    def success_handler(
+        self,
+        result: Any = None,  # heterogeneous response object; varies by call type (ANN401 ignored, see ruff-strict.toml)
+        start_time: datetime.datetime | None = None,
+        end_time: datetime.datetime | None = None,
+        cache_hit: bool | None = None,
+        **kwargs: Any,  # kwargs-ok: forwarded to _success_handler_body
+    ) -> None:
+        """Restores trace_id/session_id contextvars once this attempt's own success
+        logging (including any nested calls its callbacks trigger) is fully done."""
+        try:
+            return self._success_handler_body(
+                result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
+            )
+        finally:
+            self._restore_correlation_context()
+
+    def _success_handler_body(
+        self,
+        result: Any = None,  # heterogeneous response object; varies by call type (ANN401 ignored, see ruff-strict.toml)
+        start_time: datetime.datetime | None = None,
+        end_time: datetime.datetime | None = None,
+        cache_hit: bool | None = None,
+        **kwargs: Any,  # kwargs-ok: forwarded from success_handler
+    ) -> None:
         verbose_logger.debug("Logging Details LiteLLM-Success Call: Cache_hit=%s", cache_hit)
         if not self.should_run_logging(event_type="sync_success"):  # prevent double logging
             return
@@ -2399,7 +2498,31 @@ class Logging(LiteLLMLoggingBaseClass):
                 e,
             )
 
-    async def async_success_handler(self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs):
+    async def async_success_handler(
+        self,
+        result: Any = None,  # heterogeneous response object; varies by call type (ANN401 ignored, see ruff-strict.toml)
+        start_time: datetime.datetime | None = None,
+        end_time: datetime.datetime | None = None,
+        cache_hit: bool | None = None,
+        **kwargs: Any,  # kwargs-ok: forwarded to _async_success_handler_body
+    ) -> None:
+        """Restores trace_id/session_id contextvars once this attempt's own success
+        logging (including any nested calls its callbacks trigger) is fully done."""
+        try:
+            return await self._async_success_handler_body(
+                result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
+            )
+        finally:
+            self._restore_correlation_context()
+
+    async def _async_success_handler_body(
+        self,
+        result: Any = None,  # heterogeneous response object; varies by call type (ANN401 ignored, see ruff-strict.toml)
+        start_time: datetime.datetime | None = None,
+        end_time: datetime.datetime | None = None,
+        cache_hit: bool | None = None,
+        **kwargs: Any,  # kwargs-ok: forwarded from async_success_handler
+    ) -> None:
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
@@ -2791,7 +2914,32 @@ class Logging(LiteLLMLoggingBaseClass):
                     kwargs=self.model_call_details,
                 )
 
-    def failure_handler(self, exception, traceback_exception, start_time=None, end_time=None):
+    def failure_handler(
+        self,
+        exception: Exception,
+        traceback_exception: str,
+        start_time: datetime.datetime | None = None,
+        end_time: datetime.datetime | None = None,
+    ) -> None:
+        """Restores trace_id/session_id contextvars once this attempt's own failure
+        logging (including any nested calls its callbacks trigger) is fully done."""
+        try:
+            return self._failure_handler_body(
+                exception=exception,
+                traceback_exception=traceback_exception,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        finally:
+            self._restore_correlation_context()
+
+    def _failure_handler_body(
+        self,
+        exception: Exception,
+        traceback_exception: str,
+        start_time: datetime.datetime | None = None,
+        end_time: datetime.datetime | None = None,
+    ) -> None:
         verbose_logger.debug("Logging Details LiteLLM-Failure Call: %s", litellm.failure_callback)
         if not self.should_run_logging(event_type="sync_failure"):  # prevent double logging
             return
@@ -2960,7 +3108,32 @@ class Logging(LiteLLMLoggingBaseClass):
                 "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging %s", e
             )
 
-    async def async_failure_handler(self, exception, traceback_exception, start_time=None, end_time=None):
+    async def async_failure_handler(
+        self,
+        exception: Exception,
+        traceback_exception: str,
+        start_time: datetime.datetime | None = None,
+        end_time: datetime.datetime | None = None,
+    ) -> None:
+        """Restores trace_id/session_id contextvars once this attempt's own failure
+        logging (including any nested calls its callbacks trigger) is fully done."""
+        try:
+            return await self._async_failure_handler_body(
+                exception=exception,
+                traceback_exception=traceback_exception,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        finally:
+            self._restore_correlation_context()
+
+    async def _async_failure_handler_body(
+        self,
+        exception: Exception,
+        traceback_exception: str,
+        start_time: datetime.datetime | None = None,
+        end_time: datetime.datetime | None = None,
+    ) -> None:
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
@@ -5061,33 +5234,61 @@ class StandardLoggingPayloadSetup:
             return end_time_float - start_time_float
 
     @staticmethod
-    def _get_standard_logging_payload_trace_id(
+    def get_standard_logging_payload_trace_id(
         logging_obj: Logging,
-        litellm_params: dict,
+        litellm_params: Mapping[str, Any],
     ) -> str:
         """
         Returns the `litellm_trace_id` for this request
 
         This helps link sessions when multiple requests are made in a single session
+
+        Gated behind `litellm.request_correlation_in_logs`:
+        - Off (default): legacy behavior, preserved for backward compatibility -
+          `litellm_session_id` takes priority over `litellm_trace_id` since historically
+          this field doubled as the session-grouping field.
+        - On: `litellm_trace_id` takes priority - trace_id and session_id are independent,
+          see `get_standard_logging_payload_session_id` for session tracking.
         """
         dynamic_litellm_session_id: Final = litellm_params.get("litellm_session_id")
         dynamic_litellm_trace_id: Final = litellm_params.get("litellm_trace_id")
+        metadata: Final = litellm_params.get("metadata")
+        metadata_session_id: Final = metadata.get("session_id") if metadata else None
+        metadata_trace_id: Final = metadata.get("trace_id") if metadata else None
 
-        # Note: we recommend using `litellm_session_id` for session tracking
-        # `litellm_trace_id` is an internal litellm param
+        ordered_candidates: Final[tuple[Any, Any, Any, Any]] = (
+            (dynamic_litellm_trace_id, dynamic_litellm_session_id, metadata_trace_id, metadata_session_id)
+            if litellm.request_correlation_in_logs
+            else (dynamic_litellm_session_id, dynamic_litellm_trace_id, metadata_session_id, metadata_trace_id)
+        )
+        for candidate in ordered_candidates:
+            if candidate:
+                return str(candidate)
+        return logging_obj.litellm_trace_id
+
+    @staticmethod
+    def get_standard_logging_payload_session_id(
+        logging_obj: Logging,
+        litellm_params: Mapping[str, Any],
+    ) -> str:
+        """
+        Returns the end-user/conversation `litellm_session_id` for this request, independent of trace_id.
+
+        Only populated when `litellm.request_correlation_in_logs` is enabled - off by default
+        to avoid changing existing StandardLoggingPayload shape for callers who haven't opted in.
+        Unlike `get_standard_logging_payload_trace_id`, this never falls back to a generated
+        per-call trace id: it's empty when the caller never supplied a session id.
+        """
+        if not litellm.request_correlation_in_logs:
+            return ""
+        dynamic_litellm_session_id: Final = litellm_params.get("litellm_session_id")
         if dynamic_litellm_session_id:
             return str(dynamic_litellm_session_id)
-        elif dynamic_litellm_trace_id:
-            return str(dynamic_litellm_trace_id)
-        # Fallback: use metadata.session_id or metadata.trace_id for call chaining
-        metadata: Final = litellm_params.get("metadata") or {}
-        metadata_session_id: Final = metadata.get("session_id")
-        metadata_trace_id: Final = metadata.get("trace_id")
+        metadata: Final = litellm_params.get("metadata")
+        metadata_session_id: Final = metadata.get("session_id") if metadata else None
         if metadata_session_id:
             return str(metadata_session_id)
-        if metadata_trace_id:
-            return str(metadata_trace_id)
-        return logging_obj.litellm_trace_id
+        return logging_obj.litellm_session_id
 
     @staticmethod
     def _get_user_agent_tags(proxy_server_request: dict) -> list[str] | None:
@@ -5392,7 +5593,11 @@ def get_standard_logging_object_payload(
         payload: Final[StandardLoggingPayload] = StandardLoggingPayload(
             id=str(id),
             litellm_call_id=kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
-            trace_id=StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+            trace_id=StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(
+                logging_obj=logging_obj,
+                litellm_params=litellm_params,
+            ),
+            session_id=StandardLoggingPayloadSetup.get_standard_logging_payload_session_id(
                 logging_obj=logging_obj,
                 litellm_params=litellm_params,
             ),
