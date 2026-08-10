@@ -204,28 +204,25 @@ def test_openai_style_cache_write_tokens_are_netted_out():
     )
 
 
-def test_model_without_a_cache_write_price_takes_no_premium(monkeypatch):
+def test_model_without_a_cache_write_price_takes_no_premium():
     """An absent write price must mean zero premium, never a bonus.
 
     ``_get_cost_per_unit`` in the cost calculator defaults a missing price to 0.0. Were
     that default copied here the premium would be ``0 - input_cost``, and a model with no
-    write pricing would report cache writes as free money.
+    write pricing would report cache writes as free money. This is the common case: most
+    of the pricing map publishes a cache-read price and no cache-write price.
     """
-    from litellm.proxy.spend_tracking import savings as savings_module
+    model = "amazon.nova-2-lite-v1:0"
+    info = litellm.get_model_info(model=model)
+    input_cost = info["input_cost_per_token"]
+    cache_read_cost = info["cache_read_input_token_cost"]
+    assert info.get("cache_creation_input_token_cost") is None, (
+        "fixture drifted: this test needs a model that publishes no cache-write price"
+    )
 
-    real_get_model_info = litellm.get_model_info
-
-    def _without_write_price(*args, **kwargs):
-        info = dict(real_get_model_info(*args, **kwargs))
-        info.pop("cache_creation_input_token_cost", None)
-        return info
-
-    monkeypatch.setattr(savings_module.litellm, "get_model_info", _without_write_price)
-
-    input_cost, cache_read_cost = _anthropic_costs("claude-sonnet-5")
     result = compute_savings_spend(
-        model="claude-sonnet-5",
-        custom_llm_provider="anthropic",
+        model=model,
+        custom_llm_provider=None,
         compression_saved_tokens=0,
         usage_object=_caching_usage(read=5000, written=5000),
     )
@@ -280,35 +277,29 @@ def test_zero_cache_read_price_stays_literal():
     assert result.prompt_caching == pytest.approx(10000 * input_cost)
 
 
-def test_sub_input_cache_write_price_is_an_extra_saving(monkeypatch):
+def test_sub_input_cache_write_price_is_an_extra_saving():
     """A few models price writes below input; there the premium is a real credit.
 
     Clamping the premium at zero would silently undercount these, so the subtraction
-    stays signed.
+    stays signed. ``azure/eu/gpt-4o-2024-11-20`` ships a write price at ~0.5x input.
     """
-    from litellm.proxy.spend_tracking import savings as savings_module
-
-    real_get_model_info = litellm.get_model_info
-    input_cost, cache_read_cost = _anthropic_costs("claude-sonnet-5")
-    cheap_write = input_cost / 2
-
-    def _with_cheap_write(*args, **kwargs):
-        info = dict(real_get_model_info(*args, **kwargs))
-        info["cache_creation_input_token_cost"] = cheap_write
-        return info
-
-    monkeypatch.setattr(savings_module.litellm, "get_model_info", _with_cheap_write)
+    model = "azure/eu/gpt-4o-2024-11-20"
+    info = litellm.get_model_info(model=model)
+    input_cost = info["input_cost_per_token"]
+    cheap_write = info["cache_creation_input_token_cost"]
+    assert 0 < cheap_write < input_cost, "fixture drifted: this test needs a model pricing cache writes below input"
+    # no published read price, so the read leg mirrors input and contributes nothing;
+    # the whole result is the negative premium, i.e. a credit.
+    assert info.get("cache_read_input_token_cost") is None
 
     result = compute_savings_spend(
-        model="claude-sonnet-5",
-        custom_llm_provider="anthropic",
+        model=model,
+        custom_llm_provider=None,
         compression_saved_tokens=0,
         usage_object=_caching_usage(read=1000, written=4000),
     )
-    assert result.prompt_caching == pytest.approx(
-        1000 * (input_cost - cache_read_cost) + 4000 * (input_cost - cheap_write)
-    )
-    assert result.prompt_caching > 1000 * (input_cost - cache_read_cost)
+    assert result.prompt_caching == pytest.approx(4000 * (input_cost - cheap_write))
+    assert result.prompt_caching > 0
 
 
 def test_negative_cache_write_count_clamps_to_zero():
@@ -901,6 +892,47 @@ def test_a_non_string_recorded_baseline_is_ignored():
         usage_object=_cached_usage_object(),
     )
     assert result.autorouter == 0.0
+
+
+def test_prompt_caching_prices_at_the_deployment_rate_not_the_public_one():
+    """A deployment's negotiated cache rates are what it really pays.
+
+    Pricing the write premium off the public map instead reports a loss ~3x the real
+    one here, which is the whole point of resolving deployment pricing first.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "cheap-sonnet",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5",
+                    "input_cost_per_token": 1e-06,
+                    "cache_creation_input_token_cost": 1.25e-06,
+                    "cache_read_input_token_cost": 1e-07,
+                },
+            },
+        ]
+    )
+    deployment_id = router.get_model_list(model_name="cheap-sonnet")[0]["model_info"]["id"]
+
+    result = compute_savings_spend(
+        model="claude-sonnet-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        usage_object=_caching_usage(read=1000, written=20000),
+        model_id=deployment_id,
+        llm_router=lambda: router,
+    )
+    at_deployment_rates = 1000 * (1e-06 - 1e-07) - 20000 * (1.25e-06 - 1e-06)
+    assert result.prompt_caching == pytest.approx(at_deployment_rates)
+
+    at_public_rates = compute_savings_spend(
+        model="claude-sonnet-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        usage_object=_caching_usage(read=1000, written=20000),
+    )
+    assert result.prompt_caching > at_public_rates.prompt_caching
 
 
 def test_a_recorded_baseline_deployment_prices_at_its_configured_rate():
