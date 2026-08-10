@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -31,7 +32,7 @@ def get_budget_window(budget_reset_at: datetime | None, max_budget: float | None
     lifetime of the key. Including ``max_budget`` means raising or lowering the budget
     moves every threshold and re-arms the alerts, which is what an operator expects.
     """
-    period = budget_reset_at.isoformat() if budget_reset_at is not None else ""
+    period: Final = budget_reset_at.isoformat() if budget_reset_at is not None else ""
     return f"{period}|{max_budget}"
 
 
@@ -70,7 +71,7 @@ async def claim_budget_alert_slot(
     if prisma_client is None:
         return True
 
-    identity = _claim_identity(token, alert_type, threshold_pct)
+    identity: Final = _claim_identity(token, alert_type, threshold_pct)
 
     try:
         await prisma_client.db.litellm_budgetalertsent.create(
@@ -88,7 +89,7 @@ async def claim_budget_alert_slot(
             return True
 
     try:
-        rows_updated = await prisma_client.db.litellm_budgetalertsent.update_many(
+        rows_updated: Final = await prisma_client.db.litellm_budgetalertsent.update_many(
             where={**identity, "budget_window": {"not": budget_window}},  # mutable-ok: prisma query payload
             data={  # mutable-ok: prisma query payload
                 "budget_window": budget_window,
@@ -125,7 +126,7 @@ async def release_budget_alert_slot(
     if prisma_client is None:
         return
 
-    identity = _claim_identity(token, alert_type, threshold_pct)
+    identity: Final = _claim_identity(token, alert_type, threshold_pct)
 
     try:
         await prisma_client.db.litellm_budgetalertsent.delete_many(
