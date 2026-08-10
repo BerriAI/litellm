@@ -824,10 +824,6 @@ class BaseEmailLogger(CustomLogger):
         """
         Get invitation link for the user
         """
-        verbose_proxy_logger.debug(
-            f"Getting invitation link for user_id: {user_id}, base_url: {base_url}"
-        )
-
         # Early validation
         if not user_id:
             verbose_proxy_logger.warning(
@@ -854,7 +850,7 @@ class BaseEmailLogger(CustomLogger):
 
         invitation_link = self._construct_invitation_link(invitation.id, base_url)
         verbose_proxy_logger.info(
-            f"Successfully created invitation link for user_id: {user_id}: {invitation_link}"
+            f"Successfully created invitation link for user_id: {user_id}"
         )
         return invitation_link
 
@@ -932,13 +928,10 @@ class BaseEmailLogger(CustomLogger):
         """
         Construct invitation link for the user
 
-        # http://localhost:4000/ui/onboarding?invitation_id=7a096b3a-37c6-440f-9dd1-ba22e8043f6b
+        # http://localhost:4000/ui/onboarding/?invitation_id=7a096b3a-37c6-440f-9dd1-ba22e8043f6b
         """
         base_url = base_url.rstrip("/")
-        invitation_link = f"{base_url}/ui/onboarding?invitation_id={invitation_id}"
-        verbose_proxy_logger.debug(
-            f"Constructed invitation link: {invitation_link} from base_url: {base_url}, invitation_id: {invitation_id}"
-        )
+        invitation_link = f"{base_url}/ui/onboarding/?invitation_id={invitation_id}"
         return invitation_link
 
     async def send_email(
