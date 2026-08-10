@@ -28,7 +28,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
     SingulrGuardrailRequest,
     SingulrGuardrailResponse,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
 
 _DEFAULT_API_BASE: Final = "http://localhost:8003"
 _GUARD_ENDPOINT: Final = "/api/v1/ai-gateway/litellm"
@@ -115,11 +115,11 @@ class SingulrGuardrail(CustomGuardrail):
 
     @staticmethod
     def _model_response_for_chat(
-        response: Any,
+        response: ModelResponse | dict[str, Any] | None,
     ) -> dict[str, Any] | None:  # mutable-ok: SingulrGuardrailRequest.model_response is a pydantic dict field
         if response is None:
             return None
-        return response.model_dump(mode="json") if hasattr(response, "model_dump") else response
+        return response.model_dump(mode="json") if isinstance(response, ModelResponse) else response
 
     def _build_playground_payload(self, inputs: GenericGuardrailAPIInputs, input_type: str) -> SingulrGuardrailPayload:
         texts = inputs.get("texts", ())
