@@ -1527,12 +1527,14 @@ class TestBedrockMantleResponsesPricing:
         self, local_cost_map, model, input_cost, cache_creation_cost, cache_read_cost, output_cost
     ):
         info = litellm.get_model_info(f"bedrock_mantle/{model}")
-        assert info["mode"] == "responses"
+        assert info["mode"] == "chat"
         assert info["input_cost_per_token"] == pytest.approx(input_cost)
         assert info["cache_creation_input_token_cost"] == pytest.approx(cache_creation_cost)
         assert info["cache_read_input_token_cost"] == pytest.approx(cache_read_cost)
         assert info["output_cost_per_token"] == pytest.approx(output_cost)
-        assert info["max_input_tokens"] == 272000
+        assert info["max_input_tokens"] == 1050000
+        assert info["input_cost_per_token_above_272k_tokens"] == pytest.approx(input_cost * 2)
+        assert info["output_cost_per_token_above_272k_tokens"] == pytest.approx(output_cost * 1.5)
 
     @pytest.mark.parametrize(
         "model, input_cost, output_cost",
@@ -1566,6 +1568,33 @@ class TestBedrockMantleResponsesPricing:
         )
 
         assert cost == pytest.approx(input_tokens * input_cost + output_tokens * output_cost)
+
+    @pytest.mark.parametrize(
+        "model, input_cost_above_272k, output_cost_above_272k",
+        [
+            ("openai.gpt-5.6-sol", 1.1e-05, 4.95e-05),
+            ("openai.gpt-5.6-terra", 4.4e-06, 1.98e-05),
+            ("openai.gpt-5.6-luna", 4.4e-07, 1.98e-06),
+        ],
+    )
+    def test_gpt_5_6_above_272k_cost(self, local_cost_map, model, input_cost_above_272k, output_cost_above_272k):
+        from litellm.types.utils import Usage
+        from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+
+        prompt_tokens = 300000
+        completion_tokens = 1000
+        usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        )
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider="bedrock_mantle",
+        )
+        assert prompt_cost == pytest.approx(input_cost_above_272k * prompt_tokens)
+        assert completion_cost == pytest.approx(output_cost_above_272k * completion_tokens)
 
     def test_models_registered(self, local_cost_map):
         assert "bedrock_mantle/openai.gpt-5.5" in litellm.bedrock_mantle_models
