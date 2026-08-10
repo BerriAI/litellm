@@ -47,7 +47,11 @@ export const enAuth = {
     submitError: "Failed to submit. Please try again.",
   },
   public: {
+    oauthTitle: "LiteLLM MCP OAuth",
     oauthCompleting: "Completing authorization...",
     oauthComplete: "Authorization complete",
+    oauthDescription: "Authorization complete. You may close this window and return to the LiteLLM dashboard.",
+    oauthManualClose:
+      "If this window does not close automatically, your result is saved and you can close it manually.",
   },
 } as const;

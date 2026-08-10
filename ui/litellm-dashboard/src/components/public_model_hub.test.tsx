@@ -4,6 +4,21 @@ import { flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-tabl
 import PublicModelHub from "./public_model_hub";
 import { getPublicMCPHubColumns, MCPServerData } from "./PublicModelHubTableColumns";
 
+const translationState = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: (namespace: "common" | "auth" | "navigation" = "common") => ({
+      t: (key: string) =>
+        key.split(".").reduce<unknown>((copy, segment) => {
+          if (typeof copy !== "object" || copy === null) return undefined;
+          return (copy as Record<string, unknown>)[segment];
+        }, resources[translationState.language][namespace]) ?? key,
+    }),
+  };
+});
+
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({
     replace: vi.fn(),
@@ -51,6 +66,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  translationState.language = "en";
   Storage.prototype.getItem = vi.fn(() => "false");
   Storage.prototype.setItem = vi.fn();
   Object.defineProperty(window, "location", {
@@ -63,6 +79,19 @@ beforeEach(() => {
 });
 
 describe("PublicModelHub", () => {
+  it("localizes the public shell in Russian without changing model names", async () => {
+    translationState.language = "ru";
+    const networkingModule = await import("./networking");
+    vi.mocked(networkingModule.modelHubPublicModelsCall).mockResolvedValue([
+      { model_group: "openrouter/anthropic/claude-sonnet-4", providers: ["openrouter"], mode: "chat" } as any,
+    ]);
+
+    render(<PublicModelHub />);
+
+    expect(await screen.findByText("Доступные модели")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Поиск по названиям моделей...")).toBeInTheDocument();
+    expect(screen.getByText("openrouter/anthropic/claude-sonnet-4")).toBeInTheDocument();
+  });
   it("renders", () => {
     const { container } = render(<PublicModelHub />);
     expect(container).toBeInTheDocument();

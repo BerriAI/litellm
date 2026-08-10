@@ -47,7 +47,10 @@ export const ruAuth = {
     submitError: "Не удалось отправить данные. Повторите попытку.",
   },
   public: {
+    oauthTitle: "LiteLLM MCP OAuth",
     oauthCompleting: "Завершаем авторизацию...",
     oauthComplete: "Авторизация завершена",
+    oauthDescription: "Авторизация завершена. Можно закрыть это окно и вернуться в панель LiteLLM.",
+    oauthManualClose: "Если окно не закрылось автоматически, результат уже сохранён — закройте его вручную.",
   },
 } as const;

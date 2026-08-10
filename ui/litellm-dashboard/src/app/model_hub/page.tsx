@@ -2,6 +2,8 @@
 import React, { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import PublicModelHubPage from "@/components/public_model_hub";
+import LanguageSelector from "@/components/LanguageSelector/LanguageSelector";
+import { useTranslation } from "react-i18next";
 
 function PublicModelHubContent() {
   const searchParams = useSearchParams()!;
@@ -19,8 +21,18 @@ function PublicModelHubContent() {
 }
 
 export default function PublicModelHub() {
+  const { t } = useTranslation("common");
   return (
-    <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
+    <Suspense
+      fallback={
+        <>
+          <div className="fixed right-4 top-4 z-50 rounded-lg border border-gray-200 bg-white p-1 shadow-sm">
+            <LanguageSelector />
+          </div>
+          <div className="flex items-center justify-center min-h-screen">{t("states.loading")}</div>
+        </>
+      }
+    >
       <PublicModelHubContent />
     </Suspense>
   );
