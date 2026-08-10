@@ -65,6 +65,9 @@ jobs:
       - name: check_provider_folders_documented
         run: uv run --no-sync python ./tests/code_coverage_tests/check_provider_folders_documented.py
 
+      - name: check_prisma_binary_cache
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_prisma_binary_cache.py
+
       - name: router_code_coverage
         run: uv run --no-sync python ./tests/code_coverage_tests/router_code_coverage.py
 
