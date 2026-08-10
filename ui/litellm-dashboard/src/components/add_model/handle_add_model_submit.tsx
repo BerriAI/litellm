@@ -1,6 +1,7 @@
 import NotificationManager from "../molecules/notifications_manager";
 import { Model, modelCreateCall } from "../networking";
 import { provider_map } from "../provider_info_helpers";
+import { ptuPickerToUtcIso } from "../../utils/ptuDatetime";
 
 export const prepareModelAddRequest = async (formValues: Record<string, any>, accessToken: string, form: any) => {
   try {
@@ -159,6 +160,23 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         ) {
           if (value !== undefined && value !== null && value !== "") {
             litellmParamsObj[key] = Number(value);
+          }
+          continue;
+        }
+
+        // Handle the PTU flat-cost fields (attributed to the team via model_info)
+        else if (key === "ptu_count" || key === "cost_per_ptu_per_hour") {
+          if (value !== undefined && value !== null && value !== "") {
+            modelInfoObj[key] = Number(value);
+          }
+          continue;
+        }
+
+        // Handle the PTU effective window (DatePicker dayjs value -> ISO 8601 UTC string)
+        else if (key === "ptu_effective_from" || key === "ptu_effective_to") {
+          const iso = ptuPickerToUtcIso(value);
+          if (iso !== null) {
+            modelInfoObj[key] = iso;
           }
           continue;
         }

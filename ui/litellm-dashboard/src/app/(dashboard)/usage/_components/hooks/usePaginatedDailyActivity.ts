@@ -23,6 +23,7 @@ const SUMMABLE_METADATA_KEYS = [
   "total_failed_requests",
   "total_cache_read_input_tokens",
   "total_cache_creation_input_tokens",
+  "total_flat_cost",
 ] as const;
 
 interface DailyActivityResponse {
@@ -68,7 +69,12 @@ const EMPTY_DATA: DailyActivityResponse = {
   },
 };
 
-function sumMetadata(a: Record<string, any>, b: Record<string, any>): Record<string, any> {
+/**
+ * Combine two pages of metadata. Only keys in SUMMABLE_METADATA_KEYS are added; anything
+ * else keeps the first page's value, so a total the backend adds later is silently frozen
+ * at page 1 until it is listed above. Exported so that contract can be tested directly.
+ */
+export function sumMetadata(a: Record<string, any>, b: Record<string, any>): Record<string, any> {
   const result = { ...a };
   for (const key of SUMMABLE_METADATA_KEYS) {
     result[key] = (a[key] || 0) + (b[key] || 0);
