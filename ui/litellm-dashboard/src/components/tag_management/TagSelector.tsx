@@ -8,9 +8,10 @@ interface TagSelectorProps {
   value?: string[];
   className?: string;
   accessToken: string;
+  placeholder?: string;
 }
 
-const TagSelector: React.FC<TagSelectorProps> = ({ onChange, value, className, accessToken }) => {
+const TagSelector: React.FC<TagSelectorProps> = ({ onChange, value, className, accessToken, placeholder }) => {
   const [tags, setTags] = useState<Tag[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -34,7 +35,7 @@ const TagSelector: React.FC<TagSelectorProps> = ({ onChange, value, className, a
     <Select
       mode="tags"
       showSearch
-      placeholder="Select or create tags"
+      placeholder={placeholder ?? "Select or create tags"}
       onChange={onChange}
       value={value}
       loading={loading}

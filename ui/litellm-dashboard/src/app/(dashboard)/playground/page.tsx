@@ -9,6 +9,7 @@ import { TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { DeprecationBanner } from "@/components/DeprecationBanner";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchProxySettings } from "@/utils/proxyUtils";
+import { useTranslation } from "react-i18next";
 
 interface ProxySettings {
   PROXY_BASE_URL?: string;
@@ -16,6 +17,7 @@ interface ProxySettings {
 }
 
 export default function PlaygroundPage() {
+  const { t } = useTranslation("chat");
   const { accessToken, userRole, userId, disabledPersonalKeyCreation, token, isViewOnly } = useAuthorized();
   const [proxySettings, setProxySettings] = useState<ProxySettings | undefined>(undefined);
 
@@ -38,10 +40,8 @@ export default function PlaygroundPage() {
   if (isViewOnly) {
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-8 text-center">
-        <h1 className="text-2xl font-semibold">Access Denied</h1>
-        <p className="text-muted-foreground">
-          Your role does not have access to the Playground. Ask your proxy admin for access to test models.
-        </p>
+        <h1 className="text-2xl font-semibold">{t("playground.accessDenied")}</h1>
+        <p className="text-muted-foreground">{t("playground.accessDeniedDescription")}</p>
       </div>
     );
   }
@@ -50,10 +50,10 @@ export default function PlaygroundPage() {
     <div className="h-full w-full flex flex-col">
       <TabGroup className="w-full" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <TabList className="mb-0">
-          <Tab>Chat</Tab>
-          <Tab>Compare</Tab>
-          <Tab>Compliance</Tab>
-          <Tab>Agent Builder (Experimental)</Tab>
+          <Tab>{t("playground.tabs.chat")}</Tab>
+          <Tab>{t("playground.tabs.compare")}</Tab>
+          <Tab>{t("playground.tabs.compliance")}</Tab>
+          <Tab>{t("playground.tabs.agentBuilder")}</Tab>
         </TabList>
         <TabPanels className="h-full">
           <TabPanel className="h-full">
