@@ -402,3 +402,38 @@ tests:
       - equal:
           path: spec.template.metadata.annotations["example.com/literal"]
           value: "plain-string-value"
+  - it: should not set JSON_LOGS by default
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: JSON_LOGS
+            value: "True"
+  - it: should set JSON_LOGS when jsonLogs is enabled
+    template: deployment.yaml
+    set:
+      jsonLogs: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: JSON_LOGS
+            value: "True"
+  - it: should let envVars win over jsonLogs instead of emitting JSON_LOGS twice
+    template: deployment.yaml
+    set:
+      jsonLogs: true
+      envVars:
+        JSON_LOGS: "1"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: JSON_LOGS
+            value: "1"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: JSON_LOGS
+            value: "True"
