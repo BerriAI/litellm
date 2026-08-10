@@ -2286,6 +2286,46 @@ def test_bedrock_tool_call_invoke_non_dict_arguments():
     assert result[0]["toolUse"]["input"] == {}
 
 
+def test_bedrock_tool_call_invoke_truncated_arguments_are_repaired():
+    """Truncated arguments are repaired instead of failing the request (LIT-5029)."""
+    tool_calls = [
+        {
+            "id": "tooluse_MAh2QLVjBRkvi5QJkLQ08V",
+            "type": "function",
+            "function": {
+                "name": "replace_note_content",
+                "arguments": '{"note_id": "999af35c", "title": "WG-example"',
+            },
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["input"] == {"note_id": "999af35c", "title": "WG-example"}
+
+
+def test_bedrock_tool_call_invoke_unparseable_arguments_raise_bad_request():
+    """
+    Unparseable arguments are a client input error, so they must raise a non-retryable 400.
+
+    A bare Exception here maps to litellm.APIConnectionError, which the router retries and
+    walks the fallback graph for, turning one request into thousands of pre-network attempts
+    (LIT-5029).
+    """
+    tool_calls = [
+        {
+            "id": "tooluse_bad",
+            "type": "function",
+            "function": {"name": "replace_note_content", "arguments": "this is not json at all ]]"},
+        }
+    ]
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        _convert_to_bedrock_tool_call_invoke(tool_calls, model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0")
+
+    assert exc_info.value.status_code == 400
+    assert "tooluse_bad" in str(exc_info.value)
+    assert not litellm._should_retry(exc_info.value.status_code)
+
+
 def test_make_valid_bedrock_tool_name_preserves_hyphens():
     assert make_valid_bedrock_tool_name("my-tool") == "my-tool"
     assert (

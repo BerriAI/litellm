@@ -3606,6 +3606,66 @@ class BedrockImageProcessor:
         return cls._create_bedrock_block(img_bytes, mime_type, image_format)
 
 
+def _split_concatenated_json_objects_or_empty(arguments: str) -> tuple[Mapping[str, Any], ...]:
+    """
+    The JSON objects concatenated in *arguments*, or nothing when it is not that shape.
+
+    `split_concatenated_json_objects` raises on anything it cannot decode, including the
+    truncated arguments this is reached for, so the raise is not an outcome the caller wants.
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        split_concatenated_json_objects,
+    )
+
+    try:
+        return tuple(split_concatenated_json_objects(arguments))
+    except json.JSONDecodeError:
+        return ()
+
+
+def _bedrock_tool_use_inputs(
+    arguments: str,
+    tool_name: str,
+    tool_id: str,
+    model: str | None,
+) -> tuple[Mapping[str, Any], ...]:
+    """
+    The `toolUse.input` objects for one OpenAI tool call, one per JSON object in *arguments*.
+
+    Bedrock requires an object, so a non-object payload becomes an empty one. A model may also
+    emit several objects concatenated into one string (#20543), which becomes one input each.
+    Anything still unparseable is the client's input, not a transport failure, so it raises
+    BadRequestError: a bare exception maps to a retryable APIConnectionError, which turns one
+    deterministic pre-network failure into a retry and fallback walk (LIT-5029).
+    """
+    if not arguments.strip():
+        return ({},)
+
+    try:
+        # A non-object payload cannot be a toolUse input: some providers send arguments: '""'
+        parsed: Final = json.loads(arguments)
+        return (parsed,) if isinstance(parsed, dict) else ({},)
+    except json.JSONDecodeError:
+        pass
+
+    concatenated: Final = _split_concatenated_json_objects_or_empty(arguments)
+    if concatenated:
+        return concatenated
+
+    try:
+        repaired: Final = parse_tool_call_arguments(arguments, tool_name=tool_name, context="Bedrock Converse")
+    except ValueError as parse_error:
+        raise litellm.BadRequestError(
+            message=(
+                f"Invalid tool_calls[].function.arguments for tool_call_id={tool_id!r}, tool={tool_name!r}: "
+                f"not valid JSON. Error: {parse_error.__cause__ or parse_error}"
+            ),
+            model=model or "",
+            llm_provider="bedrock",
+        ) from parse_error
+    return (repaired,) if isinstance(repaired, dict) else ({},)
+
+
 def _convert_to_bedrock_tool_call_invoke(
     tool_calls: list,
     model: str | None = None,
@@ -3645,59 +3705,23 @@ def _convert_to_bedrock_tool_call_invoke(
     - extract name 
     - extract id
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
-        split_concatenated_json_objects,
-    )
-
     try:
         _parts_list: Final[list[BedrockContentBlock]] = []
         for tool in tool_calls:
             if "function" in tool:
                 tool_id = tool["id"]
                 name = make_valid_bedrock_tool_name(tool["function"].get("name", ""))
-                arguments = tool["function"].get("arguments", "")
+                inputs = _bedrock_tool_use_inputs(
+                    tool["function"].get("arguments", "") or "",
+                    tool_name=name,
+                    tool_id=tool_id,
+                    model=model,
+                )
 
-                if not arguments or not arguments.strip():
-                    arguments_dict = {}
-                else:
-                    try:
-                        arguments_dict = json.loads(arguments)
-                        # Ensure arguments_dict is always a dict
-                        # (Bedrock requires toolUse.input to be an object).
-                        # Some providers return arguments: '""' which
-                        # json.loads decodes to a bare string.
-                        if not isinstance(arguments_dict, dict):
-                            arguments_dict = {}
-                    except json.JSONDecodeError:
-                        # The model may return multiple JSON objects
-                        # concatenated in a single arguments string, e.g.
-                        #   '{"cmd":"a"}{"cmd":"b"}{"cmd":"c"}'
-                        # Split them and emit one toolUse block per object.
-                        # Fixes: https://github.com/BerriAI/litellm/issues/20543
-                        parsed_objects = split_concatenated_json_objects(arguments)
-                        if parsed_objects:
-                            # First object keeps the original tool id.
-                            for obj_idx, obj in enumerate(parsed_objects):
-                                block_id = tool_id if obj_idx == 0 else f"{tool_id}_{obj_idx}"
-                                bedrock_tool = BedrockToolUseBlock(input=obj, name=name, toolUseId=block_id)
-                                _parts_list.append(BedrockContentBlock(toolUse=bedrock_tool))
-                            # cache_control applies to the whole original
-                            # tool call; attach after the last split block.
-                            if tool.get("cache_control", None) is not None:
-                                _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
-                                    {"cache_control": tool["cache_control"]},
-                                    block_type="content_block",
-                                    model=model,
-                                )
-                                if _cache_point_block is not None:
-                                    _parts_list.append(_cache_point_block)
-                            continue
-                        # Fallback: no objects extracted — use empty dict.
-                        arguments_dict = {}
-
-                bedrock_tool = BedrockToolUseBlock(input=arguments_dict, name=name, toolUseId=tool_id)
-                bedrock_content_block = BedrockContentBlock(toolUse=bedrock_tool)
-                _parts_list.append(bedrock_content_block)
+                for input_idx, tool_input in enumerate(inputs):
+                    block_id = tool_id if input_idx == 0 else f"{tool_id}_{input_idx}"
+                    bedrock_tool = BedrockToolUseBlock(input=tool_input, name=name, toolUseId=block_id)
+                    _parts_list.append(BedrockContentBlock(toolUse=bedrock_tool))
 
                 # Check for cache_control and add a separate cachePoint block
                 if tool.get("cache_control", None) is not None:
@@ -3709,8 +3733,10 @@ def _convert_to_bedrock_tool_call_invoke(
                     if cache_point_block is not None:
                         _parts_list.append(cache_point_block)
         return _parts_list
+    except litellm.BadRequestError:
+        raise
     except Exception as e:
-        raise Exception(f"Unable to convert openai tool calls={tool_calls} to bedrock tool calls. Received error={e}")
+        raise Exception(f"Unable to convert openai tool calls to bedrock tool calls. Received error={e}")
 
 
 def _append_bedrock_tool_result_media_block(
