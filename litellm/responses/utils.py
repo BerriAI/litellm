@@ -231,18 +231,20 @@ class ResponsesAPIRequestUtils:
             )
             non_default_params["previous_response_id"] = decoded_previous_response_id
 
-        litellm_metadata_raw = params.get("litellm_metadata")
+        litellm_metadata_raw: Final = params.get("litellm_metadata")
         litellm_metadata: Final = litellm_metadata_raw if isinstance(litellm_metadata_raw, dict) else {}
 
-        proxy_requester_metadata = litellm_metadata.get("requester_metadata")
-        metadata_in_params = non_default_params.get("metadata")
+        proxy_requester_metadata: Final = litellm_metadata.get("requester_metadata")
+        metadata_in_params: Final = non_default_params.get("metadata")
         is_proxy_internal_metadata: Final = any(key.startswith("user_api_key_") for key in litellm_metadata)
 
-        metadata_source: dict | None = None
-        if isinstance(proxy_requester_metadata, dict):
-            metadata_source = proxy_requester_metadata
-        elif not is_proxy_internal_metadata and isinstance(metadata_in_params, dict):
-            metadata_source = metadata_in_params
+        metadata_source: Final = (
+            proxy_requester_metadata
+            if isinstance(proxy_requester_metadata, dict)
+            else (
+                metadata_in_params if not is_proxy_internal_metadata and isinstance(metadata_in_params, dict) else None
+            )
+        )
 
         from litellm.utils import add_openai_metadata
 
