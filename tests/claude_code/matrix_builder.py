@@ -131,8 +131,13 @@ def _aggregate_cell(results: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
 
     Order of precedence (most informative wins):
       - Any `fail` → cell is `fail` with the first failure's error.
-      - `not_applicable` → cell is `not_applicable` with the reason.
-      - `pass` → cell is `pass`.
+      - `not_applicable` is *neutral*: a tier whose model/provider
+        genuinely doesn't support the feature is dropped, and the cell
+        is decided by the remaining tiers. This keeps a cell green when
+        the tiers that *do* support the feature all pass (e.g. Vertex AI
+        count_tokens passes on Sonnet/Opus but Haiku 4.5 is unsupported).
+      - All remaining tiers `pass` → cell is `pass`.
+      - Every tier was `not_applicable` → cell is `not_applicable`.
       - empty / nothing recognized → `not_tested`.
     """
     if not results:
@@ -142,17 +147,107 @@ def _aggregate_cell(results: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
         if r.get("status") == "fail":
             return {"status": "fail", "error": str(r.get("error", "test failed"))}
 
-    for r in results:
-        if r.get("status") == "not_applicable":
-            return {
-                "status": "not_applicable",
-                "reason": str(r.get("reason", "not applicable")),
-            }
+    # `not_applicable` tiers are neutral — drop them and let the tiers
+    # that actually exercise the feature decide the cell.
+    considered = [r for r in results if r.get("status") != "not_applicable"]
 
-    if all(r.get("status") == "pass" for r in results):
+    if not considered:
+        # Nothing left means every tier was not_applicable → the whole
+        # cell is genuinely not_applicable; surface the first reason.
+        reason = next(
+            (
+                str(r.get("reason", "not applicable"))
+                for r in results
+                if r.get("status") == "not_applicable"
+            ),
+            "not applicable",
+        )
+        return {"status": "not_applicable", "reason": reason}
+
+    if all(r.get("status") == "pass" for r in considered):
         return {"status": "pass"}
 
     return {"status": "not_tested"}
+
+
+def _index_cells(matrix: Mapping[str, Any]) -> Dict[tuple, Dict[str, Any]]:
+    """Map ``(feature_id, provider) -> cell dict`` for a built matrix.
+
+    Cells are keyed by the *stable* feature ``id`` (not the display
+    ``name``, which can be reworded without changing the underlying row)
+    and the provider key, so two matrices built at different times line up
+    even if feature names drift.
+    """
+    out: Dict[tuple, Dict[str, Any]] = {}
+    for feature in matrix.get("features", []) or []:
+        if not isinstance(feature, Mapping):
+            continue
+        feature_id = feature.get("id")
+        if not feature_id:
+            continue
+        providers = feature.get("providers", {}) or {}
+        if not isinstance(providers, Mapping):
+            continue
+        for provider, cell in providers.items():
+            if isinstance(cell, Mapping):
+                out[(feature_id, provider)] = dict(cell)
+    return out
+
+
+def find_regressions(
+    old_matrix: Mapping[str, Any],
+    new_matrix: Mapping[str, Any],
+) -> List[Dict[str, str]]:
+    """Return the cells that flipped green→red (``pass`` → ``fail``).
+
+    A *regression* is defined strictly: a cell that was ``pass`` in
+    ``old_matrix`` and is ``fail`` in ``new_matrix``. Every other
+    transition is intentionally *not* a regression:
+
+      * ``red → green`` / ``green → green`` — the happy path.
+      * ``red → red`` — a cell that is *already* failing for an unrelated
+        reason (e.g. Anthropic out of API credits) must not block
+        publishing, otherwise the daily PR would never auto-merge until
+        that independent issue is fixed.
+      * ``green → not_tested`` / ``green → not_applicable`` — a cell going
+        grey is a degradation but not a *red* regression; treating a
+        skipped/flaky run as a hard block would create false positives.
+
+    Cells present only in ``new_matrix`` (a newly added feature or
+    provider) have no baseline and therefore cannot be regressions.
+
+    Each returned item is a flat str→str mapping so callers (the cron's
+    ``check_regressions.py``) can render it without further lookups:
+    ``feature_id``, ``feature_name``, ``provider``, ``old_status``,
+    ``new_status``, ``error``.
+    """
+    old_cells = _index_cells(old_matrix)
+    feature_names = {
+        f.get("id"): str(f.get("name", f.get("id")))
+        for f in new_matrix.get("features", []) or []
+        if isinstance(f, Mapping) and f.get("id")
+    }
+
+    regressions: List[Dict[str, str]] = []
+    for (feature_id, provider), new_cell in sorted(
+        _index_cells(new_matrix).items(), key=lambda kv: (kv[0][0], kv[0][1])
+    ):
+        if new_cell.get("status") != "fail":
+            continue
+        old_cell = old_cells.get((feature_id, provider))
+        if old_cell is None or old_cell.get("status") != "pass":
+            continue
+        regressions.append(
+            {
+                "feature_id": str(feature_id),
+                "feature_name": feature_names.get(feature_id, str(feature_id)),
+                "provider": str(provider),
+                "old_status": "pass",
+                "new_status": "fail",
+                "error": str(new_cell.get("error", "")),
+            }
+        )
+    return regressions
 
 
 def build_from_paths(

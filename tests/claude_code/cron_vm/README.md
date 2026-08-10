@@ -24,6 +24,7 @@ Action. Trade-offs:
 | --- | --- |
 | `run_daily.sh` | The actual cron job. Resolves versions, updates the worktree, boots the proxy, runs pytest, builds the JSON, opens (or updates) a docs PR. |
 | `build_matrix.py` | Tiny Python CLI that wraps `tests.claude_code.matrix_builder.build_from_paths`. Exists only because the bash script needs *some* way to render the per-cell aggregation, and the builder is already Python. |
+| `check_regressions.py` | Tiny Python CLI that wraps `tests.claude_code.matrix_builder.find_regressions`. Diffs the freshly built matrix against the currently-published one and exits `3` if any cell flipped green→red, which gates auto-merge. |
 | `litellm-compat-matrix.service` | systemd oneshot that invokes `run_daily.sh`. |
 | `litellm-compat-matrix.timer` | `OnCalendar=*-*-* 06:00:00 UTC`, `Persistent=true`. |
 | `litellm-compat-matrix.env.example` | Template for `/etc/litellm-compat-matrix.env`. |
@@ -52,10 +53,24 @@ Action. Trade-offs:
 7. **Opens or updates a docs PR**: `gh repo clone` of `litellm-docs`
    into a tempdir, deterministic head branch
    (`compat-matrix/<litellm-version>-<claude-code-version>-<UTC-date>`),
-   `--force-with-lease` push, `gh pr create`. A re-run on the same
-   day fast-forwards the existing branch and `gh pr create` no-ops
-   ("a pull request for branch ... already exists" is treated as
-   success).
+   `--force` push **directly to `BerriAI/litellm-docs`** (the
+   `mateo-berri` token has write access, so this is a same-repo branch,
+   not a fork), `gh pr create`. A re-run on the same day fast-forwards
+   the existing branch and `gh pr create` no-ops ("a pull request for
+   branch ... already exists" is treated as success). These PRs are no
+   longer gated on a second human review.
+8. **Gates auto-merge on a regression check**: before enabling
+   auto-merge, `check_regressions.py` diffs the new matrix against the
+   one currently on `main`. Auto-merge (`gh pr merge --auto --squash`)
+   is only enabled when **no cell flipped green→red** — i.e. every
+   transition is red→green, green→green, or red→red. A pre-existing red
+   cell (e.g. a provider that's out of API credits) is `red→red` and
+   does **not** block; only a `pass`→`fail` flip does. When a regression
+   is detected the PR is still opened/updated (with a warning banner
+   naming the offending cells) but auto-merge is left **off** — and any
+   auto-merge a prior same-day run enabled is explicitly disabled — so a
+   human reviews before it lands on the public table. The check fails
+   *closed*: if it errors, auto-merge is withheld.
 
 ## One-time VM setup
 
@@ -129,9 +144,13 @@ sudo systemctl disable --now litellm-compat-matrix.timer
 - **`uv sync --frozen` requires the resolved tag to be tagged on
   GitHub.** If the latest stable release was made but not pushed as a
   git tag, the `git checkout` step fails. Push the tag, then rerun.
-- **`gh auth` token rotation is your problem.** The cron does not
-  refresh the token; if the bot account's PAT expires the run will
-  fail at `gh repo clone` with a 401. Re-run `gh auth login`.
+- **`GITHUB_TOKEN` rotation is your problem.** The cron does not
+  refresh the token; if `mateo-berri`'s PAT in
+  `/etc/litellm-compat-matrix.env` expires, the run fails at the
+  `git push`/`gh pr create` step with a 401 ("Bad credentials" /
+  "Authentication failed"). Mint a fresh PAT and update the env file.
+  The token needs write access to `BerriAI/litellm-docs` (classic
+  `repo` scope, or fine-grained Contents:RW + Pull requests:RW).
 - **First run after upgrading the Claude Code CLI is the riskiest one.**
   If the new CLI changes its wire format the matrix run can produce
   systematic failures. Always run with `SKIP_PUBLISH=1` after a CLI

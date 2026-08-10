@@ -263,3 +263,42 @@ def assert_count_tokens_shape(result: ProbeResult) -> Optional[str]:
     if tokens <= 0:
         return f"input_tokens must be positive; got {tokens}"
     return None
+
+
+# Upstream signal that a model simply does not offer token counting, as
+# opposed to a transport/transform regression. Some providers return a
+# 400 invalid_request_error whose message says the model "is not
+# supported for token counting" (observed on Vertex AI for Haiku 4.5,
+# request_id req_vrtx_...). That's a capability gap, not a failure, so
+# callers should record the tier as `not_applicable` rather than `fail`.
+_COUNT_TOKENS_UNSUPPORTED_MARKER = "not supported for token counting"
+
+
+def count_tokens_unsupported_reason(result: ProbeResult) -> Optional[str]:
+    """Return a human-readable reason if `result` is a clean upstream
+    "this model does not support token counting" signal, else None.
+
+    Only a 400 whose body carries the unsupported marker qualifies; every
+    other non-200 (auth, transform 500s, transport errors) stays a real
+    failure that should flip the cell red via `assert_count_tokens_shape`.
+    """
+    if result.status_code != 400:
+        return None
+    if _COUNT_TOKENS_UNSUPPORTED_MARKER not in (result.body or "").lower():
+        return None
+
+    # Prefer the upstream message verbatim when we can find it; the body
+    # shape is `{"detail": {"error": {"message": ...}}}` for the proxy's
+    # Anthropic-passthrough errors, with a couple of common fallbacks.
+    payload = result.payload if isinstance(result.payload, Mapping) else {}
+    detail = payload.get("detail")
+    error = None
+    if isinstance(detail, Mapping):
+        error = detail.get("error")
+    if not isinstance(error, Mapping):
+        error = (
+            payload.get("error") if isinstance(payload.get("error"), Mapping) else None
+        )
+    message = error.get("message") if isinstance(error, Mapping) else None
+
+    return str(message) if message else "model does not support token counting"

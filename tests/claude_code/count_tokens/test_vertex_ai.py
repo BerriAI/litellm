@@ -43,6 +43,7 @@ import pytest
 
 from tests.claude_code.http_probe import (
     assert_count_tokens_shape,
+    count_tokens_unsupported_reason,
     probe_count_tokens,
 )
 
@@ -78,9 +79,18 @@ def test_count_tokens_vertex_ai(compat_result):
 
     failures = []
     for model in VERTEX_AI_MODELS:
-        result = probe_count_tokens(
-            base_url=base_url, api_key=api_key, model=model
-        )
+        result = probe_count_tokens(base_url=base_url, api_key=api_key, model=model)
+
+        unsupported = count_tokens_unsupported_reason(result)
+        if unsupported is not None:
+            compat_result.add(
+                {
+                    "status": "not_applicable",
+                    "reason": f"[{model}] {unsupported}",
+                }
+            )
+            continue
+
         shape_error = assert_count_tokens_shape(result)
         if shape_error is not None:
             error = f"[{model}] count_tokens probe failed: {shape_error}"

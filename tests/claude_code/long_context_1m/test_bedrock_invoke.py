@@ -29,14 +29,13 @@ Per-cell cost at 210k input tokens: ~$0.63 Sonnet, ~$3.15 Opus.
 Daily cost across all five providers (this row only): ~$19.
 
 Haiku 4.5 is intentionally omitted: it does not support 1M context
-(its window is 200k). Reporting `not_applicable` for Haiku would
-flip the entire cell to `not_applicable`, hiding genuine 1M
-regressions on Sonnet/Opus; instead we exclude Haiku from the model
-list entirely and let the matrix's per-cell aggregator green the
-cell on Sonnet + Opus passing. This is the one row where the "all
-three tiers must pass" rule is relaxed; it's relaxed structurally
-(via the model list), not semantically (via not_applicable), so the
-matrix builder stays unmodified.
+(its window is 200k), so there's no point spending on a tier that
+can't pass. We exclude Haiku from the model list and let the matrix's
+per-cell aggregator green the cell on Sonnet + Opus passing. The
+aggregator treats `not_applicable` as neutral, so reporting Haiku as
+not_applicable would green the cell too; we skip the call outright to
+save the spend. This is one of the rows where the "all three tiers
+must pass" rule is relaxed for a tier that can't support the feature.
 
 The prompt is delivered via subprocess stdin rather than a positional
 argument. ARG_MAX on Linux is typically 2MB and an 840KB prompt

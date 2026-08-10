@@ -20,6 +20,7 @@ from tests.claude_code.matrix_builder import (
     ResultsError,
     build_from_paths,
     build_matrix,
+    find_regressions,
     load_manifest,
     load_results,
 )
@@ -88,6 +89,66 @@ def test_build_matrix_any_fail_makes_cell_fail():
     cell = matrix["features"][0]["providers"]["anthropic"]
     assert cell["status"] == "fail"
     assert cell["error"] == "[claude-opus-4-7] timeout"
+
+
+def _single_cell_matrix(results):
+    """Build a 1x1 matrix and return its only cell. Helper for the
+    not_applicable aggregation tests below."""
+    manifest = {
+        "schema_version": "1",
+        "providers": ["vertex_ai"],
+        "features": [{"id": "f", "name": "F"}],
+    }
+    matrix = build_matrix(
+        manifest=manifest,
+        results=[
+            {"feature_id": "f", "provider": "vertex_ai", "result": r} for r in results
+        ],
+        litellm_version="v",
+        claude_code_version="c",
+        generated_at="t",
+    )
+    return matrix["features"][0]["providers"]["vertex_ai"]
+
+
+def test_build_matrix_not_applicable_is_neutral_when_others_pass():
+    """A tier that doesn't support the feature (`not_applicable`) must not
+    drag down a cell whose supported tiers all pass. Models the real
+    Vertex AI count_tokens case: Haiku 4.5 is unsupported, Sonnet/Opus
+    pass → the cell is green."""
+    cell = _single_cell_matrix(
+        [
+            {"status": "not_applicable", "reason": "[haiku] not supported"},
+            {"status": "pass"},
+            {"status": "pass"},
+        ]
+    )
+    assert cell == {"status": "pass"}
+
+
+def test_build_matrix_all_not_applicable_makes_cell_not_applicable():
+    """If *every* tier is not_applicable, the cell is not_applicable and
+    surfaces the first reason."""
+    cell = _single_cell_matrix(
+        [
+            {"status": "not_applicable", "reason": "first reason"},
+            {"status": "not_applicable", "reason": "second reason"},
+        ]
+    )
+    assert cell == {"status": "not_applicable", "reason": "first reason"}
+
+
+def test_build_matrix_fail_beats_not_applicable():
+    """A genuine failure still reds the cell even when another tier is
+    not_applicable — failures win over the neutral skip."""
+    cell = _single_cell_matrix(
+        [
+            {"status": "not_applicable", "reason": "[haiku] not supported"},
+            {"status": "fail", "error": "[opus] regression"},
+        ]
+    )
+    assert cell["status"] == "fail"
+    assert cell["error"] == "[opus] regression"
 
 
 def test_build_matrix_fills_not_tested_for_missing_cells():
@@ -289,6 +350,137 @@ def test_build_matrix_1x5_grid_one_failing_model_breaks_cell():
     cell = matrix["features"][0]["providers"]["bedrock_invoke"]
     assert cell["status"] == "fail"
     assert "claude-opus-4-7-bedrock-invoke" in cell["error"]
+
+
+def _matrix(cells, *, names=None):
+    """Build a minimal matrix dict from a {(feature_id, provider): status}
+    or {(feature_id, provider): cell_dict} mapping. Helper for the
+    find_regressions tests below."""
+    names = names or {}
+    features = {}
+    for (feature_id, provider), value in cells.items():
+        cell = {"status": value} if isinstance(value, str) else dict(value)
+        features.setdefault(feature_id, {})[provider] = cell
+    return {
+        "features": [
+            {
+                "id": feature_id,
+                "name": names.get(feature_id, feature_id.upper()),
+                "providers": providers,
+            }
+            for feature_id, providers in features.items()
+        ]
+    }
+
+
+def test_find_regressions_flags_pass_to_fail():
+    old = _matrix({("vision", "anthropic"): "pass"})
+    new = _matrix(
+        {("vision", "anthropic"): {"status": "fail", "error": "credit balance too low"}}
+    )
+    regressions = find_regressions(old, new)
+    assert len(regressions) == 1
+    r = regressions[0]
+    assert r["feature_id"] == "vision"
+    assert r["provider"] == "anthropic"
+    assert r["old_status"] == "pass"
+    assert r["new_status"] == "fail"
+    assert r["error"] == "credit balance too low"
+
+
+def test_find_regressions_ignores_red_to_red():
+    """An already-failing cell that stays failing is NOT a regression — a
+    provider that's independently broken (e.g. out of credits) must not
+    block the daily auto-merge forever."""
+    old = _matrix({("vision", "anthropic"): "fail"})
+    new = _matrix({("vision", "anthropic"): "fail"})
+    assert find_regressions(old, new) == []
+
+
+def test_find_regressions_ignores_improvements_and_steady_green():
+    old = _matrix(
+        {
+            ("vision", "anthropic"): "fail",  # red -> green
+            ("tool_use", "azure"): "pass",  # green -> green
+        }
+    )
+    new = _matrix(
+        {
+            ("vision", "anthropic"): "pass",
+            ("tool_use", "azure"): "pass",
+        }
+    )
+    assert find_regressions(old, new) == []
+
+
+def test_find_regressions_ignores_green_to_grey():
+    """green→not_tested / green→not_applicable are degradations but not
+    *red* regressions; we deliberately don't block on them."""
+    old = _matrix(
+        {
+            ("vision", "azure"): "pass",
+            ("tool_use", "azure"): "pass",
+        }
+    )
+    new = _matrix(
+        {
+            ("vision", "azure"): "not_tested",
+            ("tool_use", "azure"): {"status": "not_applicable", "reason": "skip"},
+        }
+    )
+    assert find_regressions(old, new) == []
+
+
+def test_find_regressions_ignores_new_cells_without_baseline():
+    """A cell only present in the new matrix (new feature/provider) has no
+    baseline, so a fail there can't be a regression."""
+    old = _matrix({("vision", "anthropic"): "pass"})
+    new = _matrix(
+        {
+            ("vision", "anthropic"): "pass",
+            ("brand_new_feature", "anthropic"): "fail",
+        }
+    )
+    assert find_regressions(old, new) == []
+
+
+def test_find_regressions_matches_by_id_not_name():
+    """Renaming a feature's display name must not hide a regression: cells
+    are matched on the stable id."""
+    old = _matrix({("thinking", "anthropic"): "pass"}, names={"thinking": "Old Name"})
+    new = _matrix(
+        {("thinking", "anthropic"): "fail"}, names={"thinking": "Totally New Name"}
+    )
+    regressions = find_regressions(old, new)
+    assert len(regressions) == 1
+    assert regressions[0]["feature_id"] == "thinking"
+    assert regressions[0]["feature_name"] == "Totally New Name"
+
+
+def test_find_regressions_reports_multiple_sorted():
+    old = _matrix(
+        {
+            ("vision", "anthropic"): "pass",
+            ("tool_use", "anthropic"): "pass",
+            ("vision", "azure"): "pass",
+        }
+    )
+    new = _matrix(
+        {
+            ("vision", "anthropic"): "fail",
+            ("tool_use", "anthropic"): "fail",
+            ("vision", "azure"): "pass",  # stays green
+        }
+    )
+    regressions = find_regressions(old, new)
+    keys = [(r["feature_id"], r["provider"]) for r in regressions]
+    assert keys == [("tool_use", "anthropic"), ("vision", "anthropic")]
+
+
+def test_find_regressions_empty_old_matrix_is_safe():
+    """No baseline at all (first publish) yields no regressions."""
+    new = _matrix({("vision", "anthropic"): "fail"})
+    assert find_regressions({}, new) == []
 
 
 def test_build_from_paths_writes_output(tmp_path):
