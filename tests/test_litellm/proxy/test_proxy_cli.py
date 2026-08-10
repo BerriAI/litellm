@@ -15,6 +15,7 @@ sys.path.insert(
 
 import builtins
 import types
+import urllib.parse as urlparse
 
 import uvicorn
 
@@ -2072,3 +2073,207 @@ class TestWorkerStartupHooks:
 
         assert _dummy_hook_called is True, "First hook was not called"
         assert _dummy_async_hook_called is True, "Second hook was not called"
+
+
+@pytest.mark.xdist_group("proxy_cli")
+class TestPostgresStatementTimeoutOptions:
+    """A batch that outlives the Prisma client's HTTP read timeout keeps running
+    server side and holds its row locks until the database finishes it. Postgres
+    `statement_timeout` / `lock_timeout` are the only bound that ends that wait,
+    so they must survive the trip from general_settings into the connection URL.
+    """
+
+    @pytest.mark.parametrize(
+        "existing, statement_timeout, lock_timeout, expected",
+        [
+            ("", 60, 15, "-c statement_timeout=60000 -c lock_timeout=15000"),
+            ("", 60, None, "-c statement_timeout=60000"),
+            ("", None, 15, "-c lock_timeout=15000"),
+            ("", None, None, ""),
+            ("", 0.25, None, "-c statement_timeout=250"),
+            (
+                "-c search_path=app",
+                60,
+                15,
+                "-c search_path=app -c statement_timeout=60000 -c lock_timeout=15000",
+            ),
+            (
+                "-c statement_timeout=5000",
+                60,
+                15,
+                "-c statement_timeout=5000 -c lock_timeout=15000",
+            ),
+            (
+                "-cstatement_timeout=5000",
+                60,
+                15,
+                "-cstatement_timeout=5000 -c lock_timeout=15000",
+            ),
+            (
+                "--statement_timeout=5000",
+                60,
+                15,
+                "--statement_timeout=5000 -c lock_timeout=15000",
+            ),
+            (
+                "-c  statement_timeout=5000",
+                60,
+                15,
+                "-c  statement_timeout=5000 -c lock_timeout=15000",
+            ),
+        ],
+        ids=[
+            "both",
+            "statement_only",
+            "lock_only",
+            "neither",
+            "fractional_seconds",
+            "preserves_unrelated_option",
+            "pinned_spaced_wins",
+            "pinned_compact_wins",
+            "pinned_double_dash_wins",
+            "pinned_extra_spaces_wins",
+        ],
+    )
+    def test_pg_options_with_timeouts(self, existing, statement_timeout, lock_timeout, expected):
+        from litellm.proxy.proxy_cli import _pg_options_with_timeouts
+
+        assert _pg_options_with_timeouts(existing, statement_timeout, lock_timeout) == expected
+
+    def test_timeouts_reach_the_database_url_from_general_settings(self, tmp_path):
+        """The whole point of the setting: it has to land on DATABASE_URL."""
+        import yaml
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.dump(
+                {
+                    "model_list": [],
+                    "general_settings": {
+                        "database_statement_timeout": 60,
+                        "database_lock_timeout": 15,
+                    },
+                }
+            )
+        )
+
+        modified_url = self._run_server_and_capture_database_url(str(config_path))
+
+        options = urlparse.parse_qs(urlparse.urlparse(modified_url).query)["options"][0]
+        assert "-c statement_timeout=60000" in options
+        assert "-c lock_timeout=15000" in options
+
+    def test_no_options_param_when_unset(self, tmp_path):
+        """Unset must mean today's behavior, not an empty options string."""
+        import yaml
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.dump({"model_list": [], "general_settings": {}}))
+
+        modified_url = self._run_server_and_capture_database_url(str(config_path))
+
+        assert "options" not in urlparse.parse_qs(urlparse.urlparse(modified_url).query)
+
+    def test_direct_url_is_never_bounded(self, tmp_path):
+        """DIRECT_URL serves migrations, which must not be cancelled mid-way."""
+        import yaml
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.dump({"model_list": [], "general_settings": {"database_statement_timeout": 60}})
+        )
+
+        captured = self._run_server_and_capture_urls(
+            str(config_path), direct_url="postgresql://t:t@localhost:5432/t"
+        )
+
+        assert "options" in urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert "options" not in urlparse.parse_qs(urlparse.urlparse(captured["DIRECT_URL"]).query)
+
+    def test_non_numeric_timeout_fails_fast(self, tmp_path):
+        """A mistyped value must fail at startup, not deep inside URL assembly."""
+        import yaml
+        from pydantic import ValidationError
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.dump({"model_list": [], "general_settings": {"database_statement_timeout": "sixty"}})
+        )
+
+        with pytest.raises(ValidationError):
+            self._run_server_and_capture_database_url(str(config_path))
+
+    def test_operator_pinned_url_options_are_preserved(self, tmp_path):
+        """An operator's own `options` on DATABASE_URL must not be clobbered."""
+        import yaml
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.dump(
+                {
+                    "model_list": [],
+                    "general_settings": {"database_statement_timeout": 60},
+                }
+            )
+        )
+
+        modified_url = self._run_server_and_capture_database_url(
+            str(config_path),
+            database_url="postgresql://t:t@localhost:5432/t?options=-c%20search_path%3Dapp",
+        )
+
+        options = urlparse.parse_qs(urlparse.urlparse(modified_url).query)["options"][0]
+        assert "-c search_path=app" in options
+        assert "-c statement_timeout=60000" in options
+
+    @classmethod
+    def _run_server_and_capture_database_url(
+        cls,
+        config_path: str,
+        database_url: str = "postgresql://t:t@localhost:5432/t",
+    ) -> str:
+        return cls._run_server_and_capture_urls(config_path, database_url=database_url)["DATABASE_URL"]
+
+    @staticmethod
+    def _run_server_and_capture_urls(
+        config_path: str,
+        database_url: str = "postgresql://t:t@localhost:5432/t",
+        direct_url: str | None = None,
+    ) -> dict:
+        from litellm.proxy.proxy_cli import run_server
+
+        import yaml
+
+        loaded_config = yaml.safe_load(Path(config_path).read_text())
+        mock_proxy_config = MagicMock()
+        mock_proxy_config.return_value.get_config = AsyncMock(return_value=loaded_config)
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=mock_proxy_config,
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env["DATABASE_URL"] = database_url
+        if direct_url is not None:
+            clean_env["DIRECT_URL"] = direct_url
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch("subprocess.run", return_value=MagicMock(returncode=0)),
+            patch("atexit.register"),
+            patch("litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False),
+            patch("litellm.proxy.db.check_migration.check_prisma_schema_diff"),
+        ):
+            run_server.main(
+                ["--config", config_path, "--local", "--skip_server_startup"],
+                standalone_mode=False,
+            )
+            return {k: os.environ[k] for k in ("DATABASE_URL", "DIRECT_URL") if k in os.environ}

@@ -4,12 +4,15 @@ from unittest.mock import Mock
 import pytest
 
 from litellm import Router
+from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router_utils.common_utils import (
     _deployment_supports_web_search,
     add_model_file_id_mappings,
     filter_team_based_models,
     filter_web_search_deployments,
+    resolve_model_group_alias,
+    truncate_fallback_error_detail,
 )
 
 
@@ -516,3 +519,68 @@ class TestAddModelFileIdMappings:
     def test_should_return_empty_mapping_when_given_empty_list(self):
         result = add_model_file_id_mappings([], [])
         assert result == {}
+
+
+class TestResolveModelGroupAlias:
+    """``model_group_alias`` maps reach this helper from validated config and
+    from key/team rows, so both entry shapes must resolve and malformed entries
+    must not raise mid-request."""
+
+    @pytest.mark.parametrize(
+        "alias_map, expected",
+        [
+            ({"group-a": "group-b"}, "group-b"),
+            ({"group-a": {"model": "group-b", "hidden": True}}, "group-b"),
+            ({"group-a": {"model": "group-b"}}, "group-b"),
+            ({"other": "group-b"}, None),
+            ({}, None),
+            (None, None),
+            ("not-a-map", None),
+            ({"group-a": {"hidden": True}}, None),
+            ({"group-a": {"model": 5}}, None),
+            ({"group-a": 5}, None),
+            ({"group-a": None}, None),
+            ({"group-a": ""}, None),
+        ],
+    )
+    def test_resolves_both_entry_shapes_and_tolerates_malformed_entries(self, alias_map, expected):
+        assert resolve_model_group_alias(alias_map, "group-a") == expected
+
+    def test_router_alias_resolution_uses_the_shared_helper(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "group-b",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+                }
+            ],
+            model_group_alias={"group-a": "group-b", "group-item": {"model": "group-b", "hidden": True}},
+        )
+
+        assert router._get_model_from_alias("group-a") == "group-b"
+        assert router._get_model_from_alias("group-item") == "group-b"
+        assert router._get_model_from_alias("group-b") is None
+
+
+class TestTruncateFallbackErrorDetail:
+    def test_short_detail_is_returned_unchanged(self):
+        assert truncate_fallback_error_detail("boom") == "boom"
+
+    def test_detail_at_the_limit_is_returned_unchanged(self):
+        detail = "x" * ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
+        assert truncate_fallback_error_detail(detail) == detail
+
+    def test_long_detail_is_bounded_and_reports_what_was_dropped(self):
+        detail = "x" * (ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS + 500)
+
+        truncated = truncate_fallback_error_detail(detail)
+
+        assert truncated.startswith("x" * ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS)
+        assert truncated.endswith("... [truncated 500 characters]")
+        assert len(truncated) < len(detail)
+
+    def test_a_megabyte_of_detail_comes_back_small(self):
+        """The detail is what a fallback level records about the level below it, so it has
+        to stay small enough that a walk over many model groups cannot compound it into an
+        output volume that starves the process."""
+        assert len(truncate_fallback_error_detail("x" * 1_000_000)) < 3_000

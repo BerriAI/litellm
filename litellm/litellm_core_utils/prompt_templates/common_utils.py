@@ -6,19 +6,17 @@ import io
 import json
 import mimetypes
 import re
+from collections.abc import Mapping, Sequence
 from os import PathLike
 from pathlib import Path
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Literal,
-    Mapping,
-    Optional,
-    Tuple,
-    Union,
-    cast,
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
+
+from openai.types.chat.chat_completion_custom_tool_param import (
+    CustomFormatGrammar,
+    CustomFormatGrammarGrammar,
+)
+from openai.types.shared_params.custom_tool_input_format import (
+    Grammar as ResponsesGrammarFormat,
 )
 
 import litellm
@@ -45,9 +43,9 @@ if TYPE_CHECKING:  # newer pattern to avoid importing pydantic objects on __init
     from litellm.types.llms.anthropic import AnthropicInputSchema
     from litellm.types.llms.openai import ChatCompletionImageObject
 
-DEFAULT_USER_CONTINUE_MESSAGE = ChatCompletionUserMessage(content="Please continue.", role="user")
+DEFAULT_USER_CONTINUE_MESSAGE: Final = ChatCompletionUserMessage(content="Please continue.", role="user")
 
-DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(content="Please continue.", role="assistant")
+DEFAULT_ASSISTANT_CONTINUE_MESSAGE: Final = ChatCompletionAssistantMessage(content="Please continue.", role="assistant")
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LoggingClass
@@ -55,7 +53,7 @@ if TYPE_CHECKING:
 
 def handle_any_messages_to_chat_completion_str_messages_conversion(
     messages: Any,
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     """
     Handles any messages to chat completion str messages conversion
 
@@ -66,7 +64,7 @@ def handle_any_messages_to_chat_completion_str_messages_conversion(
     if isinstance(messages, list):
         try:
             return cast(
-                List[Dict[str, str]],
+                list[dict[str, str]],
                 handle_messages_with_content_list_to_str_conversion(messages),
             )
         except Exception:
@@ -83,8 +81,8 @@ def handle_any_messages_to_chat_completion_str_messages_conversion(
 
 
 def handle_messages_with_content_list_to_str_conversion(
-    messages: List[AllMessageValues],
-) -> List[AllMessageValues]:
+    messages: list[AllMessageValues],
+) -> list[AllMessageValues]:
     """
     Handles messages with content list conversion
     """
@@ -95,28 +93,28 @@ def handle_messages_with_content_list_to_str_conversion(
     return messages
 
 
-def strip_name_from_message(message: AllMessageValues, allowed_name_roles: List[str] = ["user"]) -> AllMessageValues:
+def strip_name_from_message(message: AllMessageValues, allowed_name_roles: list[str] = ["user"]) -> AllMessageValues:
     """
     Removes 'name' from message
     """
-    msg_copy = message.copy()
+    msg_copy: Final = message.copy()
     if msg_copy.get("role") not in allowed_name_roles:
-        msg_copy.pop("name", None)  # type: ignore
+        msg_copy.pop("name", None)
     return msg_copy
 
 
 def strip_name_from_messages(
-    messages: List[AllMessageValues], allowed_name_roles: List[str] = ["user"]
-) -> List[AllMessageValues]:
+    messages: list[AllMessageValues], allowed_name_roles: list[str] = ["user"]
+) -> list[AllMessageValues]:
     """
     Removes 'name' from messages
     """
-    new_messages = []
+    new_messages: Final = []
     for message in messages:
         msg_role = message.get("role")
         msg_copy = message.copy()
         if msg_role not in allowed_name_roles:
-            msg_copy.pop("name", None)  # type: ignore
+            msg_copy.pop("name", None)
         new_messages.append(msg_copy)
     return new_messages
 
@@ -162,7 +160,7 @@ def extract_search_results_text(search_results: object) -> str:
 
 
 def convert_content_list_to_str(
-    message: Union[AllMessageValues, ChatCompletionResponseMessage],
+    message: AllMessageValues | ChatCompletionResponseMessage,
 ) -> str:
     """
     - handles scenario where content is list and not string
@@ -171,7 +169,7 @@ def convert_content_list_to_str(
     Motivation: mistral api + azure ai don't support content as a list
     """
     texts = ""
-    message_content = message.get("content")
+    message_content: Final = message.get("content")
     if message_content:
         if message_content is not None and isinstance(message_content, list):
             for c in message_content:
@@ -185,7 +183,7 @@ def convert_content_list_to_str(
     return texts
 
 
-def get_str_from_messages(messages: List[AllMessageValues]) -> str:
+def get_str_from_messages(messages: list[AllMessageValues]) -> str:
     """
     Converts a list of messages to a string
     """
@@ -196,7 +194,7 @@ def get_str_from_messages(messages: List[AllMessageValues]) -> str:
 
 
 def is_non_content_values_set(message: AllMessageValues) -> bool:
-    ignore_keys = ["content", "role", "name"]
+    ignore_keys: Final = ["content", "role", "name"]
     return any(message.get(key, None) is not None for key in message if key not in ignore_keys)
 
 
@@ -204,7 +202,7 @@ def _audio_or_image_in_message_content(message: AllMessageValues) -> bool:
     """
     Checks if message content contains an image or audio
     """
-    message_content = message.get("content")
+    message_content: Final = message.get("content")
     if message_content:
         if message_content is not None and isinstance(message_content, list):
             for c in message_content:
@@ -214,15 +212,15 @@ def _audio_or_image_in_message_content(message: AllMessageValues) -> bool:
 
 
 def convert_openai_message_to_only_content_messages(
-    messages: List[AllMessageValues],
-) -> List[Dict[str, str]]:
+    messages: list[AllMessageValues],
+) -> list[dict[str, str]]:
     """
     Converts OpenAI messages to only content messages
 
     Used for calling guardrails integrations which expect string content
     """
-    converted_messages = []
-    user_roles = ["user", "tool", "function"]
+    converted_messages: Final = []
+    user_roles: Final = ["user", "tool", "function"]
     for message in messages:
         if message.get("role") in user_roles:
             converted_messages.append({"role": "user", "content": convert_content_list_to_str(message)})
@@ -231,7 +229,7 @@ def convert_openai_message_to_only_content_messages(
     return converted_messages
 
 
-def get_content_from_model_response(response: Union[ModelResponse, dict]) -> str:
+def get_content_from_model_response(response: ModelResponse | dict) -> str:
     """
     Gets content from model response
     """
@@ -256,8 +254,8 @@ def get_content_from_model_response(response: Union[ModelResponse, dict]) -> str
 
 
 def detect_first_expected_role(
-    messages: List[AllMessageValues],
-) -> Optional[Literal["user", "assistant"]]:
+    messages: list[AllMessageValues],
+) -> Literal["user", "assistant"] | None:
     """
     Detect the first expected role based on the message sequence.
 
@@ -283,7 +281,7 @@ def detect_first_expected_role(
 
 
 def _counts_for_alternation(message: AllMessageValues) -> bool:
-    role = message.get("role")
+    role: Final = message.get("role")
     if role == "user":
         return True
     if role == "assistant":
@@ -292,10 +290,10 @@ def _counts_for_alternation(message: AllMessageValues) -> bool:
 
 
 def _insert_user_continue_message(
-    messages: List[AllMessageValues],
-    user_continue_message: Optional[ChatCompletionUserMessage],
+    messages: list[AllMessageValues],
+    user_continue_message: ChatCompletionUserMessage | None,
     ensure_alternating_roles: bool,
-) -> List[AllMessageValues]:
+) -> list[AllMessageValues]:
     """
     Inserts a user continue message into the messages list.
     Handles three cases:
@@ -309,8 +307,8 @@ def _insert_user_continue_message(
     if not messages:
         return messages
 
-    result_messages = messages.copy()  # Don't modify the input list
-    continue_message = user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE
+    result_messages: Final = messages.copy()  # Don't modify the input list
+    continue_message: Final = user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE
 
     # Handle first message if it's an assistant message — always prepend
     # user_continue regardless of tool_calls, to preserve backward compatibility.
@@ -352,10 +350,10 @@ def _insert_user_continue_message(
 
 
 def _insert_assistant_continue_message(
-    messages: List[AllMessageValues],
-    assistant_continue_message: Optional[ChatCompletionAssistantMessage] = None,
+    messages: list[AllMessageValues],
+    assistant_continue_message: ChatCompletionAssistantMessage | None = None,
     ensure_alternating_roles: bool = True,
-) -> List[AllMessageValues]:
+) -> list[AllMessageValues]:
     """
     Add assistant continuation messages between consecutive user messages.
 
@@ -365,10 +363,10 @@ def _insert_assistant_continue_message(
     if not ensure_alternating_roles or len(messages) <= 1:
         return messages
 
-    continue_message = assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
+    continue_message: Final = assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
 
     # Find indexes where assistant_continue should be inserted (before that index)
-    insert_before_indexes: set = set()
+    insert_before_indexes: Final[set] = set()
 
     for i in range(len(messages)):
         curr = messages[i]
@@ -383,7 +381,7 @@ def _insert_assistant_continue_message(
                 j -= 1
 
     # Build the result with assistant_continue inserted at the right positions
-    modified_messages: List[AllMessageValues] = []
+    modified_messages: Final[list[AllMessageValues]] = []
     for i, message in enumerate(messages):
         if i in insert_before_indexes:
             modified_messages.append(continue_message)
@@ -393,11 +391,11 @@ def _insert_assistant_continue_message(
 
 
 def get_completion_messages(
-    messages: List[AllMessageValues],
-    assistant_continue_message: Optional[ChatCompletionAssistantMessage],
-    user_continue_message: Optional[ChatCompletionUserMessage],
+    messages: list[AllMessageValues],
+    assistant_continue_message: ChatCompletionAssistantMessage | None,
+    user_continue_message: ChatCompletionUserMessage | None,
     ensure_alternating_roles: bool,
-) -> List[AllMessageValues]:
+) -> list[AllMessageValues]:
     """
     Ensures messages alternate between user and assistant roles by adding placeholders
     only when there are consecutive messages of the same role.
@@ -416,7 +414,7 @@ def get_completion_messages(
     return messages
 
 
-def get_format_from_file_id(file_id: Optional[str]) -> Optional[str]:
+def get_format_from_file_id(file_id: str | None) -> str | None:
     """
     Gets format from file id
 
@@ -430,9 +428,9 @@ def get_format_from_file_id(file_id: Optional[str]) -> Optional[str]:
     if not file_id:
         return None
     try:
-        transformed_file_id = convert_b64_uid_to_unified_uid(file_id)
+        transformed_file_id: Final = convert_b64_uid_to_unified_uid(file_id)
         if transformed_file_id.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
-            match = re.match(
+            match: Final = re.match(
                 f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}:(.*?);unified_id",
                 transformed_file_id,
             )
@@ -445,10 +443,10 @@ def get_format_from_file_id(file_id: Optional[str]) -> Optional[str]:
 
 
 def update_messages_with_model_file_ids(
-    messages: List[AllMessageValues],
+    messages: list[AllMessageValues],
     model_id: str | None,
-    model_file_id_mapping: Dict[str, Dict[str, str]],
-) -> List[AllMessageValues]:
+    model_file_id_mapping: dict[str, dict[str, str]],
+) -> list[AllMessageValues]:
     """
     Updates messages with model file ids.
 
@@ -512,9 +510,9 @@ def update_messages_with_model_file_ids(
 
 def update_responses_input_with_model_file_ids(
     input: Any,
-    model_id: Optional[str] = None,
-    model_file_id_mapping: Optional[Dict[str, Dict[str, str]]] = None,
-) -> Union[str, List[Dict[str, Any]]]:
+    model_id: str | None = None,
+    model_file_id_mapping: dict[str, dict[str, str]] | None = None,
+) -> str | list[dict[str, Any]]:
     """
     Updates responses API input with provider-specific file IDs.
     File IDs are always inside the content array, not as direct input_file items.
@@ -539,7 +537,7 @@ def update_responses_input_with_model_file_ids(
     if not isinstance(input, list):
         return input
 
-    updated_input = []
+    updated_input: Final = []
     for item in input:
         if not isinstance(item, dict):
             updated_input.append(item)
@@ -589,8 +587,8 @@ def update_responses_input_with_model_file_ids(
 
 
 def _decode_vector_store_ids_in_tools(
-    tools: Optional[List[Dict[str, Any]]],
-) -> Optional[List[Dict[str, Any]]]:
+    tools: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
     """
     Decodes unified (LiteLLM-managed) vector_store_ids in file_search tools to
     provider-native IDs.  Non-unified IDs are passed through unchanged.
@@ -605,7 +603,7 @@ def _decode_vector_store_ids_in_tools(
         parse_unified_id,
     )
 
-    updated_tools = []
+    updated_tools: Final = []
     for tool in tools:
         if not isinstance(tool, dict) or tool.get("type") != "file_search":
             updated_tools.append(tool)
@@ -642,10 +640,10 @@ def _decode_vector_store_ids_in_tools(
 
 
 def update_responses_tools_with_model_file_ids(
-    tools: Optional[List[Dict[str, Any]]],
-    model_id: Optional[str] = None,
-    model_file_id_mapping: Optional[Dict[str, Dict[str, str]]] = None,
-) -> Optional[List[Dict[str, Any]]]:
+    tools: list[dict[str, Any]] | None,
+    model_id: str | None = None,
+    model_file_id_mapping: dict[str, dict[str, str]] | None = None,
+) -> list[dict[str, Any]] | None:
     """
     Updates responses API tools with provider-specific file IDs.
 
@@ -668,7 +666,7 @@ def update_responses_tools_with_model_file_ids(
     if not model_file_id_mapping or not model_id:
         return tools
 
-    updated_tools = []
+    updated_tools: Final = []
     for tool in tools:
         if not isinstance(tool, dict):
             updated_tools.append(tool)
@@ -705,7 +703,7 @@ def update_responses_tools_with_model_file_ids(
     return updated_tools
 
 
-def extract_file_metadata(file_data: FileTypes) -> Tuple[Optional[str], Optional[str]]:
+def extract_file_metadata(file_data: FileTypes) -> tuple[str | None, str | None]:
     """
     Resolve (filename, content_type) without reading the file body.
 
@@ -713,8 +711,8 @@ def extract_file_metadata(file_data: FileTypes) -> Tuple[Optional[str], Optional
     it stays O(1) on large uploads. Use this when only metadata is needed (batch
     detection, GCS object naming) and the body must remain a streamable Path/handle.
     """
-    filename: Optional[str] = None
-    content_type: Optional[str] = None
+    filename: str | None = None
+    content_type: str | None = None
     file_content: Any = None
 
     if isinstance(file_data, tuple):
@@ -734,12 +732,12 @@ def extract_file_metadata(file_data: FileTypes) -> Tuple[Optional[str], Optional
         if isinstance(file_content, PathLike):
             filename = Path(file_content).name
         elif isinstance(file_content, io.IOBase):
-            name_attr = getattr(file_content, "name", None)
+            name_attr: Final = getattr(file_content, "name", None)
             if isinstance(name_attr, str):
                 filename = Path(name_attr).name
 
     if not content_type:
-        guessed = mimetypes.guess_type(filename)[0] if filename else None
+        guessed: Final = mimetypes.guess_type(filename)[0] if filename else None
         content_type = guessed or "application/octet-stream"
 
     return filename, content_type
@@ -820,7 +818,7 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
     # Use provided content type or guess based on filename
     if not content_type:
         if filename:
-            guessed_type = mimetypes.guess_type(filename)[0]
+            guessed_type: Final = mimetypes.guess_type(filename)[0]
             content_type = guessed_type if guessed_type else "application/octet-stream"
         else:
             content_type = "application/octet-stream"
@@ -849,7 +847,7 @@ def _estimate_json_bytes(obj: Any) -> int:
     serialised size, which is what a schema-bomb budget needs.
     """
     total = 0
-    stack: list = [obj]
+    stack: Final[list] = [obj]
     while stack:
         x = stack.pop()
         if isinstance(x, dict):
@@ -877,7 +875,7 @@ def _estimate_json_bytes(obj: Any) -> int:
 def unpack_defs(
     schema: dict,
     defs: dict,
-    max_inlined_bytes: Optional[int] = None,
+    max_inlined_bytes: int | None = None,
 ) -> None:
     """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
 
@@ -905,7 +903,7 @@ def unpack_defs(
     # Combine the defs handed down by the caller with defs/definitions found on
     # the current node.  Local keys shadow parent keys to match JSON-schema
     # scoping rules.
-    root_defs: dict = {
+    root_defs: Final[dict] = {
         **defs,
         **schema.get("$defs", {}),
         **schema.get("definitions", {}),
@@ -913,7 +911,7 @@ def unpack_defs(
 
     # Use iterative approach with queue to avoid recursion
     # Each item in queue is (node, parent_container, key/index, active_defs, ref_chain)
-    queue: deque[tuple[Any, Union[dict, list, None], Union[str, int, None], dict, set]] = deque(
+    queue: Final[deque[tuple[Any, dict | list | None, str | int | None, dict, set]]] = deque(
         [(schema, None, None, root_defs, set())]
     )
     inlined_bytes = 0
@@ -957,9 +955,12 @@ def unpack_defs(
                 # Replace the reference with resolved copy
                 resolved = copy.deepcopy(target_schema)
                 if parent is not None and key is not None:
-                    if isinstance(parent, dict) and isinstance(key, str):
-                        parent[key] = resolved
-                    elif isinstance(parent, list) and isinstance(key, int):
+                    if (
+                        isinstance(parent, dict)
+                        and isinstance(key, str)
+                        or isinstance(parent, list)
+                        and isinstance(key, int)
+                    ):
                         parent[key] = resolved
                 else:
                     # This is the root schema itself
@@ -997,7 +998,7 @@ def unpack_defs(
 def _has_legacy_defs(schema: object) -> bool:
     if not isinstance(schema, dict):
         return False
-    components = schema.get("components")
+    components: Final = schema.get("components")
     return "definitions" in schema or (isinstance(components, dict) and isinstance(components.get("schemas"), dict))
 
 
@@ -1009,7 +1010,7 @@ def _has_legacy_defs(schema: object) -> bool:
 # inline well under 1MB; 10MB sits two orders of magnitude above that, well
 # below memory-pressure territory, and rejects request-supplied bombs before
 # the proxy materialises them.
-_LEGACY_DEFS_MAX_INLINED_BYTES = 10_000_000
+_LEGACY_DEFS_MAX_INLINED_BYTES: Final = 10_000_000
 
 
 def unpack_legacy_defs(
@@ -1041,7 +1042,7 @@ def unpack_legacy_defs(
     # ``unpack_defs`` keys refs by last path segment so a single name can only
     # resolve to one body, and ``definitions`` is the JSON-Schema-native
     # namespace.
-    defs = schema.pop("components", {}).get("schemas") or {}
+    defs: Final = schema.pop("components", {}).get("schemas") or {}
     defs.update(schema.pop("definitions", None) or {})
     unpack_defs(schema, defs, max_inlined_bytes=max_inlined_bytes)
     return schema
@@ -1067,12 +1068,12 @@ def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSc
 
     normalized = unpack_legacy_defs(normalized, copy=True)
 
-    allowed_keys = set(AnthropicInputSchema.__annotations__.keys())
-    filtered = {key: value for key, value in normalized.items() if key in allowed_keys}
+    allowed_keys: Final = set(AnthropicInputSchema.__annotations__.keys())
+    filtered: Final = {key: value for key, value in normalized.items() if key in allowed_keys}
     return AnthropicInputSchema(**filtered)
 
 
-def _get_image_mime_type_from_url(url: str) -> Optional[str]:
+def _get_image_mime_type_from_url(url: str) -> str | None:
     """
     Get mime type for common image URLs
     See gemini mime types: https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-understanding#image-requirements
@@ -1102,11 +1103,11 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
 
     # Parse URL to extract path without query parameters
     # This handles URLs like: https://example.com/image.jpg?signature=...
-    parsed = urlparse(url)
-    path = parsed.path
+    parsed: Final = urlparse(url)
+    path: Final = parsed.path
 
     # Map file extensions to mime types
-    mime_types = {
+    mime_types: Final = {
         # Images
         (".jpg", ".jpeg"): "image/jpeg",
         (".png",): "image/png",
@@ -1140,7 +1141,7 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
 def infer_content_type_from_url_and_content(
     url: str,
     content: bytes,
-    current_content_type: Optional[str] = None,
+    current_content_type: str | None = None,
 ) -> str:
     """
     Infer content type from URL extension and binary content when content-type header is missing or generic.
@@ -1186,7 +1187,7 @@ def infer_content_type_from_url_and_content(
 
     # Extension to MIME type mapping
     # Supports images, documents, and other common file types
-    extension_to_mime = {
+    extension_to_mime: Final = {
         # Image formats
         "jpg": "image/jpeg",
         "jpeg": "image/jpeg",
@@ -1207,16 +1208,16 @@ def infer_content_type_from_url_and_content(
 
     # Try to infer from URL extension
     if url:
-        extension = url.split(".")[-1].lower().split("?")[0]  # Remove query params
-        inferred_type = extension_to_mime.get(extension)
+        extension: Final = url.split(".")[-1].lower().split("?")[0]  # Remove query params
+        inferred_type: Final = extension_to_mime.get(extension)
         if inferred_type:
             return inferred_type
 
     # Try to detect from binary content signature (magic bytes)
     if content:
-        detected_type = get_image_type(content[:100])
+        detected_type: Final = get_image_type(content[:100])
         if detected_type:
-            type_to_mime = {
+            type_to_mime: Final = {
                 "png": "image/png",
                 "jpeg": "image/jpeg",
                 "gif": "image/gif",
@@ -1230,11 +1231,11 @@ def infer_content_type_from_url_and_content(
     raise ValueError(f"Unable to determine content type from URL: {url}. Response content-type: {current_content_type}")
 
 
-def get_tool_call_names(tools: List[ChatCompletionToolParam]) -> List[str]:
+def get_tool_call_names(tools: list[ChatCompletionToolParam]) -> list[str]:
     """
     Get tool call names from tools
     """
-    tool_call_names: List[str] = []
+    tool_call_names: Final[list[str]] = []
     for tool in tools:
         if tool.get("type") == "function":
             tool_call_name = tool.get("function", {}).get("name")
@@ -1252,11 +1253,43 @@ def is_function_call(optional_params: dict) -> bool:
     return False
 
 
-def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
+def convert_custom_tool_format_to_chat_shape(format_obj: Mapping[str, Any]) -> Mapping[str, Any]:
+    """
+    Responses API grammar formats are flat ({"type": "grammar", "definition", "syntax"});
+    Chat Completions wraps the same fields in a "grammar" object. Text formats are
+    identical on both surfaces and pass through, as does anything unrecognized.
+    """
+    if format_obj.get("type") != "grammar" or "grammar" in format_obj:
+        return format_obj
+    grammar: Final = CustomFormatGrammarGrammar()
+    if "definition" in format_obj:
+        grammar["definition"] = format_obj["definition"]
+    if "syntax" in format_obj:
+        grammar["syntax"] = format_obj["syntax"]
+    return CustomFormatGrammar(type="grammar", grammar=grammar)
+
+
+def convert_custom_tool_format_to_responses_shape(format_obj: Mapping[str, Any]) -> Mapping[str, Any]:
+    """
+    Inverse of convert_custom_tool_format_to_chat_shape: unwrap the Chat Completions
+    "grammar" object into the flat Responses API grammar shape.
+    """
+    grammar: Final = format_obj.get("grammar")
+    if format_obj.get("type") != "grammar" or not isinstance(grammar, dict):
+        return format_obj
+    flat: Final = ResponsesGrammarFormat(type="grammar")
+    if "definition" in grammar:
+        flat["definition"] = grammar["definition"]
+    if "syntax" in grammar:
+        flat["syntax"] = grammar["syntax"]
+    return flat
+
+
+def get_file_ids_from_messages(messages: list[AllMessageValues]) -> list[str]:
     """
     Gets file ids from messages
     """
-    file_ids = []
+    file_ids: Final = []
     for message in messages:
         if message.get("role") == "user":
             content = message.get("content")
@@ -1302,7 +1335,7 @@ def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
         return dictionary
 
     # Create a copy of keys to avoid modifying dict during iteration
-    keys = list(dictionary.keys())
+    keys: Final = list(dictionary.keys())
     for k in keys:
         v = dictionary[k]
         if k == key:
@@ -1327,19 +1360,19 @@ def migrate_file_to_image_url(
         ChatCompletionImageUrlObject,
     )
 
-    file_sub = message.get("file")
+    file_sub: Final = message.get("file")
     if file_sub is None:
         raise litellm.BadRequestError(
             message="Content block has type='file' but is missing the required 'file' field",
             model=None,
             llm_provider=None,
         )
-    file_id = file_sub.get("file_id")
-    file_data = file_sub.get("file_data")
-    format = file_sub.get("format")
+    file_id: Final = file_sub.get("file_id")
+    file_data: Final = file_sub.get("file_data")
+    format: Final = file_sub.get("format")
     if not file_id and not file_data:
         raise ValueError("file_id and file_data are both None")
-    image_url_object = ChatCompletionImageObject(
+    image_url_object: Final = ChatCompletionImageObject(
         type="image_url",
         image_url=ChatCompletionImageUrlObject(
             url=cast(str, file_id or file_data),
@@ -1350,7 +1383,7 @@ def migrate_file_to_image_url(
     return image_url_object
 
 
-def get_last_user_message(messages: List[AllMessageValues]) -> Optional[str]:
+def get_last_user_message(messages: list[AllMessageValues]) -> str | None:
     """
     Get the last consecutive block of messages from the user.
 
@@ -1366,7 +1399,7 @@ def get_last_user_message(messages: List[AllMessageValues]) -> Optional[str]:
         return None
 
     # Iterate from the end to find the last consecutive block of user messages
-    user_messages = []
+    user_messages: Final = []
     for message in reversed(messages):
         if message.get("role") == "user":
             user_messages.append(message)
@@ -1385,18 +1418,18 @@ def get_last_user_message(messages: List[AllMessageValues]) -> Optional[str]:
         text_content = convert_content_list_to_str(message)
         user_prompt += text_content + "\n"
 
-    result = user_prompt.strip()
+    result: Final = user_prompt.strip()
     return result if result else None
 
 
-def set_last_user_message(messages: List[AllMessageValues], content: str) -> List[AllMessageValues]:
+def set_last_user_message(messages: list[AllMessageValues], content: str) -> list[AllMessageValues]:
     """
     Set the last user message
 
     1. remove all the last consecutive user messages (FROM THE END)
     2. add the new message
     """
-    idx_to_remove = []
+    idx_to_remove: Final = []
     for idx, message in enumerate(reversed(messages)):
         if message.get("role") == "user":
             idx_to_remove.append(idx)
@@ -1411,10 +1444,10 @@ def set_last_user_message(messages: List[AllMessageValues], content: str) -> Lis
 
 
 def add_system_prompt_to_messages(
-    messages: List[AllMessageValues],
+    messages: list[AllMessageValues],
     system_prompt: str,
     merge_with_first_system: bool = False,
-) -> List[AllMessageValues]:
+) -> list[AllMessageValues]:
     """
     Add a system prompt to the messages list.
 
@@ -1432,9 +1465,9 @@ def add_system_prompt_to_messages(
         return list(messages)
 
     if merge_with_first_system and messages and messages[0].get("role") == "system":
-        first = dict(messages[0])
-        existing_content = first.get("content", "")
-        merged_content: Union[str, List[Dict[str, str]]]
+        first: Final = dict(messages[0])
+        existing_content: Final = first.get("content", "")
+        merged_content: str | list[dict[str, str]]
         if isinstance(existing_content, str):
             merged_content = f"{system_prompt.strip()}\n\n{existing_content}"
         elif isinstance(existing_content, list):
@@ -1444,13 +1477,13 @@ def add_system_prompt_to_messages(
         first["content"] = merged_content
         return [cast(AllMessageValues, first)] + list(messages[1:])
 
-    system_message: AllMessageValues = {"role": "system", "content": system_prompt}
+    system_message: Final[AllMessageValues] = {"role": "system", "content": system_prompt}
     return [system_message, *messages]
 
 
 def convert_prefix_message_to_non_prefix_messages(
-    messages: List[AllMessageValues],
-) -> List[AllMessageValues]:
+    messages: list[AllMessageValues],
+) -> list[AllMessageValues]:
     """
     For models that don't support {prefix: true} in messages, we need to convert the prefix message to a non-prefix message.
 
@@ -1469,7 +1502,7 @@ def convert_prefix_message_to_non_prefix_messages(
 
     do this in place
     """
-    new_messages: List[AllMessageValues] = []
+    new_messages: Final[list[AllMessageValues]] = []
     for message in messages:
         if message.get("prefix"):
             new_messages.append(
@@ -1478,15 +1511,13 @@ def convert_prefix_message_to_non_prefix_messages(
                     "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
                 }
             )
-            new_messages.append(
-                {**{k: v for k, v in message.items() if k != "prefix"}}  # type: ignore
-            )
+            new_messages.append({**{k: v for k, v in message.items() if k != "prefix"}})
         else:
             new_messages.append(message)
     return new_messages
 
 
-def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[str]]:
+def _extract_reasoning_content(message: dict) -> tuple[str | None, str | None]:
     """
     Extract reasoning content and main content from a message.
 
@@ -1496,7 +1527,7 @@ def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[s
     Returns:
         tuple[Optional[str], Optional[str]]: A tuple of (reasoning_content, content)
     """
-    message_content = message.get("content")
+    message_content: Final = message.get("content")
     if "reasoning_content" in message:
         return message["reasoning_content"], message_content
     elif "reasoning" in message:
@@ -1507,8 +1538,8 @@ def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[s
 
 
 def _parse_content_for_reasoning(
-    message_text: Optional[str],
-) -> Tuple[Optional[str], Optional[str]]:
+    message_text: str | None,
+) -> tuple[str | None, str | None]:
     """
     Parse the content for reasoning
 
@@ -1519,7 +1550,7 @@ def _parse_content_for_reasoning(
     if not message_text:
         return None, message_text
 
-    reasoning_match = re.match(
+    reasoning_match: Final = re.match(
         r"<(?:think|thinking|budget:thinking)>(.*?)</(?:think|thinking|budget:thinking)>(.*)",
         message_text,
         re.DOTALL,
@@ -1553,7 +1584,7 @@ def _extract_base64_data(image_url: str) -> str:
     return image_url
 
 
-def extract_images_from_message(message: AllMessageValues) -> List[str]:
+def extract_images_from_message(message: AllMessageValues) -> list[str]:
     """
     Extract images from a message.
 
@@ -1561,8 +1592,8 @@ def extract_images_from_message(message: AllMessageValues) -> List[str]:
     data portion is extracted. This is required for providers like Ollama
     that expect pure base64 data rather than full data URLs.
     """
-    images = []
-    message_content = message.get("content")
+    images: Final = []
+    message_content: Final = message.get("content")
     if isinstance(message_content, list):
         for m in message_content:
             image_url = m.get("image_url")
@@ -1574,7 +1605,7 @@ def extract_images_from_message(message: AllMessageValues) -> List[str]:
     return images
 
 
-def _attempt_json_repair(s: str) -> Optional[Any]:
+def _attempt_json_repair(s: str) -> Any | None:
     """
     Attempt to repair truncated JSON produced by LLM tool calls.
 
@@ -1585,12 +1616,12 @@ def _attempt_json_repair(s: str) -> Optional[Any]:
     """
     import json
 
-    stripped = s.rstrip()
+    stripped: Final = s.rstrip()
     if not stripped:
         return None
 
     # Track the stack of unmatched openers to respect nesting order
-    opener_stack: list = []
+    opener_stack: Final[list] = []
     in_string = False
     escape_next = False
 
@@ -1633,9 +1664,9 @@ def _attempt_json_repair(s: str) -> Optional[Any]:
 
 
 def parse_tool_call_arguments(
-    arguments: Optional[str],
-    tool_name: Optional[str] = None,
-    context: Optional[str] = None,
+    arguments: str | None,
+    tool_name: str | None = None,
+    context: str | None = None,
 ) -> Any:
     """
     Parse tool call arguments from a JSON string.
@@ -1666,7 +1697,7 @@ def parse_tool_call_arguments(
     try:
         return json.loads(arguments)
     except json.JSONDecodeError as original_error:
-        repaired = _attempt_json_repair(arguments)
+        repaired: Final = _attempt_json_repair(arguments)
         if repaired is not None:
             verbose_logger.warning(
                 "Repaired truncated tool call arguments for tool '%s' (%s). Original (%d chars): %.200s%s",
@@ -1678,19 +1709,19 @@ def parse_tool_call_arguments(
             )
             return repaired
 
-        error_parts = ["Failed to parse tool call arguments"]
+        error_parts: Final = ["Failed to parse tool call arguments"]
 
         if tool_name:
             error_parts.append(f"for tool '{tool_name}'")
         if context:
             error_parts.append(f"({context})")
 
-        error_message = " ".join(error_parts) + f". Error: {str(original_error)}. Arguments: {arguments}"
+        error_message: Final = " ".join(error_parts) + f". Error: {original_error}. Arguments: {arguments}"
 
         raise ValueError(error_message) from original_error
 
 
-def split_concatenated_json_objects(raw: str) -> List[Dict[str, Any]]:
+def split_concatenated_json_objects(raw: str) -> list[dict[str, Any]]:
     """
     Split a string that contains one or more concatenated JSON objects into
     a list of parsed dicts.
@@ -1722,10 +1753,10 @@ def split_concatenated_json_objects(raw: str) -> List[Dict[str, Any]]:
     if not raw:
         return []
 
-    decoder = json.JSONDecoder()
-    results: List[Dict[str, Any]] = []
+    decoder: Final = json.JSONDecoder()
+    results: Final[list[dict[str, Any]]] = []
     idx = 0
-    length = len(raw)
+    length: Final = len(raw)
 
     while idx < length:
         # Skip whitespace between objects
@@ -1744,3 +1775,24 @@ def split_concatenated_json_objects(raw: str) -> List[Dict[str, Any]]:
         idx = end_idx
 
     return results
+
+
+def text_completion_prompt_to_messages(prompt: object) -> tuple[AllMessageValues, ...]:
+    """
+    Wrap an OpenAI ``/v1/completions`` ``prompt`` into Chat Completion messages.
+
+    Mirrors what ``litellm.text_completion`` does on the real-time path: a
+    string becomes a single user message, and a list of strings becomes one
+    user message per element. Pre-tokenized prompts (``list[int]`` /
+    ``list[list[int]]``) are only meaningful for the OpenAI-family text
+    endpoints, so they are rejected here rather than silently forwarded, as is
+    an empty prompt, which every chat-shaped provider rejects downstream.
+    """
+    prompt_type_name: Final = type(prompt).__name__
+    if isinstance(prompt, str) and prompt:
+        return (ChatCompletionUserMessage(role="user", content=prompt),)
+    entries: Final = cast("Sequence[object]", prompt) if isinstance(prompt, Sequence) else ()
+    string_entries: Final = tuple(entry for entry in entries if isinstance(entry, str) and entry)
+    if string_entries and len(string_entries) == len(entries):
+        return tuple(ChatCompletionUserMessage(role="user", content=entry) for entry in string_entries)
+    raise ValueError(f"`prompt` must be a non-empty string or a non-empty list of strings. Got: {prompt_type_name}.")

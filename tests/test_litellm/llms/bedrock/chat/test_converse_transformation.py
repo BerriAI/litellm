@@ -3562,6 +3562,8 @@ def test_supports_native_structured_outputs():
         assert config._supports_native_structured_outputs("nvidia.nemotron-nano-3-30b")
         # DeepSeek: old substring "deepseek-v3.1" didn't match real ID
         assert config._supports_native_structured_outputs("deepseek.v3-v1:0")
+        assert config._supports_native_structured_outputs("deepseek.v3.2")
+        assert config._supports_native_structured_outputs("zai.glm-5")
 
         # Unsupported models -- should fall back to tool-call approach
         assert not config._supports_native_structured_outputs(
@@ -4260,6 +4262,78 @@ def test_parallel_tool_calls_emits_typed_auto_tool_choice(parallel_tool_calls, e
     assert request_data["additionalModelRequestFields"]["tool_choice"] == {
         "type": "auto",
         "disable_parallel_tool_use": expected_disable,
+    }
+
+
+@pytest.mark.parametrize(
+    "tool_choice, expected_tool_config_choice",
+    [
+        ("auto", {"auto": {}}),
+        ("required", {"any": {}}),
+        ({"type": "function", "function": {"name": "get_current_weather"}}, {"tool": {"name": "get_current_weather"}}),
+    ],
+)
+def test_parallel_tool_calls_with_explicit_tool_choice_omits_conflicting_type(tool_choice, expected_tool_config_choice):
+    config = AmazonConverseConfig()
+    model = "us.anthropic.claude-opus-4-8"
+    messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
+
+    optional_params = config.map_openai_params(
+        non_default_params={"parallel_tool_calls": False, "tool_choice": tool_choice, "tools": _TOOL_PARAM},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    request_data = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request_data["toolConfig"]["toolChoice"] == expected_tool_config_choice
+    assert request_data["additionalModelRequestFields"]["tool_choice"] == {"disable_parallel_tool_use": True}
+
+
+def test_tool_choice_type_kept_when_no_tool_config_choice_conflicts():
+    config = AmazonConverseConfig()
+    model = "us.anthropic.claude-opus-4-8"
+
+    optional_params = config.map_openai_params(
+        non_default_params={"parallel_tool_calls": False, "tools": _TOOL_PARAM},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    request_data = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "What's the weather in SF and NYC?"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "toolChoice" not in request_data["toolConfig"]
+    assert request_data["additionalModelRequestFields"]["tool_choice"] == {
+        "type": "auto",
+        "disable_parallel_tool_use": True,
+    }
+
+
+def test_drop_tool_choice_type_leaves_other_passthrough_fields_untouched():
+    additional_request_params = {
+        "tool_choice": {"type": "tool", "name": "get_weather", "disable_parallel_tool_use": True},
+        "anthropic_beta": ["some-beta"],
+    }
+
+    AmazonConverseConfig._drop_tool_choice_type_conflicting_with_tool_config(additional_request_params)
+
+    assert additional_request_params == {
+        "tool_choice": {"name": "get_weather", "disable_parallel_tool_use": True},
+        "anthropic_beta": ["some-beta"],
     }
 
 

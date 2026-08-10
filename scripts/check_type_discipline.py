@@ -17,13 +17,14 @@ LIT002  Mutable-collection *construction*: a list/dict/set literal or comprehens
         a call to a mutable constructor (list/dict/set/deque/defaultdict/Counter/...).
         Catches the unannotated seed-then-mutate pattern LIT001 cannot see (`acc = []`).
         Build the value in one shot and freeze it: a `tuple`/`frozenset` wrapping a
-        generator (`tuple(f(x) for x in xs)`), a tuple literal, or a frozen dataclass /
-        NamedTuple / ReadOnly TypedDict. Generator expressions and `tuple`/`frozenset`
-        calls are not construction and pass. Annotation-internal lists (`Callable[[int],
-        str]`) are exempt, as is a value passed directly to a freezing wrapper
-        (`tuple(...)`, `frozenset(...)`, `MappingProxyType(...)`): it is frozen before
-        it can escape, though anything mutable nested inside it still counts.
-        Suppress with `# mutable-ok: <reason>`.
+        generator (`tuple(f(x) for x in xs)`), a tuple literal, a frozen dataclass /
+        NamedTuple / ReadOnly TypedDict, or (if it really must be dynamic) a
+        MappingProxyType wrapping a dict literal or comprehension. Generator expressions
+        and freezing-wrapper calls (`tuple(...)`, `frozenset(...)`,
+        `MappingProxyType(...)`) are not construction and pass, as does the value passed
+        directly to a wrapper: it is frozen before it can escape, though anything
+        mutable nested inside it still counts. Annotation-internal lists
+        (`Callable[[int], str]`) are exempt. Suppress with `# mutable-ok: <reason>`.
 LIT003  noqa suppression without rule codes or without a reason.
         Required shape: `# noqa: TID251  # <reason>`
 LIT004  pyright/mypy ignore without bracketed codes or without a reason.
@@ -45,6 +46,40 @@ LIT009  `# type: ignore` in any shape (bare, with codes, with a reason).
         pyrightconfig.json sets enableTypeIgnoreComments to false, so basedpyright
         never honors it: the comment is inert dead syntax that suppresses nothing.
         Use `# pyright: ignore[ruleName]  # <reason>` instead.
+LIT010  Variable assignment without a `Final` declaration. Every local and module-level
+        name bound by `=` (plain, augmented, or annotated) must be declared Final --
+        `x: Final = ...`, `x: Final[T] = ...`, or a bare `x: Final[T]` declaration
+        followed by a single deferred assignment (basedpyright polices reassignment
+        and allows exactly one). A name that is never Final is an open invitation to
+        rebind it later. Unpacking (`a, b = ...`) and walrus targets cannot carry
+        Final, so their first binding is implicitly final: a later `=`-form binding
+        of the name trips as an ordinary unannotated assignment, and a later unpack
+        or walrus binding trips as a re-bind. A `global`/`nonlocal` statement counts
+        as the name's first binding in that scope, so the same re-bind logic applies
+        under it. Exempt: `for`/`with`/`except`/import/def bindings (including as
+        re-binds -- a distinct statement form re-using a name is out of scope),
+        assignments inside a `for`/`while` body (pyright forbids Final in a loop;
+        this exemption applies everywhere, including under `global`), valueless
+        declarations (`x: int` binds nothing), dunder names, `_`, class bodies,
+        `TypeAlias` declarations, and module-level names in `litellm/__init__.py`:
+        that namespace is the SDK's runtime-settable config surface (users follow
+        the documented `litellm.api_key = ...` pattern and the proxy rebinds these
+        via setattr), and the package ships py.typed, so a Final there turns every
+        documented downstream assignment into a mypy error. Suppress a deliberately
+        rebindable name with `# rebind-ok: <reason>` on each offending line.
+LIT011  Function-argument mutation: a parameter that is re-bound (`param = ...`,
+        `param += ...`, a `for`/`with`/unpacking/walrus target, `del param`, or a
+        re-bind in a nested function under `nonlocal param`) or mutated in place
+        (`param.attr = ...`, `param[k] = ...`, `del param[k]`, a `for`/`with`
+        target like `for param.attr in ...`). Re-binding silently detaches the name
+        from what the caller passed; in-place stores rewrite the caller's object at
+        a distance. Bind a new name / build a new value instead. Lambda parameters
+        count (a walrus can re-bind them). A function's decorators, defaults, and
+        annotations are evaluated in the enclosing scope and are attributed there.
+        `self`/`cls` are exempt from the in-place-store check (methods own their
+        instance), not from re-binding. Method-call mutation (`param.append(x)`) is
+        out of reach without type information; LIT001/LIT002 keep mutable collections
+        off signatures instead. Suppress with `# rebind-ok: <reason>`.
 
 LIT000  Setup failure: a target file could not be read, or contains a syntax error.
         Reported as a violation rather than crashing the run.
@@ -65,7 +100,7 @@ import sys
 import tokenize
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import NamedTuple
  
 # Mutable collection types, banned in *every* annotation. Name-based, so `dict`,
@@ -111,6 +146,7 @@ MUTABLE_OK_RE = re.compile(r"#\s*mutable-ok(?::\s*(?P<reason>.*))?")
 CAST_OK_RE = re.compile(r"#\s*cast-ok(?::\s*(?P<reason>.*))?")
 GUARD_OK_RE = re.compile(r"#\s*guard-ok(?::\s*(?P<reason>.*))?")
 KWARGS_OK_RE = re.compile(r"#\s*kwargs-ok(?::\s*(?P<reason>.*))?")
+REBIND_OK_RE = re.compile(r"#\s*rebind-ok(?::\s*(?P<reason>.*))?")
 
 # Suppression tokens that must each carry a reason (LIT005).
 OK_SUPPRESSIONS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -118,6 +154,7 @@ OK_SUPPRESSIONS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("cast-ok", CAST_OK_RE),
     ("guard-ok", GUARD_OK_RE),
     ("kwargs-ok", KWARGS_OK_RE),
+    ("rebind-ok", REBIND_OK_RE),
 )
  
  
@@ -139,6 +176,7 @@ class Comments:
     cast_ok_lines: frozenset[int]
     guard_ok_lines: frozenset[int]
     kwargs_ok_lines: frozenset[int]
+    rebind_ok_lines: frozenset[int]
  
  
 # --------------------------------------------------------------------------- #
@@ -194,7 +232,7 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
         # tokenize raises TokenError (EOF mid-construct) or a SyntaxError subclass
         # (IndentationError / TabError) on malformed source; defer to ast.parse below,
         # which re-raises and is reported as LIT000 rather than crashing the run.
-        return Comments(frozenset(), frozenset(), frozenset(), frozenset()), ()
+        return Comments(frozenset(), frozenset(), frozenset(), frozenset(), frozenset()), ()
 
     def _lines_with(regex: re.Pattern[str]) -> frozenset[int]:
         return frozenset(line for line, text in comment_toks if _valid_ok(regex, text))
@@ -205,6 +243,7 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
             cast_ok_lines=_lines_with(CAST_OK_RE),
             guard_ok_lines=_lines_with(GUARD_OK_RE),
             kwargs_ok_lines=_lines_with(KWARGS_OK_RE),
+            rebind_ok_lines=_lines_with(REBIND_OK_RE),
         ),
         tuple(v for line, text in comment_toks for v in _comment_violations(path, line, text)),
     )
@@ -450,11 +489,331 @@ def iter_construction_violations(path: Path, tree: ast.AST, comments: Comments) 
             path, node.lineno, "LIT002",
             f"mutable {kind}: this builds a collection that can be grown or rewritten. "
             f"Build it in one shot and freeze it -- a tuple/frozenset wrapping a generator "
-            f"(`tuple(f(x) for x in xs)`), a tuple literal, or a frozen dataclass / NamedTuple "
-            f"/ ReadOnly TypedDict (suppress: `# mutable-ok: <reason>`)",
+            f"(`tuple(f(x) for x in xs)`), a tuple literal, a frozen dataclass / NamedTuple "
+            f"/ ReadOnly TypedDict, or (if it really must be dynamic) a MappingProxyType "
+            f"wrapping a dict literal or comprehension (suppress: `# mutable-ok: <reason>`)",
         )
  
  
+# --------------------------------------------------------------------------- #
+# Final-annotation discipline (LIT010) and argument immutability (LIT011)
+# --------------------------------------------------------------------------- #
+
+CONSTANT_DECLARATIONS = frozenset(("Final", "TypeAlias"))
+CONFIG_SURFACE_PARTS = ("litellm", "__init__.py")
+SELF_PARAMS = frozenset(("self", "cls"))
+NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+ASSIGN_FORMS = frozenset(("assign", "annassign", "aug"))
+IMPLICIT_FINAL_FORMS = frozenset(("unpack", "walrus"))
+SCOPE_STATEMENT_FORMS = frozenset(("global", "nonlocal"))
+
+
+class Binding(NamedTuple):
+    name: str
+    line: int
+    form: str
+    in_loop: bool
+
+
+def _declares_constant(annotation: ast.expr) -> bool:
+    root = annotation.value if isinstance(annotation, ast.Subscript) else annotation
+    if isinstance(root, ast.Name):
+        return root.id in CONSTANT_DECLARATIONS
+    return isinstance(root, ast.Attribute) and root.attr in CONSTANT_DECLARATIONS
+
+
+def _defaults(args: ast.arguments) -> tuple[ast.expr, ...]:
+    return (*args.defaults, *(d for d in args.kw_defaults if d is not None))
+
+
+def _annotations(args: ast.arguments) -> tuple[ast.expr, ...]:
+    return tuple(
+        p.annotation
+        for p in (*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg)
+        if p is not None and p.annotation is not None
+    )
+
+
+def _scope_body(scope: ast.AST) -> tuple[ast.AST, ...]:
+    match scope:
+        case ast.FunctionDef(body=body) | ast.AsyncFunctionDef(body=body):
+            return tuple(body)
+        case ast.Lambda(body=body):
+            return (body,)
+        case _:
+            return tuple(ast.iter_child_nodes(scope))
+
+
+def _enclosing_scope_parts(node: ast.AST) -> tuple[ast.expr, ...]:
+    """The pieces of a nested scope's statement that Python evaluates in the scope
+    DEFINING it: decorators, parameter defaults, annotations, class bases."""
+    match node:
+        case ast.FunctionDef() | ast.AsyncFunctionDef():
+            returns = (node.returns,) if node.returns is not None else ()
+            return (*node.decorator_list, *_defaults(node.args), *_annotations(node.args), *returns)
+        case ast.Lambda():
+            return _defaults(node.args)
+        case ast.ClassDef():
+            return (*node.decorator_list, *node.bases, *(k.value for k in node.keywords))
+        case _:
+            return ()
+
+
+def _walk_scope(scope: ast.AST, in_loop: bool = False) -> Iterator[tuple[ast.AST, bool]]:
+    """Depth-first over everything this scope evaluates, nested scopes excluded.
+
+    A nested function's decorators, defaults, and annotations belong to THIS scope
+    (Python evaluates them at def time, here), while its body does not; conversely
+    this scope's own defaults/decorators belong to its parent and are skipped.
+    `in_loop` marks nodes living under a `for`/`while` of this scope: basedpyright
+    rejects a Final assignment there ("cannot be assigned within a loop"), so LIT010
+    must not demand one.
+    """
+    for child in _scope_body(scope):
+        yield from _walk_within(child, in_loop)
+
+
+def _walk_within(node: ast.AST, in_loop: bool) -> Iterator[tuple[ast.AST, bool]]:
+    yield node, in_loop
+    if isinstance(node, NESTED_SCOPES):
+        for part in _enclosing_scope_parts(node):
+            yield from _walk_within(part, in_loop)
+        return
+    deeper = in_loop or isinstance(node, (ast.For, ast.AsyncFor, ast.While))
+    for child in ast.iter_child_nodes(node):
+        yield from _walk_within(child, deeper)
+
+
+def _stored_targets(target: ast.expr) -> Iterator[ast.expr]:
+    """The individual store sites inside an assignment target, unpacking flattened."""
+    if isinstance(target, (ast.Tuple, ast.List)):
+        for elt in target.elts:
+            yield from _stored_targets(elt)
+    elif isinstance(target, ast.Starred):
+        yield from _stored_targets(target.value)
+    else:
+        yield target
+
+
+def _bound_names(target: ast.expr) -> Iterator[tuple[str, int]]:
+    for t in _stored_targets(target):
+        if isinstance(t, ast.Name):
+            yield t.id, t.lineno
+
+
+def _node_bindings(node: ast.AST, in_loop: bool) -> Iterator[Binding]:
+    match node:
+        case ast.Assign(targets=targets):
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    yield Binding(target.id, target.lineno, "assign", in_loop)
+                else:
+                    yield from (Binding(n, line, "unpack", in_loop) for n, line in _bound_names(target))
+        case ast.AnnAssign(target=ast.Name(id=name, lineno=line), annotation=annotation, value=value):
+            if _declares_constant(annotation):
+                yield Binding(name, line, "declared", in_loop)
+            elif value is not None:
+                yield Binding(name, line, "annassign", in_loop)
+        case ast.AugAssign(target=ast.Name(id=name, lineno=line)):
+            yield Binding(name, line, "aug", in_loop)
+        case ast.For(target=target) | ast.AsyncFor(target=target):
+            yield from (Binding(n, line, "other", in_loop) for n, line in _bound_names(target))
+        case ast.withitem(optional_vars=ast.expr() as optional_vars):
+            yield from (Binding(n, line, "other", in_loop) for n, line in _bound_names(optional_vars))
+        case ast.ExceptHandler(name=str(name)):
+            yield Binding(name, node.lineno, "other", in_loop)
+        case ast.NamedExpr(target=ast.Name(id=name, lineno=line)):
+            yield Binding(name, line, "walrus", in_loop)
+        case ast.Import(names=aliases):
+            yield from (
+                Binding((a.asname or a.name).partition(".")[0], node.lineno, "other", in_loop)
+                for a in aliases
+            )
+        case ast.ImportFrom(names=aliases):
+            yield from (
+                Binding(a.asname or a.name, node.lineno, "other", in_loop)
+                for a in aliases
+                if a.name != "*"
+            )
+        case ast.Delete(targets=targets):
+            yield from (
+                Binding(t.id, t.lineno, "other", in_loop) for t in targets if isinstance(t, ast.Name)
+            )
+        case ast.FunctionDef(name=name) | ast.AsyncFunctionDef(name=name) | ast.ClassDef(name=name):
+            yield Binding(name, node.lineno, "other", in_loop)
+        case ast.Global(names=names):
+            yield from (Binding(name, node.lineno, "global", in_loop) for name in names)
+        case ast.Nonlocal(names=names):
+            yield from (Binding(name, node.lineno, "nonlocal", in_loop) for name in names)
+        case ast.MatchAs(name=str(name)) | ast.MatchStar(name=str(name)):
+            yield Binding(name, node.lineno, "other", in_loop)
+        case ast.MatchMapping(rest=str(rest)):
+            yield Binding(rest, node.lineno, "other", in_loop)
+        case _:
+            pass
+
+
+def scope_bindings(scope: ast.AST) -> tuple[Binding, ...]:
+    """Every name-binding event in `scope` itself.
+
+    Comprehension targets bind their own scope and never surface here; a walrus
+    inside a comprehension binds the enclosing scope (PEP 572) and does.
+    """
+    return tuple(b for node, in_loop in _walk_scope(scope) for b in _node_bindings(node, in_loop))
+
+
+def iter_scopes(tree: ast.AST) -> Iterator[ast.AST]:
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef)):
+            yield node
+
+
+def _function_params(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda) -> frozenset[str]:
+    a = node.args
+    return frozenset(
+        p.arg for p in (*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg) if p is not None
+    )
+
+
+def _exempt_final_name(name: str) -> bool:
+    return name == "_" or (name.startswith("__") and name.endswith("__"))
+
+
+def _first_binding_index(bindings: Sequence[Binding]) -> Mapping[str, int]:
+    return {b.name: i for i, b in reversed(tuple(enumerate(bindings)))}
+
+
+def _is_config_surface(path: Path) -> bool:
+    """The SDK's runtime-settable config module: `litellm.<name> = ...` is the
+    documented way to configure the library and the proxy rebinds these names via
+    setattr, so with py.typed shipped a Final here breaks downstream mypy runs."""
+    return path.parts[-2:] == CONFIG_SURFACE_PARTS
+
+
+def iter_final_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
+    for scope in iter_scopes(tree):
+        if isinstance(scope, ast.Module) and _is_config_surface(path):
+            continue
+        params = (
+            _function_params(scope)
+            if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef))
+            else frozenset()
+        )
+        bindings = scope_bindings(scope)
+        declared = frozenset(b.name for b in bindings if b.form == "declared")
+        first = _first_binding_index(bindings)
+        for i, b in enumerate(bindings):
+            if b.name in declared or b.name in params or b.in_loop:
+                continue
+            if _exempt_final_name(b.name) or b.line in comments.rebind_ok_lines:
+                continue
+            if b.form in ASSIGN_FORMS:
+                yield Violation(
+                    path, b.line, "LIT010",
+                    f"`{b.name}` is assigned without a Final declaration, leaving it open to "
+                    f"rebinding: annotate `{b.name}: Final = ...` (or `Final[T]`, or a bare "
+                    f"`{b.name}: Final[T]` declaration with a single deferred assignment); "
+                    f"implicit type aliases must use `{b.name}: TypeAlias = ...` instead, since "
+                    f"a Final alias no longer resolves in type expressions; if rebinding is the "
+                    f"point, suppress with `# rebind-ok: <reason>`",
+                )
+            elif b.form in IMPLICIT_FINAL_FORMS and i > first[b.name]:
+                yield Violation(
+                    path, b.line, "LIT010",
+                    f"`{b.name}` is re-bound here after an earlier binding: unpacking and "
+                    f"walrus targets cannot carry Final, so their names are implicitly final; "
+                    f"bind a fresh name instead, or suppress with `# rebind-ok: <reason>`",
+                )
+
+
+def _mutation_sites(scope: ast.AST) -> Iterator[tuple[str, int]]:
+    for node, _in_loop in _walk_scope(scope):
+        match node:
+            case ast.Assign(targets=targets) | ast.Delete(targets=targets):
+                stored = tuple(targets)
+            case ast.AnnAssign(target=target) | ast.AugAssign(target=target):
+                stored = (target,)
+            case ast.For(target=target) | ast.AsyncFor(target=target):
+                stored = (target,)
+            case ast.withitem(optional_vars=ast.expr() as optional_vars):
+                stored = (optional_vars,)
+            case _:
+                continue
+        for target in stored:
+            for site in _stored_targets(target):
+                root = site
+                while isinstance(root, (ast.Attribute, ast.Subscript)):
+                    root = root.value
+                if isinstance(root, ast.Name) and root is not site:
+                    yield root.id, site.lineno
+
+
+class _EnclosingFunction(NamedTuple):
+    name: str
+    params: frozenset[str]
+
+
+def _iter_param_scopes(
+    node: ast.AST, enclosing: tuple[_EnclosingFunction, ...] = ()
+) -> Iterator[tuple[ast.AST, tuple[_EnclosingFunction, ...]]]:
+    for child in ast.iter_child_nodes(node):
+        match child:
+            case ast.FunctionDef() | ast.AsyncFunctionDef():
+                yield child, enclosing
+                yield from _iter_param_scopes(
+                    child, (*enclosing, _EnclosingFunction(child.name, _function_params(child)))
+                )
+            case ast.Lambda():
+                yield child, enclosing
+                yield from _iter_param_scopes(child, enclosing)
+            case _:
+                yield from _iter_param_scopes(child, enclosing)
+
+
+def _param_owners(
+    scope: ast.AST, bindings: Sequence[Binding], enclosing: Sequence[_EnclosingFunction]
+) -> Mapping[str, str]:
+    own_name = (
+        scope.name if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)) else "<lambda>"
+    )
+    nonlocal_params = {
+        b.name: owner.name
+        for b in bindings
+        if b.form == "nonlocal"
+        for owner in (next((s for s in reversed(tuple(enclosing)) if b.name in s.params), None),)
+        if owner is not None
+    }
+    return {**{p: own_name for p in _function_params(scope)}, **nonlocal_params}
+
+
+def iter_param_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
+    for scope, enclosing in _iter_param_scopes(tree):
+        bindings = scope_bindings(scope)
+        owners = _param_owners(scope, bindings, enclosing)
+        if not owners:
+            continue
+        for b in bindings:
+            if b.form in SCOPE_STATEMENT_FORMS or b.name not in owners:
+                continue
+            if b.line in comments.rebind_ok_lines:
+                continue
+            yield Violation(
+                path, b.line, "LIT011",
+                f"parameter `{b.name}` of `{owners[b.name]}` is re-bound: the name silently "
+                f"detaches from what the caller passed; bind a new name instead "
+                f"(suppress: `# rebind-ok: <reason>`)",
+            )
+        for name, line in _mutation_sites(scope):
+            if name not in owners or name in SELF_PARAMS or line in comments.rebind_ok_lines:
+                continue
+            yield Violation(
+                path, line, "LIT011",
+                f"parameter `{name}` of `{owners[name]}` is mutated in place: the caller's "
+                f"object is rewritten at a distance; build and return a new value instead "
+                f"(suppress: `# rebind-ok: <reason>`)",
+            )
+
+
 # --------------------------------------------------------------------------- #
 # Driver
 # --------------------------------------------------------------------------- #
@@ -479,6 +838,8 @@ def check_file(path: Path) -> tuple[Violation, ...]:
         *iter_cast_violations(path, tree, comments),
         *iter_guard_violations(path, tree, comments),
         *iter_construction_violations(path, tree, comments),
+        *iter_final_violations(path, tree, comments),
+        *iter_param_violations(path, tree, comments),
     )
  
  

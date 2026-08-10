@@ -57,6 +57,12 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.utils import get_utc_datetime
 
 
+def _rendered_log_message(call):
+    message = str(call.args[0])
+    values = call.args[1:]
+    return message % values if values else message
+
+
 @pytest.fixture(autouse=True)
 def set_salt_key(monkeypatch):
     """Automatically set LITELLM_SALT_KEY for all tests"""
@@ -884,6 +890,229 @@ async def test_get_user_object_upsert_includes_user_email():
 
 
 @pytest.mark.asyncio
+async def test_get_user_object_backfills_null_email_from_cache_hit():
+    """
+    Regression (LIT-4710): an existing user row with a null user_email must be
+    backfilled from the JWT-provided email even when served from cache, so the
+    JWT-to-virtual-key path (which resolves straight to the cached user) stops
+    logging user_api_key_user_email=null forever. Before the fix the cached row
+    was returned unchanged and the DB was never updated.
+    """
+    cache = UserApiKeyCache()
+    existing = LiteLLM_UserTable(
+        user_id="jwt-user-1", user_email=None, user_role="internal_user"
+    )
+    await cache.async_set_cache(
+        key="jwt-user-1", value=existing, model_type=LiteLLM_UserTable
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=1)
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(
+            user_id="jwt-user-1",
+            user_email="jwt-user-1@example.com",
+            user_role="internal_user",
+        )
+    )
+
+    result = await get_user_object(
+        user_id="jwt-user-1",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=cache,
+        user_id_upsert=False,
+        proxy_logging_obj=None,
+        user_email="jwt-user-1@example.com",
+    )
+
+    assert result is not None
+    assert result.user_email == "jwt-user-1@example.com"
+
+    mock_prisma_client.db.litellm_usertable.update_many.assert_called_once()
+    update_kwargs = mock_prisma_client.db.litellm_usertable.update_many.call_args.kwargs
+    assert update_kwargs["where"] == {"user_id": "jwt-user-1", "user_email": None}
+    assert update_kwargs["data"]["user_email"] == "jwt-user-1@example.com"
+
+    refreshed = await cache.async_get_cache(
+        key="jwt-user-1", model_type=LiteLLM_UserTable
+    )
+    assert refreshed is not None
+    assert refreshed.user_email == "jwt-user-1@example.com"
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_backfills_null_email_from_db_read():
+    """
+    Regression (LIT-4710): a user row read from the DB with a null user_email is
+    backfilled from the JWT-provided email before it is cached and returned.
+    """
+    cache = UserApiKeyCache()
+    db_row = LiteLLM_UserTable(
+        user_id="jwt-user-3", user_email=None, user_role="internal_user"
+    )
+    backfilled_row = LiteLLM_UserTable(
+        user_id="jwt-user-3",
+        user_email="jwt-user-3@example.com",
+        user_role="internal_user",
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        side_effect=[db_row, backfilled_row]
+    )
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=1)
+
+    with patch(
+        "litellm.proxy.auth.auth_checks._should_check_db", return_value=True
+    ):
+        result = await get_user_object(
+            user_id="jwt-user-3",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=cache,
+            user_id_upsert=False,
+            proxy_logging_obj=None,
+            user_email="jwt-user-3@example.com",
+        )
+
+    assert result is not None
+    assert result.user_email == "jwt-user-3@example.com"
+    mock_prisma_client.db.litellm_usertable.update_many.assert_called_once()
+
+    refreshed = await cache.async_get_cache(
+        key="jwt-user-3", model_type=LiteLLM_UserTable
+    )
+    assert refreshed is not None
+    assert refreshed.user_email == "jwt-user-3@example.com"
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_does_not_overwrite_existing_email():
+    """
+    LIT-4710 guardrail: backfill is scoped to null-to-value. An existing non-null
+    user_email (e.g. one an operator set intentionally) must never be overwritten
+    by the JWT-provided email.
+    """
+    cache = UserApiKeyCache()
+    existing = LiteLLM_UserTable(
+        user_id="jwt-user-2",
+        user_email="operator-set@example.com",
+        user_role="internal_user",
+    )
+    await cache.async_set_cache(
+        key="jwt-user-2", value=existing, model_type=LiteLLM_UserTable
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=0)
+
+    result = await get_user_object(
+        user_id="jwt-user-2",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=cache,
+        user_id_upsert=False,
+        proxy_logging_obj=None,
+        user_email="different@example.com",
+    )
+
+    assert result is not None
+    assert result.user_email == "operator-set@example.com"
+    mock_prisma_client.db.litellm_usertable.update_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_backfill_race_prefers_db_email():
+    """
+    LIT-4710 race guard: when the null-guarded update matches 0 rows because a
+    concurrent writer already backfilled an email, the cache must be refreshed
+    with the value the DB accepted, not this request's proposed email.
+    """
+    cache = UserApiKeyCache()
+    existing = LiteLLM_UserTable(
+        user_id="jwt-user-4", user_email=None, user_role="internal_user"
+    )
+    await cache.async_set_cache(
+        key="jwt-user-4", value=existing, model_type=LiteLLM_UserTable
+    )
+
+    winner_row = LiteLLM_UserTable(
+        user_id="jwt-user-4",
+        user_email="winner@example.com",
+        user_role="internal_user",
+    )
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=winner_row
+    )
+
+    result = await get_user_object(
+        user_id="jwt-user-4",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=cache,
+        user_id_upsert=False,
+        proxy_logging_obj=None,
+        user_email="loser@example.com",
+    )
+
+    assert result is not None
+    assert result.user_email == "winner@example.com"
+
+    refreshed = await cache.async_get_cache(
+        key="jwt-user-4", model_type=LiteLLM_UserTable
+    )
+    assert refreshed is not None
+    assert refreshed.user_email == "winner@example.com"
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_backfill_caches_persisted_email_not_proposed():
+    """
+    LIT-4710 cache-coherence: even when the null-guarded update succeeds, the
+    cache must be refreshed from the row the DB actually holds, not this
+    request's proposed email. A concurrent ordinary user update (not null
+    guarded) can change the email in the window before the cache write, so
+    optimistically caching the proposed email would serve a stale value.
+    """
+    cache = UserApiKeyCache()
+    existing = LiteLLM_UserTable(
+        user_id="jwt-user-5", user_email=None, user_role="internal_user"
+    )
+    await cache.async_set_cache(
+        key="jwt-user-5", value=existing, model_type=LiteLLM_UserTable
+    )
+
+    persisted_row = LiteLLM_UserTable(
+        user_id="jwt-user-5",
+        user_email="admin-edited@example.com",
+        user_role="internal_user",
+    )
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=1)
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=persisted_row
+    )
+
+    result = await get_user_object(
+        user_id="jwt-user-5",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=cache,
+        user_id_upsert=False,
+        proxy_logging_obj=None,
+        user_email="jwt-user-5@example.com",
+    )
+
+    assert result is not None
+    assert result.user_email == "admin-edited@example.com"
+
+    refreshed = await cache.async_get_cache(
+        key="jwt-user-5", model_type=LiteLLM_UserTable
+    )
+    assert refreshed is not None
+    assert refreshed.user_email == "admin-edited@example.com"
+
+
+@pytest.mark.asyncio
 async def test_get_user_object_upsert_routes_default_team_to_membership(monkeypatch):
     """Regression for LIT-4324: a configured default team (list of NewUserRequestTeam
     dicts) must not be written into the Prisma create payload (teams is a String[] column
@@ -944,7 +1173,7 @@ def test_log_budget_lookup_failure_dry_run():
         err = Exception("column 'policies' does not exist in prisma schema")
         _log_budget_lookup_failure("user", err)
         mock_logger.error.assert_called_once()
-        call_msg = mock_logger.error.call_args[0][0]
+        call_msg = _rendered_log_message(mock_logger.error.call_args)
         assert "user" in call_msg
         assert "cache will not be populated" in call_msg
         assert "policies" in call_msg or "prisma" in call_msg
@@ -4876,6 +5105,80 @@ async def test_common_checks_personal_user_budget_skipped_for_team_key():
     assert result is True
 
 
+@pytest.mark.asyncio
+async def test_common_checks_personal_user_budget_enforced_on_team_key_when_flag_enabled():
+    """general_settings.apply_user_budget_to_team_keys opts a deployment into
+    charging the key owner's personal budget on team-scoped keys too.
+
+    Same fixture as the default-off test above, so a regression that ignores the
+    flag lets this call through instead of raising.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    user = LiteLLM_UserTable(user_id="u1", spend=0.0, max_budget=100.0)
+    team = LiteLLM_TeamTable(team_id="t1", spend=0.0, max_budget=1000.0)
+    token = UserAPIKeyAuth(token="k1", user_id="u1", team_id="t1")
+
+    async def _spend_by_counter(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return 999.0 if counter_key == "spend:user:u1" else 0.0
+
+    async def _no_membership(*args, **kwargs):
+        return None
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None), patch(
+        "litellm.proxy.proxy_server.get_current_spend", _spend_by_counter
+    ), patch("litellm.proxy.auth.auth_checks.get_team_membership", _no_membership):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await common_checks(
+                request_body={"messages": [{"role": "user", "content": "hi"}]},
+                team_object=team,
+                user_object=user,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={"apply_user_budget_to_team_keys": True},
+                route="/chat/completions",
+                llm_router=None,
+                proxy_logging_obj=MagicMock(),
+                valid_token=token,
+                request=MagicMock(spec=Request),
+            )
+    assert "ExceededBudget: User=u1" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_common_checks_personal_user_budget_still_enforced_on_personal_key_with_flag_enabled():
+    """The flag only widens enforcement to team keys; personal keys keep blocking."""
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    user = LiteLLM_UserTable(user_id="u1", spend=0.0, max_budget=100.0)
+    token = UserAPIKeyAuth(token="k1", user_id="u1")
+
+    async def _spend_by_counter(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return 999.0 if counter_key == "spend:user:u1" else 0.0
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None), patch(
+        "litellm.proxy.proxy_server.get_current_spend", _spend_by_counter
+    ):
+        with pytest.raises(litellm.BudgetExceededError):
+            await common_checks(
+                request_body={"messages": [{"role": "user", "content": "hi"}]},
+                team_object=None,
+                user_object=user,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={"apply_user_budget_to_team_keys": True},
+                route="/chat/completions",
+                llm_router=None,
+                proxy_logging_obj=MagicMock(),
+                valid_token=token,
+                request=MagicMock(spec=Request),
+            )
+
+
 @pytest.mark.parametrize(
     "scope, route, expect_blocked",
     [
@@ -5233,3 +5536,82 @@ async def test_get_project_object_db_fetch_returns_cached_obj():
     assert isinstance(result, LiteLLM_ProjectTableCachedObj)
     assert result.project_id == "p-1"
     assert result.project_alias == "proj"
+
+
+@pytest.mark.asyncio
+async def test_project_allowlist_enforced_when_key_models_empty():
+    """
+    LIT-3803: a project-bound key with models=[] has no key-level restriction,
+    but the project allowlist must still 403 team models outside it.
+    """
+    from litellm.proxy._types import (
+        LiteLLM_ProjectTableCachedObj,
+        ProxyErrorTypes,
+        ProxyException,
+    )
+    from litellm.proxy.auth.auth_checks import _run_project_checks, can_key_call_model
+
+    valid_token = UserAPIKeyAuth(
+        api_key="hashed-key",
+        project_id="p-1",
+        team_id="t-1",
+        models=[],
+    )
+    project = LiteLLM_ProjectTableCachedObj(
+        project_id="p-1",
+        team_id="t-1",
+        models=["gemini-2.5-flash-image", "gemini-3.1-flash-lite-preview"],
+    )
+
+    assert (
+        await can_key_call_model(
+            model="gemini-2.5-flash",
+            llm_model_list=None,
+            valid_token=valid_token,
+            llm_router=None,
+        )
+        is True
+    )
+
+    await _run_project_checks(
+        project_object=project,
+        _model="gemini-2.5-flash-image",
+        llm_router=None,
+        skip_budget_checks=True,
+        valid_token=valid_token,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_project_checks(
+            project_object=project,
+            _model="gemini-2.5-flash",
+            llm_router=None,
+            skip_budget_checks=True,
+            valid_token=valid_token,
+            proxy_logging_obj=MagicMock(),
+        )
+    assert exc_info.value.type == ProxyErrorTypes.project_model_access_denied
+    assert exc_info.value.code == "403"
+
+
+def test_is_user_proxy_admin_rejects_view_only_admin():
+    """This predicate skips `non_proxy_admin_allowed_routes_check` entirely, so an
+    Admin Viewer answering True here would gain every write route. Read parity for
+    that role belongs in the route checks, never here."""
+    from litellm.proxy.auth.auth_checks import _is_user_proxy_admin
+
+    viewer = LiteLLM_UserTable(
+        user_id="viewer_user",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    admin = LiteLLM_UserTable(
+        user_id="admin_user",
+        user_email="admin@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+    )
+
+    assert _is_user_proxy_admin(user_obj=viewer) is False
+    assert _is_user_proxy_admin(user_obj=admin) is True
+    assert _is_user_proxy_admin(user_obj=None) is False

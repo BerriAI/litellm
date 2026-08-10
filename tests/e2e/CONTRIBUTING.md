@@ -25,7 +25,7 @@ The suites run against a live proxy, so bring one up first by running the litell
    GEMINI_API_KEY="..."
    ```
 
-2. Bring up a Postgres and a Redis for the proxy to use. The repo-root `docker-compose.yml` already defines a Postgres on `5432`; a `docker run -p 6379:6379 redis:7` covers Redis. Point `DATABASE_URL` / `REDIS_HOST` / `REDIS_PORT` at whatever you run
+2. Bring up a Postgres and a Redis for the proxy to use. The repo-root `docker-compose.yml` already defines a Postgres on `5432`; a `docker run -p 6379:6379 redis:7` covers Redis. Point `DATABASE_URL` / `REDIS_HOST` / `REDIS_PORT` at whatever you run. Tests that read Redis directly default to the deployed shape (TLS + cluster mode) whenever `REDIS_HOST` is set, so for a local standalone Redis also set `REDIS_CLUSTER=false` and `REDIS_SSL=false` (plus `REDIS_PASSWORD` when your Redis requires auth)
 
 3. Start the litellm proxy locally against your config and confirm it is live:
 
@@ -138,7 +138,7 @@ Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure cover
 
 Before you push
 
-1. Run `make lint-e2e-basedpyright` (or `make pre-commit` with your changes staged); the harness is fully typed and the gate allows zero basedpyright errors, enforced in CI on any PR touching `tests/e2e/**/*.py`
+1. Run `make lint-e2e-basedpyright` (or `make check` with your changes staged); the harness is fully typed and the gate allows zero basedpyright errors, enforced in CI on any PR touching `tests/e2e/**/*.py`
 
 2. Add the models your test needs to the config your local proxy loads
 

@@ -5,7 +5,7 @@ Transforms between Anthropic/OpenAI tool_use format and LiteLLM search format.
 """
 
 import json
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
@@ -27,7 +27,7 @@ class WebSearchTransformation:
         response: Any,
         stream: bool,
         response_format: str = "anthropic",
-    ) -> Tuple[bool, List[Dict]]:
+    ) -> tuple[bool, list[dict]]:
         """
         Transform model response to extract WebSearch tool calls.
 
@@ -82,7 +82,7 @@ class WebSearchTransformation:
         if not isinstance(output, list):
             return False, []
 
-        tool_calls: list[dict] = []
+        tool_calls: Final[list[dict]] = []
         for item in output:
             if isinstance(item, dict):
                 item_type = item.get("type")
@@ -103,7 +103,7 @@ class WebSearchTransformation:
                     parsed_input = json.loads(arguments) if arguments else {}
                 except json.JSONDecodeError:
                     verbose_logger.warning(
-                        f"WebSearchInterception: Failed to parse function_call arguments: {arguments}"
+                        "WebSearchInterception: Failed to parse function_call arguments: %s", arguments
                     )
                     parsed_input = {}
             elif isinstance(arguments, dict):
@@ -122,14 +122,14 @@ class WebSearchTransformation:
                     "input": parsed_input,
                 }
             )
-            verbose_logger.debug(f"WebSearchInterception: Found {item_name} function_call with call_id={call_id}")
+            verbose_logger.debug("WebSearchInterception: Found %s function_call with call_id=%s", item_name, call_id)
 
         return len(tool_calls) > 0, tool_calls
 
     @staticmethod
     def _detect_from_non_streaming_response(
         response: Any,
-    ) -> Tuple[bool, List[Dict]]:
+    ) -> tuple[bool, list[dict]]:
         """Parse non-streaming response for WebSearch tool_use"""
 
         # Handle both dict and object responses
@@ -146,7 +146,7 @@ class WebSearchTransformation:
             return False, []
 
         # Find all WebSearch tool_use blocks
-        tool_calls = []
+        tool_calls: Final = []
         for block in content:
             # Handle both dict and object blocks
             if isinstance(block, dict):
@@ -178,14 +178,14 @@ class WebSearchTransformation:
                     "input": block_input,
                 }
                 tool_calls.append(tool_call)
-                verbose_logger.debug(f"WebSearchInterception: Found {block_name} tool_use with id={tool_call['id']}")
+                verbose_logger.debug("WebSearchInterception: Found %s tool_use with id=%s", block_name, tool_call["id"])
 
         return len(tool_calls) > 0, tool_calls
 
     @staticmethod
     def _detect_from_openai_response(
         response: Any,
-    ) -> Tuple[bool, List[Dict]]:
+    ) -> tuple[bool, list[dict]]:
         """Parse OpenAI-style response for WebSearch tool_calls"""
 
         # Handle both dict and ModelResponse objects
@@ -202,7 +202,7 @@ class WebSearchTransformation:
             return False, []
 
         # Get first choice's message
-        first_choice = choices[0]
+        first_choice: Final = choices[0]
         if isinstance(first_choice, dict):
             message = first_choice.get("message", {})
         else:
@@ -223,7 +223,7 @@ class WebSearchTransformation:
             return False, []
 
         # Find all WebSearch tool calls
-        tool_calls = []
+        tool_calls: Final = []
         for tool_call in openai_tool_calls:
             # Handle both dict and object tool calls
             if isinstance(tool_call, dict):
@@ -255,7 +255,7 @@ class WebSearchTransformation:
                         arguments = json.loads(function_arguments)
                     except json.JSONDecodeError:
                         verbose_logger.warning(
-                            f"WebSearchInterception: Failed to parse function arguments: {function_arguments}"
+                            "WebSearchInterception: Failed to parse function arguments: %s", function_arguments
                         )
                         arguments = {}
                 else:
@@ -273,17 +273,17 @@ class WebSearchTransformation:
                     "input": arguments,  # For compatibility with Anthropic format
                 }
                 tool_calls.append(tool_call_dict)
-                verbose_logger.debug(f"WebSearchInterception: Found {function_name} tool_call with id={tool_id}")
+                verbose_logger.debug("WebSearchInterception: Found %s tool_call with id=%s", function_name, tool_id)
 
         return len(tool_calls) > 0, tool_calls
 
     @staticmethod
     def transform_response(
-        tool_calls: List[Dict],
-        search_results: List[str],
+        tool_calls: list[dict],
+        search_results: list[str],
         response_format: str = "anthropic",
-        thinking_blocks: Optional[List[Dict]] = None,
-    ) -> Tuple[Dict, Union[Dict, List[Dict]]]:
+        thinking_blocks: list[dict] | None = None,
+    ) -> tuple[dict, dict | list[dict]]:
         """
         Transform LiteLLM search results to Anthropic/OpenAI tool_result format.
 
@@ -313,13 +313,13 @@ class WebSearchTransformation:
 
     @staticmethod
     def _transform_response_anthropic(
-        tool_calls: List[Dict],
-        search_results: List[str],
-        thinking_blocks: Optional[List[Dict]] = None,
-    ) -> Tuple[Dict, Dict]:
+        tool_calls: list[dict],
+        search_results: list[str],
+        thinking_blocks: list[dict] | None = None,
+    ) -> tuple[dict, dict]:
         """Transform to Anthropic format (single user message with tool_result blocks)"""
         # Build assistant message content
-        assistant_content: List[Dict] = []
+        assistant_content: Final[list[dict]] = []
 
         # Prepend thinking blocks if present.
         # When extended thinking is enabled, Anthropic requires the assistant
@@ -341,13 +341,13 @@ class WebSearchTransformation:
             ]
         )
 
-        assistant_message = {
+        assistant_message: Final = {
             "role": "assistant",
             "content": assistant_content,
         }
 
         # Build user message with tool_result blocks
-        user_message = {
+        user_message: Final = {
             "role": "user",
             "content": [
                 {
@@ -363,12 +363,12 @@ class WebSearchTransformation:
 
     @staticmethod
     def _transform_response_openai(
-        tool_calls: List[Dict],
-        search_results: List[str],
-    ) -> Tuple[Dict, List[Dict]]:
+        tool_calls: list[dict],
+        search_results: list[str],
+    ) -> tuple[dict, list[dict]]:
         """Transform to OpenAI format (assistant with tool_calls, separate tool messages)"""
         # Build assistant message with tool_calls
-        assistant_message = {
+        assistant_message: Final = {
             "role": "assistant",
             "tool_calls": [
                 {
@@ -384,7 +384,7 @@ class WebSearchTransformation:
         }
 
         # Build separate tool messages (one per tool call)
-        tool_messages = [
+        tool_messages: Final = [
             {
                 "role": "tool",
                 "tool_call_id": tool_calls[i]["id"],
@@ -398,8 +398,8 @@ class WebSearchTransformation:
     @staticmethod
     def build_web_search_tool_result_block(
         tool_use_id: str,
-        search_response: Optional[SearchResponse],
-    ) -> Dict[str, Any]:
+        search_response: SearchResponse | None,
+    ) -> dict[str, Any]:
         """
         Build an Anthropic-native ``web_search_tool_result`` content block.
 
@@ -411,6 +411,15 @@ class WebSearchTransformation:
         model needs readable evidence). This helper produces the *additional*
         block that should accompany the model's text reply when the original
         request used a native ``web_search_*`` tool.
+
+        The spec'd shape carries page text only in ``encrypted_content``, an
+        opaque server-issued blob that we cannot mint. Emitting the four spec
+        fields alone would drop the snippet entirely, leaving the client (and
+        the model, on any replayed follow-up turn) with URLs and titles but no
+        evidence to answer from, forcing a fetch per result. So the snippet is
+        carried in an additive ``snippet`` key alongside the spec fields.
+        ``encrypted_content`` stays empty rather than holding plaintext, which
+        would assert encryption semantics that do not hold.
 
         Spec reference:
         https://docs.anthropic.com/en/api/web-search-tool
@@ -424,9 +433,9 @@ class WebSearchTransformation:
                 emitted with an empty result list (signals "search ran, no
                 results" rather than "search did not run").
         """
-        items: List[Dict[str, Any]] = []
+        items: Final[list[dict[str, Any]]] = []
         if search_response is not None:
-            results = getattr(search_response, "results", None) or []
+            results: Final = getattr(search_response, "results", None) or []
             for r in results:
                 url = getattr(r, "url", "") or ""
                 title = getattr(r, "title", "") or ""
@@ -438,6 +447,7 @@ class WebSearchTransformation:
                         "title": title,
                         "page_age": page_age,
                         "encrypted_content": "",
+                        "snippet": getattr(r, "snippet", "") or "",
                     }
                 )
         return {

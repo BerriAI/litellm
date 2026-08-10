@@ -18,6 +18,33 @@ export const getCallbackConfigsCall = async (accessToken: string) => {
   }
 };
 
+export const getAutoRouterClassifierDefaultPromptCall = async (
+  accessToken: string,
+  contextWindowSize: number,
+  tierLabels?: Record<string, string>,
+): Promise<string> => {
+  /**
+   * Get the built-in system prompt an auto-router's LLM classifier uses when none is configured,
+   * so the prompt editor prefills what the proxy actually sends rather than a frontend copy.
+   *
+   * tierLabels names the rubric's tier bullets, so a router that renamed its tiers prefills the
+   * rubric it sends rather than one using the canonical names.
+   */
+  try {
+    const response = await apiClient.get<{ system_prompt: string }>(`/auto_router/classifier/default_prompt`, {
+      accessToken,
+      query: {
+        context_window_size: contextWindowSize,
+        ...(tierLabels && Object.keys(tierLabels).length > 0 ? { tier_labels: JSON.stringify(tierLabels) } : {}),
+      },
+    });
+    return response.system_prompt;
+  } catch (error) {
+    console.error("Failed to get the default classifier prompt:", error);
+    throw error;
+  }
+};
+
 /**
  * Helper file for calls being made to proxy
  */
@@ -38,7 +65,14 @@ import type {
   CoordinationRedisTestResponse,
 } from "@/app/(dashboard)/caching/_components/coordination_redis_settings/types";
 import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
-import { createApiClient, deriveErrorMessage } from "@/lib/http/client";
+import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity_router_config";
+import type { RoutingDecision } from "./view_logs/LogDetailsDrawer/RoutingDecisionCard";
+import {
+  createApiClient,
+  deriveErrorMessage,
+  extractProxyErrorMessage,
+  unwrapProxyErrorMessage,
+} from "@/lib/http/client";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
 import {
   registerAuthHeaderNameGetter,
@@ -356,7 +390,6 @@ export const getAgentCreateMetadata = async (): Promise<AgentCreateInfo[]> => {
 
 // Global variable for the header name
 let globalLitellmHeaderName: string = "Authorization";
-const MCP_AUTH_HEADER: string = "x-mcp-auth";
 
 // Function to set the global header name
 export function setGlobalLitellmHeaderName(headerName: string = "Authorization") {
@@ -1355,6 +1388,7 @@ export const userDailyActivityCall = async (
   endTime: Date,
   page: number = 1,
   userId: string | null = null,
+  includeCurrentUtcDay: boolean = false,
 ) => {
   /**
    * Get daily user activity on proxy
@@ -1367,6 +1401,7 @@ export const userDailyActivityCall = async (
     page,
     extraQueryParams: {
       user_id: userId,
+      include_current_utc_day: includeCurrentUtcDay ? "true" : undefined,
     },
   });
 };
@@ -2291,6 +2326,39 @@ export const testModelGroupConnection = async (
   }
 };
 
+export interface AutoRouterRoutingTestRequest {
+  prompt: string;
+  complexity_router_config: ComplexityRouterConfigPayload;
+  default_model?: string;
+  router_name?: string;
+  team_id?: string;
+}
+
+export interface AutoRouterRoutingTestResult {
+  routed_model: string;
+  routed_model_configured: boolean;
+  routing_decision: RoutingDecision;
+}
+
+export type AutoRouterRoutingTestResponse =
+  | { status: "success"; result: AutoRouterRoutingTestResult }
+  | { status: "error"; error: string };
+
+export const testAutoRouterRouting = async (
+  accessToken: string,
+  request: AutoRouterRoutingTestRequest,
+): Promise<AutoRouterRoutingTestResponse> => {
+  try {
+    const result = await apiClient.post<AutoRouterRoutingTestResult>("/auto_router/test_routing", {
+      accessToken,
+      body: request,
+    });
+    return { status: "success", result };
+  } catch (error) {
+    return { status: "error", error: extractProxyErrorMessage(error) };
+  }
+};
+
 // ... existing code ...
 export const keyInfoV1Call = async (accessToken: string, key: string) => {
   try {
@@ -2427,6 +2495,31 @@ export const userDailyActivityAggregatedCall = async (
     });
   } catch (error) {
     console.error("Failed to fetch aggregated user daily activity:", error);
+    throw error;
+  }
+};
+
+export const gatewayDailyActivityCall = async (accessToken: string, startTime: Date, endTime: Date) => {
+  /**
+   * Get gateway request counts (SGR) recorded by the proxy middleware.
+   * Deployment-wide and admin-only; carries no per-key or per-user dimension.
+   */
+  try {
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
+    return await apiClient.get(`/gateway/daily/activity`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch gateway daily activity:", error);
     throw error;
   }
 };
@@ -2643,7 +2736,7 @@ export const teamUpdateCall = async (
       const errorData = await response.text();
       handleError(errorData);
       console.error("Error response from the server:", errorData);
-      NotificationsManager.fromBackend("Failed to update team settings: " + errorData);
+      NotificationsManager.fromBackend("Failed to update team settings: " + unwrapProxyErrorMessage(errorData));
       throw new Error(errorData);
     }
     const data = (await response.json()) as { data: Team; team_id: string };
@@ -7109,6 +7202,29 @@ export const updateUiSettings = async (accessToken: string, settings: Record<str
   return data;
 };
 
+export type UserBannerSeverity = "info" | "warning" | "error";
+
+export interface UserBanner {
+  enabled: boolean;
+  message: string;
+  severity: UserBannerSeverity;
+  revision: string;
+}
+
+export type UserBannerUpdate = Omit<UserBanner, "revision">;
+
+export const getUserBanner = async (accessToken: string): Promise<UserBanner> => {
+  return await apiClient.get<UserBanner>("/get/user_banner", { accessToken });
+};
+
+export const updateUserBanner = async (accessToken: string, banner: UserBannerUpdate): Promise<UserBanner> => {
+  const data = await apiClient.patch<{ message: string; banner: UserBanner }>("/update/user_banner", {
+    accessToken,
+    body: banner,
+  });
+  return data.banner;
+};
+
 // Claude Code Marketplace Networking Functions
 
 /**
@@ -7213,7 +7329,8 @@ export const getClaudeCodePluginDetails = async (accessToken: string, pluginName
 };
 
 /**
- * Register or update a Claude Code plugin (admin only)
+ * Register a new Claude Code plugin (admin only). Create-only: the proxy returns
+ * 409 if a plugin with the same name already exists.
  * @param accessToken - Admin access token
  * @param pluginData - Plugin registration data
  */

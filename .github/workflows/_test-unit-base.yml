@@ -154,6 +154,19 @@ jobs:
           merge-multiple: true
 
       - name: Upload to Codecov
+        id: codecov-upload
+        continue-on-error: true
+        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
+        with:
+          use_oidc: true
+          directory: coverage-reports
+          root_dir: ${{ github.workspace }}
+          flags: ${{ inputs.artifact-name }}
+          fail_ci_if_error: false
+
+      - name: Upload to Codecov (retry)
+        if: steps.codecov-upload.outcome == 'failure'
+        continue-on-error: true
         uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
         with:
           use_oidc: true
