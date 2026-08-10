@@ -1317,9 +1317,8 @@ class LiteLLMProxyRequestSetup:
         if "disable_fallbacks" in key_metadata and isinstance(key_metadata["disable_fallbacks"], bool):
             data["disable_fallbacks"] = key_metadata["disable_fallbacks"]
 
-        ## KEY-LEVEL PROMPT CACHING AUTO-INJECTION
         if isinstance(key_metadata.get("enable_prompt_caching"), bool):
-            data["enable_prompt_caching"] = key_metadata["enable_prompt_caching"]
+            data["enable_prompt_caching"] = key_metadata["enable_prompt_caching"]  # rebind-ok: data is an out-param
 
         ## KEY-LEVEL METADATA
         data = LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
