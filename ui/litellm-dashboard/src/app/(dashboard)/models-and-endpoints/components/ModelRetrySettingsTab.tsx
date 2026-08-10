@@ -1,6 +1,7 @@
 import { Button, Select, SelectItem, Text, Title } from "@tremor/react";
 import { InputNumber } from "antd";
 import React from "react";
+import { useTranslation } from "react-i18next";
 
 interface GlobalRetryPolicyObject {
   [retryPolicyKey: string]: number;
@@ -44,6 +45,7 @@ const ModelRetrySettingsTab = ({
   handleSaveRetrySettings,
   isSaving = false,
 }: ModelRetrySettingsTabProps) => {
+  const { t } = useTranslation("gateway");
   const isGlobalScope = selectedModelGroup === "global";
 
   const setGlobalValue = (retryPolicyKey: string, value: number | null) => {
@@ -67,13 +69,13 @@ const ModelRetrySettingsTab = ({
     <div>
       <div className="flex items-center gap-4 mb-6">
         <div className="flex items-center">
-          <Text>Retry Policy Scope:</Text>
+          <Text>{t("models.retrySettings.scope")}</Text>
           <Select
             className="ml-2 w-48"
             value={isGlobalScope ? "global" : selectedModelGroup || availableModelGroups[0]}
             onValueChange={(value) => setSelectedModelGroup(value)}
           >
-            <SelectItem value="global">Global Default</SelectItem>
+            <SelectItem value="global">{t("models.retrySettings.globalDefault")}</SelectItem>
             {availableModelGroups.map((group, idx) => (
               <SelectItem key={idx} value={group}>
                 {group}
@@ -85,13 +87,13 @@ const ModelRetrySettingsTab = ({
 
       {isGlobalScope ? (
         <>
-          <Title>Global Retry Policy</Title>
-          <Text className="mb-6">Default retry settings applied to all model groups unless overridden</Text>
+          <Title>{t("models.retrySettings.globalTitle")}</Title>
+          <Text className="mb-6">{t("models.retrySettings.globalDescription")}</Text>
         </>
       ) : (
         <>
-          <Title>Retry Policy for {selectedModelGroup}</Title>
-          <Text className="mb-6">Model-specific retry settings. Falls back to global defaults if not set.</Text>
+          <Title>{t("models.retrySettings.groupTitle", { group: selectedModelGroup })}</Title>
+          <Text className="mb-6">{t("models.retrySettings.groupDescription")}</Text>
         </>
       )}
       <table>
@@ -105,7 +107,11 @@ const ModelRetrySettingsTab = ({
               <tr key={idx} className="flex justify-between items-center mt-2">
                 <td>
                   <Text>{exceptionType}</Text>
-                  {!isGlobalScope && <Text className="text-xs text-gray-500 ml-2">(Global: {inheritedValue})</Text>}
+                  {!isGlobalScope && (
+                    <Text className="text-xs text-gray-500 ml-2">
+                      ({t("models.retrySettings.inherited", { value: inheritedValue })})
+                    </Text>
+                  )}
                 </td>
                 <td className="flex items-center gap-2">
                   <InputNumber
@@ -120,7 +126,7 @@ const ModelRetrySettingsTab = ({
                   />
                   {!isGlobalScope && hasOverride && (
                     <Button variant="light" size="xs" onClick={() => setModelOverride(retryPolicyKey, null)}>
-                      Reset
+                      {t("models.retrySettings.reset")}
                     </Button>
                   )}
                 </td>
@@ -130,7 +136,7 @@ const ModelRetrySettingsTab = ({
         </tbody>
       </table>
       <Button className="mt-6 mr-8" onClick={handleSaveRetrySettings} loading={isSaving} disabled={isSaving}>
-        Save
+        {t("models.retrySettings.save")}
       </Button>
     </div>
   );

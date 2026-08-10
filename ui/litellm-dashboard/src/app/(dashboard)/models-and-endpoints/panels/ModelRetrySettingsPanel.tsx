@@ -7,6 +7,7 @@ import { useUpdateRetryPolicy } from "@/app/(dashboard)/hooks/routerSettings/use
 import { useModelDashboardData } from "@/app/(dashboard)/models-and-endpoints/useModelDashboardData";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import NotificationsManager from "@/components/molecules/notifications_manager";
+import { useTranslation } from "react-i18next";
 
 interface RetryPolicyObject {
   [key: string]: { [retryPolicyKey: string]: number } | undefined;
@@ -23,6 +24,7 @@ interface RouterSettings {
 }
 
 export default function ModelRetrySettingsPanel() {
+  const { t } = useTranslation("gateway");
   const { accessToken, userId: userID, userRole } = useAuthorized();
   const { availableModelGroups } = useModelDashboardData();
   const updateRetryPolicy = useUpdateRetryPolicy(accessToken);
@@ -69,7 +71,7 @@ export default function ModelRetrySettingsPanel() {
       { retry_policy: globalRetryPolicy, model_group_retry_policy: modelGroupRetryPolicy },
       {
         onSuccess: () => {
-          NotificationsManager.success("Retry settings saved successfully");
+          NotificationsManager.success(t("models.retrySettings.saved"));
           void fetchRetrySettings().then((routerSettings) => {
             if (routerSettings) {
               applyRetrySettings(routerSettings);
@@ -77,7 +79,7 @@ export default function ModelRetrySettingsPanel() {
           });
         },
         onError: () => {
-          NotificationsManager.fromBackend("Failed to save retry settings");
+          NotificationsManager.fromBackend(t("models.retrySettings.saveFailed"));
         },
       },
     );
