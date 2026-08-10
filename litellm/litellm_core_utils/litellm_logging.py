@@ -4539,28 +4539,60 @@ class StandardLoggingPayloadSetup:
         return start_time_float, end_time_float, completion_start_time_float
 
     @staticmethod
+    def get_system_prompt_from_kwargs(kwargs: dict | None) -> str | list | None:
+        """
+        Extract the system prompt from kwargs, checking all known sources.
+
+        Priority: system_instructions (Vertex Gemini) > instructions > system (Anthropic /messages).
+        Returns the value as-is — either a string or a list of content blocks.
+        """
+        if kwargs is None:
+            return None
+        return (
+            kwargs.get("system_instructions")
+            if kwargs.get("system_instructions") is not None
+            else (
+                kwargs.get("instructions")
+                if kwargs.get("instructions") is not None
+                else kwargs.get("system")
+            )
+        )
+
+    @staticmethod
     def append_system_prompt_messages(kwargs: dict | None = None, messages: Any | None = None):
         """
-        Append system prompt messages to the messages
-        """
-        if kwargs is not None:
-            if kwargs.get("system") is not None and isinstance(kwargs.get("system"), str):
-                if messages is None:
-                    return [{"role": "system", "content": kwargs.get("system")}]
-                elif isinstance(messages, list):
-                    if len(messages) == 0:
-                        return [{"role": "system", "content": kwargs.get("system")}]
-                    # check for duplicates
-                    if messages[0].get("role") == "system" and messages[0].get("content") == kwargs.get("system"):
-                        return messages
-                    messages = [{"role": "system", "content": kwargs.get("system")}] + messages
-                elif isinstance(messages, str):
-                    messages = [
-                        {"role": "system", "content": kwargs.get("system")},
-                        {"role": "user", "content": messages},
-                    ]
-                return messages
+        Append system prompt messages to the messages list.
 
+        Handles both string and list-of-content-blocks system prompts so that the
+        logged ``messages`` field always reflects what was actually sent, regardless
+        of whether the caller used the Anthropic string form or the block-list form.
+        """
+        if kwargs is None:
+            return messages
+
+        system = kwargs.get("system")
+        if system is None:
+            return messages
+
+        if not isinstance(system, (str, list)):
+            return messages
+
+        system_message: dict = {"role": "system", "content": system}
+
+        if messages is None:
+            return [system_message]
+        elif isinstance(messages, list):
+            if len(messages) == 0:
+                return [system_message]
+            # skip prepend if the first message already carries this exact system content
+            if messages[0].get("role") == "system" and messages[0].get("content") == system:
+                return messages
+            messages = [system_message] + messages
+        elif isinstance(messages, str):
+            messages = [
+                system_message,
+                {"role": "user", "content": messages},
+            ]
         return messages
 
     @staticmethod
@@ -5442,6 +5474,7 @@ def get_standard_logging_object_payload(
             response_cost_failure_debug_info=kwargs.get("response_cost_failure_debug_information"),
             guardrail_information=metadata.get("standard_logging_guardrail_information", None),
             standard_built_in_tools_params=standard_built_in_tools_params,
+            system_prompt=StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(kwargs),
         )
         # emit_standard_logging_payload(payload) - Moved to success_handler to prevent double emitting
 

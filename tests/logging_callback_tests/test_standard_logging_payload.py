@@ -1169,3 +1169,122 @@ def test_merge_litellm_metadata_bedrock_passthrough_scenario():
 
     # Verify total number of fields (9 user fields + 4 model fields = 13)
     assert len(result) == 13
+
+
+# ---------------------------------------------------------------------------
+# Tests for system_prompt logging (issue: list-form system was silently dropped)
+# ---------------------------------------------------------------------------
+
+class TestAppendSystemPromptMessages:
+    """Tests for StandardLoggingPayloadSetup.append_system_prompt_messages."""
+
+    def test_string_system_prepended_to_messages(self):
+        """String system prompt is prepended as a system message."""
+        kwargs = {"system": "You are a helpful assistant."}
+        messages = [{"role": "user", "content": "Hello"}]
+        result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+            kwargs=kwargs, messages=messages
+        )
+        assert result is not None
+        assert result[0] == {"role": "system", "content": "You are a helpful assistant."}
+        assert result[1] == {"role": "user", "content": "Hello"}
+
+    def test_list_system_prepended_to_messages(self):
+        """List-of-content-blocks system prompt is now prepended, not silently dropped."""
+        system_blocks = [
+            {"type": "text", "text": "You are a helpful assistant."},
+            {"type": "text", "text": "Be concise.", "cache_control": {"type": "ephemeral"}},
+        ]
+        kwargs = {"system": system_blocks}
+        messages = [{"role": "user", "content": "Hello"}]
+        result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+            kwargs=kwargs, messages=messages
+        )
+        assert result is not None
+        assert result[0] == {"role": "system", "content": system_blocks}
+        assert result[1] == {"role": "user", "content": "Hello"}
+
+    def test_none_system_returns_messages_unchanged(self):
+        """No system key in kwargs leaves messages unchanged."""
+        messages = [{"role": "user", "content": "Hello"}]
+        result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+            kwargs={}, messages=messages
+        )
+        assert result == messages
+
+    def test_none_kwargs_returns_messages_unchanged(self):
+        """None kwargs leaves messages unchanged."""
+        messages = [{"role": "user", "content": "Hello"}]
+        result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+            kwargs=None, messages=messages
+        )
+        assert result == messages
+
+    def test_string_system_with_empty_messages(self):
+        """String system prompt is returned as a single-element list when messages is empty."""
+        kwargs = {"system": "Be helpful."}
+        result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+            kwargs=kwargs, messages=[]
+        )
+        assert result == [{"role": "system", "content": "Be helpful."}]
+
+    def test_list_system_with_empty_messages(self):
+        """List system prompt is returned as a single-element list when messages is empty."""
+        system_blocks = [{"type": "text", "text": "Be helpful."}]
+        kwargs = {"system": system_blocks}
+        result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+            kwargs=kwargs, messages=[]
+        )
+        assert result == [{"role": "system", "content": system_blocks}]
+
+    def test_no_duplicate_prepend_when_already_present(self):
+        """System message is not prepended if it is already the first message."""
+        system_text = "You are a helpful assistant."
+        kwargs = {"system": system_text}
+        messages = [
+            {"role": "system", "content": system_text},
+            {"role": "user", "content": "Hello"},
+        ]
+        result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+            kwargs=kwargs, messages=messages
+        )
+        # should still be 2 messages, not 3
+        assert result is not None
+        assert len(result) == 2
+        assert result[0]["role"] == "system"
+
+
+class TestGetSystemPromptFromKwargs:
+    """Tests for StandardLoggingPayloadSetup.get_system_prompt_from_kwargs."""
+
+    def test_system_string(self):
+        kwargs = {"system": "You are helpful."}
+        result = StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(kwargs)
+        assert result == "You are helpful."
+
+    def test_system_list(self):
+        blocks = [{"type": "text", "text": "Be concise."}]
+        kwargs = {"system": blocks}
+        result = StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(kwargs)
+        assert result is blocks
+
+    def test_system_instructions_takes_priority_over_system(self):
+        kwargs = {
+            "system_instructions": "From Vertex.",
+            "system": "This should be ignored.",
+        }
+        result = StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(kwargs)
+        assert result == "From Vertex."
+
+    def test_instructions_fallback(self):
+        kwargs = {"instructions": "From instructions field."}
+        result = StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(kwargs)
+        assert result == "From instructions field."
+
+    def test_none_kwargs_returns_none(self):
+        result = StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(None)
+        assert result is None
+
+    def test_no_system_keys_returns_none(self):
+        result = StandardLoggingPayloadSetup.get_system_prompt_from_kwargs({"model": "gpt-4"})
+        assert result is None

@@ -3166,6 +3166,7 @@ class StandardLoggingPayload(TypedDict):
     hidden_params: StandardLoggingHiddenParams
     guardrail_information: list[StandardLoggingGuardrailInformation] | None
     standard_built_in_tools_params: StandardBuiltInToolsParams | None
+    system_prompt: str | list | None
 
 
 from collections.abc import AsyncIterator, Iterator
