@@ -2375,7 +2375,7 @@ def _request_matches_unauthenticated_pass_through(endpoint: object, route: str) 
     the route registration uses to decide enforcement."""
     if not isinstance(endpoint, dict):
         return False
-    endpoint_data: Final = cast("dict[str, object]", endpoint)
+    endpoint_data: Final = cast("dict[str, object]", endpoint)  # cast-ok: isinstance erases dict params to Unknown
     auth: Final = endpoint_data.get("auth")
     if auth is not None and str(auth).lower() == "true":
         return False
