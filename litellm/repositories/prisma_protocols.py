@@ -8,7 +8,7 @@ private ones per file.
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Protocol, TypeVar
+from typing import Protocol, TypedDict, TypeVar
 
 RowT_co = TypeVar("RowT_co", covariant=True)
 RowT = TypeVar("RowT")
@@ -101,6 +101,13 @@ class PrismaTableActions(Protocol):
     async def delete(self, *, where: Mapping[str, object]) -> PrismaRecord | None: ...
 
     async def count(self, *, where: Mapping[str, object] | None = None) -> int: ...
+
+
+class FindManyKwargs(TypedDict, total=False):
+    where: Mapping[str, object]
+    skip: int
+    take: int
+    order: Mapping[str, str]
 
 
 class JWTKeyMappingRecord(Protocol):

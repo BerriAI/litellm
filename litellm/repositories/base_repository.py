@@ -8,7 +8,7 @@ from typing import Any, Final, Generic, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel
 
-from litellm.repositories.prisma_protocols import PrismaTableActions
+from litellm.repositories.prisma_protocols import FindManyKwargs, PrismaTableActions
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -96,12 +96,17 @@ class BaseRepository(ABC, Generic[T]):
         order: dict[str, str] | None = None,
     ) -> list[T]:
         """Find multiple records matching the criteria."""
-        records: Final = await self.typed_table.find_many(
-            where=where or None,
-            skip=skip,
-            take=take,
-            order=order or None,
-        )
+        kwargs: Final[FindManyKwargs] = {}
+        if where:
+            kwargs["where"] = where
+        if skip is not None:
+            kwargs["skip"] = skip
+        if take is not None:
+            kwargs["take"] = take
+        if order:
+            kwargs["order"] = order
+
+        records: Final = await self.typed_table.find_many(**kwargs)
         return self._to_model_list(records)
 
     async def create(self, data: dict[str, Any]) -> T:
