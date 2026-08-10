@@ -51,17 +51,6 @@ def test_has_streaming_callbacks_detects_guardrails(monkeypatch):
     assert ProxyLogging.has_streaming_callbacks() is True
 
 
-def test_custom_guardrail_streaming_call_type_capability_is_opt_in():
-    from litellm.types.utils import CallTypes
-
-    class _ProtocolAwareGuardrail(CustomGuardrail):
-        supported_streaming_call_types = frozenset({CallTypes.anthropic_messages})
-
-    assert CustomGuardrail().supports_streaming_call_type(CallTypes.anthropic_messages) is False
-    assert _ProtocolAwareGuardrail().supports_streaming_call_type(CallTypes.anthropic_messages) is True
-    assert _ProtocolAwareGuardrail().supports_streaming_call_type(CallTypes.aresponses) is False
-
-
 @pytest.mark.asyncio
 async def test_post_call_response_headers_hook_returns_early_without_callbacks(
     monkeypatch,
@@ -244,27 +233,28 @@ def _streaming_logging_obj():
     )
 
 
-def test_stream_requires_guardrail_translation_route_detection():
+def test_stream_guardrail_translation_call_type_route_detection():
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.utils import CallTypes
 
     assert (
-        ProxyLogging._stream_requires_guardrail_translation(
+        ProxyLogging._stream_guardrail_translation_call_type(
             UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/messages")
         )
-        is True
+        is CallTypes.anthropic_messages
     )
     assert (
-        ProxyLogging._stream_requires_guardrail_translation(
+        ProxyLogging._stream_guardrail_translation_call_type(
             UserAPIKeyAuth(api_key="sk-1234", request_route="/chat/completions")
         )
-        is False
+        is None
     )
-    assert ProxyLogging._stream_requires_guardrail_translation(UserAPIKeyAuth(api_key="sk-1234")) is False
+    assert ProxyLogging._stream_guardrail_translation_call_type(UserAPIKeyAuth(api_key="sk-1234")) is None
     assert (
-        ProxyLogging._stream_requires_guardrail_translation(
+        ProxyLogging._stream_guardrail_translation_call_type(
             UserAPIKeyAuth(api_key="sk-1234", request_route="/route/without/call/types")
         )
-        is False
+        is None
     )
 
 
