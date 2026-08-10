@@ -4844,11 +4844,11 @@ class MCPServerManager:
                 user_api_key_auth=user_api_key_auth,
             )
 
-            for header in mcp_server.extra_headers:
-                if not isinstance(header, str):
-                    continue
-                if _is_gateway_attribution_header(header):
-                    continue
+            for header in (
+                header
+                for header in mcp_server.extra_headers
+                if isinstance(header, str) and not _is_gateway_attribution_header(header)
+            ):
                 if header.lower() == "authorization" and strip_caller_authorization:
                     continue
                 header_value = normalized_raw_headers.get(header.lower())
