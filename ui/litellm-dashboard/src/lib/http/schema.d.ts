@@ -30631,6 +30631,43 @@ export interface components {
             tpm_limit?: number | null;
         };
         /**
+         * TagRateLimitEntry
+         * @description One tag-scoped limit: a caller-supplied tag value (identified by `tag_id`,
+         *     e.g. `end_user_id` in a request tag like `end_user_id:user-123`) is capped
+         *     at `limit` units per rolling `period_seconds`-second window. Bucketing is
+         *     `epoch_second // period_seconds`, so `period_seconds=86400` resets at UTC
+         *     midnight and `period_seconds=60` resets on real clock-minute boundaries.
+         */
+        TagRateLimitEntry: {
+            /** Limit */
+            limit: number;
+            /** Name */
+            name: string;
+            /** Period Seconds */
+            period_seconds: number;
+            /**
+             * Tag Id
+             * @default end_user_id
+             */
+            tag_id: string;
+        };
+        /** TagRateLimitGroup */
+        TagRateLimitGroup: {
+            /** Limits */
+            limits?: components["schemas"]["TagRateLimitEntry"][];
+        };
+        /**
+         * TagRateLimits
+         * @description Per-chain/model-group tag rate limits, set under a deployment's
+         *     `model_info.tag_rate_limits`. Each entry carries its own `tag_id`, so two
+         *     entries of the same unit on the same chain can key by different tags.
+         */
+        TagRateLimits: {
+            dollar_limits?: components["schemas"]["TagRateLimitGroup"] | null;
+            request_limits?: components["schemas"]["TagRateLimitGroup"] | null;
+            token_limits?: components["schemas"]["TagRateLimitGroup"] | null;
+        };
+        /**
          * TagSummaryMetrics
          * @description Summary metrics for a tag
          */
@@ -33000,6 +33037,7 @@ export interface components {
             db_model: boolean;
             /** Id */
             id: string | null;
+            tag_rate_limits?: components["schemas"]["TagRateLimits"] | null;
             /** Team Id */
             team_id?: string | null;
             /** Team Public Model Name */
