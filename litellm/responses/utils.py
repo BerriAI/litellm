@@ -246,9 +246,7 @@ class ResponsesAPIRequestUtils:
 
         from litellm.utils import add_openai_metadata
 
-        converted_metadata: Final = (
-            add_openai_metadata(metadata_source) if metadata_source is not None else None
-        )
+        converted_metadata: Final = add_openai_metadata(metadata_source) if metadata_source is not None else None
         non_default_params_with_metadata: Final = (
             {**non_default_params, "metadata": converted_metadata}
             if converted_metadata
