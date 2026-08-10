@@ -3929,7 +3929,21 @@ async def generate_key_helper_fn(
                 "prisma_client: Creating Key= %s",
                 {**key_data, "token": hash_token(token=token)},
             )
-            create_key_response: Final = await prisma_client.insert_data(data=key_data, table_name="key")
+            try:
+                create_key_response: Final = await prisma_client.insert_data(
+                    data=key_data,
+                    table_name="key",
+                    ignore_duplicates=False,
+                )
+            except Exception as e:
+                if _is_unique_constraint_failure(e):
+                    raise ProxyException(
+                        message="Key already exists. Use /key/update to modify an existing key.",
+                        type=ProxyErrorTypes.bad_request_error,
+                        param="key",
+                        code=400,
+                    ) from e
+                raise
 
             key_data["token_id"] = getattr(create_key_response, "token", None)
             key_data["litellm_budget_table"] = getattr(create_key_response, "litellm_budget_table", None)
@@ -3947,7 +3961,7 @@ async def generate_key_helper_fn(
     except Exception as e:
         verbose_proxy_logger.error("litellm.proxy.proxy_server.generate_key_helper_fn(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
+        if isinstance(e, (HTTPException, ProxyException)):
             raise e
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -6527,6 +6541,14 @@ def _validate_key_alias_format(key_alias: str | None) -> None:
             param="key_alias",
             code=400,
         )
+
+
+def _is_unique_constraint_failure(exc: Exception) -> bool:
+    code: Final = getattr(exc, "code", None)
+    if code == "P2002":
+        return True
+    message: Final = str(exc)
+    return "P2002" in message or "Unique constraint failed" in message
 
 
 async def _enforce_unique_key_alias(

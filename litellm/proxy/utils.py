@@ -3832,9 +3832,11 @@ class PrismaClient:
         self,
         data: dict,
         table_name: Literal["user", "key", "config", "spend", "team", "user_notification"],
+        ignore_duplicates: bool = True,
     ):
         """
-        Add a key to the database. If it already exists, do nothing.
+        Add a key to the database. If it already exists and ignore_duplicates is True, do nothing.
+        When ignore_duplicates is False, raise on primary-key conflicts so callers can reject duplicates.
         """
         start_time: Final = time.time()
         try:
@@ -3851,16 +3853,26 @@ class PrismaClient:
                 # Strip them so the DB stores NULL via the column's nullable constraint.
                 if db_data.get("budget_limits") is None:
                     db_data.pop("budget_limits", None)
-                print_verbose("PrismaClient: Before upsert into litellm_verificationtoken")
-                new_verification_token: Final = await VerificationTokenRepository(self).table.upsert(
-                    where={
-                        "token": hashed_token,
-                    },
-                    data={
-                        "create": {**db_data},
-                        "update": {},  # don't do anything if it already exists
-                    },
-                    include={"litellm_budget_table": True},
+                verification_token_table: Final = VerificationTokenRepository(self).table
+                print_verbose(
+                    f"PrismaClient: Before {'create' if ignore_duplicates is False else 'upsert'} into litellm_verificationtoken"
+                )
+                new_verification_token: Final = (
+                    await verification_token_table.create(
+                        data={**db_data},
+                        include={"litellm_budget_table": True},
+                    )
+                    if ignore_duplicates is False
+                    else await verification_token_table.upsert(
+                        where={
+                            "token": hashed_token,
+                        },
+                        data={
+                            "create": {**db_data},
+                            "update": {},  # don't do anything if it already exists
+                        },
+                        include={"litellm_budget_table": True},
+                    )
                 )
                 verbose_proxy_logger.info("Data Inserted into Keys Table")
                 return new_verification_token
