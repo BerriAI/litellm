@@ -1749,3 +1749,26 @@ class TestEdgeCases:
         stored = json.loads(call_args.kwargs["value"])
 
         assert stored["output"] == []
+
+
+class TestBackgroundStreamingRequestNone:
+    """Regression tests for background polling passing request=None."""
+
+    def test_background_streaming_passes_none_request(self):
+        """background_streaming_task must pass request=None to base_process_llm_request.
+
+        The client disconnects immediately on background requests, so the
+        disconnect buffer must not arm and cancel the upstream LLM call.
+        """
+        import inspect
+        import textwrap
+
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        source = textwrap.dedent(inspect.getsource(background_streaming_task))
+        assert "request=None," in source or "request = None" in source, (
+            "background_streaming_task should pass request=None to base_process_llm_request"
+        )
+
