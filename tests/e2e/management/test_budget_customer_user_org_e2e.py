@@ -125,6 +125,17 @@ def _budget_rows(client: ManagementClient, budget_id: str) -> tuple[BudgetRow, .
     )
 
 
+def _find_model_budget(
+    client: ManagementClient, budget_id: str, model_name: str
+) -> BudgetRow | None:
+    row = next(
+        (r for r in _budget_rows(client, budget_id) if r.budget_id == budget_id), None
+    )
+    if row is None or not row.model_max_budget or model_name not in row.model_max_budget:
+        return None
+    return row
+
+
 def _budget_list_ids(client: ManagementClient) -> tuple[str, ...]:
     return tuple(
         row.budget_id
@@ -161,51 +172,47 @@ class TestBudgetManagement:
     def test_update_accepts_per_model_budgets_including_punctuated_names(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
-        """Per-model caps must be settable on an existing budget.
+        """/budget/update must accept per-model caps on an existing budget.
 
-        `model_max_budget` is how a customer caps spend per model on a shared
-        budget, and model ids routinely carry dots and hyphens (`glm-5.2`). The
-        route has to accept both, and the plain name is included so a failure
-        says whether per-model budgets are broken outright or only for
+        model_max_budget keys are model ids, which routinely carry dots and
+        hyphens (glm-5.2). Both a plain and a punctuated id are exercised so a
+        failure says whether per-model budgets break outright or only for
         punctuated ids.
         """
         for model_name in ("gpt4o", "glm-5.2"):
-            budget_id = _create_budget(
-                client, resources, BudgetNewBody(max_budget=_INITIAL_MAX_BUDGET)
-            )
+            self._assert_model_budget_round_trips(client, resources, model_name)
 
-            result = client.proxy.transport.post(
-                "/budget/update",
-                headers=client.proxy.transport.master,
-                json=BudgetUpdateBody(
-                    budget_id=budget_id,
-                    model_max_budget={
-                        model_name: ModelBudgetEntry(budget_limit=5.0, time_period="1d")
-                    },
-                ),
-                response_type=NoBody,
-            )
+    @staticmethod
+    def _assert_model_budget_round_trips(
+        client: ManagementClient, resources: ResourceManager, model_name: str
+    ) -> None:
+        budget_id = _create_budget(
+            client, resources, BudgetNewBody(max_budget=_INITIAL_MAX_BUDGET)
+        )
 
-            assert is_ok(result), (
-                f"/budget/update rejected a per-model budget for {model_name!r}: {result}; "
-                f"a customer cannot cap spend per model on an existing budget"
-            )
+        result = client.proxy.transport.post(
+            "/budget/update",
+            headers=client.proxy.transport.master,
+            json=BudgetUpdateBody(
+                budget_id=budget_id,
+                model_max_budget={
+                    model_name: ModelBudgetEntry(budget_limit=5.0, time_period="1d")
+                },
+            ),
+            response_type=NoBody,
+        )
 
-            def has_model_budget() -> BudgetRow | None:
-                row = next(
-                    (r for r in _budget_rows(client, budget_id) if r.budget_id == budget_id),
-                    None,
-                )
-                if row is None or not row.model_max_budget:
-                    return None
-                return row if model_name in row.model_max_budget else None
+        assert is_ok(result), (
+            f"/budget/update rejected a per-model budget for {model_name!r}: {result}; "
+            f"a customer cannot cap spend per model on an existing budget"
+        )
 
-            _ = _poll(
-                client,
-                has_model_budget,
-                f"/budget/info never reported a model_max_budget entry for {model_name!r} "
-                f"on budget {budget_id}",
-            )
+        _ = _poll(
+            client,
+            lambda: _find_model_budget(client, budget_id, model_name),
+            f"/budget/info never reported a model_max_budget entry for {model_name!r} "
+            f"on budget {budget_id}",
+        )
 
     @pytest.mark.covers("mgmt.budget.update.persists")
     def test_update_max_budget_persists_to_budget_info(

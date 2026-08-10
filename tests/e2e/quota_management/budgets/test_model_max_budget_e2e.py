@@ -11,10 +11,10 @@ import time
 import pytest
 
 from budget_client import BudgetClient, is_budget_block, model_budget
-from models import ModelBudgetEntry
 from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from lifecycle import ResourceManager
+from models import ModelBudgetEntry
 
 pytestmark = pytest.mark.e2e
 
@@ -63,13 +63,12 @@ def test_model_max_budget_isolates_per_model(
 def test_end_user_model_max_budget_enforces_per_model_rpm(
     client: BudgetClient, resources: ResourceManager
 ) -> None:
-    """A per-model rpm_limit on an end user's budget has to actually throttle.
+    """A per-model rpm_limit on an end-user budget must actually throttle.
 
-    `model_max_budget` accepts an `rpm_limit` alongside the spend cap, and a
-    customer uses it to hold one end user to a slow rate on an expensive model
-    without limiting the shared key everyone else runs through. The budget is
-    attached to the end user rather than to the key, which is the case that
-    matters here: the same shape already works when the budget hangs off a key.
+    model_max_budget takes an rpm_limit alongside the spend cap, letting a
+    customer hold one end user to a slow rate without limiting the shared key.
+    The budget hangs off the end user, not the key; the key-attached shape
+    already works, so this pins the end-user gap.
     """
     budget_id = client.create_budget(
         model_max_budget={

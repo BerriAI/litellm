@@ -69,13 +69,10 @@ def test_gemini_passthrough_nonstreaming_logs_cost(
 def test_gemini_passthrough_returns_the_same_header_contract_as_the_managed_route(
     client: PassthroughClient, scoped_key: str
 ) -> None:
-    """A native passthrough call must still be costable and pace-able by the client.
-
-    Customers front provider-native traffic through /gemini/ and read the same
-    operational headers they get on /chat/completions: the response cost, so the
-    call reconciles against spend, and the x-ratelimit-* pacing headers, so a
-    client knows how much budget it has left. The passthrough route currently
-    returns neither, which makes native traffic invisible to the same tooling.
+    """Native /gemini/ passthrough must return the same operational headers as
+    /chat/completions: x-litellm-response-cost so the call reconciles against
+    spend, and x-ratelimit-* so a client can pace itself. It returns neither
+    today, which makes native traffic invisible to the same tooling.
     """
     result = client.gemini_generate(
         scoped_key, "gemini-2.5-flash", f"Say hello in one word. {unique_marker()}"
