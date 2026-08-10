@@ -18,10 +18,18 @@ on:
         type: number
         default: 2
       timeout-minutes:
-        description: "Job timeout in minutes"
+        description: >-
+          Timeout for the test step alone. Setup (checkout, dependency install,
+          Prisma client generation) gets its own allowance on top, so a slow
+          runner or a cold binary download can never cancel passing tests.
         required: false
         type: number
         default: 20
+      setup-timeout-minutes:
+        description: "Timeout allowance for everything before the test step"
+        required: false
+        type: number
+        default: 12
       max-failures:
         description: "Stop after this many failures"
         required: false
@@ -44,7 +52,7 @@ jobs:
   run:
     name: Run tests
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ inputs.timeout-minutes }}
+    timeout-minutes: ${{ inputs.timeout-minutes + inputs.setup-timeout-minutes }}
     outputs:
       decision: ${{ steps.changes.outputs.decision }}
 
@@ -82,15 +90,18 @@ jobs:
         run: |
           .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml
 
+      - name: Cache Prisma binaries
+        if: steps.changes.outputs.decision != 'skip'
+        uses: ./.github/actions/cache-prisma-binaries
+
       - name: Generate Prisma client
         if: steps.changes.outputs.decision != 'skip'
-        env:
-          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
         run: |
           uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Run tests
         if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: ${{ inputs.timeout-minutes }}
         env:
           TEST_PATH: ${{ inputs.test-path }}
           MAX_FAILURES: ${{ inputs.max-failures }}
