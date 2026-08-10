@@ -39,9 +39,7 @@ if TYPE_CHECKING:
 else:
     MCPTool = Any
 
-# NOTE: We intentionally keep ToolParam as a broad Mapping type here to avoid tight
-# coupling to the OpenAI SDK's tool union types while still allowing dict-style
-# access at runtime.
+# NOTE: We intentionally keep ToolParam as a broad type here to avoid tight coupling
 ToolParam: TypeAlias = Mapping[str, object]
 
 
