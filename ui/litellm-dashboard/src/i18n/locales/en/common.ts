@@ -1,6 +1,7 @@
 export const enCommon = {
   language: {
     selectorLabel: "Language",
+    selectorTitle: "Choose language",
     english: "English",
     russian: "Русский",
   },

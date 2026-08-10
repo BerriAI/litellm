@@ -16,6 +16,7 @@ const LanguageSelector = () => {
       <PopoverTrigger
         className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
         aria-label={`${copy.selectorLabel}: ${activeLanguageName}`}
+        title={copy.selectorTitle}
       >
         <Languages className="size-4" />
         <span>{language.toUpperCase()}</span>

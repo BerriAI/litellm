@@ -1,6 +1,7 @@
 export const ruCommon = {
   language: {
     selectorLabel: "Язык",
+    selectorTitle: "Выбрать язык",
     english: "English",
     russian: "Русский",
   },

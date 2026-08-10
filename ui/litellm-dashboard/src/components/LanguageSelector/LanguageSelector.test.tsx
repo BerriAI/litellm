@@ -26,6 +26,7 @@ describe("LanguageSelector", () => {
     await user.click(screen.getByRole("button", { name: "Русский" }));
 
     await waitFor(() => expect(screen.getByRole("button", { name: "Язык: Русский" })).toHaveTextContent("RU"));
+    expect(screen.getByRole("button", { name: "Язык: Русский" })).toHaveAttribute("title", "Выбрать язык");
     expect(window.localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe("ru");
     expect(document.documentElement.lang).toBe("ru");
   });

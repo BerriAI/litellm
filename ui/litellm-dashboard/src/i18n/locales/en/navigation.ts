@@ -3,6 +3,18 @@ export const enNavigation = {
     docs: "Docs",
     chat: "Chat",
   },
+  viewSwitcher: {
+    gateway: "AI Gateway",
+    chat: "Chat",
+    chatDisabledHint: "Admins can enable in Settings",
+  },
+  navbar: {
+    documentation: "Product documentation",
+    brandAlt: "LiteLLM Brand",
+    expandSidebar: "Expand sidebar",
+    collapseSidebar: "Collapse sidebar",
+    thanks: "Thanks for using LiteLLM!",
+  },
   breadcrumbs: {
     home: "Home",
   },

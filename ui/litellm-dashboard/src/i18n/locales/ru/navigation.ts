@@ -3,6 +3,18 @@ export const ruNavigation = {
     docs: "Документация",
     chat: "Чат",
   },
+  viewSwitcher: {
+    gateway: "AI-шлюз",
+    chat: "Чат",
+    chatDisabledHint: "Администратор может включить чат в настройках",
+  },
+  navbar: {
+    documentation: "Документация продукта",
+    brandAlt: "Логотип LiteLLM",
+    expandSidebar: "Развернуть сайдбар",
+    collapseSidebar: "Свернуть сайдбар",
+    thanks: "Спасибо, что используете LiteLLM!",
+  },
   breadcrumbs: {
     home: "Главная",
   },

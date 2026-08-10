@@ -19,6 +19,8 @@ import { NotificationsBell } from "./Navbar/NotificationsBell/NotificationsBell"
 import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
 import ViewSwitcher from "./Navbar/ViewSwitcher";
 import WorkerDropdown from "./Navbar/WorkerDropdown/WorkerDropdown";
+import { useTranslation } from "react-i18next";
+import LanguageSelector from "./LanguageSelector/LanguageSelector";
 
 interface NavbarProps {
   accessToken: string | null;
@@ -33,6 +35,7 @@ const Navbar: React.FC<NavbarProps> = ({
   sidebarCollapsed = false,
   onToggleSidebar,
 }) => {
+  const { t } = useTranslation("navigation");
   const baseUrl = getProxyBaseUrl();
   const proxySettings = useProxySettings(accessToken);
   const { logoUrl } = useTheme();
@@ -69,7 +72,7 @@ const Navbar: React.FC<NavbarProps> = ({
               <button
                 onClick={onToggleSidebar}
                 className="mr-2 flex h-9 w-9 items-center justify-center rounded-md text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
-                title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                title={sidebarCollapsed ? t("navbar.expandSidebar") : t("navbar.collapseSidebar")}
               >
                 <span className="text-lg">{sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}</span>
               </button>
@@ -93,7 +96,7 @@ const Navbar: React.FC<NavbarProps> = ({
                     <span
                       className="absolute -left-2 -top-1 animate-bounce text-lg"
                       style={{ animationDuration: "2s" }}
-                      title="Thanks for using LiteLLM!"
+                      title={t("navbar.thanks")}
                     >
                       🌑
                     </span>
@@ -127,7 +130,7 @@ const Navbar: React.FC<NavbarProps> = ({
             )}
 
             <nav
-              aria-label="Product documentation"
+              aria-label={t("navbar.documentation")}
               className={`flex min-w-0 items-center gap-2 ${showWorkerSwitch ? "border-l border-gray-200 pl-4" : ""}`}
             >
               <a
@@ -136,7 +139,7 @@ const Navbar: React.FC<NavbarProps> = ({
                 rel="noopener noreferrer"
                 className={NAV_PRODUCT_LINK_CLASS}
               >
-                Docs
+                {t("header.docs")}
                 {/* Layout parity with Blog chevron — intentional single-level link */}
                 <DownOutlined className="pointer-events-none text-[10px] opacity-0" aria-hidden />
               </a>
@@ -148,6 +151,10 @@ const Navbar: React.FC<NavbarProps> = ({
                 <CommunityEngagementButtons />
               </div>
             )}
+
+            <div className="flex shrink-0 items-center border-l border-gray-200 pl-4">
+              <LanguageSelector />
+            </div>
 
             {!isPublicPage && (
               <div className="flex shrink-0 items-center border-l border-gray-200 pl-4">

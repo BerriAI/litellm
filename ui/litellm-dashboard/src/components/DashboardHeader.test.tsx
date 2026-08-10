@@ -6,6 +6,7 @@ const { mockUsePluginMode, mockUseUISettings, state } = vi.hoisted(() => {
   const state = {
     plugins: [] as { name: string; display_name: string; url: string }[],
     enableChatUI: false,
+    language: "en" as "en" | "ru",
   };
   return {
     state,
@@ -27,13 +28,29 @@ vi.mock("@/components/Navbar/CommunityEngagementButtons/CommunityEngagementButto
 vi.mock("@/components/Navbar/NotificationsBell/NotificationsBell", () => ({ NotificationsBell: () => null }));
 vi.mock("@/components/Navbar/WorkerDropdown/WorkerDropdown", () => ({ default: () => null }));
 vi.mock("@/i18n/I18nProvider", () => ({
-  useDashboardLanguage: () => ({ language: "en", setLanguage: vi.fn() }),
+  useDashboardLanguage: () => ({ language: state.language, setLanguage: vi.fn() }),
 }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: (namespace: "navigation") => ({
+      t: (key: string, options?: { defaultValue?: string }) => {
+        const value = key.split(".").reduce<unknown>((copy, segment) => {
+          if (typeof copy !== "object" || copy === null) return undefined;
+          return (copy as Record<string, unknown>)[segment];
+        }, resources[state.language][namespace]);
+        return typeof value === "string" ? value : options?.defaultValue ?? key;
+      },
+    }),
+  };
+});
 
 describe("DashboardHeader breadcrumb", () => {
   afterEach(() => {
     state.plugins = [];
     state.enableChatUI = false;
+    state.language = "en";
   });
 
   it("roots the breadcrumb in the AI Gateway selector (with a Chat option) and drops the static section crumb when the selector is available", async () => {
@@ -71,5 +88,15 @@ describe("DashboardHeader breadcrumb", () => {
     render(<DashboardHeader page="logs" />);
 
     expect(screen.getByRole("button", { name: "Language: English" })).toBeInTheDocument();
+  });
+
+  it("localizes the breadcrumb and header controls in Russian", () => {
+    state.language = "ru";
+
+    render(<DashboardHeader page="guardrails" />);
+
+    expect(screen.getByText("Ограничители")).toBeInTheDocument();
+    expect(screen.getByText("Документация")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Язык: Русский" })).toBeInTheDocument();
   });
 });

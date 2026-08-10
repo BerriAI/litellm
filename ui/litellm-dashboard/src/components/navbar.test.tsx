@@ -4,6 +4,21 @@ import { describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../tests/test-utils";
 import Navbar from "./navbar";
 
+const translationState = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: () => ({
+      t: (key: string) =>
+        key.split(".").reduce<unknown>((copy, segment) => {
+          if (typeof copy !== "object" || copy === null) return undefined;
+          return (copy as Record<string, unknown>)[segment];
+        }, resources[translationState.language].navigation) ?? key,
+    }),
+  };
+});
+
 // Mock the hooks and utilities
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "http://localhost:4000"),
@@ -16,6 +31,10 @@ vi.mock("@/app/(dashboard)/hooks/useDisableBouncingIcon", () => ({
 
 vi.mock("./Navbar/BlogDropdown/BlogDropdown", () => ({
   BlogDropdown: () => <div data-testid="blog-dropdown">Blog</div>,
+}));
+
+vi.mock("./LanguageSelector/LanguageSelector", () => ({
+  default: () => <button aria-label="Language selector">EN</button>,
 }));
 
 const mockUserDropdownData = vi.hoisted(() => ({
@@ -149,7 +168,18 @@ describe("Navbar", () => {
 
     expect(screen.getByRole("button", { name: /^notifications$/i })).toBeInTheDocument();
     expect(screen.getByText("Docs")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Language selector" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /open account menu/i })).toBeInTheDocument();
+  });
+
+  it("localizes legacy navigation controls in Russian", () => {
+    translationState.language = "ru";
+
+    renderWithProviders(<Navbar {...defaultProps} onToggleSidebar={vi.fn()} />);
+
+    expect(screen.getByText("Документация")).toBeInTheDocument();
+    expect(screen.getByTitle("Свернуть сайдбар")).toBeInTheDocument();
+    translationState.language = "en";
   });
 
   it("should link the logo to the UI home route rather than the proxy origin", () => {
