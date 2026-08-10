@@ -10422,11 +10422,11 @@ class Router:
     async def _pre_call_checks_async(
         self,
         model: str,
-        healthy_deployments: list,
-        messages: list[dict[str, str]] | None = None,
-        input: str | list | None = None,
-        request_kwargs: dict | None = None,
-    ) -> list[dict]:
+        healthy_deployments: Sequence[Mapping[str, Any]],
+        messages: Sequence[Mapping[str, str]] | None = None,
+        input: str | Sequence[Any] | None = None,
+        request_kwargs: Mapping[str, Any] | None = None,
+    ) -> Sequence[Mapping[str, Any]]:
         """
         Async wrapper around _pre_call_checks_sync.
 
