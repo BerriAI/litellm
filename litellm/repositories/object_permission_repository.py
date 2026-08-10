@@ -6,6 +6,7 @@ from typing import Any, Final
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.repositories.base_repository import BaseRepository
+from litellm.repositories.prisma_protocols import ObjectPermissionWriteTable
 
 
 class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
@@ -18,6 +19,11 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
     @property
     def model_class(self) -> type[LiteLLM_ObjectPermissionTable]:
         return LiteLLM_ObjectPermissionTable
+
+    @property
+    def rows(self) -> ObjectPermissionWriteTable:
+        rows: Final[ObjectPermissionWriteTable] = self.table
+        return rows
 
     async def find_by_id(
         self, object_permission_id: str, id_field: str = "object_permission_id"
