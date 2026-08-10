@@ -5,6 +5,7 @@ import time
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from openai.types.completion_usage import CompletionUsage, PromptTokensDetails
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -21,6 +22,9 @@ from litellm.litellm_core_utils.streaming_handler import (
     _ProviderChunkEarlyReturn,
     _ProviderChunkParsed,
 )
+from litellm.types import utils
+from litellm.types.llms import openai
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     Delta,
@@ -3551,3 +3555,39 @@ def test_openai_custom_tool_call_stream_deltas_survive_conversion(logging_obj: L
     assert combined_input == "*** Begin Patch\n*** End Patch\n"
     finish_reasons = [chunk.choices[0].finish_reason for chunk in emitted if chunk.choices]
     assert "tool_calls" in finish_reasons
+
+
+def test_openai_usage_on_non_empty_choices_is_preserved(logging_obj: Logging):
+    """Provider usage remains available when the final chunk has a choice entry."""
+    namespace = {**vars(utils), **vars(openai)}
+    for model in (utils.Delta, utils.StreamingChoices, utils.ModelResponseStream, GenericLiteLLMParams):
+        model.model_rebuild(_types_namespace=namespace, raise_errors=False)
+
+    chunk = ModelResponseStream(
+        id="chatcmpl-usage-test",
+        created=1,
+        model="custom_openai/m",
+        choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")],
+    )
+    chunk.usage = CompletionUsage(
+        prompt_tokens=39779,
+        completion_tokens=32,
+        total_tokens=39811,
+        prompt_tokens_details=PromptTokensDetails(cached_tokens=39424),
+    )
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=iter([chunk]),
+        model="custom_openai/m",
+        logging_obj=logging_obj,
+        custom_llm_provider="custom_openai",
+        stream_options={"include_usage": True},
+    )
+
+    processed = wrapper.chunk_creator(chunk)
+
+    assert processed is not None
+    assert isinstance(processed.usage, litellm.Usage)
+    assert processed.usage.prompt_tokens == 39779
+    assert processed.usage.prompt_tokens_details is not None
+    assert processed.usage.prompt_tokens_details.cached_tokens == 39424

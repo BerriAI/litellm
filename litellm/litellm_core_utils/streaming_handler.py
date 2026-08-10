@@ -1450,7 +1450,7 @@ class CustomStreamWrapper:
 
                 self.tool_call = True
 
-            if hasattr(chunk, "usage") and chunk.usage is not None:
+            if hasattr(chunk, "usage") and chunk.usage is not None and getattr(model_response, "usage", None) is None:
                 model_response.usage = chunk.usage
 
             ## RETURN ARG
