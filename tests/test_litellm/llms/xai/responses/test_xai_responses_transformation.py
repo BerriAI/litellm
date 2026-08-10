@@ -7,12 +7,13 @@ transformations for the Responses API.
 Source: litellm/llms/xai/responses/transformation.py
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, Mock
 
-
+import httpx
 import pytest
 
 import litellm
+from litellm.llms.xai.cost_calculator import cost_per_token
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import (
@@ -400,3 +401,72 @@ class TestXAIResponsesWebSearchBilling:
 
         bridged = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(event.response.usage)
         assert getattr(bridged, "server_side_tool_usage_details") == self._TOOL_DETAILS
+
+
+class TestXAIResponsesReportedCost:
+    """xAI reports what it charged; the transformation moves it to where litellm bills from.
+
+    ``ResponseAPILoggingUtils`` copies ``usage.cost`` onto the chat Usage that cost
+    tracking prices, so restating ``cost_in_usd_ticks`` there is what makes /v1/responses
+    bill the reported figure. At 10^10 ticks to the dollar, 37756000 ticks is $0.0037756.
+    """
+
+    @staticmethod
+    def _transformed_usage(usage: dict) -> ResponseAPIUsage | None:
+        raw_response = httpx.Response(
+            status_code=200,
+            json={
+                "id": "resp_xai",
+                "object": "response",
+                "created_at": 0,
+                "model": "grok-4-latest",
+                "status": "completed",
+                "output": [],
+                "parallel_tool_calls": False,
+                "tool_choice": "auto",
+                "tools": [],
+                "usage": usage,
+            },
+        )
+
+        response = XAIResponsesAPIConfig().transform_response_api_response(
+            model="grok-4-latest",
+            raw_response=raw_response,
+            logging_obj=Mock(),
+        )
+        return response.usage
+
+    def test_reported_cost_reaches_the_cost_calculator(self):
+        usage = self._transformed_usage(
+            {
+                "input_tokens": 100,
+                "output_tokens": 200,
+                "total_tokens": 300,
+                "cost_in_usd_ticks": 37756000,
+            }
+        )
+
+        assert usage.cost == 0.0037756
+
+        chat_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        assert cost_per_token(model="grok-4-latest", usage=chat_usage) == (0.0, 0.0037756)
+
+    def test_usage_without_a_reported_cost_is_left_alone(self):
+        usage = self._transformed_usage(
+            {"input_tokens": 100, "output_tokens": 200, "total_tokens": 300}
+        )
+
+        assert usage.cost is None
+
+    def test_negative_reported_cost_is_not_carried(self):
+        """A caller who can set api_base must not be able to report negative spend."""
+        usage = self._transformed_usage(
+            {
+                "input_tokens": 100,
+                "output_tokens": 200,
+                "total_tokens": 300,
+                "cost_in_usd_ticks": -37756000,
+            }
+        )
+
+        assert usage.cost is None

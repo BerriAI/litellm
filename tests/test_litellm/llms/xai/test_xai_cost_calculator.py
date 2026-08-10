@@ -361,6 +361,145 @@ class TestXAICostCalculator:
             response_object=object(), usage=usage
         )
 
+    def test_reported_cost_is_preferred_over_token_math(self):
+        """The amount xAI reported, carried on usage.cost by the transformation, is billed.
+
+        It lands entirely on completion cost because xAI does not split its total by
+        direction, the same shape the perplexity calculator returns.
+        """
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=200,
+            total_tokens=300,
+            cost=0.0037756,
+        )
+
+        prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+
+        assert prompt_cost == 0.0
+        assert math.isclose(completion_cost, 0.0037756, rel_tol=1e-10)
+
+    def test_reported_cost_suppresses_web_search_surcharge(self):
+        """The reported total already covers server-side tool calls.
+
+        Without the suppression these 3 searches would be billed a second time on
+        top of the total xAI already charged.
+        """
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=100,
+                web_search_requests=3,
+            ),
+            cost=0.0037756,
+        )
+
+        assert cost_per_web_search_request(usage=usage, model_info={}) == 0.0
+
+    def test_web_search_surcharge_suppressed_through_the_dispatcher(self):
+        """The suppression has to hold on the path cost tracking actually uses.
+
+        Legacy behaviour stays intact when xAI reports no cost.
+        """
+        from litellm.llms import get_cost_for_web_search_request
+
+        usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        setattr(usage, "server_side_tool_usage_details", {"web_search_calls": 3})
+
+        assert get_cost_for_web_search_request("xai", usage, {}) > 0.0
+
+        reported = Usage(
+            prompt_tokens=100, completion_tokens=50, total_tokens=150, cost=0.0037756
+        )
+        setattr(reported, "server_side_tool_usage_details", {"web_search_calls": 3})
+        assert get_cost_for_web_search_request("xai", reported, {}) == 0.0
+
+    def test_no_reported_cost_falls_back_to_token_math(self):
+        """Absent the provider figure, nothing changes for existing callers."""
+        usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
+
+        prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+
+        assert prompt_cost > 0.0
+        assert completion_cost > 0.0
+
+    def test_malformed_reported_cost_falls_back_to_token_math(self):
+        """A junk value must not fail the request, fall back to calculating."""
+        usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
+        setattr(usage, "cost", "not-a-number")
+
+        prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+
+        assert prompt_cost > 0.0
+        assert completion_cost > 0.0
+
+    def test_boolean_reported_cost_falls_back_to_token_math(self):
+        """True is an int in python and would otherwise be billed as $1."""
+        usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
+        setattr(usage, "cost", True)
+
+        prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+
+        assert prompt_cost > 0.0
+        assert completion_cost > 0.0
+        assert completion_cost != 1.0
+
+    def test_negative_reported_cost_is_rejected(self):
+        """A negative amount must never reach spend tracking.
+
+        A caller who can set api_base controls the response body, so trusting a
+        negative figure would let them subtract from their own recorded spend and
+        slip past a budget. Fall back to token pricing instead, and keep charging
+        the web search surcharge, since no trustworthy total was reported.
+        """
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=200,
+            total_tokens=300,
+            cost=-0.0037756,
+        )
+        setattr(usage, "server_side_tool_usage_details", {"web_search_calls": 3})
+
+        prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+
+        assert prompt_cost > 0.0
+        assert completion_cost > 0.0
+        assert cost_per_web_search_request(usage=usage, model_info={}) > 0.0
+
+    def test_non_finite_reported_cost_is_rejected(self):
+        """NaN compares false against every budget threshold.
+
+        Usage stores a provider supplied cost without validating it, so a caller who
+        controls the response body could report NaN and leave spend >= max_budget
+        false for the life of the key rather than mispricing one request. The
+        infinities are refused alongside it. Fall back to token pricing and keep
+        charging the web search surcharge, since no trustworthy total was reported.
+        """
+        for reported_cost in (float("nan"), float("inf"), float("-inf")):
+            usage = Usage(
+                prompt_tokens=100,
+                completion_tokens=200,
+                total_tokens=300,
+                cost=reported_cost,
+            )
+            setattr(usage, "server_side_tool_usage_details", {"web_search_calls": 3})
+
+            prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+
+            assert math.isfinite(prompt_cost), reported_cost
+            assert math.isfinite(completion_cost), reported_cost
+            assert prompt_cost > 0.0, reported_cost
+            assert completion_cost > 0.0, reported_cost
+            assert cost_per_web_search_request(usage=usage, model_info={}) > 0.0, reported_cost
+
+    def test_zero_reported_cost_is_honoured(self):
+        """A reported zero is a real answer, not a missing value."""
+        usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300, cost=0.0)
+
+        assert cost_per_token(model="grok-4-latest", usage=usage) == (0.0, 0.0)
+
     def test_grok_4_20_beta_reasoning_cost_calculation(self):
         """Test cost calculation for grok-4.20-beta-0309-reasoning model."""
         usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
