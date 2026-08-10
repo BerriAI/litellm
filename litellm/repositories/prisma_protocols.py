@@ -16,6 +16,40 @@ class PrismaRecord(Protocol):
     def dict(self) -> Mapping[str, object]: ...
 
 
+class PrismaTableActions(Protocol):
+    """The subset of prisma-client-py table actions the repositories rely on."""
+
+    async def find_unique(
+        self, *, where: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> PrismaRecord | None: ...
+
+    async def find_first(
+        self, *, where: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> PrismaRecord | None: ...
+
+    async def find_many(
+        self,
+        *,
+        where: Mapping[str, object] | None = None,
+        include: Mapping[str, object] | None = None,
+        skip: int | None = None,
+        take: int | None = None,
+        order: Mapping[str, str] | None = None,
+    ) -> Sequence[PrismaRecord]: ...
+
+    async def create(
+        self, *, data: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> PrismaRecord: ...
+
+    async def update(
+        self, *, where: Mapping[str, object], data: Mapping[str, object]
+    ) -> PrismaRecord | None: ...
+
+    async def delete(self, *, where: Mapping[str, object]) -> PrismaRecord | None: ...
+
+    async def count(self, *, where: Mapping[str, object] | None = None) -> int: ...
+
+
 class ReadOnlyTable(Protocol):
     async def find_many(self, *, where: Mapping[str, object]) -> Sequence[PrismaRecord]: ...
 

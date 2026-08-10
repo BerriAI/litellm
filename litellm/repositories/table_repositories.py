@@ -7,9 +7,21 @@ These are thin wrappers for tables that do not (yet) need domain-specific query
 methods; richer repositories live in their own modules.
 """
 
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, Final, Generic, TypeVar
 
+from pydantic import BaseModel, TypeAdapter
+
+from litellm.models.access_group import LiteLLM_AccessGroupTable
+from litellm.models.end_user import LiteLLM_EndUserTable
+from litellm.models.tag import LiteLLM_TagTable
+from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
+from litellm.repositories.prisma_protocols import PrismaTableActions
+
+ModelT = TypeVar("ModelT", bound=BaseModel)
+
+_TOKEN_ADAPTER: Final = TypeAdapter(str)
 
 
 class PrismaTableRepository:
@@ -32,6 +44,42 @@ class PrismaTableRepository:
             actions=getattr(self.prisma_client.db, self.table_name),
             table_name=self.table_name,
         )
+
+    @property
+    def typed_table(self) -> PrismaTableActions:  # any-ok: Prisma table actions are untyped at runtime
+        """The repository table, narrowed to the action surface the repositories use."""
+        return self.table
+
+
+class ModelBackedTable(Generic[ModelT]):
+    """Mixin that validates rows of a prisma table into a pydantic model before handing them out."""
+
+    model_class: type[ModelT]
+
+    @property
+    def typed_table(self) -> PrismaTableActions:
+        raise NotImplementedError
+
+    async def find_unique_model(
+        self, *, where: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> ModelT | None:
+        """Load a single row by a unique constraint and validate it into the domain model."""
+        record: Final = await self.typed_table.find_unique(where=where, include=include)
+        return None if record is None else self.model_class.model_validate(record.dict())
+
+    async def find_first_model(
+        self, *, where: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> ModelT | None:
+        """Load the first row matching the filter and validate it into the domain model."""
+        record: Final = await self.typed_table.find_first(where=where, include=include)
+        return None if record is None else self.model_class.model_validate(record.dict())
+
+    async def find_many_models(
+        self, *, where: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> tuple[ModelT, ...]:
+        """Load every row matching the filter and validate them into domain models."""
+        records: Final = await self.typed_table.find_many(where=where, include=include)
+        return tuple(self.model_class.model_validate(record.dict()) for record in records)
 
 
 class PolicyRepository(PrismaTableRepository):
@@ -70,12 +118,14 @@ class ClaudeCodePluginRepository(PrismaTableRepository):
     table_name = "litellm_claudecodeplugintable"
 
 
-class TeamMembershipRepository(PrismaTableRepository):
+class TeamMembershipRepository(PrismaTableRepository, ModelBackedTable[LiteLLM_TeamMembership]):
     table_name = "litellm_teammembership"
+    model_class = LiteLLM_TeamMembership
 
 
-class EndUserRepository(PrismaTableRepository):
+class EndUserRepository(PrismaTableRepository, ModelBackedTable[LiteLLM_EndUserTable]):
     table_name = "litellm_endusertable"
+    model_class = LiteLLM_EndUserTable
 
 
 class ManagedVectorStoresRepository(PrismaTableRepository):
@@ -94,8 +144,9 @@ class PromptRepository(PrismaTableRepository):
     table_name = "litellm_prompttable"
 
 
-class TagRepository(PrismaTableRepository):
+class TagRepository(PrismaTableRepository, ModelBackedTable[LiteLLM_TagTable]):
     table_name = "litellm_tagtable"
+    model_class = LiteLLM_TagTable
 
 
 class InvitationLinkRepository(PrismaTableRepository):
@@ -104,6 +155,17 @@ class InvitationLinkRepository(PrismaTableRepository):
 
 class JWTKeyMappingRepository(PrismaTableRepository):
     table_name = "litellm_jwtkeymapping"
+
+    async def find_active_token(self, *, jwt_claim_name: str, jwt_claim_value: str) -> str | None:
+        """Return the key token mapped to an active JWT claim pair."""
+        record: Final = await self.typed_table.find_first(
+            where={
+                "jwt_claim_name": jwt_claim_name,
+                "jwt_claim_value": jwt_claim_value,
+                "is_active": True,
+            }
+        )
+        return None if record is None else _TOKEN_ADAPTER.validate_python(record.dict()["token"])
 
 
 class ManagedFileRepository(PrismaTableRepository):
@@ -142,8 +204,9 @@ class ModelTableRepository(PrismaTableRepository):
     table_name = "litellm_modeltable"
 
 
-class AccessGroupRepository(PrismaTableRepository):
+class AccessGroupRepository(PrismaTableRepository, ModelBackedTable[LiteLLM_AccessGroupTable]):
     table_name = "litellm_accessgrouptable"
+    model_class = LiteLLM_AccessGroupTable
 
 
 class SSOConfigRepository(PrismaTableRepository):

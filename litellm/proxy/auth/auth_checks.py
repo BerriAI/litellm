@@ -955,17 +955,14 @@ async def get_default_end_user_budget(
 
     # Fetch from database
     try:
-        budget_record: Final = await BudgetRepository(prisma_client).table.find_unique(
-            where={"budget_id": litellm.max_end_user_budget_id}
-        )
+        _budget_obj: Final = await BudgetRepository(prisma_client).find_by_id(litellm.max_end_user_budget_id)
 
-        if budget_record is None:
+        if _budget_obj is None:
             verbose_proxy_logger.warning(
                 "Default end user budget not found in database: %s", litellm.max_end_user_budget_id
             )
             return None
 
-        _budget_obj: Final = LiteLLM_BudgetTable.model_validate(budget_record.dict())
         # Cache the budget for 60 seconds
         await user_api_key_cache.async_set_cache(
             key=cache_key,
@@ -1014,7 +1011,7 @@ async def get_team_member_default_budget(
         return LiteLLM_BudgetTable.model_validate(cached_budget)
 
     try:
-        budget_record: Final = await BudgetRepository(prisma_client).table.find_unique(where={"budget_id": budget_id})
+        budget_record: Final = await BudgetRepository(prisma_client).find_by_id(budget_id)
 
         if budget_record is None:
             verbose_proxy_logger.warning("Team-default member budget not found in database: %s", budget_id)
@@ -1022,11 +1019,11 @@ async def get_team_member_default_budget(
 
         await user_api_key_cache.async_set_cache(
             key=cache_key,
-            value=budget_record.dict(),
+            value=budget_record.model_dump(),
             ttl=get_management_object_ttl(user_api_key_cache),
         )
 
-        return LiteLLM_BudgetTable.model_validate(budget_record.dict())
+        return budget_record
 
     except Exception:
         verbose_proxy_logger.exception("Error fetching team-default member budget %s", budget_id)
@@ -1171,16 +1168,14 @@ async def get_end_user_object(
 
     # Fetch from database
     try:
-        response: Final = await EndUserRepository(prisma_client).table.find_unique(
+        _response = await EndUserRepository(prisma_client).find_unique_model(
             where={"user_id": end_user_id},
             include={"litellm_budget_table": True, "object_permission": True},
         )
 
-        if response is None:
+        if _response is None:
             raise Exception
 
-        # Convert to LiteLLM_EndUserTable object
-        _response = LiteLLM_EndUserTable.model_validate(response.dict())
 
         # Apply default budget if needed
         _response = await _apply_default_budget_to_end_user(
@@ -1345,8 +1340,8 @@ async def get_tag_objects_batch(
     if not tag_names:
         return {}
 
-    tag_objects: Final = {}
-    uncached_tags: Final = []
+    tag_objects: Final[dict[str, LiteLLM_TagTable]] = {}
+    uncached_tags: Final[list[str]] = []
 
     # Try to get all tags from cache first
     for tag_name in tag_names:
@@ -1363,7 +1358,7 @@ async def get_tag_objects_batch(
     # Batch fetch uncached tags from DB in one query
     if uncached_tags:
         try:
-            db_tags: Final = await TagRepository(prisma_client).table.find_many(
+            db_tags: Final = await TagRepository(prisma_client).find_many_models(
                 where={"tag_name": {"in": uncached_tags}},
                 include={"litellm_budget_table": True},
             )
@@ -1372,13 +1367,12 @@ async def get_tag_objects_batch(
             for db_tag in db_tags:
                 tag_name = db_tag.tag_name
                 cache_key = f"tag:{tag_name}"
-                _tag_obj = LiteLLM_TagTable.model_validate(db_tag.dict())
                 await user_api_key_cache.async_set_cache(
                     key=cache_key,
-                    value=_tag_obj,
+                    value=db_tag,
                     model_type=LiteLLM_TagTable,
                 )
-                tag_objects[tag_name] = _tag_obj
+                tag_objects[tag_name] = db_tag
         except Exception as e:
             verbose_proxy_logger.debug("Error batch fetching tags from database: %s", e)
 
@@ -1457,15 +1451,14 @@ async def get_team_membership(
 
     # else, check db
     try:
-        response: Final = await TeamMembershipRepository(prisma_client).table.find_unique(
+        _response: Final = await TeamMembershipRepository(prisma_client).find_unique_model(
             where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
             include={"litellm_budget_table": True},
         )
 
-        if response is None:
+        if _response is None:
             return None
 
-        _response: Final = LiteLLM_TeamMembership.model_validate(response.dict())
         await user_api_key_cache.async_set_cache(
             key=_key,
             value=_response,
@@ -1768,11 +1761,10 @@ async def get_user_object(
             ]
             response.organization_memberships = _dumped_memberships
 
-        _response = LiteLLM_UserTable.model_validate(dict(response))
-        _response = await _backfill_null_user_email(
+        _response: Final = await _backfill_null_user_email(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
-            user_row=_response,
+            user_row=LiteLLM_UserTable.model_validate(dict(response)),
             user_email=user_email,
         )
         response_dict: Final = _response.model_dump()
@@ -2148,17 +2140,16 @@ async def get_access_object(
 
     # Not in cache - fetch from DB
     try:
-        response: Final = await AccessGroupRepository(prisma_client).table.find_unique(
+        _response: Final = await AccessGroupRepository(prisma_client).find_unique_model(
             where={"access_group_id": access_group_id}
         )
 
-        if response is None:
+        if _response is None:
             raise HTTPException(
                 status_code=404,
                 detail={"error": f"Access group doesn't exist in db. Access group={access_group_id}."},
             )
 
-        _response: Final = LiteLLM_AccessGroupTable.model_validate(response.dict())
 
         # Save to cache
         await _cache_access_object(
@@ -2224,7 +2215,7 @@ async def get_team_object_by_alias(
 
     # Query database by team_alias
     try:
-        teams: Final = await TeamRepository(prisma_client).table.find_many(where={"team_alias": team_alias})
+        teams: Final = await TeamRepository(prisma_client).find_many(where={"team_alias": team_alias})
 
         if not teams:
             raise HTTPException(
@@ -2329,7 +2320,7 @@ async def get_org_object_by_alias(
 
     # Query database by organization_alias
     try:
-        orgs = await OrganizationRepository(prisma_client).table.find_many(where={"organization_alias": org_alias})
+        orgs = await OrganizationRepository(prisma_client).find_many(where={"organization_alias": org_alias})
 
         if not orgs:
             raise HTTPException(
@@ -2546,16 +2537,10 @@ async def get_jwt_key_mapping_object(
 
     Returns the hashed token (str) if a matching active mapping is found, else None.
     """
-    mapping: Final = await JWTKeyMappingRepository(prisma_client).table.find_first(
-        where={
-            "jwt_claim_name": jwt_claim_name,
-            "jwt_claim_value": jwt_claim_value,
-            "is_active": True,
-        }
+    return await JWTKeyMappingRepository(prisma_client).find_active_token(
+        jwt_claim_name=jwt_claim_name,
+        jwt_claim_value=jwt_claim_value,
     )
-    if mapping is not None:
-        return mapping.token
-    return None
 
 
 @log_db_metrics
@@ -2674,14 +2659,11 @@ async def get_object_permission(
 
     # else, check db
     try:
-        response: Final = await ObjectPermissionRepository(prisma_client).table.find_unique(
-            where={"object_permission_id": object_permission_id}
-        )
+        _perm_obj: Final = await ObjectPermissionRepository(prisma_client).find_by_id(object_permission_id)
 
-        if response is None:
+        if _perm_obj is None:
             return None
 
-        _perm_obj: Final = LiteLLM_ObjectPermissionTable.model_validate(response.dict())
         await user_api_key_cache.async_set_cache(
             key=key,
             value=_perm_obj,
@@ -2804,11 +2786,14 @@ async def get_org_object(
         return deserialized_org
     # else, check db
     try:
-        query_kwargs: Final[dict[str, Any]] = {"where": {"organization_id": org_id}}
-        if include_budget_table:
-            query_kwargs["include"] = {"litellm_budget_table": True}
-
-        response: Final = await OrganizationRepository(prisma_client).table.find_unique(**query_kwargs)
+        organization_repository: Final = OrganizationRepository(prisma_client)
+        _org_response: Final = (
+            await organization_repository.find_by_id_with_relations(
+                org_id, include={"litellm_budget_table": True}, id_field="organization_id"
+            )
+            if include_budget_table
+            else await organization_repository.find_by_id(org_id)
+        )
     except Exception:
         # An operational failure (DB down, timeout, cache fault) is NOT the same fact as a confirmed
         # missing row, and relabelling it as "doesn't exist" made every caller unable to tell them
@@ -2817,12 +2802,12 @@ async def get_org_object(
         # Exception are unaffected.
         raise
 
-    if response is None:
+    if _org_response is None:
         raise OrganizationNotFoundError(
             f"Organization doesn't exist in db. Organization={org_id}. Create organization via `/organization/new` call."
         )
 
-    _org_obj: Final = LiteLLM_OrganizationTable.model_validate(response.model_dump())
+    _org_obj: Final = _org_response
     # Cache the result
     await user_api_key_cache.async_set_cache(
         key=cache_key,
@@ -3763,7 +3748,7 @@ async def _virtual_key_soft_budget_check(
         )
 
 
-def _parse_email_list(raw: Any) -> list[str]:
+def _parse_email_list(raw: object) -> list[str]:
     """Parse emails from a list or comma-separated string."""
     if isinstance(raw, list):
         return [e.strip() for e in raw if isinstance(e, str) and e.strip()]
@@ -4294,9 +4279,8 @@ async def get_project_object(
         return deserialized_project
 
     # Fetch from DB
-    project_row: Final = await ProjectRepository(prisma_client).table.find_unique(
-        where={"project_id": project_id},
-        include={"litellm_budget_table": True},
+    project_row: Final = await ProjectRepository(prisma_client).find_by_id_with_relations(
+        project_id, include={"litellm_budget_table": True}, id_field="project_id"
     )
     if project_row is None:
         return None
