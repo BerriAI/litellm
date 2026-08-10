@@ -92,25 +92,39 @@ def base_default(base_text: str, name: str) -> int:
     return base[True]["workflow_call"]["inputs"][name]["default"]
 
 
-def resolve_budgets(job: ReusableCall, key: str, fallback: int) -> Sequence[int]:
+def budget_source(job: ReusableCall, key: str, fallback: int) -> int | str | None:
     """A caller passes a literal, or `${{ matrix.x }}` naming a column of its matrix."""
     value: Final = job.with_.get(key)
     if value is None:
-        return (fallback,)
+        return fallback
     if isinstance(value, int):
-        return (value,)
+        return value
 
     matrix_ref: Final = MATRIX_REF.match(str(value))
-    if not matrix_ref:
-        return ()
+    return matrix_ref.group("key") if matrix_ref else None
 
-    include: Final = job.strategy.get("matrix", {})
-    entries: Final = include.get("include", ()) if isinstance(include, dict) else ()
-    return tuple(
-        e[matrix_ref.group("key")]
-        for e in entries
-        if isinstance(e, dict) and isinstance(e.get(matrix_ref.group("key")), int)
-    )
+
+def matrix_rows(job: ReusableCall) -> Sequence[Mapping[str, object]]:
+    matrix: Final = job.strategy.get("matrix", {})
+    entries: Final = matrix.get("include", ()) if isinstance(matrix, dict) else ()
+    return tuple(e for e in entries if isinstance(e, dict))
+
+
+def budget_pairs(job: ReusableCall, test_source: int | str, job_source: int | str) -> Iterator[tuple[int, int]]:
+    """Pair each shard's test budget with the job budget of that same shard.
+
+    Matrix-sourced budgets resolve per `include` row, so two matrix columns are
+    read off the same row rather than cross-producted across rows.
+    """
+    if isinstance(test_source, int) and isinstance(job_source, int):
+        yield test_source, job_source
+        return
+
+    for row in matrix_rows(job):
+        test_budget = row.get(test_source) if isinstance(test_source, str) else test_source
+        job_budget = row.get(job_source) if isinstance(job_source, str) else job_source
+        if isinstance(test_budget, int) and isinstance(job_budget, int):
+            yield test_budget, job_budget
 
 
 def timeout_contract_errors(rel: Path, workflow: WorkflowFile, ceiling: int, base_text: str) -> Iterator[str]:
@@ -118,18 +132,20 @@ def timeout_contract_errors(rel: Path, workflow: WorkflowFile, ceiling: int, bas
         if job.uses != BASE_WORKFLOW:
             continue
 
-        test_budgets: Final = resolve_budgets(job, "timeout-minutes", base_default(base_text, "timeout-minutes"))
-        job_budgets: Final = resolve_budgets(job, "job-timeout-minutes", base_default(base_text, "job-timeout-minutes"))
-        for test_budget in test_budgets:
-            for job_budget in job_budgets:
-                required = test_budget + ceiling + JOB_OVERHEAD_MINUTES
-                if job_budget < required:
-                    yield (
-                        f"{rel}: job `{job_name}` gives pytest {test_budget}m but caps the job at "
-                        f"{job_budget}m. Setup can use up to {ceiling}m plus {JOB_OVERHEAD_MINUTES}m of "
-                        f"runner overhead, so the job deadline would preempt pytest; raise "
-                        f"job-timeout-minutes to at least {required}."
-                    )
+        test_source: Final = budget_source(job, "timeout-minutes", base_default(base_text, "timeout-minutes"))
+        job_source: Final = budget_source(job, "job-timeout-minutes", base_default(base_text, "job-timeout-minutes"))
+        if test_source is None or job_source is None:
+            continue
+
+        for test_budget, job_budget in budget_pairs(job, test_source, job_source):
+            required = test_budget + ceiling + JOB_OVERHEAD_MINUTES
+            if job_budget < required:
+                yield (
+                    f"{rel}: job `{job_name}` gives pytest {test_budget}m but caps the job at "
+                    f"{job_budget}m. Setup can use up to {ceiling}m plus {JOB_OVERHEAD_MINUTES}m of "
+                    f"runner overhead, so the job deadline would preempt pytest; raise "
+                    f"job-timeout-minutes to at least {required}."
+                )
 
 
 def workflow_errors(rel: Path, text: str, ceiling: int, base_text: str) -> Iterator[str]:
