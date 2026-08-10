@@ -111,6 +111,70 @@ SKIPPED_PATTERN_NAMES: frozenset = frozenset(
         # Card-expiry-shaped: matches ``08-05`` (MM-DD) and ``08/2025``
         # (MM-YYYY) without any card context. Eats every date fragment.
         "card_expiry_date_contextual",
+        # Broad 40-char base64 — matches git SHAs, package hashes, tokens.
+        "aws_secret_key",
+        # "(?<!\\d)(?:\\d[\\s%\\-]?){12,18}\\d(?!\\d)" - any 13-19 digit run.
+        # Matches epoch millis, K8s pod IDs, timestamps. The actual
+        # card-specific shapes (visa/mc/amex/discover) remain active.
+        "payment_card_number_contextual",
+        # Bare 9-digit SSN. Shreds Jira IDs, timestamps, port numbers.
+        "us_ssn_no_dash",
+        # Any 10-digit phone-looking run; no anchor.
+        "us_phone",
+        # Passport-shaped but really just "any 9 digits" or "A+8digits".
+        "passport_us",
+        "passport_uk",
+        "passport_germany",
+        "passport_france",
+        "passport_netherlands",
+        "passport_canada",
+        "passport_india",
+        "passport_australia",
+        "passport_china",
+        "passport_japan",
+        # Bare 9 digits, 8-9 digits, and digit-runs. Shred IDs everywhere.
+        "nl_bsn_contextual",
+        "au_tfn",
+        "au_abn",
+        "au_medicare",
+        # 15-digit run starting with 1 or 2 — matches epoch timestamps.
+        "fr_nir",
+        # IBAN-enhanced — matches 13+ char base64/alphanumeric tokens.
+        "eu_iban_enhanced",
+        # French phone, mostly `0[1-9][0-9]{8}` — collides with 10-digit runs.
+        "fr_phone",
+        # 2-letter country code + 8-12 alnum. Matches tool/deployment IDs.
+        "eu_vat",
+        # Generic "NNLLNNNNN" shape. Matches config keys.
+        "eu_passport_generic",
+        # Bare 5-digit run. Shreds port numbers, build numbers, ZIP codes.
+        "fr_postal_code",
+        # 5 letters + 4 digits + letter. Matches tool/class names like
+        # "READX1X", "ABCD4Z".
+        "in_pan",
+        # 15-char alphanumeric with embedded 'Z'. Matches version strings:
+        # "18.0.0+sdk@1.0.0+json-..." produced false positives in production.
+        "in_gstin",
+        # Singapore 6-digit postal — collides with short hashes.
+        "sg_postal_code",
+        # "[STFGM]dddddddL" — matches tool IDs.
+        "sg_nric",
+        # "E" or "K" + 7 digits. Matches env var names.
+        "passport_singapore",
+        # Broad alphanum with optional letter suffix.
+        "sg_uen",
+        # Bare 11 digits — matches timestamps.
+        "br_cpf_unformatted",
+        # Loose Brazilian phone shapes. Match any 8-10 digit run.
+        "br_phone_landline",
+        "br_phone_mobile",
+        # 8-digit run.
+        "br_cep",
+        # Broad Canadian patterns.
+        "ca_ohip",
+        "ca_on_drivers_licence",
+        "ca_immigration_doc",
+        "ca_bank_account",
     }
 )
 
