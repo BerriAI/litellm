@@ -26,6 +26,9 @@ vi.mock("@/components/Navbar/CommunityEngagementButtons/CommunityEngagementButto
 }));
 vi.mock("@/components/Navbar/NotificationsBell/NotificationsBell", () => ({ NotificationsBell: () => null }));
 vi.mock("@/components/Navbar/WorkerDropdown/WorkerDropdown", () => ({ default: () => null }));
+vi.mock("@/i18n/I18nProvider", () => ({
+  useDashboardLanguage: () => ({ language: "en", setLanguage: vi.fn() }),
+}));
 
 describe("DashboardHeader breadcrumb", () => {
   afterEach(() => {
@@ -62,5 +65,11 @@ describe("DashboardHeader breadcrumb", () => {
     expect(separators).toHaveLength(1);
     expect(separators[0].className).not.toMatch(/self-stretch/);
     expect(separators[0].className).toContain("data-vertical:self-center");
+  });
+
+  it("renders the language selector in the shared header tools", () => {
+    render(<DashboardHeader page="logs" />);
+
+    expect(screen.getByRole("button", { name: "Language: English" })).toBeInTheDocument();
   });
 });

@@ -19,6 +19,7 @@ import { useWorker } from "@/hooks/useWorker";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
+import LanguageSelector from "@/components/LanguageSelector/LanguageSelector";
 
 interface DashboardHeaderProps {
   page: string;
@@ -72,6 +73,7 @@ export function DashboardHeader({ page }: DashboardHeaderProps) {
         </Button>
         <BlogDropdown />
         {!hideCommunityLinks && <CommunityEngagementButtons />}
+        <LanguageSelector />
         <ToolbarSeparator />
         <NotificationsBell />
       </div>
