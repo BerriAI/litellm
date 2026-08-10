@@ -10,7 +10,7 @@ methods; richer repositories live in their own modules.
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, Generic, TypeVar
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel
 
 from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.models.end_user import LiteLLM_EndUserTable
@@ -19,16 +19,16 @@ from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
 from litellm.repositories.prisma_protocols import (
     DailyToolSpendTable,
+    JWTKeyMappingRecord,
     MemoryTable,
     PrismaTableActions,
     SpendLogUsageRecord,
     SpendLogUsageTable,
+    TableActions,
     ToolIndexTable,
 )
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
-
-_TOKEN_ADAPTER: Final = TypeAdapter(str)
 
 
 class PrismaTableRepository:
@@ -167,16 +167,21 @@ class InvitationLinkRepository(PrismaTableRepository):
 class JWTKeyMappingRepository(PrismaTableRepository):
     table_name = "litellm_jwtkeymapping"
 
+    @property
+    def rows(self) -> TableActions[JWTKeyMappingRecord]:
+        rows: Final[TableActions[JWTKeyMappingRecord]] = self.table
+        return rows
+
     async def find_active_token(self, *, jwt_claim_name: str, jwt_claim_value: str) -> str | None:
         """Return the key token mapped to an active JWT claim pair."""
-        record: Final = await self.typed_table.find_first(
+        record: Final = await self.rows.find_first(
             where={
                 "jwt_claim_name": jwt_claim_name,
                 "jwt_claim_value": jwt_claim_value,
                 "is_active": True,
             }
         )
-        return None if record is None else _TOKEN_ADAPTER.validate_python(record.dict()["token"])
+        return None if record is None else record.token
 
 
 class ManagedFileRepository(PrismaTableRepository):

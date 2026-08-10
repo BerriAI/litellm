@@ -103,6 +103,10 @@ class PrismaTableActions(Protocol):
     async def count(self, *, where: Mapping[str, object] | None = None) -> int: ...
 
 
+class JWTKeyMappingRecord(Protocol):
+    token: str
+
+
 class ReadOnlyTable(Protocol):
     async def find_many(self, *, where: Mapping[str, object]) -> Sequence[PrismaRecord]: ...
 

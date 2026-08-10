@@ -5238,6 +5238,8 @@ async def _fetch_user_team_objects(
     teams: Final = await _prisma_table(TeamRepository(prisma_client)).find_many(
         where={"team_id": {"in": complete_user_info.teams}}
     )
+    if not teams:
+        return []
 
     return [LiteLLM_TeamTable.model_validate(team.model_dump()) for team in teams]
 
