@@ -96,6 +96,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _update_metadata_fields,
     _upsert_budget_and_membership,
     _user_has_admin_view,
+    validate_budget_duration,
 )
 from litellm.proxy.management_endpoints.organization_endpoints import (
     add_member_to_organization,
@@ -1258,6 +1259,9 @@ async def new_team(
                 detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
             )
 
+        validate_budget_duration(data.budget_duration)
+        validate_budget_duration(data.team_member_budget_duration)
+
         if data.soft_budget is not None:
             if data.max_budget is not None:
                 # If max_budget is set, soft_budget must be strictly lower than max_budget
@@ -1946,6 +1950,9 @@ async def update_team(
                 status_code=400,
                 detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
             )
+
+        validate_budget_duration(data.budget_duration)
+        validate_budget_duration(data.team_member_budget_duration)
 
         existing_team_row = await _team_db(prisma_client).find_unique(where={"team_id": data.team_id})
 
@@ -2979,7 +2986,7 @@ async def team_member_add(
     except HTTPException as e:
         raise e
 
-    _validate_budget_duration(data.budget_duration)
+    validate_budget_duration(data.budget_duration)
 
     prisma_client = cast(PrismaClient, prisma_client)
 
@@ -3282,29 +3289,6 @@ def _build_member_budget_patch(data: TeamMemberUpdateRequest) -> dict[str, objec
     }
 
 
-def _validate_budget_duration(budget_duration: str | None) -> None:
-    """Reject budget durations that can't be parsed, are non-positive, or
-    overflow date math, so a bad value can't be persisted and later crash the
-    budget reset job."""
-    if budget_duration is None:
-        return
-
-    from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-    from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
-    try:
-        if duration_in_seconds(budget_duration) <= 0:
-            raise ValueError("budget_duration must be positive")
-        get_budget_reset_time(budget_duration=budget_duration)
-    except (ValueError, OverflowError):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": f"Invalid budget_duration '{budget_duration}'. Use a format like '1h', '24h', '7d', or '30d'."
-            },
-        )
-
-
 @router.post(
     "/team/member_update",
     tags=["team management"],
@@ -3342,7 +3326,7 @@ async def team_member_update(
             detail={"error": "Either user_id or user_email needs to be passed in"},
         )
 
-    _validate_budget_duration(data.budget_duration)
+    validate_budget_duration(data.budget_duration)
 
     _existing_team_row: Final = await _team_db(prisma_client).find_unique(where={"team_id": data.team_id})
 

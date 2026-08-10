@@ -2528,6 +2528,72 @@ def _setup_update_key_mocks(monkeypatch, mock_prisma_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bad_duration", ["0s", "-5m"])
+async def test_update_key_rejects_a_duration_that_never_advances(monkeypatch, bad_duration):
+    """A zero-length window resets to "now", so the key row is due again the
+    moment it is written. The reset job re-reads such rows on every tick, and a
+    tenant with enough of them fills each batch and starves other tenants.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    hashed_token = "0d62f396c1317066f55a96086517047c737087c61eb2bf016b72e6298927b15b"
+    key_in_db = LiteLLM_VerificationToken(token=hashed_token, user_id="test-user")
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=key_in_db
+    )
+    mock_prisma_client.update_data = AsyncMock()
+    _setup_update_key_mocks(monkeypatch, mock_prisma_client)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_key_fn(
+            request=MagicMock(),
+            data=UpdateKeyRequest(key=hashed_token, budget_duration=bad_duration),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
+            ),
+            litellm_changed_by=None,
+        )
+
+    assert str(exc_info.value.code) == "400"
+    assert "Invalid budget_duration" in str(exc_info.value.message)
+    mock_prisma_client.update_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_duration", ["0s", "-5m"])
+async def test_generate_key_rejects_a_duration_that_never_advances(monkeypatch, bad_duration):
+    """/key/generate must reject the same never-advancing durations /key/update does."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_fn,
+    )
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        new=AsyncMock(),
+    ) as mock_generate:
+        with pytest.raises(ProxyException) as exc_info:
+            await generate_key_fn(
+                data=GenerateKeyRequest(budget_duration=bad_duration),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="1234"
+                ),
+            )
+
+    assert str(exc_info.value.code) == "400"
+    assert "Invalid budget_duration" in str(exc_info.value.message)
+    mock_generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_update_key_by_alias_only(monkeypatch):
     """
     /key/update identified by key_alias alone resolves the key row via
@@ -8081,7 +8147,7 @@ async def test_key_with_budget_id_does_not_store_budget_duration():
     budget_duration, the key does NOT get budget_duration stored on it.
 
     Keys with budget_id follow their linked budget tier's reset schedule;
-    reset_budget_for_keys_linked_to_budgets() resets them when the tier resets.
+    reset_budget_for_litellm_budget_table() resets them when the tier resets.
     This avoids duplicating budget_duration on keys so tier updates apply
     automatically to all linked keys.
     """

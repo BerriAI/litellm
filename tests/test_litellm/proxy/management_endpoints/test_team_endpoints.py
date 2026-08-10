@@ -381,6 +381,66 @@ async def test_update_team_permissions_success(mock_db_client, mock_admin_auth):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["budget_duration", "team_member_budget_duration"])
+@pytest.mark.parametrize("bad_duration", ["0s", "-5m"])
+async def test_new_team_rejects_a_duration_that_never_advances(
+    mock_db_client, mock_admin_auth, field, bad_duration
+):
+    """A zero-length window resets to "now", so the team row is due again the
+    moment it is written. The reset job re-reads such rows on every tick, and a
+    tenant with enough of them fills each batch and starves other tenants.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    mock_db_client.db = MagicMock()
+    mock_team_create = AsyncMock()
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.create = mock_team_create
+
+    with pytest.raises(ProxyException) as exc_info:
+        await new_team(
+            data=NewTeamRequest(team_alias="my-team", **{field: bad_duration}),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    assert str(exc_info.value.code) == "400"
+    assert "Invalid budget_duration" in str(exc_info.value.message)
+    mock_team_create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["budget_duration", "team_member_budget_duration"])
+async def test_update_team_rejects_a_duration_that_never_advances(
+    mock_db_client, mock_admin_auth, field
+):
+    """/team/update must reject the same never-advancing durations /team/new does."""
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    mock_db_client.db = MagicMock()
+    mock_find_unique = AsyncMock(return_value=None)
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.find_unique = mock_find_unique
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_team(
+            data=UpdateTeamRequest(team_id="team-1", **{field: "0s"}),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    assert str(exc_info.value.code) == "400"
+    assert "Invalid budget_duration" in str(exc_info.value.message)
+    mock_find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_new_team_with_object_permission(mock_db_client, mock_admin_auth):
     """
     Test that /team/new correctly handles object_permission by:
