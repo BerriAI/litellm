@@ -1,7 +1,7 @@
 import json
 import time
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
 
@@ -121,7 +121,7 @@ class OllamaConfig(BaseConfig):
         system: str | None = None,
         template: str | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -194,11 +194,11 @@ class OllamaConfig(BaseConfig):
         """
         Check if the 'template' field in the ollama_model_info contains a 'tools' or 'function' key.
         """
-        _template: str = str(ollama_model_info.get("template", "") or "")
+        _template: Final[str] = str(ollama_model_info.get("template", "") or "")
         return "tools" in _template.lower()
 
     def _get_max_tokens(self, ollama_model_info: dict) -> int | None:
-        _model_info: dict = ollama_model_info.get("model_info", {})
+        _model_info: Final[dict] = ollama_model_info.get("model_info", {})
 
         for k, v in _model_info.items():
             if "context_length" in k:
@@ -254,7 +254,7 @@ class OllamaConfig(BaseConfig):
             _parse_content_for_reasoning,
         )
 
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
         ## RESPONSE OBJECT
         model_response.choices[0].finish_reason = "stop"
         if request_data.get("format", "") == "json":
@@ -264,11 +264,11 @@ class OllamaConfig(BaseConfig):
             if not response_text or not response_text.strip():
                 # Handle empty response gracefully - set empty content
                 message = litellm.Message(content="")
-                model_response.choices[0].message = message  # type: ignore
+                model_response.choices[0].message = message
                 model_response.choices[0].finish_reason = "stop"
             else:
                 try:
-                    response_content = json.loads(response_text)
+                    response_content: Final = json.loads(response_text)
 
                     # Check if this is a function call format with name/arguments structure
                     if (
@@ -277,7 +277,7 @@ class OllamaConfig(BaseConfig):
                         and "arguments" in response_content
                     ):
                         # Handle as function call (original behavior)
-                        function_call = response_content
+                        function_call: Final = response_content
                         message = litellm.Message(
                             content=None,
                             tool_calls=[
@@ -291,14 +291,14 @@ class OllamaConfig(BaseConfig):
                                 }
                             ],
                         )
-                        model_response.choices[0].message = message  # type: ignore
+                        model_response.choices[0].message = message
                         model_response.choices[0].finish_reason = "tool_calls"
                     else:
                         # Handle as regular JSON (new behavior)
                         message = litellm.Message(
                             content=json.dumps(response_content),
                         )
-                        model_response.choices[0].message = message  # type: ignore
+                        model_response.choices[0].message = message
                         model_response.choices[0].finish_reason = "stop"
                 except json.JSONDecodeError:
                     # If JSON parsing fails, treat as regular text response
@@ -308,7 +308,7 @@ class OllamaConfig(BaseConfig):
                     if response_text is not None:
                         reasoning_content, content = _parse_content_for_reasoning(response_text)
                     message = litellm.Message(content=content, reasoning_content=reasoning_content)
-                    model_response.choices[0].message = message  # type: ignore
+                    model_response.choices[0].message = message
                     model_response.choices[0].finish_reason = "stop"
         else:
             response_text = response_json.get("response", "")
@@ -317,17 +317,17 @@ class OllamaConfig(BaseConfig):
             if response_text is not None and isinstance(response_text, str):
                 reasoning_content, content = _parse_content_for_reasoning(response_text)
             else:
-                content = response_text  # type: ignore
-            model_response.choices[0].message.content = content  # type: ignore
-            model_response.choices[0].message.reasoning_content = reasoning_content  # type: ignore
+                content = response_text
+            model_response.choices[0].message.content = content
+            model_response.choices[0].message.reasoning_content = reasoning_content
         model_response.created = int(time.time())
         model_response.model = "ollama/" + model
-        _prompt = request_data.get("prompt", "")
-        prompt_tokens = response_json.get(
+        _prompt: Final = request_data.get("prompt", "")
+        prompt_tokens: Final = response_json.get(
             "prompt_eval_count",
-            len(encoding.encode(_prompt, disallowed_special=())),  # type: ignore
+            len(encoding.encode(_prompt, disallowed_special=())),
         )
-        completion_tokens = response_json.get(
+        completion_tokens: Final = response_json.get(
             "eval_count", len(response_json.get("message", dict()).get("content", ""))
         )
         setattr(
@@ -349,12 +349,12 @@ class OllamaConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        custom_prompt_dict = litellm_params.get("custom_prompt_dict") or litellm.custom_prompt_dict
+        custom_prompt_dict: Final = litellm_params.get("custom_prompt_dict") or litellm.custom_prompt_dict
 
-        text_completion_request = litellm_params.get("text_completion")
+        text_completion_request: Final = litellm_params.get("text_completion")
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
-            model_prompt_details = custom_prompt_dict[model]
+            model_prompt_details: Final = custom_prompt_dict[model]
             ollama_prompt = custom_prompt(
                 role_dict=model_prompt_details["roles"],
                 initial_prompt_value=model_prompt_details["initial_prompt_value"],
@@ -364,7 +364,7 @@ class OllamaConfig(BaseConfig):
         elif text_completion_request:  # handle `/completions` requests
             ollama_prompt = get_str_from_messages(messages=messages)
         else:  # handle `/chat/completions` requests
-            modified_prompt = ollama_pt(model=model, messages=messages)
+            modified_prompt: Final = ollama_pt(model=model, messages=messages)
             if isinstance(modified_prompt, dict):
                 ollama_prompt, images = (
                     modified_prompt["prompt"],
@@ -373,11 +373,11 @@ class OllamaConfig(BaseConfig):
                 optional_params["images"] = images
             else:
                 ollama_prompt = modified_prompt
-        stream = optional_params.pop("stream", False)
-        format = optional_params.pop("format", None)
+        stream: Final = optional_params.pop("stream", False)
+        format: Final = optional_params.pop("format", None)
         images = optional_params.pop("images", None)
-        think = optional_params.pop("think", None)
-        data = {
+        think: Final = optional_params.pop("think", None)
+        data: Final = {
             "model": model,
             "prompt": ollama_prompt,
             "options": optional_params,
@@ -464,8 +464,8 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                 text = ""
                 is_finished = True
                 finish_reason = "stop"
-                prompt_eval_count: int | None = chunk.get("prompt_eval_count", None)
-                eval_count: int | None = chunk.get("eval_count", None)
+                prompt_eval_count: Final[int | None] = chunk.get("prompt_eval_count", None)
+                eval_count: Final[int | None] = chunk.get("eval_count", None)
 
                 usage: ChatCompletionUsageBlock | None = None
                 if prompt_eval_count is not None and eval_count is not None:
@@ -515,7 +515,7 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                 # )
             elif "thinking" in chunk and not chunk["response"]:
                 # Return reasoning content as ModelResponseStream so UIs can render it
-                thinking_content = chunk.get("thinking") or ""
+                thinking_content: Final = chunk.get("thinking") or ""
                 return ModelResponseStream(
                     choices=[
                         StreamingChoices(

@@ -2,7 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to Lemonade's `/v1/chat/completions`
 """
 
-from typing import Any
+from typing import Any, Final
 from urllib.parse import quote
 
 import httpx
@@ -52,7 +52,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         response_format: dict | None = None,
         tools: list | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -87,7 +87,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
 
         # Getting the list of models from lemonade
         try:
-            response = litellm.module_level_client.get(
+            response: Final = litellm.module_level_client.get(
                 url=f"{api_base}/models",
                 headers=self._get_auth_headers(api_key),
             )
@@ -101,7 +101,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
                 f"Failed to fetch models from Lemonade. Status code: {response.status_code}, Response: {response.text}"
             )
 
-        model_list = response.json().get("data", [])
+        model_list: Final = response.json().get("data", [])
         return ["lemonade/" + model["id"] for model in model_list]
 
     @staticmethod
@@ -112,7 +112,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
             return value
         if isinstance(value, str):
             try:
-                parsed = int(value)
+                parsed: Final = int(value)
             except ValueError:
                 return None
             if parsed > 0:
@@ -134,7 +134,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         return provider_specific_entry
 
     def _get_context_window(self, model_info: dict) -> int | None:
-        provider_specific_entry = self._get_provider_specific_entry(model_info)
+        provider_specific_entry: Final = self._get_provider_specific_entry(model_info)
         recipe_options = provider_specific_entry.get("recipe_options")
         if not isinstance(recipe_options, dict):
             recipe_options = {}
@@ -172,25 +172,25 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
             model = model.split("/", 1)[1]
 
         api_base, api_key = self._get_openai_compatible_provider_info(api_base=api_base, api_key=api_key)
-        encoded_model = quote(model, safe="")
+        encoded_model: Final = quote(model, safe="")
 
         try:
-            response = litellm.module_level_client.get(
+            response: Final = litellm.module_level_client.get(
                 url=f"{api_base}/models/{encoded_model}",
                 headers=self._get_auth_headers(api_key),
             )
             response.raise_for_status()
-            model_info = response.json()
+            model_info: Final = response.json()
         except Exception:
             verbose_logger.debug("LemonadeError: Could not get model info.")
             return self._get_default_model_info(model)
 
-        max_input_tokens = self._get_context_window(model_info)
-        max_output_tokens = self._get_positive_int(model_info.get("max_output_tokens"))
-        max_tokens = self._get_positive_int(model_info.get("max_tokens"))
-        provider_specific_entry = self._get_provider_specific_entry(model_info)
+        max_input_tokens: Final = self._get_context_window(model_info)
+        max_output_tokens: Final = self._get_positive_int(model_info.get("max_output_tokens"))
+        max_tokens: Final = self._get_positive_int(model_info.get("max_tokens"))
+        provider_specific_entry: Final = self._get_provider_specific_entry(model_info)
 
-        model_info_response = self._get_default_model_info(model)
+        model_info_response: Final = self._get_default_model_info(model)
         model_info_response.update(
             {
                 "max_tokens": max_tokens or max_output_tokens,
@@ -206,8 +206,8 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
         # lemonade is openai compatible, we just need to set this to custom_openai and have the api_base be lemonade's endpoint
-        passed_api_base = api_base
-        api_base = api_base or get_secret_str("LEMONADE_API_BASE") or "http://localhost:8000/api/v1"  # type: ignore
+        passed_api_base: Final = api_base
+        api_base = api_base or get_secret_str("LEMONADE_API_BASE") or "http://localhost:8000/api/v1"
         key = self._DEFAULT_API_KEY
         if passed_api_base is None or api_key:
             key = api_key or litellm.lemonade_key or get_secret_str("LEMONADE_API_KEY") or self._DEFAULT_API_KEY

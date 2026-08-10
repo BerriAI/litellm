@@ -10,7 +10,7 @@ follow-up response is chained as Phase 2 of the same iterator.
 
 import json
 from collections.abc import AsyncIterator
-from typing import Any, cast
+from typing import Any, Final, cast
 
 from litellm._logging import verbose_logger
 
@@ -21,9 +21,9 @@ from litellm._logging import verbose_logger
 
 def _parse_sse_events(raw: bytes) -> list[tuple]:
     """Return a list of (event_type, parsed_data_dict) from raw SSE bytes."""
-    text = raw.decode("utf-8", errors="replace")
-    lines = text.split("\n")
-    events: list[tuple] = []
+    text: Final = raw.decode("utf-8", errors="replace")
+    lines: Final = text.split("\n")
+    events: Final[list[tuple]] = []
     current_event_type: str | None = None
 
     for line in lines:
@@ -45,11 +45,11 @@ def _parse_sse_events(raw: bytes) -> list[tuple]:
 
 
 def _handle_message_start(data: dict, response: dict) -> None:
-    msg = data.get("message", {})
+    msg: Final = data.get("message", {})
     response["id"] = msg.get("id", response["id"])
     response["model"] = msg.get("model", response["model"])
     response["role"] = msg.get("role", response["role"])
-    usage = msg.get("usage", {})
+    usage: Final = msg.get("usage", {})
     if usage:
         response["usage"]["input_tokens"] = usage.get("input_tokens", 0)
         for key in ("cache_creation_input_tokens", "cache_read_input_tokens"):
@@ -58,11 +58,11 @@ def _handle_message_start(data: dict, response: dict) -> None:
 
 
 def _handle_content_block_start(data: dict, content_blocks: dict[int, dict]) -> None:
-    idx = data.get("index", len(content_blocks))
-    block = data.get("content_block", {})
-    block_type = block.get("type", "text")
+    idx: Final = data.get("index", len(content_blocks))
+    block: Final = data.get("content_block", {})
+    block_type: Final = block.get("type", "text")
 
-    _BLOCK_TEMPLATES: dict[str, dict] = {
+    _BLOCK_TEMPLATES: Final[dict[str, dict]] = {
         "text": {"type": "text", "text": ""},
         "thinking": {"type": "thinking", "thinking": "", "signature": ""},
         "redacted_thinking": {
@@ -85,10 +85,10 @@ def _handle_content_block_start(data: dict, content_blocks: dict[int, dict]) -> 
 
 
 def _handle_content_block_delta(data: dict, content_blocks: dict[int, dict]) -> None:
-    idx = data.get("index", 0)
-    delta = data.get("delta", {})
-    delta_type = delta.get("type", "")
-    block = content_blocks.get(idx)
+    idx: Final = data.get("index", 0)
+    delta: Final = data.get("delta", {})
+    delta_type: Final = delta.get("type", "")
+    block: Final = content_blocks.get(idx)
     if block is None:
         return
 
@@ -103,10 +103,10 @@ def _handle_content_block_delta(data: dict, content_blocks: dict[int, dict]) -> 
 
 
 def _handle_content_block_stop(data: dict, content_blocks: dict[int, dict]) -> None:
-    idx = data.get("index", 0)
-    block = content_blocks.get(idx)
+    idx: Final = data.get("index", 0)
+    block: Final = content_blocks.get(idx)
     if block and block.get("type") == "tool_use":
-        partial = block.pop("_partial_json", "")
+        partial: Final = block.pop("_partial_json", "")
         if partial:
             try:
                 block["input"] = json.loads(partial)
@@ -115,12 +115,12 @@ def _handle_content_block_stop(data: dict, content_blocks: dict[int, dict]) -> N
 
 
 def _handle_message_delta(data: dict, response: dict) -> None:
-    delta = data.get("delta", {})
+    delta: Final = data.get("delta", {})
     if "stop_reason" in delta:
         response["stop_reason"] = delta["stop_reason"]
     if "stop_sequence" in delta:
         response["stop_sequence"] = delta["stop_sequence"]
-    usage = data.get("usage", {})
+    usage: Final = data.get("usage", {})
     if usage.get("output_tokens") is not None:
         response["usage"]["output_tokens"] = usage["output_tokens"]
     for key in (
@@ -212,7 +212,7 @@ class AgenticAnthropicStreamingIterator:
             return
 
         try:
-            rebuilt = self._rebuild_anthropic_response_from_sse(self._collected_bytes)
+            rebuilt: Final = self._rebuild_anthropic_response_from_sse(self._collected_bytes)
             if rebuilt is None:
                 verbose_logger.debug("AgenticStreamingIterator: Could not rebuild response from SSE bytes")
                 return
@@ -222,7 +222,7 @@ class AgenticAnthropicStreamingIterator:
                 for b in rebuilt.get("content", [])
             ]
 
-            result = await self._http_handler._call_agentic_completion_hooks(
+            result: Final = await self._http_handler._call_agentic_completion_hooks(
                 response=rebuilt,
                 model=self._model,
                 messages=self._messages,
@@ -247,7 +247,7 @@ class AgenticAnthropicStreamingIterator:
                     AnthropicMessagesResponse,
                 )
 
-                fake = FakeAnthropicMessagesStreamIterator(response=cast(AnthropicMessagesResponse, result))
+                fake: Final = FakeAnthropicMessagesStreamIterator(response=cast(AnthropicMessagesResponse, result))
                 self._follow_up_iterator = fake.__aiter__()
             else:
                 verbose_logger.warning(
@@ -255,7 +255,7 @@ class AgenticAnthropicStreamingIterator:
                     type(result).__name__,
                 )
         except Exception as e:
-            _call_id = getattr(self._logging_obj, "litellm_call_id", "unknown")
+            _call_id: Final = getattr(self._logging_obj, "litellm_call_id", "unknown")
             verbose_logger.exception(
                 "AgenticStreamingIterator: Error in agentic hook processing [call_id=%s model=%s]: %s",
                 _call_id,
@@ -278,9 +278,9 @@ class AgenticAnthropicStreamingIterator:
         - message_delta   -> stop_reason, output usage
         - message_stop    -> end
         """
-        events = _parse_sse_events(b"".join(raw_bytes))
+        events: Final = _parse_sse_events(b"".join(raw_bytes))
 
-        response: dict[str, Any] = {
+        response: Final[dict[str, Any]] = {
             "id": "",
             "type": "message",
             "role": "assistant",
@@ -290,7 +290,7 @@ class AgenticAnthropicStreamingIterator:
             "stop_sequence": None,
             "usage": {"input_tokens": 0, "output_tokens": 0},
         }
-        content_blocks: dict[int, dict[str, Any]] = {}
+        content_blocks: Final[dict[int, dict[str, Any]]] = {}
         saw_message_start = False
 
         for event_type, data in events:

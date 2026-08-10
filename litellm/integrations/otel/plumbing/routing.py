@@ -10,7 +10,7 @@ logger fan requests out to many tenants without needing a logger per tenant.
 
 from collections import OrderedDict
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Final
 
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Tracer
@@ -24,7 +24,7 @@ from litellm.integrations.otel.plumbing.providers import (
 from litellm.integrations.otel.presets import dynamic_otlp_headers
 
 # Exporter kinds that ignore headers — never rewritten with dynamic credentials.
-_NON_OTLP_KINDS = ("console", "in_memory", "inmemory", "memory")
+_NON_OTLP_KINDS: Final = ("console", "in_memory", "inmemory", "memory")
 
 # Cap on distinct credential-scoped providers held at once. ``dynamic_params``
 # can be populated from request metadata, so an unbounded cache lets a caller
@@ -32,7 +32,7 @@ _NON_OTLP_KINDS = ("console", "in_memory", "inmemory", "memory")
 # thread) per unique credential set and exhaust the proxy. The LRU bound keeps
 # the working set of active tenants resident while flushing and shutting down
 # evicted providers so their threads are reclaimed.
-_MAX_CACHED_PROVIDERS = 256
+_MAX_CACHED_PROVIDERS: Final = 256
 
 
 def _shutdown_provider(provider: TracerProvider) -> None:
@@ -71,10 +71,10 @@ class TenantTracerCache:
         is a bounded LRU: the least-recently-used provider is flushed and shut
         down on overflow so its exporter threads don't accumulate.
         """
-        headers = dynamic_otlp_headers(self._callback_name, dynamic_params)
+        headers: Final = dynamic_otlp_headers(self._callback_name, dynamic_params)
         if not headers:
             return default
-        cache_key = tuple(sorted(headers.items()))
+        cache_key: Final = tuple(sorted(headers.items()))
         provider = self._providers.get(cache_key)
         if provider is not None:
             self._providers.move_to_end(cache_key)
@@ -96,9 +96,9 @@ class TenantTracerCache:
         Langfuse or self-hosted collector exporter, which would leak that key to a
         different backend.
         """
-        header_str = ",".join(f"{key}={value}" for key, value in headers.items())
-        header_update: dict[str, str] = {"headers": header_str}
-        exporters = [
+        header_str: Final = ",".join(f"{key}={value}" for key, value in headers.items())
+        header_update: Final[dict[str, str]] = {"headers": header_str}
+        exporters: Final = [
             (
                 spec.model_copy(update=header_update)
                 if spec.owner == self._callback_name and spec.kind.lower() not in _NON_OTLP_KINDS

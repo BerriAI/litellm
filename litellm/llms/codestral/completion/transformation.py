@@ -1,4 +1,5 @@
 import json
+from typing import Final
 
 import litellm
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
@@ -28,7 +29,7 @@ class CodestralTextCompletionConfig(OpenAITextCompletionConfig):
         random_seed: int | None = None,
         stop: str | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -91,7 +92,7 @@ class CodestralTextCompletionConfig(OpenAITextCompletionConfig):
                 "finish_reason": finish_reason,
             }
         try:
-            chunk_data_dict = json.loads(chunk_data)
+            chunk_data_dict: Final = json.loads(chunk_data)
         except json.JSONDecodeError:
             return {
                 "text": "",
@@ -99,15 +100,15 @@ class CodestralTextCompletionConfig(OpenAITextCompletionConfig):
                 "finish_reason": finish_reason,
             }
 
-        original_chunk = litellm.ModelResponseStream(**chunk_data_dict)
-        _choices = chunk_data_dict.get("choices", []) or []
+        original_chunk: Final = litellm.ModelResponseStream(**chunk_data_dict)
+        _choices: Final = chunk_data_dict.get("choices", []) or []
         if len(_choices) == 0:
             return {
                 "text": "",
                 "is_finished": is_finished,
                 "finish_reason": finish_reason,
             }
-        _choice = _choices[0]
+        _choice: Final = _choices[0]
         text = _choice.get("delta", {}).get("content", "")
 
         if _choice.get("finish_reason") is not None:

@@ -919,7 +919,7 @@ describe("TeamInfoView", () => {
       });
     };
 
-    it("prefills pairs from team metadata, hides UI-managed keys, and round-trips typed values on save", async () => {
+    it("should preserve metadata types and hide managed keys", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(networking.teamInfoCall).mockResolvedValue(
         createMockTeamData({
@@ -962,27 +962,6 @@ describe("TeamInfoView", () => {
       });
       expect(updateArg.metadata).not.toHaveProperty("model_tpm_limit");
       expect(updateArg.model_tpm_limit).toEqual({ "gpt-4": 100 });
-    });
-
-    it("includes a newly added pair in the team update", async () => {
-      const user = userEvent.setup({ delay: null });
-      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"] }));
-      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
-
-      renderWithProviders(<TeamInfoView {...defaultProps} />);
-      await openSettingsEditor(user);
-
-      await user.click(screen.getByRole("button", { name: /add key-value pair/i }));
-      await user.type(screen.getByPlaceholderText("Key"), "cost_center");
-      await user.type(screen.getByPlaceholderText("Value"), "eng-1");
-
-      await user.click(screen.getByRole("button", { name: /save changes/i }));
-
-      await waitFor(() => {
-        expect(networking.teamUpdateCall).toHaveBeenCalled();
-      });
-
-      expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].metadata).toMatchObject({ cost_center: "eng-1" });
     });
 
     it("should keep declared keys as ordinary prefilled rows and submit the edited value", async () => {

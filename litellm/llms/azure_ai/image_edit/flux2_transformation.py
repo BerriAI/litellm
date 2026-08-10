@@ -1,6 +1,6 @@
 import base64
 from io import BufferedReader
-from typing import Any
+from typing import Any, Final
 
 from httpx._types import RequestFiles
 
@@ -47,8 +47,8 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         Map OpenAI params to FLUX 2 params.
         FLUX 2 uses the same param names as OpenAI for supported params.
         """
-        mapped_params: dict[str, Any] = {}
-        supported_params = self.get_supported_openai_params(model)
+        mapped_params: Final[dict[str, Any]] = {}
+        supported_params: Final = self.get_supported_openai_params(model)
 
         for key, value in dict(image_edit_optional_params).items():
             if key in supported_params and value is not None:
@@ -107,10 +107,10 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         if image is None:
             raise ValueError("FLUX 2 image edit requires an image.")
 
-        image_b64 = self._convert_image_to_base64(image)
+        image_b64: Final = self._convert_image_to_base64(image)
 
         # Build request body with required params
-        request_body: dict[str, Any] = {
+        request_body: Final[dict[str, Any]] = {
             "prompt": prompt,
             "image": image_b64,
             "model": model,
@@ -136,7 +136,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         elif isinstance(image, bytes):
             image_bytes = image
         elif hasattr(image, "read"):
-            image_bytes = image.read()  # type: ignore
+            image_bytes = image.read()
         else:
             raise ValueError(f"Unsupported image type: {type(image)}")
 
@@ -160,7 +160,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
                 "Azure AI API base is required. Set AZURE_AI_API_BASE environment variable or pass api_base parameter."
             )
 
-        api_version = (
+        api_version: Final = (
             litellm_params.get("api_version")
             or litellm.api_version
             or get_secret_str("AZURE_AI_API_VERSION")

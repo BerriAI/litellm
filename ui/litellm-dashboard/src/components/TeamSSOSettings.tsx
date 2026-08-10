@@ -236,7 +236,7 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
               editContent={
                 <BudgetDurationDropdown
                   value={editedValues.budget_duration || null}
-                  onChange={(v) => update("budget_duration", v)}
+                  onChange={(v) => update("budget_duration", v ?? null)}
                   style={{ maxWidth: 320 }}
                 />
               }

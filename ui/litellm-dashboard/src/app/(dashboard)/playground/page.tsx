@@ -9,7 +9,6 @@ import { TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { DeprecationBanner } from "@/components/DeprecationBanner";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchProxySettings } from "@/utils/proxyUtils";
-import { isViewOnlyRole } from "@/utils/roles";
 
 interface ProxySettings {
   PROXY_BASE_URL?: string;
@@ -17,7 +16,7 @@ interface ProxySettings {
 }
 
 export default function PlaygroundPage() {
-  const { accessToken, userRole, userId, disabledPersonalKeyCreation, token } = useAuthorized();
+  const { accessToken, userRole, userId, disabledPersonalKeyCreation, token, isViewOnly } = useAuthorized();
   const [proxySettings, setProxySettings] = useState<ProxySettings | undefined>(undefined);
 
   useEffect(() => {
@@ -36,7 +35,7 @@ export default function PlaygroundPage() {
     initializeProxySettings();
   }, [accessToken]);
 
-  if (isViewOnlyRole(userRole)) {
+  if (isViewOnly) {
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-8 text-center">
         <h1 className="text-2xl font-semibold">Access Denied</h1>

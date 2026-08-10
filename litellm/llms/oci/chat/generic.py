@@ -8,7 +8,7 @@ parsing, and streaming chunk parsing for models served with
 
 import datetime
 import hashlib
-from typing import Any
+from typing import Any, Final
 
 import httpx
 from pydantic import ValidationError
@@ -43,7 +43,7 @@ from litellm.types.utils import (
 )
 
 # Maps OpenAI role names to OCI GENERIC role names.
-open_ai_to_generic_oci_role_map: dict[str, OCIRoles] = {
+open_ai_to_generic_oci_role_map: Final[dict[str, OCIRoles]] = {
     "system": "SYSTEM",
     "user": "USER",
     "assistant": "ASSISTANT",
@@ -58,7 +58,7 @@ open_ai_to_generic_oci_role_map: dict[str, OCIRoles] = {
 
 def adapt_messages_to_generic_oci_standard_content_message(role: str, content: str | list) -> OCIMessage:
     """Convert a plain-text or multipart content message to OCI format."""
-    new_content: list[OCIContentPartUnion] = []
+    new_content: Final[list[OCIContentPartUnion]] = []
     if isinstance(content, str):
         return OCIMessage(
             role=open_ai_to_generic_oci_role_map[role],
@@ -113,7 +113,7 @@ def adapt_messages_to_generic_oci_standard_content_message(role: str, content: s
 
 def adapt_messages_to_generic_oci_standard_tool_call(role: str, tool_calls: list) -> OCIMessage:
     """Convert an assistant tool-call message to OCI format."""
-    tool_calls_formatted = []
+    tool_calls_formatted: Final = []
     for tool_call in tool_calls:
         if not isinstance(tool_call, dict):
             raise OCIError(status_code=400, message="Each tool call must be a dictionary")
@@ -170,7 +170,7 @@ def adapt_messages_to_generic_oci_standard(
     messages: list[AllMessageValues],
 ) -> list[OCIMessage]:
     """Convert an OpenAI-format message array to OCI GENERIC format."""
-    new_messages = []
+    new_messages: Final = []
     for message in messages:
         role = message["role"]
         content = message.get("content")
@@ -216,7 +216,7 @@ def adapt_tool_definition_to_oci_standard(tools: list[dict], vendor: OCIVendors)
 
     Resolves ``$ref``/``$defs`` and ``anyOf`` that the OCI endpoint rejects.
     """
-    new_tools = []
+    new_tools: Final = []
     for tool in tools:
         if tool["type"] != "function":
             raise OCIError(status_code=400, message="OCI only supports function tools")
@@ -272,7 +272,7 @@ def _synthesize_oci_tool_call_id(position: int, name: str, arguments: str) -> st
     distinct calls. A content-derived digest stays stable across identical
     re-emissions while differing across truly distinct calls.
     """
-    digest = hashlib.sha256(
+    digest: Final = hashlib.sha256(
         f"{position}|{name}|{arguments}".encode(),
         usedforsecurity=False,
     ).hexdigest()[:24]
@@ -306,15 +306,15 @@ def handle_generic_response(
 ) -> ModelResponse:
     """Parse a non-streaming GENERIC OCI response into a LiteLLM ModelResponse."""
     try:
-        completion_response = OCICompletionResponse(**json_data)
+        completion_response: Final = OCICompletionResponse(**json_data)
     except (TypeError, ValidationError) as e:
         raise OCIError(
             message=f"Response cannot be casted to OCICompletionResponse: {e}",
             status_code=raw_response.status_code,
         )
 
-    iso_str = completion_response.chatResponse.timeCreated
-    dt = datetime.datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+    iso_str: Final = completion_response.chatResponse.timeCreated
+    dt: Final = datetime.datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
     model_response.created = int(dt.timestamp())
     model_response.model = completion_response.modelId
 
@@ -324,9 +324,9 @@ def handle_generic_response(
             status_code=raw_response.status_code,
         )
 
-    response_choice = completion_response.chatResponse.choices[0]
-    message = model_response.choices[0].message  # type: ignore
-    response_message = response_choice.message
+    response_choice: Final = completion_response.chatResponse.choices[0]
+    message: Final = model_response.choices[0].message
+    response_message: Final = response_choice.message
     if response_message is not None:
         if response_message.content:
             # Concatenate all text parts — matches the streaming handler, which
@@ -341,15 +341,13 @@ def handle_generic_response(
         if response_message.toolCalls:
             message.tool_calls = adapt_tools_to_openai_standard(response_message.toolCalls)
 
-    model_response.choices[0].finish_reason = _normalize_oci_finish_reason(  # type: ignore[union-attr,assignment]
-        response_choice.finishReason
-    )
+    model_response.choices[0].finish_reason = _normalize_oci_finish_reason(response_choice.finishReason)
 
-    oci_usage = completion_response.chatResponse.usage
+    oci_usage: Final = completion_response.chatResponse.usage
     reasoning_tokens: int | None = None
     if oci_usage.completionTokensDetails and oci_usage.completionTokensDetails.reasoningTokens is not None:
         reasoning_tokens = oci_usage.completionTokensDetails.reasoningTokens
-    model_response.usage = Usage(  # type: ignore[attr-defined]
+    model_response.usage = Usage(
         prompt_tokens=oci_usage.promptTokens,
         completion_tokens=oci_usage.completionTokens or 0,
         total_tokens=oci_usage.totalTokens,
@@ -369,7 +367,7 @@ def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
             tool_call.setdefault("name", "")
 
     try:
-        typed_chunk = OCIStreamChunk(**dict_chunk)
+        typed_chunk: Final = OCIStreamChunk(**dict_chunk)
     except (TypeError, ValidationError) as e:
         raise OCIError(
             status_code=500,
@@ -420,7 +418,7 @@ def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
             for i, tc in enumerate(typed_chunk.message.toolCalls)
         ]
 
-    finish_reason: str | None = _normalize_oci_finish_reason(typed_chunk.finishReason)
+    finish_reason: Final[str | None] = _normalize_oci_finish_reason(typed_chunk.finishReason)
 
     return ModelResponseStream(
         choices=[
