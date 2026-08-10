@@ -2240,6 +2240,39 @@ def test_append_system_prompt_messages():
     assert result == messages
 
 
+def test_append_system_prompt_messages_content_blocks():
+    """
+    Anthropic /v1/messages accepts `system` as a list of content blocks; that shape must be logged
+    too, not silently dropped.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    system_blocks = [
+        {
+            "type": "text",
+            "text": "You are a helpful assistant",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+    messages = [{"role": "user", "content": "Hello"}]
+
+    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+        kwargs={"system": system_blocks}, messages=messages
+    )
+    assert result == [{"role": "system", "content": system_blocks}, *messages]
+
+    # already-prepended system blocks are not duplicated
+    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+        kwargs={"system": system_blocks}, messages=result
+    )
+    assert len(result) == 2
+
+    # empty system is not logged as an empty system turn
+    assert (
+        StandardLoggingPayloadSetup.append_system_prompt_messages(kwargs={"system": []}, messages=messages) == messages
+    )
+
+
 @pytest.mark.asyncio
 async def test_async_success_handler_sets_standard_logging_object_for_pass_through_endpoints():
     """
