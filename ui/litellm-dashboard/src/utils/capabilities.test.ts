@@ -38,11 +38,6 @@ describe("hasCapability", () => {
   });
 });
 
-// Backend truth table for the `/global/spend/*` routes the Old Usage page calls
-// (verified against a live proxy): only proxy_admin and proxy_admin_viewer are
-// served. Org admins and team admins carry `internal_user` as their top-level
-// user_role, so `effectiveSessionRole` renders them "Internal User" — an org
-// admin never reaches the UI as "Org Admin" or `org_admin`.
 describe("hasCapability - viewGlobalSpend", () => {
   it.each(ADMIN_ROLES)("should grant it to %s", (role) => {
     expect(hasCapability(role, "viewGlobalSpend")).toBe(true);
