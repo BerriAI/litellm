@@ -2669,7 +2669,16 @@ async def test_ProxyConfig__init_guardrails_in_db_skips_only_the_unloadable_row(
     from litellm.proxy.guardrails import guardrail_registry as registry_module
     from litellm.types.guardrails import Guardrail, GuardrailEventHooks, LitellmParams
 
-    handler = registry_module.InMemoryGuardrailHandler()
+    class _RecordingHandler(registry_module.InMemoryGuardrailHandler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reconciled_with: list[set[str]] = []
+
+        def reconcile_db_guardrails(self, db_guardrail_ids: set[str]) -> list[str]:
+            self.reconciled_with.append(set(db_guardrail_ids))
+            return super().reconcile_db_guardrails(db_guardrail_ids)
+
+    handler = _RecordingHandler()
     monkeypatch.setattr(registry_module, "IN_MEMORY_GUARDRAIL_HANDLER", handler)
 
     def _initializer(litellm_params: LitellmParams, guardrail: Guardrail) -> CustomGuardrail:
@@ -2685,22 +2694,12 @@ async def test_ProxyConfig__init_guardrails_in_db_skips_only_the_unloadable_row(
     prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
         return_value=[
             _db_guardrail_row("first", "lit5367_ok"),
-            # real failure shape from the report: a type that is not registered
             _db_guardrail_row("broken", "litellm_tool_permission"),
             _db_guardrail_row("last", "lit5367_ok"),
         ]
     )
 
-    reconciled_with: list[set[str]] = []
-    real_reconcile = handler.reconcile_db_guardrails
-
-    def _spy_reconcile(db_guardrail_ids: set[str]) -> list[str]:
-        reconciled_with.append(set(db_guardrail_ids))
-        return real_reconcile(db_guardrail_ids)
-
-    monkeypatch.setattr(handler, "reconcile_db_guardrails", _spy_reconcile)
-
     await ProxyConfig()._init_guardrails_in_db(prisma_client=prisma_client)
 
     assert sorted(handler.IN_MEMORY_GUARDRAILS) == ["first", "last"]
-    assert reconciled_with == [{"first", "broken", "last"}]
+    assert handler.reconciled_with == [{"first", "broken", "last"}]
