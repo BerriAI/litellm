@@ -6758,6 +6758,68 @@ async def test_acreate_batch_disable_fallbacks_surfaces_owning_provider_error():
 
 
 @pytest.mark.asyncio
+async def test_acreate_batch_surfaces_owning_provider_error_without_disable_fallbacks():
+    """The router itself has to keep a batch inside the group that owns the input file:
+    the proxy only sets disable_fallbacks on the managed-files route, so the caller
+    otherwise gets the fallback provider's error for a file it never received."""
+    from litellm.types.utils import LiteLLMBatch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "owning-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-owning",
+                },
+            },
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4o-mini",
+                    "api_key": "sk-fallback",
+                    "api_base": "https://fallback.openai.azure.com",
+                    "api_version": "2024-08-01-preview",
+                },
+            },
+        ],
+        fallbacks=[{"owning-model": ["fallback-model"]}],
+        num_retries=0,
+    )
+    attempted_models = []
+
+    async def _acreate_batch(model, **kwargs):
+        attempted_models.append(model)
+        if model == "owning-model":
+            raise litellm.APIConnectionError(
+                message="Connection error - openai is unreachable",
+                model="openai/gpt-4o-mini",
+                llm_provider="openai",
+            )
+        return LiteLLMBatch(
+            id="batch-created-on-the-wrong-provider",
+            completion_window="24h",
+            created_at=0,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-owned-by-openai",
+            object="batch",
+            status="validating",
+        )
+
+    with patch.object(router, "_acreate_batch", _acreate_batch):
+        with pytest.raises(litellm.APIConnectionError, match="openai is unreachable"):
+            await router.acreate_batch(
+                model="owning-model",
+                input_file_id="file-owned-by-openai",
+                endpoint="/v1/chat/completions",
+                completion_window="24h",
+                metadata={"team": "batch-jobs"},
+            )
+
+    assert attempted_models == ["owning-model"]
+
+
+@pytest.mark.asyncio
 async def test_acreate_batch_request_bedrock_tags_override_deployment_tags():
     import httpx
 
