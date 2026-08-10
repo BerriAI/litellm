@@ -1443,6 +1443,49 @@ def test_make_keepalive_resolver_missing_model_id_never_cached(monkeypatch):
     assert router.get_model_list.call_count == 2
 
 
+def test_make_keepalive_resolver_expires_cache_after_ttl(monkeypatch):
+    """An operator's live config change (revoking override, disabling
+    keepalive, removing the deployment) must be observed within
+    _KEEPALIVE_CACHE_TTL_SECONDS, not frozen for the rest of an
+    already-in-flight stream just because the model_id hasn't changed."""
+    from unittest.mock import MagicMock
+
+    before = MagicMock()
+    before.litellm_params.keepalive_seconds = 20.0
+    before.litellm_params.allow_client_keepalive_override = False
+
+    after = MagicMock()
+    after.litellm_params.keepalive_seconds = 0
+    after.litellm_params.allow_client_keepalive_override = False
+
+    router = MagicMock()
+    router.get_deployment.return_value = before
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    clock = {"t": 0.0}
+    monkeypatch.setattr(ps.time, "monotonic", lambda: clock["t"])
+
+    resolve = _make_keepalive_resolver({"model": "my-model"})
+
+    chunk = _simple_chunk(content="a")
+    chunk._hidden_params = {"model_id": "deploy-live"}
+
+    assert resolve(chunk) == 20.0
+    assert router.get_deployment.call_count == 1
+
+    # Still within the TTL: same model_id, cached value reused even though
+    # the router's live config has since changed underneath it.
+    router.get_deployment.return_value = after
+    clock["t"] = ps._KEEPALIVE_CACHE_TTL_SECONDS - 0.01
+    assert resolve(chunk) == 20.0
+    assert router.get_deployment.call_count == 1
+
+    # Past the TTL: the config-reload disable is now observed.
+    clock["t"] = ps._KEEPALIVE_CACHE_TTL_SECONDS + 0.01
+    assert resolve(chunk) == 0.0
+    assert router.get_deployment.call_count == 2
+
+
 def test_keepalive_seconds_in_all_litellm_params():
     from litellm.types.utils import all_litellm_params
 

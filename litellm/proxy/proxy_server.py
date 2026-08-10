@@ -7796,29 +7796,43 @@ def _resolve_keepalive_seconds(request_data: Mapping[str, Any], response: object
     return clamped
 
 
+_KEEPALIVE_CACHE_TTL_SECONDS: Final = 5.0
+
+
 def _make_keepalive_resolver(request_data: Mapping[str, Any]) -> Callable[[object], float]:
     """Wrap `_resolve_keepalive_seconds` with a memo keyed on the serving
     deployment's model_id. The steady-state case (no mid-stream fallback, the
     overwhelming majority of streams) sees the same model_id on every chunk, so
     this turns the per-chunk cost from a full `llm_router.get_deployment()`
-    Pydantic rebuild into a cheap hidden-params read once the first chunk for
-    that model_id has been resolved. A missing/empty model_id can't be trusted
-    as a cache key (see `_keepalive_from_deployment_config`'s model_name
-    fallback, which reflects current router state rather than one deployment's
-    fixed identity), so those chunks always resolve fresh, matching prior
-    behavior exactly.
+    Pydantic rebuild into a cheap hidden-params read once per
+    `_KEEPALIVE_CACHE_TTL_SECONDS` for that model_id. The cache expires on its
+    own rather than living for the life of the stream, so an operator's live
+    config change (disabling keepalive, revoking client override, or removing
+    the deployment) is observed within a bounded window instead of being able
+    to be evaded by an already-in-flight stream indefinitely. A missing/empty
+    model_id can't be trusted as a cache key (see
+    `_keepalive_from_deployment_config`'s model_name fallback, which reflects
+    current router state rather than one deployment's fixed identity), so
+    those chunks always resolve fresh, matching prior behavior exactly.
     """
     last_model_id: str | None = None  # rebind-ok: memoized identity of the last-resolved chunk
     last_value: float = 0.0  # rebind-ok: cached resolution for last_model_id
+    last_resolved_at: float = float("-inf")  # rebind-ok: monotonic timestamp of the last real resolution
 
     def _resolve(item: object) -> float:
-        nonlocal last_model_id, last_value
+        nonlocal last_model_id, last_value, last_resolved_at
         model_id = get_hidden_params_dict(item).get("model_id")
-        if isinstance(model_id, str) and model_id and model_id == last_model_id:
+        now: Final = time.monotonic()
+        if (
+            isinstance(model_id, str)
+            and model_id
+            and model_id == last_model_id
+            and now - last_resolved_at < _KEEPALIVE_CACHE_TTL_SECONDS
+        ):
             return last_value
         value: Final = _resolve_keepalive_seconds(request_data, item)
         if isinstance(model_id, str) and model_id:
-            last_model_id, last_value = model_id, value
+            last_model_id, last_value, last_resolved_at = model_id, value, now
         return value
 
     return _resolve

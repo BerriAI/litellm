@@ -2119,6 +2119,7 @@ def test_add_litellm_data_for_backend_llm_call_merges_keepalive_seconds_header()
     """
     result = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
         headers={"x-litellm-keepalive-seconds": "20"},
+        request_data={},
         user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
     )
     assert result.get("keepalive_seconds") == 20.0
