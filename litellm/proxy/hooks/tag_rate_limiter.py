@@ -69,42 +69,50 @@ _UNIT_TO_RATE_LIMIT_TYPE: dict[_LimitUnit, RateLimitType] = {
     "concurrency": RateLimitType.CONCURRENT_REQUESTS,
 }
 
-# All-or-nothing atomic check-and-increment across every key in one hop's
-# atomic_checks batch (e.g. a requests-unit entry and a concurrency-unit
-# entry checked together for the same routing attempt). Two-phase, mirroring
-# `CHECK_AND_INCREMENT_BY_N_SCRIPT` in parallel_request_limiter_v3.py: if any
-# key would exceed its limit, NONE are incremented -- a single hop's
-# requests-unit check must never commit while its concurrency-unit check
-# (checked in the same call) rejects the hop, or vice versa. Independent
-# entries in different hops/calls are unaffected: each async_filter_deployments
-# call gets its own script invocation.
+# Single-key atomic check-and-increment. Deliberately one key per script call
+# (never a batch of differently-hash-tagged keys in one call): every tag_rl
+# key carries its own self-contained {..} hash tag so unrelated buckets never
+# forcibly co-locate on the same Redis Cluster shard, which means a single Lua
+# invocation can never span more than one key's slot without risking a
+# cross-slot error. All-or-nothing across a hop's multiple atomic checks
+# (e.g. requests + concurrency checked together) is achieved in Python by
+# calling this once per key and refunding every earlier admission in the same
+# batch if a later one is rejected -- the same refund-on-rollback shape as
+# `atomic_check_and_increment_by_n` in parallel_request_limiter_v3.py, applied
+# per-key instead of per-descriptor since each key already is one hash-tag
+# group by construction.
 TAG_RL_CHECK_AND_INCR_SCRIPT = """
-local n = #KEYS
-for i = 1, n do
-    local key = KEYS[i]
-    local arg_base = (i - 1) * 3
-    local limit = tonumber(ARGV[arg_base + 1])
-    local increment = tonumber(ARGV[arg_base + 2])
-    local current = tonumber(redis.call('GET', key) or 0)
-    if current + increment > limit then
-        return { 0, i, current, limit }
-    end
+local key = KEYS[1]
+local limit = tonumber(ARGV[1])
+local increment = tonumber(ARGV[2])
+local ttl = tonumber(ARGV[3])
+local current = tonumber(redis.call('GET', key) or 0)
+if current + increment > limit then
+    return { 0, current }
 end
+local new_value = redis.call('INCRBY', key, increment)
+local current_ttl = redis.call('TTL', key)
+if current_ttl == -1 and ttl > 0 then
+    redis.call('EXPIRE', key, ttl)
+end
+return { 1, new_value }
+"""
 
-local results = { 1 }
-for i = 1, n do
-    local key = KEYS[i]
-    local arg_base = (i - 1) * 3
-    local increment = tonumber(ARGV[arg_base + 2])
-    local ttl = tonumber(ARGV[arg_base + 3])
-    local new_value = redis.call('INCRBY', key, increment)
-    local current_ttl = redis.call('TTL', key)
-    if current_ttl == -1 and ttl > 0 then
-        redis.call('EXPIRE', key, ttl)
-    end
-    table.insert(results, new_value)
+# Atomic decrement that never leaves a counter negative. Used both to refund
+# an earlier admission when a later key in the same batch is rejected, and to
+# release a concurrency reservation -- floors at 0 so a decrement that can't
+# be attributed to the exact reservation that caused it (see
+# `_release_keys`'s docstring) degrades to under-counting rather than a
+# negative counter that would admit unlimited requests.
+TAG_RL_DECR_FLOOR_ZERO_SCRIPT = """
+local key = KEYS[1]
+local delta = tonumber(ARGV[1])
+local new_value = redis.call('INCRBY', key, delta)
+if new_value < 0 then
+    redis.call('SET', key, 0)
+    new_value = 0
 end
-return results
+return new_value
 """
 
 
@@ -159,6 +167,19 @@ def _build_group_limits(deployments: list[dict], unit: _LimitUnit) -> list[_Conf
     declared that value -- silently dropping a divergent deployment's config
     (as a naive dedupe-by-name index would) is the exact bug this guards
     against.
+
+    `concurrency` is the one exception: a per-deployment-scoped reservation
+    is never created for it. Admission for a hop reserves every scope whose
+    deployments overlap `healthy_deployments`, but only one deployment ends
+    up actually serving -- releasing the exact reservation(s) that were never
+    used, without a per-request slot identity to track which reservation
+    belongs to which hop, isn't solved correctly by this design (a
+    since-fixed live bug: an admitted-then-failed call's per-deployment
+    reservation was never released; a caller could also strand a sibling
+    deployment's reservation just by never being routed to it). A divergent
+    concurrency signature is dropped with a warning instead of silently
+    creating a bucket that can leak; only chain-wide concurrency entries
+    (identical across every deployment in the group) are supported.
     """
     declaring_ids_by_signature: dict[tuple[str, str, float, int], list[str]] = {}
     for deployment in deployments:
@@ -179,6 +200,15 @@ def _build_group_limits(deployments: list[dict], unit: _LimitUnit) -> list[_Conf
     for signature, declaring_ids in declaring_ids_by_signature.items():
         tag_id, name, limit, period_seconds = signature
         is_chain_wide = distinct_signatures_by_name[(tag_id, name)] == 1 and len(declaring_ids) == total_deployments
+        if unit == "concurrency" and not is_chain_wide:
+            verbose_proxy_logger.warning(
+                "tag_rate_limiter: concurrency_limits entry %r (tag_id=%s) is not declared identically by every "
+                "deployment sharing this model_name; per-deployment-scoped concurrency limits are not supported "
+                "and this entry is being skipped entirely.",
+                name,
+                tag_id,
+            )
+            continue
         configured.append(
             _ConfiguredLimit(
                 unit=unit,
@@ -190,6 +220,19 @@ def _build_group_limits(deployments: list[dict], unit: _LimitUnit) -> list[_Conf
 
 
 def _build_limits_index(model_list: list[dict]) -> dict[str, list[_ConfiguredLimit]]:
+    """
+    Keyed by every name a caller could pass as the `model` this hop is for.
+    That's not always `deployment["model_name"]`: a team calling through its
+    own `team_public_model_name` alias reaches `async_filter_deployments`
+    with that alias as `model`, while the deployment dicts in
+    `healthy_deployments` still carry their own real `model_name` --
+    `Router` never rewrites it for this path (unlike `model_group_alias`,
+    which is resolved to the real model_name before routing even starts).
+    Without this, tag limits configured on a team-aliased chain would never
+    be looked up at all. Grouping (which deployments share one bucket) is
+    still by the deployment's own `model_name`; the alias is only an
+    additional key pointing at that same computed group.
+    """
     groups: dict[str, list[dict]] = {}
     for deployment in model_list:
         groups.setdefault(deployment["model_name"], []).append(deployment)
@@ -197,8 +240,13 @@ def _build_limits_index(model_list: list[dict]) -> dict[str, list[_ConfiguredLim
     index: dict[str, list[_ConfiguredLimit]] = {}
     for model_name, deployments in groups.items():
         configured = [limit for unit in _LIMIT_UNITS for limit in _build_group_limits(deployments, unit)]
-        if configured:
-            index[model_name] = configured
+        if not configured:
+            continue
+        index[model_name] = configured
+        for deployment in deployments:
+            team_public_model_name = (deployment.get("model_info") or {}).get("team_public_model_name")
+            if team_public_model_name:
+                index[team_public_model_name] = configured
     return index
 
 
@@ -208,6 +256,14 @@ def _build_limits_index(model_list: list[dict]) -> dict[str, list[_ConfiguredLim
 # exposes no generic "config changed" version counter to key off instead, so
 # this bounds staleness by simply re-checking periodically.
 _INDEX_TTL_SECONDS = 5.0
+
+# Floor for a concurrency reservation's self-heal TTL, regardless of the
+# configured period_seconds. A reservation that expires while its request is
+# still genuinely in flight silently admits requests past the limit; this
+# generous floor keeps that window far larger than any realistic request
+# duration, at the cost of a leaked (crashed-worker) slot self-healing more
+# slowly. period_seconds can still raise the TTL further, never lower it.
+_CONCURRENCY_MIN_SAFETY_TTL_SECONDS = 3600
 
 
 class _TagRateLimitIndex:
@@ -266,9 +322,41 @@ class _PROXY_TagRateLimiter(CustomLogger):
         self._check_and_incr_script = (
             redis_cache.async_register_script(TAG_RL_CHECK_AND_INCR_SCRIPT) if redis_cache is not None else None
         )
+        self._decr_floor_zero_script = (
+            redis_cache.async_register_script(TAG_RL_DECR_FLOOR_ZERO_SCRIPT) if redis_cache is not None else None
+        )
 
     def update_variables(self, llm_router: Router) -> None:
         self.llm_router = llm_router
+
+    async def _check_and_increment_one(self, key: str, limit: float, increment: float, ttl: int) -> tuple[bool, float]:
+        """Single-key atomic check-and-increment. Always one key per Lua
+        call -- see TAG_RL_CHECK_AND_INCR_SCRIPT's module docstring for why."""
+        if self._check_and_incr_script is not None:
+            raw = await self._check_and_incr_script(keys=[key], args=[limit, increment, ttl])
+            return bool(raw[0]), float(raw[1])
+
+        async with self._lock:
+            current_value = await self.internal_usage_cache.async_get_cache(key=key, litellm_parent_otel_span=None)
+            current = float(current_value) if current_value is not None else 0.0
+            if current + increment > limit:
+                return False, current
+            new_value = current + increment
+            await self.internal_usage_cache.async_set_cache(
+                key=key, value=new_value, ttl=ttl, litellm_parent_otel_span=None
+            )
+            return True, new_value
+
+    async def _decrement_floor_zero(self, key: str, delta: float) -> None:
+        if self._decr_floor_zero_script is not None:
+            await self._decr_floor_zero_script(keys=[key], args=[delta])
+            return
+        async with self._lock:
+            current_value = await self.internal_usage_cache.async_get_cache(key=key, litellm_parent_otel_span=None)
+            current = float(current_value) if current_value is not None else 0.0
+            await self.internal_usage_cache.async_set_cache(
+                key=key, value=max(0.0, current + delta), litellm_parent_otel_span=None
+            )
 
     async def _atomic_check_and_increment(
         self,
@@ -278,7 +366,10 @@ class _PROXY_TagRateLimiter(CustomLogger):
         All-or-nothing across every (key, limit, increment, ttl) in `checks`:
         if any would exceed its limit, none are incremented -- a single hop's
         requests-unit and concurrency-unit checks must commit together or not
-        at all.
+        at all. Each key is checked/incremented in its own single-key Lua
+        call (cluster-safe by construction); all-or-nothing across the batch
+        is enforced here by refunding every earlier admission the moment a
+        later key is rejected, not by a single multi-key script call.
 
         Returns (failing_index, values). On success, failing_index is None
         and values holds each key's new post-increment value, same order as
@@ -288,28 +379,19 @@ class _PROXY_TagRateLimiter(CustomLogger):
         """
         if not checks:
             return None, []
-        if self._check_and_incr_script is not None:
-            keys = [key for key, _limit, _increment, _ttl in checks]
-            args = [value for _key, limit, increment, ttl in checks for value in (limit, increment, ttl)]
-            raw = await self._check_and_incr_script(keys=keys, args=args)
-            if int(raw[0]) == 0:
-                return int(raw[1]) - 1, [float(raw[2])]
-            return None, [float(v) for v in raw[1:]]
 
-        async with self._lock:
-            current_values: list[float] = []
-            for key, limit, increment, _ttl in checks:
-                current_value = await self.internal_usage_cache.async_get_cache(key=key, litellm_parent_otel_span=None)
-                current = float(current_value) if current_value is not None else 0.0
-                if current + increment > limit:
-                    return len(current_values), [current]
-                current_values.append(current)
+        admitted_values: list[float] = []
+        for index, (key, limit, increment, ttl) in enumerate(checks):
+            admitted, value = await self._check_and_increment_one(key, limit, increment, ttl)
+            if admitted:
+                admitted_values.append(value)
+                continue
+            for refund_index in range(index):
+                refund_key, _limit, refund_increment, _ttl = checks[refund_index]
+                await self._decrement_floor_zero(refund_key, -refund_increment)
+            return index, [value]
 
-            for i, (key, _limit, increment, ttl) in enumerate(checks):
-                await self.internal_usage_cache.async_set_cache(
-                    key=key, value=current_values[i] + increment, ttl=ttl, litellm_parent_otel_span=None
-                )
-            return None, [current_values[i] + checks[i][2] for i in range(len(checks))]
+        return None, admitted_values
 
     async def async_filter_deployments(
         self,
@@ -374,7 +456,13 @@ class _PROXY_TagRateLimiter(CustomLogger):
     @staticmethod
     def _ttl_for(configured_limit: _ConfiguredLimit) -> int:
         if configured_limit.unit == "concurrency":
-            return configured_limit.entry.period_seconds
+            # A reservation's TTL must comfortably outlast any real in-flight
+            # request, or a slow request's reservation self-heals (expires)
+            # while it is still genuinely running, silently admitting extra
+            # requests past the configured limit. period_seconds is still
+            # honored if the operator wants an even longer safety margin, but
+            # never shortens the floor below it.
+            return max(configured_limit.entry.period_seconds, _CONCURRENCY_MIN_SAFETY_TTL_SECONDS)
         return configured_limit.entry.period_seconds + 3600
 
     async def _read_only_values(
@@ -438,11 +526,19 @@ class _PROXY_TagRateLimiter(CustomLogger):
         )
 
     async def _release_keys(self, keys: list[str]) -> None:
+        """
+        Release each key by one slot. This does not verify the completing
+        request still owns a live reservation (no per-request slot identity
+        is tracked -- see the concurrency design note above), so a request
+        that outlives the safety TTL and gets its key reused by a fresh
+        reservation could in principle decrement a reservation it never
+        held. Flooring at 0 (TAG_RL_DECR_FLOOR_ZERO_SCRIPT) bounds the
+        damage to under-counting (briefly under-enforcing the limit) rather
+        than a negative counter, which would admit unlimited requests.
+        """
         for key in keys:
             try:
-                await self.internal_usage_cache.async_increment_cache(
-                    key=key, value=-1.0, litellm_parent_otel_span=None
-                )
+                await self._decrement_floor_zero(key, -1.0)
             except Exception as e:  # noqa: BLE001 - releasing a slot must never raise into the caller's request path
                 verbose_proxy_logger.warning("tag_rate_limiter: failed to release concurrency slot %s: %s", key, e)
 
@@ -459,10 +555,9 @@ class _PROXY_TagRateLimiter(CustomLogger):
         the way a successful call's standard_logging_object does, so this
         re-derives identity from request_data["model"] (the hop's own model
         group -- reliable, since a hop that reserved a slot did so under
-        this exact name) and releases only chain-wide entries; a
-        per-deployment-scoped entry can't be resolved without knowing which
-        deployment was actually dispatched, so it's left to its TTL instead
-        of guessed at.
+        this exact name). Concurrency entries are always chain-wide (see
+        `_build_group_limits`'s docstring), so no deployment_id is needed to
+        resolve which bucket to release here.
         """
         if self.llm_router is None:
             return

@@ -130,8 +130,15 @@ class TagRateLimitEntry(BaseModel):
     midnight and `period_seconds=60` resets on real clock-minute boundaries.
 
     For a `concurrency_limits` entry specifically, `period_seconds` is not a
-    window: it is the safety TTL a reserved in-flight slot self-heals after,
-    in case a worker crashes before releasing it (the counter, not a window).
+    window: it is a floor under the safety TTL a reserved in-flight slot
+    self-heals after, in case a worker crashes before releasing it (the
+    counter, not a window). The effective TTL is at least one hour regardless
+    of this value, so a slow but genuinely still-running request never has
+    its reservation expire out from under it; set this higher only if an
+    even longer self-heal window is wanted. `concurrency_limits` also only
+    supports chain-wide entries (declared identically by every deployment
+    sharing a `model_name`) -- a divergent per-deployment value is dropped
+    with a warning, not silently scoped to a subset of deployments.
     """
 
     name: str

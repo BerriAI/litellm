@@ -14,9 +14,13 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.tag_rate_limiter import (
     _build_group_limits,
+    _build_limits_index,
+    _ConfiguredLimit,
+    _CONCURRENCY_MIN_SAFETY_TTL_SECONDS,
     _extract_identity,
     _PROXY_TagRateLimiter,
 )
+from litellm.types.router import TagRateLimitEntry
 
 
 class TimeController:
@@ -701,3 +705,161 @@ async def test_redis_backed_cross_unit_rejection_does_not_leave_a_phantom_increm
 
     # cleanup: this key persists in the shared scratch Redis instance beyond the test's TTL otherwise
     await redis_cache.async_delete_cache(key=request_key)
+
+
+# ---------------------------------------------------------------------------
+# team_public_model_name alias -- index lookup must not miss
+# ---------------------------------------------------------------------------
+
+
+def test_build_limits_index_is_also_keyed_by_team_public_model_name():
+    """
+    Router threads a team's public alias, not the deployment's own
+    model_name, into async_filter_deployments's `model` param when a caller
+    requests via that alias (Router never rewrites it for this path, unlike
+    model_group_alias). The index must resolve either name to the same
+    configured limits, or a team-aliased chain's limits are silently never
+    checked.
+    """
+    deployment = _deployment("real-model-name", "dep-1", {"token_limits": {"limits": [{"name": "daily", "limit": 500, "period_seconds": 86400}]}})
+    deployment["model_info"]["team_public_model_name"] = "team-alias-name"
+    index = _build_limits_index([deployment])
+    assert "real-model-name" in index
+    assert "team-alias-name" in index
+    assert index["real-model-name"] == index["team-alias-name"]
+
+
+@pytest.mark.asyncio
+async def test_filter_deployments_enforces_limit_when_called_with_team_alias(time_controller):
+    limiter = _make_limiter(time_controller)
+    deployment = _deployment("real-model-name", "dep-1", {"request_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]}})
+    deployment["model_info"]["team_public_model_name"] = "team-alias-name"
+    router = litellm.Router(model_list=[deployment])
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    # Router passes the alias as `model`, not "real-model-name".
+    await limiter.async_filter_deployments(
+        model="team-alias-name", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+    )
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="team-alias-name", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        )
+
+
+# ---------------------------------------------------------------------------
+# concurrency_limits -- chain-wide only, divergent config dropped not leaked
+# ---------------------------------------------------------------------------
+
+
+def test_concurrency_divergent_config_is_dropped_not_scoped_per_deployment():
+    """
+    Unlike tokens/requests/dollars, a concurrency entry declared with
+    different values per deployment must not become a per-deployment-scoped
+    reservation -- that shape leaks (see the regression tests below this
+    plan superseded). It should be dropped entirely, with the group left
+    with no concurrency entry at all.
+    """
+    deployments = [
+        _deployment("grp", "dep-1", {"concurrency_limits": {"limits": [{"name": "inflight", "limit": 2, "period_seconds": 60}]}}),
+        _deployment("grp", "dep-2", {"concurrency_limits": {"limits": [{"name": "inflight", "limit": 5, "period_seconds": 60}]}}),
+    ]
+    configured = _build_group_limits(deployments, "concurrency")
+    assert configured == []
+
+
+def test_concurrency_partial_declaration_is_dropped_not_scoped_per_deployment():
+    deployments = [
+        _deployment("grp", "dep-1", {"concurrency_limits": {"limits": [{"name": "inflight", "limit": 2, "period_seconds": 60}]}}),
+        _deployment("grp", "dep-2", {}),
+    ]
+    configured = _build_group_limits(deployments, "concurrency")
+    assert configured == []
+
+
+def test_concurrency_identical_across_all_deployments_is_still_chain_wide():
+    deployments = [
+        _deployment("grp", "dep-1", {"concurrency_limits": {"limits": [{"name": "inflight", "limit": 2, "period_seconds": 60}]}}),
+        _deployment("grp", "dep-2", {"concurrency_limits": {"limits": [{"name": "inflight", "limit": 2, "period_seconds": 60}]}}),
+    ]
+    configured = _build_group_limits(deployments, "concurrency")
+    assert len(configured) == 1
+    assert configured[0].deployment_scope is None
+
+
+# ---------------------------------------------------------------------------
+# concurrency TTL floor -- a short period_seconds must not shorten the
+# self-heal safety TTL below the floor
+# ---------------------------------------------------------------------------
+
+
+def test_concurrency_ttl_floor_overrides_a_too_short_period_seconds():
+    entry = TagRateLimitEntry(name="inflight", tag_id="end_user_id", limit=1, period_seconds=5)
+    configured_limit = _ConfiguredLimit(unit="concurrency", entry=entry, deployment_scope=None)
+    assert _PROXY_TagRateLimiter._ttl_for(configured_limit) == _CONCURRENCY_MIN_SAFETY_TTL_SECONDS
+
+
+def test_concurrency_ttl_floor_does_not_shorten_a_longer_period_seconds():
+    entry = TagRateLimitEntry(name="inflight", tag_id="end_user_id", limit=1, period_seconds=_CONCURRENCY_MIN_SAFETY_TTL_SECONDS + 100)
+    configured_limit = _ConfiguredLimit(unit="concurrency", entry=entry, deployment_scope=None)
+    assert _PROXY_TagRateLimiter._ttl_for(configured_limit) == _CONCURRENCY_MIN_SAFETY_TTL_SECONDS + 100
+
+
+# ---------------------------------------------------------------------------
+# refund-on-rollback across differently-hash-tagged keys (Redis Cluster safety)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cross_unit_refund_leaves_no_phantom_increment_in_memory(time_controller):
+    """
+    In-memory equivalent of the Redis Cluster cross-slot fix: requests and
+    concurrency keys carry different hash tags by construction, so the
+    all-or-nothing guarantee across them must come from a refund, not a
+    single multi-key atomic call. Confirms the refund path itself (not just
+    the end observable behavior already covered by
+    test_cross_unit_rejection_does_not_leave_a_phantom_increment).
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "request_limits": {"limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 10, "period_seconds": 60}]},
+                    "concurrency_limits": {"limits": [{"name": "inflight", "tag_id": "end_user_id", "limit": 1, "period_seconds": 60}]},
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:refund-check"]}}
+    )
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:refund-check"]}}
+        )
+
+    now = time_controller.now().timestamp()
+    request_key = f"{{tag_rl:grp:requests:per_minute:chain:refund-check}}:{int(now) // 60}"
+    value = await limiter.internal_usage_cache.async_get_cache(key=request_key, litellm_parent_otel_span=None)
+    assert (float(value) if value is not None else 0.0) == 1.0
+
+
+# ---------------------------------------------------------------------------
+# release floors at zero -- never goes negative
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_release_floors_at_zero_instead_of_going_negative(time_controller):
+    limiter = _make_limiter(time_controller)
+    key = "{tag_rl:test:concurrency:floor:chain:u1}:inflight"
+    await limiter._decrement_floor_zero(key, -1.0)
+    value = await limiter.internal_usage_cache.async_get_cache(key=key, litellm_parent_otel_span=None)
+    assert (float(value) if value is not None else 0.0) == 0.0
