@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
@@ -602,7 +602,7 @@ async def index_create(
     response_model=IndexListResponse,
 )
 async def index_list(
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> IndexListResponse:
     """
     List all vector store indexes. Proxy admin only.
