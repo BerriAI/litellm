@@ -2331,6 +2331,84 @@ def test_translate_openai_usage_to_anthropic_cache_tokens_from_dict_details_with
     assert anthropic_usage["cache_creation_input_tokens"] == 20
 
 
+def test_translate_openai_usage_to_anthropic_reports_reasoning_tokens():
+    """
+    Reasoning models served through /v1/messages must report the reasoning tokens they billed for,
+    in Anthropic's own shape (usage.output_tokens_details.thinking_tokens).
+
+    Fixes: https://github.com/BerriAI/litellm/issues/36376
+    """
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    usage = Usage(
+        prompt_tokens=15,
+        completion_tokens=100,
+        total_tokens=115,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=68, text_tokens=32),
+    )
+
+    anthropic_usage = LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage_delta(usage)
+
+    assert anthropic_usage["output_tokens"] == 100
+    assert anthropic_usage["output_tokens_details"] == {"thinking_tokens": 68}
+
+
+def test_translate_openai_usage_to_anthropic_reads_reasoning_tokens_from_dict_details():
+    usage = Usage(prompt_tokens=15, completion_tokens=100, total_tokens=115)
+    usage.completion_tokens_details = {"reasoning_tokens": 68}
+
+    anthropic_usage = LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage_delta(usage)
+
+    assert anthropic_usage["output_tokens_details"] == {"thinking_tokens": 68}
+
+
+def test_translate_openai_usage_to_anthropic_omits_zero_reasoning_tokens():
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    usage = Usage(
+        prompt_tokens=15,
+        completion_tokens=100,
+        total_tokens=115,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=0, text_tokens=100),
+    )
+
+    anthropic_usage = LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage_delta(usage)
+
+    assert "output_tokens_details" not in anthropic_usage
+
+
+def test_translate_openai_response_to_anthropic_reports_reasoning_tokens():
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    usage = Usage(
+        prompt_tokens=15,
+        completion_tokens=100,
+        total_tokens=115,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=68, text_tokens=32),
+    )
+    response = ModelResponse(
+        id="chatcmpl-1",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="2", role="assistant"),
+            )
+        ],
+        created=1,
+        model="gpt-5.1",
+        object="chat.completion",
+        usage=usage,
+    )
+
+    anthropic_response = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
+        response=response,
+        tool_name_mapping=None,
+    )
+
+    assert anthropic_response["usage"]["output_tokens_details"] == {"thinking_tokens": 68}
+
+
 def test_translate_openai_usage_to_anthropic_ignores_fractional_cache_tokens():
     usage = Usage(
         prompt_tokens=120,

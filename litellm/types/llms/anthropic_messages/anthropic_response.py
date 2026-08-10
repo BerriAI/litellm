@@ -3,6 +3,7 @@ from typing import Any, Literal, TypeAlias
 from typing_extensions import NotRequired, TypedDict
 
 from litellm.types.llms.anthropic import (
+    AnthropicOutputTokensDetails,
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockToolUse,
     ContextManagementResponse,
@@ -70,6 +71,11 @@ class AnthropicUsage(TypedDict, total=False):
     """
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
+
+    """
+    Extended thinking breakdown of ``output_tokens``
+    """
+    output_tokens_details: AnthropicOutputTokensDetails
 
 
 class AnthropicMessagesResponse(TypedDict, total=False):

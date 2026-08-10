@@ -486,11 +486,18 @@ class MessageDelta(TypedDict, total=False):
     stop_reason: str | None
 
 
+class AnthropicOutputTokensDetails(TypedDict, total=False):
+    """Anthropic ``usage.output_tokens_details`` (extended thinking breakdown)."""
+
+    thinking_tokens: int
+
+
 class UsageDelta(TypedDict, total=False):
     input_tokens: int
     output_tokens: int
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
+    output_tokens_details: AnthropicOutputTokensDetails
 
 
 class AppliedEdit(TypedDict, total=False):

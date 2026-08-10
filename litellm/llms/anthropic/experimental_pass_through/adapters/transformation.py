@@ -80,6 +80,7 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
     AnthropicMessagesToolChoice,
     AnthropicMessagesUserMessageParam,
+    AnthropicOutputTokensDetails,
     AnthropicResponseContentBlockRedactedThinking,
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockThinking,
@@ -1266,6 +1267,15 @@ class LiteLLMAnthropicMessagesAdapter:
         return cls._first_positive_prompt_tokens_detail_value(usage, ("cache_creation_tokens", "cache_write_tokens"))
 
     @classmethod
+    def _get_reasoning_tokens(cls, usage: Usage) -> int:
+        completion_tokens_details: Final = getattr(usage, "completion_tokens_details", None)
+        if completion_tokens_details is None:
+            return 0
+        if isinstance(completion_tokens_details, dict):
+            return cls._positive_int(completion_tokens_details.get("reasoning_tokens"))
+        return cls._positive_int(getattr(completion_tokens_details, "reasoning_tokens", None))
+
+    @classmethod
     def _translate_openai_usage_to_anthropic_usage_delta(cls, usage: Usage) -> UsageDelta:
         cache_read_input_tokens: Final = cls._get_cache_read_input_tokens(usage)
         cache_creation_input_tokens: Final = cls._get_cache_creation_input_tokens(usage)
@@ -1282,6 +1292,9 @@ class LiteLLMAnthropicMessagesAdapter:
             usage_delta["cache_creation_input_tokens"] = cache_creation_input_tokens
         if cache_read_input_tokens > 0:
             usage_delta["cache_read_input_tokens"] = cache_read_input_tokens
+        reasoning_tokens: Final = cls._get_reasoning_tokens(usage)
+        if reasoning_tokens > 0:
+            usage_delta["output_tokens_details"] = AnthropicOutputTokensDetails(thinking_tokens=reasoning_tokens)
         return usage_delta
 
     @classmethod
