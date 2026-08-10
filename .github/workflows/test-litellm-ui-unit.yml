@@ -42,6 +42,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Run UI type tests (Vitest)
+        env:
+          CI: "true"
+        run: npm run test:types
+
       - name: Run UI unit tests (Vitest)
         env:
           CI: "true"
