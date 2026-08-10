@@ -298,6 +298,27 @@ describe("AddModelForm", () => {
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
+  it("should offer the existing-credentials picker when the caller can read credentials", async () => {
+    const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+    mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+
+    renderWithProviders(<AddModelForm {...createTestProps()} />);
+
+    expect(await screen.findByText("Existing Credentials")).toBeInTheDocument();
+    expect(screen.getByText(/Either select existing credentials/i)).toBeInTheDocument();
+  });
+
+  it("should drop the existing-credentials picker, keeping provider fields, when credentials are unreadable", async () => {
+    const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+    mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+
+    renderWithProviders(<AddModelForm {...createTestProps()} credentials={null} />);
+
+    expect(await screen.findByText("Provider")).toBeInTheDocument();
+    expect(screen.queryByText("Existing Credentials")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Either select existing credentials/i)).not.toBeInTheDocument();
+  });
+
   it("should display the provider field and the Test Connect / Add Model buttons", async () => {
     const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
     mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));

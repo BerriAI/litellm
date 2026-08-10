@@ -11,10 +11,12 @@ import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap"
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import useCan from "@/app/(dashboard)/hooks/useCan";
 import { vertexCredentialsUploadProps } from "@/app/(dashboard)/models-and-endpoints/vertexCredentialsUpload";
 
 export default function AddModelPanel() {
   const { accessToken } = useAuthorized();
+  const canViewCredentials = useCan("viewCredentials");
   const [form] = Form.useForm();
   const queryClient = useQueryClient();
   const { data: modelCostMapData } = useModelCostMap();
@@ -51,7 +53,7 @@ export default function AddModelPanel() {
       showAdvancedSettings={showAdvancedSettings}
       setShowAdvancedSettings={setShowAdvancedSettings}
       teams={teams ?? null}
-      credentials={credentialsResponse?.credentials || []}
+      credentials={canViewCredentials ? credentialsResponse?.credentials ?? [] : null}
     />
   );
 }

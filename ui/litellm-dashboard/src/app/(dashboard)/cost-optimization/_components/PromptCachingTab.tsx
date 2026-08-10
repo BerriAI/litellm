@@ -14,13 +14,14 @@ import { DailyActivityRange } from "./useDailyActivityRange";
 interface PromptCachingTabProps {
   accessToken: string | null;
   activity: DailyActivityRange;
+  canViewProxyConfig: boolean;
 }
 
-const PromptCachingTab: React.FC<PromptCachingTabProps> = ({ accessToken, activity }) => {
+const PromptCachingTab: React.FC<PromptCachingTabProps> = ({ accessToken, activity, canViewProxyConfig }) => {
   const [settings, setSettings] = useState<generalSettingsItem[]>([]);
 
   const loadSettings = useCallback(() => {
-    if (!accessToken) {
+    if (!accessToken || !canViewProxyConfig) {
       return;
     }
     getGeneralSettingsCall(accessToken)
@@ -29,7 +30,7 @@ const PromptCachingTab: React.FC<PromptCachingTabProps> = ({ accessToken, activi
         console.error("Failed to load prompt caching settings:", error);
         NotificationsManager.fromBackend("Failed to load prompt caching settings");
       });
-  }, [accessToken]);
+  }, [accessToken, canViewProxyConfig]);
 
   useEffect(() => {
     loadSettings();
@@ -47,7 +48,9 @@ const PromptCachingTab: React.FC<PromptCachingTabProps> = ({ accessToken, activi
 
   return (
     <div className="w-full space-y-6">
-      <PromptCachingPanel accessToken={accessToken} settings={settings} onChange={handleChange} />
+      {canViewProxyConfig && (
+        <PromptCachingPanel accessToken={accessToken} settings={settings} onChange={handleChange} />
+      )}
       <CacheLeakageCard activity={activity} />
     </div>
   );

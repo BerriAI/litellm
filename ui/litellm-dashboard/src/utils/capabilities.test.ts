@@ -23,7 +23,19 @@ const ADMIN_ONLY_CAPABILITIES: Capability[] = [
   "viewPrompts",
   "viewOrganizationUsage",
   "viewAgentUsage",
+  "viewProxyConfig",
+  "viewCredentials",
 ];
+
+// `/config/list` sits in `admin_viewer_routes`, which `org_admin_allowed_routes`
+// includes, so an org admin looks allowed on paper. At runtime `_user_is_org_admin`
+// needs an `organization_id` in the request payload, which a bare GET never carries,
+// so the proxy answers 401 for org admins on both of these routes.
+const PROXY_ADMIN_ONLY_CAPABILITIES: Capability[] = ["viewProxyConfig", "viewCredentials"];
+
+// A team admin carries no distinct session role; the dashboard sees their user_role.
+const TEAM_ADMIN_SESSION_ROLE = "Internal User";
+const ORG_ADMIN_ROLES = ["Org Admin", "org_admin"];
 
 describe("hasCapability", () => {
   describe.each(ADMIN_ONLY_CAPABILITIES)("%s", (capability) => {
@@ -34,6 +46,24 @@ describe("hasCapability", () => {
     it.each(NON_ADMIN_ROLES)("should deny it to %s", (role) => {
       expect(hasCapability(role, capability)).toBe(false);
     });
+  });
+});
+
+describe.each(PROXY_ADMIN_ONLY_CAPABILITIES)("hasCapability - %s", (capability) => {
+  it.each(ORG_ADMIN_ROLES)("should deny it to an org admin (%s)", (role) => {
+    expect(hasCapability(role, capability)).toBe(false);
+  });
+
+  it("should deny it to a team admin", () => {
+    expect(hasCapability(TEAM_ADMIN_SESSION_ROLE, capability)).toBe(false);
+  });
+
+  it.each(["internal_user", "internal_user_viewer", "Internal Viewer"])("should deny it to %s", (role) => {
+    expect(hasCapability(role, capability)).toBe(false);
+  });
+
+  it.each(["Admin", "proxy_admin", "Admin Viewer", "proxy_admin_viewer"])("should grant it to %s", (role) => {
+    expect(hasCapability(role, capability)).toBe(true);
   });
 });
 

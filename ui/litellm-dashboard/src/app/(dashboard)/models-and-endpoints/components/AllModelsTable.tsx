@@ -68,7 +68,7 @@ interface AllModelsTableProps {
   isLoadingTeams: boolean;
   viewMode: ModelViewMode;
   onViewModeChange: (viewMode: ModelViewMode) => void;
-  onOpenModelSettings: () => void;
+  onOpenModelSettings: (() => void) | null;
   availableModelGroups: string[];
   availableModelAccessGroups: string[];
   userRole: string;
@@ -249,18 +249,22 @@ export function AllModelsTable({
               </SelectContent>
             </Select>
 
-            <ToolbarSeparator className="mx-0.5" />
+            {onOpenModelSettings !== null && (
+              <>
+                <ToolbarSeparator className="mx-0.5" />
 
-            <Button
-              variant="outline"
-              size="icon-sm"
-              aria-label="Model Settings"
-              title="Model Settings"
-              data-testid="models-settings-trigger"
-              onClick={onOpenModelSettings}
-            >
-              <Settings />
-            </Button>
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label="Model Settings"
+                  title="Model Settings"
+                  data-testid="models-settings-trigger"
+                  onClick={onOpenModelSettings}
+                >
+                  <Settings />
+                </Button>
+              </>
+            )}
           </DataTableToolbar>
           <DataTableFilterDrawer
             table={table}

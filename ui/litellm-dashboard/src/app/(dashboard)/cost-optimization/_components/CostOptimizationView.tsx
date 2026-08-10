@@ -9,6 +9,7 @@ import PromptCompressionTab from "./PromptCompressionTab";
 import PromptCachingTab from "./PromptCachingTab";
 import AutoRouterBenchmarksTab from "./AutoRouterBenchmarksTab";
 import { useDailyActivityRange } from "./useDailyActivityRange";
+import { hasCapability } from "@/utils/capabilities";
 
 interface CostOptimizationViewProps {
   accessToken: string | null;
@@ -33,7 +34,13 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
     {
       key: "caching",
       label: "Prompt Caching",
-      children: <PromptCachingTab accessToken={accessToken} activity={activity} />,
+      children: (
+        <PromptCachingTab
+          accessToken={accessToken}
+          activity={activity}
+          canViewProxyConfig={hasCapability(userRole, "viewProxyConfig")}
+        />
+      ),
     },
     {
       key: "autorouter-usage",

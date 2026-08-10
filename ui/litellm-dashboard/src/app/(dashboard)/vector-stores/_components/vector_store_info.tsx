@@ -21,6 +21,7 @@ interface VectorStoreInfoViewProps {
   onClose: () => void;
   accessToken: string | null;
   is_admin: boolean;
+  canViewCredentials: boolean;
   editVectorStore: boolean;
 }
 
@@ -29,6 +30,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
   onClose,
   accessToken,
   is_admin,
+  canViewCredentials,
   editVectorStore,
 }) => {
   const [form] = Form.useForm();
@@ -69,7 +71,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
   };
 
   const fetchCredentials = async () => {
-    if (!accessToken) return;
+    if (!accessToken || !canViewCredentials) return;
     try {
       const response = await credentialListCall(accessToken);
       setCredentials(response.credentials || []);
@@ -192,37 +194,41 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                       </Select2>
                     </Form.Item>
 
-                    {/* Credentials */}
-                    <div className="mb-4">
-                      <Text className="text-sm text-gray-500 mb-2">
-                        Either select existing credentials OR enter provider credentials below
-                      </Text>
-                    </div>
+                    {canViewCredentials && (
+                      <>
+                        {/* Credentials */}
+                        <div className="mb-4">
+                          <Text className="text-sm text-gray-500 mb-2">
+                            Either select existing credentials OR enter provider credentials below
+                          </Text>
+                        </div>
 
-                    <Form.Item label="Existing Credentials" name="litellm_credential_name">
-                      <Select2
-                        showSearch
-                        placeholder="Select or search for existing credentials"
-                        optionFilterProp="children"
-                        filterOption={(input, option) =>
-                          (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
-                        }
-                        options={[
-                          { value: null, label: "None" },
-                          ...credentials.map((credential) => ({
-                            value: credential.credential_name,
-                            label: credential.credential_name,
-                          })),
-                        ]}
-                        allowClear
-                      />
-                    </Form.Item>
+                        <Form.Item label="Existing Credentials" name="litellm_credential_name">
+                          <Select2
+                            showSearch
+                            placeholder="Select or search for existing credentials"
+                            optionFilterProp="children"
+                            filterOption={(input, option) =>
+                              (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+                            }
+                            options={[
+                              { value: null, label: "None" },
+                              ...credentials.map((credential) => ({
+                                value: credential.credential_name,
+                                label: credential.credential_name,
+                              })),
+                            ]}
+                            allowClear
+                          />
+                        </Form.Item>
 
-                    <div className="flex items-center my-4">
-                      <div className="grow border-t border-gray-200"></div>
-                      <span className="px-4 text-gray-500 text-sm">OR</span>
-                      <div className="grow border-t border-gray-200"></div>
-                    </div>
+                        <div className="flex items-center my-4">
+                          <div className="grow border-t border-gray-200"></div>
+                          <span className="px-4 text-gray-500 text-sm">OR</span>
+                          <div className="grow border-t border-gray-200"></div>
+                        </div>
+                      </>
+                    )}
 
                     <Form.Item
                       label={

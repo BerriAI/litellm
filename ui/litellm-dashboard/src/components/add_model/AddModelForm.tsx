@@ -33,7 +33,8 @@ interface AddModelFormProps {
   showAdvancedSettings: boolean;
   setShowAdvancedSettings: (show: boolean) => void;
   teams: Team[] | null;
-  credentials: CredentialItem[];
+  /** `null` when the caller may not read stored credentials, which hides the reuse picker entirely. */
+  credentials: CredentialItem[] | null;
 }
 
 const { Title, Link } = Typography;
@@ -228,55 +229,63 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                   </Col>
                 </Row>
 
-                {/* Credentials */}
-                <div className="mb-4">
-                  <Typography.Text className="text-sm text-gray-500 mb-2">
-                    Either select existing credentials OR enter new provider credentials below
-                  </Typography.Text>
-                </div>
+                {credentials === null ? (
+                  <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
+                ) : (
+                  <>
+                    {/* Credentials */}
+                    <div className="mb-4">
+                      <Typography.Text className="text-sm text-gray-500 mb-2">
+                        Either select existing credentials OR enter new provider credentials below
+                      </Typography.Text>
+                    </div>
 
-                <Form.Item label="Existing Credentials" name="litellm_credential_name" initialValue={null}>
-                  <AntdSelect
-                    showSearch
-                    placeholder="Select or search for existing credentials"
-                    optionFilterProp="children"
-                    filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
-                    options={[
-                      { value: null, label: "None" },
-                      ...credentials.map((credential) => ({
-                        value: credential.credential_name,
-                        label: credential.credential_name,
-                      })),
-                    ]}
-                    allowClear
-                  />
-                </Form.Item>
+                    <Form.Item label="Existing Credentials" name="litellm_credential_name" initialValue={null}>
+                      <AntdSelect
+                        showSearch
+                        placeholder="Select or search for existing credentials"
+                        optionFilterProp="children"
+                        filterOption={(input, option) =>
+                          (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+                        }
+                        options={[
+                          { value: null, label: "None" },
+                          ...credentials.map((credential) => ({
+                            value: credential.credential_name,
+                            label: credential.credential_name,
+                          })),
+                        ]}
+                        allowClear
+                      />
+                    </Form.Item>
 
-                <Form.Item
-                  noStyle
-                  shouldUpdate={(prevValues, currentValues) =>
-                    prevValues.litellm_credential_name !== currentValues.litellm_credential_name ||
-                    prevValues.provider !== currentValues.provider
-                  }
-                >
-                  {({ getFieldValue }) => {
-                    const credentialName = getFieldValue("litellm_credential_name");
-                    // Only show provider specific fields if no credentials selected
-                    if (!credentialName) {
-                      return (
-                        <>
-                          <div className="flex items-center my-4">
-                            <div className="grow border-t border-gray-200"></div>
-                            <span className="px-4 text-gray-500 text-sm">OR</span>
-                            <div className="grow border-t border-gray-200"></div>
-                          </div>
-                          <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
-                        </>
-                      );
-                    }
-                    return null;
-                  }}
-                </Form.Item>
+                    <Form.Item
+                      noStyle
+                      shouldUpdate={(prevValues, currentValues) =>
+                        prevValues.litellm_credential_name !== currentValues.litellm_credential_name ||
+                        prevValues.provider !== currentValues.provider
+                      }
+                    >
+                      {({ getFieldValue }) => {
+                        const credentialName = getFieldValue("litellm_credential_name");
+                        // Only show provider specific fields if no credentials selected
+                        if (!credentialName) {
+                          return (
+                            <>
+                              <div className="flex items-center my-4">
+                                <div className="grow border-t border-gray-200"></div>
+                                <span className="px-4 text-gray-500 text-sm">OR</span>
+                                <div className="grow border-t border-gray-200"></div>
+                              </div>
+                              <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
+                            </>
+                          );
+                        }
+                        return null;
+                      }}
+                    </Form.Item>
+                  </>
+                )}
                 <div className="flex items-center my-4">
                   <div className="grow border-t border-gray-200"></div>
                   <span className="px-4 text-gray-500 text-sm">Additional Model Info Settings</span>

@@ -3,6 +3,7 @@
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import useCan from "@/app/(dashboard)/hooks/useCan";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import ModelSettingsModal from "@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal";
 import { ModelData } from "@/components/model_dashboard/types";
@@ -48,6 +49,7 @@ const AllModelsTab = ({
 }: AllModelsTabProps) => {
   const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
   const { accessToken, userId, userRole } = useAuthorized();
+  const canViewProxyConfig = useCan("viewProxyConfig");
   const { data: teams, isLoading: isLoadingTeams } = useTeams();
   const queryClient = useQueryClient();
 
@@ -283,7 +285,7 @@ const AllModelsTab = ({
           isLoadingTeams={isLoadingTeams}
           viewMode={modelViewMode}
           onViewModeChange={setModelViewMode}
-          onOpenModelSettings={handleOpenModelSettings}
+          onOpenModelSettings={canViewProxyConfig ? handleOpenModelSettings : null}
           availableModelGroups={availableModelGroups}
           availableModelAccessGroups={availableModelAccessGroups}
           userRole={userRole}
@@ -351,11 +353,13 @@ const AllModelsTab = ({
         onOk={handleDeleteModel}
         confirmLoading={deleteLoading}
       />
-      <ModelSettingsModal
-        isVisible={isModelSettingsModalVisible}
-        onCancel={() => setIsModelSettingsModalVisible(false)}
-        onSuccess={() => setIsModelSettingsModalVisible(false)}
-      />
+      {canViewProxyConfig && (
+        <ModelSettingsModal
+          isVisible={isModelSettingsModalVisible}
+          onCancel={() => setIsModelSettingsModalVisible(false)}
+          onSuccess={() => setIsModelSettingsModalVisible(false)}
+        />
+      )}
     </div>
   );
 };
