@@ -2580,3 +2580,52 @@ def test_replayed_intercepted_search_turn_leaves_no_unsupported_block_for_bedroc
     assert "server_tool_use" not in serialized
     assert expected_evidence in serialized
     assert "Rome was founded in 753 BC." in serialized
+
+
+@pytest.mark.parametrize("tool_type", ["web_search_20250305", "web_search_20260209"])
+def test_bedrock_invoke_messages_rejects_server_web_search_tool(tool_type: str):
+    """Bedrock can't execute Anthropic's server-side web search; the transform
+    must raise an actionable 400 pointing at the interception docs instead of
+    letting Bedrock return an opaque "provided request is not valid"."""
+    import litellm
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        cfg.transform_anthropic_messages_request(
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "search the web for litellm"}],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 128,
+                "tools": [{"type": tool_type, "name": "web_search", "max_uses": 5}],
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+    assert "https://docs.litellm.ai/docs/integrations/websearch_interception" in str(exc_info.value)
+    assert "us.anthropic.claude-haiku-4-5-20251001-v1:0" in str(exc_info.value)
+
+
+def test_bedrock_invoke_messages_allows_converted_websearch_function_tool():
+    """The interception hook rewrites web_search into a plain custom tool
+    (litellm_web_search); that converted shape must pass through untouched."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "search the web for litellm"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 128,
+            "tools": [
+                {
+                    "name": "litellm_web_search",
+                    "description": "Search the web",
+                    "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+                }
+            ],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result["tools"][0]["name"] == "litellm_web_search"

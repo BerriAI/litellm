@@ -3087,3 +3087,47 @@ class TestIsRequestBodySafeChecksBracketNotationMetadata:
             )
             is True
         )
+
+
+class TestHasUserSetupSso:
+    """_has_user_setup_sso must treat SAML IdP metadata as SSO configured.
+
+    Regression: UI discovery used this helper for sso_configured, but it only
+    checked OAuth client IDs, so SAML-only setups left the login button gray.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_sso_env(self, monkeypatch):
+        for key in (
+            "MICROSOFT_CLIENT_ID",
+            "GOOGLE_CLIENT_ID",
+            "GENERIC_CLIENT_ID",
+            "SAML_IDP_METADATA_URL",
+            "SAML_IDP_METADATA_XML",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+    def test_false_when_no_sso_env(self):
+        from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+
+        assert _has_user_setup_sso() is False
+
+    def test_true_for_oauth_client_ids(self, monkeypatch):
+        from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-client")
+        assert _has_user_setup_sso() is True
+
+    def test_true_for_saml_metadata_url(self, monkeypatch):
+        from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+
+        monkeypatch.setenv(
+            "SAML_IDP_METADATA_URL", "https://idp.example.com/metadata.xml"
+        )
+        assert _has_user_setup_sso() is True
+
+    def test_true_for_saml_metadata_xml(self, monkeypatch):
+        from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+
+        monkeypatch.setenv("SAML_IDP_METADATA_XML", "<EntityDescriptor/>")
+        assert _has_user_setup_sso() is True

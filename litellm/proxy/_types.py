@@ -4031,6 +4031,7 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     # deliberately tiny value isn't treated as a deployment health signal (see
     # cooldown_handlers._trigger_cooldown_for_failed_deployment).
     client_side_timeout: bool
+    keepalive_seconds: float | None
 
 
 class LitellmMetadataFromRequestHeaders(TypedDict, total=False):
