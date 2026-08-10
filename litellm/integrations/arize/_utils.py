@@ -1098,7 +1098,7 @@ def _maybe_set_mcp_tool_attrs(
     if tool_name:
         safe_set_attribute(span, SpanAttributes.TOOL_NAME, tool_name)
 
-    if should_redact_message_logging(kwargs):  # pyright: ignore[reportArgumentType]  # reads the mapping, never mutates it
+    if should_redact_message_logging(kwargs):  # pyright: ignore[reportArgumentType]  # reads, never mutates
         return
 
     arguments: Final[object] = mcp_meta.get("arguments")
@@ -1109,13 +1109,17 @@ def _maybe_set_mcp_tool_attrs(
     _set_mcp_tool_output(span, coerced_response_obj)
 
 
+def _has_only_text_parts(content: object) -> bool:
+    return not isinstance(content, list) or all(_coerce_text([part]) is not None for part in content)
+
+
 def _set_mcp_tool_output(span: "Span", coerced_response_obj: object) -> None:
     if not isinstance(coerced_response_obj, Mapping):
         return
 
     content: Final[object] = coerced_response_obj.get("content")
     text: Final[str | None] = _coerce_text(content)
-    if text:
+    if text and _has_only_text_parts(content):
         safe_set_attribute(span, SpanAttributes.OUTPUT_VALUE, text)
         safe_set_attribute(span, SpanAttributes.OUTPUT_MIME_TYPE, OpenInferenceMimeTypeValues.TEXT.value)
         return
