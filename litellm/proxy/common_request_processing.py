@@ -1162,7 +1162,7 @@ class ProxyBaseLLMRequestProcessing:
             data=request_data,
             user_api_key_dict=user_api_key_dict,
             response=response,
-            request_headers=dict(request.headers),
+            request_headers=dict(request.headers) if request is not None else {},
         )
         if callback_headers:
             custom_headers.update(callback_headers)
@@ -1171,7 +1171,7 @@ class ProxyBaseLLMRequestProcessing:
 
     async def common_processing_pre_call_logic(
         self,
-        request: Request,
+        request: Request | None,
         general_settings: dict,
         user_api_key_dict: UserAPIKeyAuth,
         proxy_logging_obj: ProxyLogging,
@@ -1378,7 +1378,7 @@ class ProxyBaseLLMRequestProcessing:
                 if alias_target is not None:
                     self.data["model"] = alias_target
 
-        self.data["litellm_call_id"] = request.headers.get("x-litellm-call-id", str(uuid.uuid4()))
+        self.data["litellm_call_id"] = request.headers.get("x-litellm-call-id", str(uuid.uuid4())) if request is not None else str(uuid.uuid4())
         DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
         DDSpanTagger.tag_request(
             user_api_key_dict=user_api_key_dict,
@@ -1439,7 +1439,7 @@ class ProxyBaseLLMRequestProcessing:
 
     async def _pre_call_with_fallbacks(
         self,
-        request: Request,
+        request: Request | None,
         general_settings: dict,
         proxy_logging_obj: ProxyLogging,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1622,7 +1622,7 @@ class ProxyBaseLLMRequestProcessing:
 
     async def base_process_llm_request(
         self,
-        request: Request,
+        request: Request | None,
         fastapi_response: Response,
         user_api_key_dict: UserAPIKeyAuth,
         route_type: Literal[
@@ -1873,7 +1873,7 @@ class ProxyBaseLLMRequestProcessing:
                     data=self.data,
                     user_api_key_dict=user_api_key_dict,
                     response=response,
-                    request_headers=dict(request.headers),
+                    request_headers=dict(request.headers) if request is not None else {},
                 )
                 if callback_headers:
                     custom_headers.update(callback_headers)
@@ -1958,7 +1958,7 @@ class ProxyBaseLLMRequestProcessing:
                             proxy_logging_obj=proxy_logging_obj,
                             user_api_key_dict=user_api_key_dict,
                             custom_headers=custom_headers,
-                            request_headers=dict(request.headers),
+                            request_headers=dict(request.headers) if request is not None else {},
                         )
                         if _early is not None:
                             return _early
@@ -2050,7 +2050,7 @@ class ProxyBaseLLMRequestProcessing:
                     proxy_logging_obj=proxy_logging_obj,
                     user_api_key_dict=user_api_key_dict,
                     custom_headers=_non_streaming_custom_headers,
-                    request_headers=dict(request.headers),
+                    request_headers=dict(request.headers) if request is not None else {},
                 )
                 if _early is not None:
                     return _early
@@ -2140,7 +2140,7 @@ class ProxyBaseLLMRequestProcessing:
             data=self.data,
             user_api_key_dict=user_api_key_dict,
             response=response,
-            request_headers=dict(request.headers),
+            request_headers=dict(request.headers) if request is not None else {},
         )
         if callback_headers:
             fastapi_response.headers.update(callback_headers)
