@@ -89,7 +89,11 @@ cleanup() {
   fi
   echo "Done."
 }
-trap cleanup EXIT INT TERM
+on_signal() {
+  exit 130
+}
+trap cleanup EXIT
+trap on_signal INT TERM
 
 # --- Pre-flight checks ---
 for cmd in python3 npx uv; do
@@ -271,7 +275,8 @@ EOF
   while kill -0 "$PROXY_PID" 2>/dev/null; do
     sleep 5
   done
-  echo "Proxy exited."
+  echo "Error: proxy process exited unexpectedly. Proxy output:"
+  tail -n 100 "$PROXY_LOG"
   exit 1
 fi
 
