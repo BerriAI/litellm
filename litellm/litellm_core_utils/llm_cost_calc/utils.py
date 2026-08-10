@@ -49,6 +49,12 @@ _SERVICE_TIER_TO_COST_KEY_SUFFIX: Final[Mapping[str, str]] = MappingProxyType(
     }
 )
 
+_INCLUSIVE_THRESHOLD_PROVIDERS: Final = frozenset({"xai"})
+
+
+def _uses_inclusive_token_thresholds(custom_llm_provider: str | None) -> bool:
+    return custom_llm_provider in _INCLUSIVE_THRESHOLD_PROVIDERS
+
 
 def _get_token_detail_value(details: object, key: str) -> int | None:
     if isinstance(details, dict):
@@ -712,7 +718,6 @@ def generic_cost_per_token(
     service_tier: str | None = None,
     data_residency: str | None = None,
     model_info: ModelInfo | None = None,
-    threshold_is_inclusive: bool = False,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -724,8 +729,6 @@ def generic_cost_per_token(
         - usage: LiteLLM Usage block, containing anthropic caching information
         - data_residency: optional OpenAI data-residency region (e.g. "eu", "us"),
           used to apply the per-model regional-processing uplift multiplier.
-        - threshold_is_inclusive: bill the above-threshold tier when the prompt is exactly
-          at the threshold, as xAI does.
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -791,7 +794,7 @@ def generic_cost_per_token(
         model_info=model_info,
         usage=usage,
         service_tier=service_tier,
-        threshold_is_inclusive=threshold_is_inclusive,
+        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
     )
 
     prompt_cost = _calculate_input_cost(
@@ -924,7 +927,12 @@ def get_token_type_cost_breakdown(
         cache_creation_cost_rate,
         cache_creation_cost_above_1hr_rate,
         cache_read_cost_rate,
-    ) = _get_token_base_cost(model_info=model_info, usage=usage, service_tier=service_tier)
+    ) = _get_token_base_cost(
+        model_info=model_info,
+        usage=usage,
+        service_tier=service_tier,
+        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+    )
 
     reasoning_tokens = (
         _parse_completion_tokens_details(usage)["reasoning_tokens"]

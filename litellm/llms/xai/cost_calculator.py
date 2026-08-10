@@ -47,13 +47,7 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
         completion_tokens_details=None,
     )
 
-    # xAI bills the higher tier once the prompt reaches 200k tokens, not strictly above it
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model=model,
-        usage=modified_usage,
-        custom_llm_provider="xai",
-        threshold_is_inclusive=True,
-    )
+    prompt_cost, completion_cost = generic_cost_per_token(model=model, usage=modified_usage, custom_llm_provider="xai")
 
     return prompt_cost, completion_cost
 
