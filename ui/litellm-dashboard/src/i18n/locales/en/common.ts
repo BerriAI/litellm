@@ -20,6 +20,22 @@ export const enCommon = {
     error: "Something went wrong",
     loading: "Loading...",
   },
+  deprecation: {
+    title: "{{feature}} is on a draft deprecation list",
+    description:
+      "{{feature}} is one of several experimental features we're considering removing, potentially as early as {{date}}. This list is a draft and is not final. If you rely on this feature, please share feedback on the",
+    discussion: "deprecation discussion",
+    targetDate: "September 1, 2026",
+    features: {
+      agentBuilder: "The Playground's Agent Builder",
+      workflows: "Workflows",
+      apiReference: "The API Reference tab",
+      mcpNetwork: "MCP Network Settings and the internal-network-only flag",
+      memory: "Memory",
+      oldUsage: "The old Usage page",
+      prompts: "Prompt Management",
+    },
+  },
   table: {
     columns: "Columns",
     filters: "Filters",
