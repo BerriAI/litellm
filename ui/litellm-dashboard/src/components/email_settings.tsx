@@ -1,12 +1,7 @@
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from "@/components/ui/input-group";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Eye, EyeOff } from "lucide-react";
 import NotificationManager from "./molecules/notifications_manager";
 import { serviceHealthCheck, setCallbacksCall } from "./networking";
@@ -34,6 +29,8 @@ const FIELD_HELP: Record<string, React.ReactNode> = {
 };
 
 const PREMIUM_ONLY_FIELDS = ["EMAIL_LOGO_URL", "EMAIL_SUPPORT_CONTACT"];
+
+const SENSITIVE_FIELD_PATTERN = /(PASSWORD|SECRET|KEY|TOKEN)/i;
 
 const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser, alerts }) => {
   const [visibleFields, setVisibleFields] = useState<Record<string, boolean>>({});
@@ -114,6 +111,7 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
               <div key={index} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 {Object.entries(alert.variables ?? {}).map(([key, value]) => {
                   const isLocked = !premiumUser && PREMIUM_ONLY_FIELDS.includes(key);
+                  const isSensitive = SENSITIVE_FIELD_PATTERN.test(key);
                   const isVisible = visibleFields[key] || false;
                   return (
                     <div key={key} className="space-y-1">
@@ -133,18 +131,20 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
                         <InputGroupInput
                           name={key}
                           defaultValue={value as string}
-                          type={isVisible ? "text" : "password"}
+                          type={isSensitive && !isVisible ? "password" : "text"}
                           disabled={isLocked}
                         />
-                        <InputGroupAddon align="inline-end">
-                          <InputGroupButton
-                            size="icon-xs"
-                            onClick={() => toggleFieldVisibility(key)}
-                            aria-label={isVisible ? "Hide credential" : "Show credential"}
-                          >
-                            {isVisible ? <EyeOff /> : <Eye />}
-                          </InputGroupButton>
-                        </InputGroupAddon>
+                        {isSensitive && (
+                          <InputGroupAddon align="inline-end">
+                            <InputGroupButton
+                              size="icon-xs"
+                              onClick={() => toggleFieldVisibility(key)}
+                              aria-label={isVisible ? "Hide credential" : "Show credential"}
+                            >
+                              {isVisible ? <EyeOff /> : <Eye />}
+                            </InputGroupButton>
+                          </InputGroupAddon>
+                        )}
                       </InputGroup>
                       <div className="text-xs text-muted-foreground italic">{FIELD_HELP[key]}</div>
                     </div>
