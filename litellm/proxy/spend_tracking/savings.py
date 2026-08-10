@@ -26,29 +26,38 @@ class SavingsSpend(NamedTuple):
     autorouter: float = 0.0
 
 
-def _input_and_cache_read_cost(model: str | None, custom_llm_provider: str | None) -> tuple[float, float]:
+def _input_cache_read_and_write_cost(model: str | None, custom_llm_provider: str | None) -> tuple[float, float, float]:
     """
-    Return ``(input_cost_per_token, cache_read_cost_per_token)`` for a model.
+    Return ``(input_cost, cache_read_cost, cache_write_cost)`` per token for a model.
 
-    Falls open to ``(0.0, 0.0)`` when the model is unknown so savings degrade to
-    zero rather than raising inside the spend writer. When a model has no
-    separate cache-read price the cache-read cost mirrors the input cost, which
-    yields zero caching savings.
+    Falls open to ``(0.0, 0.0, 0.0)`` when the model is unknown so savings degrade to
+    zero rather than raising inside the spend writer. When a model has no separate
+    cache-read price the cache-read cost mirrors the input cost, which yields zero
+    caching savings; a missing cache-write price mirrors the input cost for the same
+    reason, which yields a zero write premium.
+
+    Mirroring input rather than defaulting to ``0.0`` is load-bearing on the write leg.
+    The cost calculator's ``_get_cost_per_unit`` defaults an absent price to ``0.0``, but
+    a zero write price here would make the premium ``0 - input_cost``, turning a model
+    that simply has no write pricing into a spurious extra saving.
     """
     if not model:
-        return 0.0, 0.0
+        return 0.0, 0.0, 0.0
     try:
         info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models; degrade to zero savings
         verbose_proxy_logger.debug(
             "savings: no model info for provider=%s model=%s (%s)", custom_llm_provider, model, e
         )
-        return 0.0, 0.0
+        return 0.0, 0.0, 0.0
     input_cost: Final = float(info.get("input_cost_per_token") or 0.0)
     cache_read_cost: Final = info.get("cache_read_input_token_cost")
-    if cache_read_cost is None:
-        return input_cost, input_cost
-    return input_cost, float(cache_read_cost)
+    cache_write_cost: Final = info.get("cache_creation_input_token_cost")
+    return (
+        input_cost,
+        input_cost if cache_read_cost is None else float(cache_read_cost),
+        input_cost if cache_write_cost is None else float(cache_write_cost),
+    )
 
 
 class _ModelIdentity(NamedTuple):
@@ -434,10 +443,28 @@ def compute_savings_spend(
     Dollar savings for one request, split by optimization driver.
 
     Compression savings price the tokens compression removed at the model's
-    input rate. Prompt-caching savings price the cache-read tokens at the
-    difference between the input rate and the discounted cache-read rate; the
-    read count is derived here from ``usage_object`` so no caller can hand in a
-    count that disagrees with the usage record. Auto-router savings compare the
+    input rate. Prompt-caching savings are NET: the cache-read discount minus the
+    premium paid to write those entries, both derived here from ``usage_object`` so no
+    caller can hand in a count that disagrees with the usage record.
+
+    The net form follows from what the request would have cost with caching off. The
+    provider reports ``prompt_tokens`` as the inclusive total of three disjoint
+    partitions (uncached text, cache reads, cache writes), so an uncached counterfactual
+    bills every one of those tokens at the flat input rate::
+
+        would_have_cost = (text + reads + writes) * input
+        actually_cost   = text * input + reads * read_rate + writes * write_rate
+        savings         = reads * (input - read_rate) - writes * (write_rate - input)
+
+    So the write leg subtracts the write PREMIUM, not the whole write cost: those tokens
+    had to be sent either way, and the counterfactual already pays the input rate for
+    them. The premium stays signed, because a handful of models price writes below their
+    input rate and there the write is a genuine extra saving.
+
+    A request that only writes cache and gets no hits therefore reports negative savings,
+    which is accurate: it really did cost more than the uncached call would have. The
+    daily rollup increments arithmetically, so those rows offset positive ones in the
+    same bucket. Auto-router savings compare the
     served ``model`` against the counterfactual baseline the router recorded on
     its ``routing_decision``, and are zero unless the two differ. That record
     also says whether the conversation was already underway, which is what tells
@@ -454,10 +481,13 @@ def compute_savings_spend(
     the same way; that is pre-existing behaviour on two shipped drivers rather than
     something introduced here, and moving those numbers is its own change.
     """
-    input_cost, cache_read_cost = _input_and_cache_read_cost(model, custom_llm_provider)
+    input_cost, cache_read_cost, cache_write_cost = _input_cache_read_and_write_cost(model, custom_llm_provider)
     compression: Final = max(compression_saved_tokens, 0) * input_cost
     cache_read_input_tokens: Final = extract_cache_read_tokens(usage_object)
-    prompt_caching: Final = max(cache_read_input_tokens, 0) * max(input_cost - cache_read_cost, 0.0)
+    cache_creation_input_tokens: Final = extract_cache_creation_tokens(usage_object)
+    read_discount: Final = max(cache_read_input_tokens, 0) * max(input_cost - cache_read_cost, 0.0)
+    write_premium: Final = max(cache_creation_input_tokens, 0) * (cache_write_cost - input_cost)
+    prompt_caching: Final = read_discount - write_premium
 
     usage: Final = _usage_from_spend_log(usage_object)
     if usage is None or not model:

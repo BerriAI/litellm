@@ -6,13 +6,13 @@ sys.path.insert(0, os.path.abspath("../../../.."))
 import pytest
 
 import litellm
-from litellm.router import Router
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.proxy.spend_tracking.savings import (
     _baseline_usage,
     compute_autorouter_savings,
     compute_savings_spend,
 )
+from litellm.router import Router
 from litellm.types.utils import Usage
 
 
@@ -82,6 +82,198 @@ def test_prompt_caching_savings_priced_at_input_minus_cache_read():
     assert result.prompt_caching == pytest.approx(8200 * (input_cost - cache_read_cost))
     assert result.prompt_caching > 0
     assert result.compression == 0.0
+
+
+def _net_caching_savings_against_biller(usage_object: dict, model: str = "claude-sonnet-5") -> float:
+    """True net caching savings, priced by the real cost calculator.
+
+    Bills the request as it happened, then bills the same token total with nothing
+    cached, and returns the difference. Deriving the expectation from
+    ``generic_cost_per_token`` rather than restating the formula is what makes these
+    tests able to fail: a wrong formula in savings.py cannot also be wrong here.
+    """
+    prompt_tokens = usage_object["prompt_tokens"]
+    uncached = {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": usage_object["completion_tokens"],
+        "total_tokens": prompt_tokens + usage_object["completion_tokens"],
+        "prompt_tokens_details": {"cached_tokens": 0, "cache_creation_tokens": 0, "text_tokens": prompt_tokens},
+    }
+    return _cost_on(model, uncached) - _cost_on(model, usage_object)
+
+
+def _caching_usage(read: int, written: int, text: int = 10, out: int = 100) -> dict:
+    prompt_tokens = text + read + written
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": out,
+        "total_tokens": prompt_tokens + out,
+        "prompt_tokens_details": {
+            "cached_tokens": read,
+            "cache_creation_tokens": written,
+            "text_tokens": text,
+        },
+        "cache_creation_input_tokens": written,
+        "cache_read_input_tokens": read,
+    }
+
+
+def test_prompt_caching_savings_nets_out_the_cache_write_premium():
+    """A cache-writing request is only credited the read discount minus the write premium."""
+    input_cost, cache_read_cost = _anthropic_costs("claude-sonnet-5")
+    _, _, cache_write_cost = _flat_rates("claude-sonnet-5")
+    # Anthropic charges a premium to write; without it this test asserts nothing.
+    assert cache_write_cost > input_cost
+    usage_object = _caching_usage(read=20000, written=500)
+    result = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        usage_object=usage_object,
+    )
+    assert result.prompt_caching == pytest.approx(_net_caching_savings_against_biller(usage_object))
+    # Strictly less than the gross read discount, which is what shipped before.
+    assert result.prompt_caching < 20000 * (input_cost - cache_read_cost)
+    assert result.prompt_caching > 0
+
+
+def test_prompt_caching_savings_go_negative_on_a_write_only_request():
+    """A cold turn that writes cache and gets no hits genuinely cost more than not caching."""
+    usage_object = _caching_usage(read=0, written=20000)
+    result = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        usage_object=usage_object,
+    )
+    true_savings = _net_caching_savings_against_biller(usage_object)
+    assert true_savings < 0
+    assert result.prompt_caching == pytest.approx(true_savings)
+    assert result.prompt_caching < 0
+
+
+def test_prompt_caching_savings_negative_when_writes_outweigh_reads():
+    """The wrong-sign case: a few hits against a big write bill is still a net loss."""
+    usage_object = _caching_usage(read=1000, written=20000)
+    result = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        usage_object=usage_object,
+    )
+    true_savings = _net_caching_savings_against_biller(usage_object)
+    assert true_savings < 0
+    assert result.prompt_caching == pytest.approx(true_savings)
+    # The gross formula reported this as a saving; the sign itself is the regression.
+    assert result.prompt_caching < 0
+
+
+def test_read_only_request_is_unchanged_by_the_write_premium():
+    """No cache writes means nothing to net out, so the read discount stands alone."""
+    input_cost, cache_read_cost = _anthropic_costs("claude-sonnet-5")
+    result = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        usage_object=_caching_usage(read=20000, written=0),
+    )
+    assert result.prompt_caching == pytest.approx(20000 * (input_cost - cache_read_cost))
+
+
+def test_openai_style_cache_write_tokens_are_netted_out():
+    """Providers reporting writes under prompt_tokens_details are netted the same way."""
+    _, _, cache_write_cost = _flat_rates("claude-sonnet-5")
+    input_cost, _ = _anthropic_costs("claude-sonnet-5")
+    with_top_level = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        usage_object={"cache_read_input_tokens": 5000, "cache_creation_input_tokens": 800},
+    )
+    nested_only = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        usage_object={
+            "prompt_tokens_details": {"cached_tokens": 5000, "cache_write_tokens": 800},
+        },
+    )
+    assert nested_only.prompt_caching == pytest.approx(with_top_level.prompt_caching)
+    assert nested_only.prompt_caching == pytest.approx(
+        5000 * (input_cost - _anthropic_costs("claude-sonnet-5")[1]) - 800 * (cache_write_cost - input_cost)
+    )
+
+
+def test_model_without_a_cache_write_price_takes_no_premium(monkeypatch):
+    """An absent write price must mean zero premium, never a bonus.
+
+    ``_get_cost_per_unit`` in the cost calculator defaults a missing price to 0.0. Were
+    that default copied here the premium would be ``0 - input_cost``, and a model with no
+    write pricing would report cache writes as free money.
+    """
+    from litellm.proxy.spend_tracking import savings as savings_module
+
+    real_get_model_info = litellm.get_model_info
+
+    def _without_write_price(*args, **kwargs):
+        info = dict(real_get_model_info(*args, **kwargs))
+        info.pop("cache_creation_input_token_cost", None)
+        return info
+
+    monkeypatch.setattr(savings_module.litellm, "get_model_info", _without_write_price)
+
+    input_cost, cache_read_cost = _anthropic_costs("claude-sonnet-5")
+    result = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        usage_object=_caching_usage(read=5000, written=5000),
+    )
+    assert result.prompt_caching == pytest.approx(5000 * (input_cost - cache_read_cost))
+    assert result.prompt_caching > 0
+
+
+def test_sub_input_cache_write_price_is_an_extra_saving(monkeypatch):
+    """A few models price writes below input; there the premium is a real credit.
+
+    Clamping the premium at zero would silently undercount these, so the subtraction
+    stays signed.
+    """
+    from litellm.proxy.spend_tracking import savings as savings_module
+
+    real_get_model_info = litellm.get_model_info
+    input_cost, cache_read_cost = _anthropic_costs("claude-sonnet-5")
+    cheap_write = input_cost / 2
+
+    def _with_cheap_write(*args, **kwargs):
+        info = dict(real_get_model_info(*args, **kwargs))
+        info["cache_creation_input_token_cost"] = cheap_write
+        return info
+
+    monkeypatch.setattr(savings_module.litellm, "get_model_info", _with_cheap_write)
+
+    result = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        usage_object=_caching_usage(read=1000, written=4000),
+    )
+    assert result.prompt_caching == pytest.approx(
+        1000 * (input_cost - cache_read_cost) + 4000 * (input_cost - cheap_write)
+    )
+    assert result.prompt_caching > 1000 * (input_cost - cache_read_cost)
+
+
+def test_negative_cache_write_count_clamps_to_zero():
+    """A malformed negative write count must not be read as a saving."""
+    input_cost, cache_read_cost = _anthropic_costs("claude-sonnet-5")
+    result = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        usage_object={"cache_read_input_tokens": 1000, "cache_creation_input_tokens": -5000},
+    )
+    assert result.prompt_caching == pytest.approx(1000 * (input_cost - cache_read_cost))
 
 
 def test_unknown_model_fails_open_to_zero():

@@ -2196,9 +2196,11 @@ async def test_daily_transaction_carries_compression_saved_tokens():
     model_info = litellm.get_model_info(model="claude-sonnet-5", custom_llm_provider="anthropic")
     input_cost = model_info["input_cost_per_token"] or 0.0
     cache_read_cost = model_info.get("cache_read_input_token_cost") or input_cost
+    cache_write_cost = model_info.get("cache_creation_input_token_cost") or input_cost
     assert transaction["compression_savings_spend"] == pytest.approx(7600 * input_cost)
     assert transaction["prompt_caching_savings_spend"] == pytest.approx(
         40 * max(input_cost - cache_read_cost, 0.0)
+        - 15 * (cache_write_cost - input_cost)
     )
     assert transaction["compression_savings_spend"] > 0
     assert transaction["prompt_caching_savings_spend"] > 0
