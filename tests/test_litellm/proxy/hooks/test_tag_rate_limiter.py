@@ -542,6 +542,40 @@ async def test_concurrency_slot_released_on_failure_frees_capacity(time_controll
     assert result == healthy
 
 
+@pytest.mark.asyncio
+async def test_concurrency_slot_released_on_fallback_recovered_hop_failure(time_controller):
+    """
+    A hop that fails but gets recovered by a later fallback never reaches
+    async_post_call_failure_hook, which only fires once, if and when the
+    entire request (every fallback exhausted) ultimately fails. Only
+    async_log_failure_event fires for a per-hop failure that a fallback
+    recovers, so it alone must release that hop's reservation, or it leaks
+    until its safety TTL (up to an hour).
+    """
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=1)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    request_kwargs = {"metadata": {"tags": ["end_user_id:u1"]}}
+    await limiter.async_filter_deployments(model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs)
+
+    # The failed hop's own logging kwargs, as they'd look mid-fallback-chain:
+    # model_group/model_id/metadata reflect this hop, not a later fallback.
+    failure_kwargs = {
+        "standard_logging_object": {"model_group": "grp", "model_id": "dep-1"},
+        "metadata": {"tags": ["end_user_id:u1"]},
+    }
+    await limiter.async_log_failure_event(kwargs=failure_kwargs, response_obj=None, start_time=0, end_time=0)
+
+    # async_post_call_failure_hook never fires for this hop (a fallback
+    # recovered it) -- capacity must already be free without it.
+    result = await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+    )
+    assert result == healthy
+
+
 # ---------------------------------------------------------------------------
 # tokens / dollars -- read-then-account-on-success rejection path
 # ---------------------------------------------------------------------------
@@ -722,30 +756,96 @@ def test_build_limits_index_is_also_keyed_by_team_public_model_name():
     checked.
     """
     deployment = _deployment("real-model-name", "dep-1", {"token_limits": {"limits": [{"name": "daily", "limit": 500, "period_seconds": 86400}]}})
+    deployment["model_info"]["team_id"] = "team-1"
     deployment["model_info"]["team_public_model_name"] = "team-alias-name"
     index = _build_limits_index([deployment])
-    assert "real-model-name" in index
-    assert "team-alias-name" in index
-    assert index["real-model-name"] == index["team-alias-name"]
+    assert index.resolve("real-model-name", team_id=None) == index.resolve("team-alias-name", team_id="team-1")
+    assert index.resolve("real-model-name", team_id=None) != []
+
+
+def test_build_limits_index_keeps_different_teams_same_alias_separate():
+    """
+    `team_public_model_name` is only unique per team: Router itself lets two
+    different teams publish the identical alias string for different
+    deployments, resolving each caller's own team's deployment by
+    `(team_id, name)` rather than by name alone. Keying the limits index by
+    name alone would let one team's config silently overwrite another's.
+    """
+    team_a = _deployment("model-a", "dep-a", {"token_limits": {"limits": [{"name": "daily", "limit": 100, "period_seconds": 86400}]}})
+    team_a["model_info"]["team_id"] = "team-a"
+    team_a["model_info"]["team_public_model_name"] = "shared-alias"
+
+    team_b = _deployment("model-b", "dep-b", {"token_limits": {"limits": [{"name": "daily", "limit": 999, "period_seconds": 86400}]}})
+    team_b["model_info"]["team_id"] = "team-b"
+    team_b["model_info"]["team_public_model_name"] = "shared-alias"
+
+    index = _build_limits_index([team_a, team_b])
+    resolved_a = index.resolve("shared-alias", team_id="team-a")
+    resolved_b = index.resolve("shared-alias", team_id="team-b")
+    assert resolved_a[0].entry.limit == 100
+    assert resolved_b[0].entry.limit == 999
 
 
 @pytest.mark.asyncio
 async def test_filter_deployments_enforces_limit_when_called_with_team_alias(time_controller):
     limiter = _make_limiter(time_controller)
     deployment = _deployment("real-model-name", "dep-1", {"request_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]}})
+    deployment["model_info"]["team_id"] = "team-1"
     deployment["model_info"]["team_public_model_name"] = "team-alias-name"
     router = litellm.Router(model_list=[deployment])
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
 
-    # Router passes the alias as `model`, not "real-model-name".
+    # Router passes the alias as `model`, not "real-model-name", and threads
+    # the caller's team_id through request metadata.
+    request_kwargs = {"metadata": {"tags": ["end_user_id:u1"], "user_api_key_team_id": "team-1"}}
+    await limiter.async_filter_deployments(model="team-alias-name", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs)
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(model="team-alias-name", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs)
+
+
+@pytest.mark.asyncio
+async def test_filter_deployments_does_not_cross_team_alias_boundary(time_controller):
+    """
+    Two teams sharing the same team_public_model_name must not share a
+    counter: a caller on team-b hitting the alias must not be limited (or
+    counted) by team-a's configured limit and usage.
+    """
+    limiter = _make_limiter(time_controller)
+    team_a = _deployment("model-a", "dep-a", {"request_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]}})
+    team_a["model_info"]["team_id"] = "team-a"
+    team_a["model_info"]["team_public_model_name"] = "shared-alias"
+
+    team_b = _deployment("model-b", "dep-b", {"request_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 5, "period_seconds": 86400}]}})
+    team_b["model_info"]["team_id"] = "team-b"
+    team_b["model_info"]["team_public_model_name"] = "shared-alias"
+
+    router = litellm.Router(model_list=[team_a, team_b])
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    # team-a exhausts its own limit of 1.
     await limiter.async_filter_deployments(
-        model="team-alias-name", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        model="shared-alias",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key_team_id": "team-a"}},
     )
     with pytest.raises(ProxyRateLimitError):
         await limiter.async_filter_deployments(
-            model="team-alias-name", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+            model="shared-alias",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key_team_id": "team-a"}},
         )
+
+    # team-b, same alias string and same tag value, is unaffected by team-a's exhausted limit.
+    await limiter.async_filter_deployments(
+        model="shared-alias",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key_team_id": "team-b"}},
+    )
 
 
 # ---------------------------------------------------------------------------

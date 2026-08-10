@@ -145,6 +145,17 @@ def _deployment_id(deployment: dict) -> Optional[str]:
     return (deployment.get("model_info") or {}).get("id")
 
 
+def _extract_team_id(request_kwargs: dict) -> Optional[str]:
+    """Same two-channel lookup Router itself uses to resolve a caller's own
+    team-scoped deployment (see `Router._common_checks_available_deployment`,
+    which reads `user_api_key_team_id` from `metadata` falling back to
+    `litellm_metadata`)."""
+    metadata = request_kwargs.get("metadata") or {}
+    litellm_metadata = request_kwargs.get("litellm_metadata") or {}
+    team_id = metadata.get("user_api_key_team_id") or litellm_metadata.get("user_api_key_team_id")
+    return team_id if isinstance(team_id, str) else None
+
+
 def _entries_for_unit(deployment: dict, unit: _LimitUnit) -> list[TagRateLimitEntry]:
     raw_tag_rate_limits = (deployment.get("model_info") or {}).get("tag_rate_limits")
     if not raw_tag_rate_limits:
@@ -219,11 +230,34 @@ def _build_group_limits(deployments: list[dict], unit: _LimitUnit) -> list[_Conf
     return configured
 
 
-def _build_limits_index(model_list: list[dict]) -> dict[str, list[_ConfiguredLimit]]:
+@dataclass(frozen=True, slots=True)
+class _LimitsIndex:
     """
-    Keyed by every name a caller could pass as the `model` this hop is for.
-    That's not always `deployment["model_name"]`: a team calling through its
-    own `team_public_model_name` alias reaches `async_filter_deployments`
+    Two lookup tables because a `team_public_model_name` alias is only
+    unique per team, not globally: Router itself lets different teams
+    publish the identical alias string for different deployments, and
+    resolves each caller's own team's deployment by `(team_id, name)`, not
+    by `name` alone (see `Router._update_team_model_index`). Keying alias
+    limits by name alone here would let one team's config silently
+    overwrite another's.
+    """
+
+    by_model_name: dict[str, list[_ConfiguredLimit]]
+    by_team_alias: dict[tuple[str, str], list[_ConfiguredLimit]]
+
+    def resolve(self, model: str, team_id: Optional[str]) -> list[_ConfiguredLimit]:
+        if team_id is not None:
+            scoped = self.by_team_alias.get((team_id, model))
+            if scoped is not None:
+                return scoped
+        return self.by_model_name.get(model, [])
+
+
+def _build_limits_index(model_list: list[dict]) -> _LimitsIndex:
+    """
+    `by_model_name` is keyed by every deployment's own `model_name`.
+    `by_team_alias` additionally covers `team_public_model_name`: a team
+    calling through its own public alias reaches `async_filter_deployments`
     with that alias as `model`, while the deployment dicts in
     `healthy_deployments` still carry their own real `model_name` --
     `Router` never rewrites it for this path (unlike `model_group_alias`,
@@ -231,23 +265,27 @@ def _build_limits_index(model_list: list[dict]) -> dict[str, list[_ConfiguredLim
     Without this, tag limits configured on a team-aliased chain would never
     be looked up at all. Grouping (which deployments share one bucket) is
     still by the deployment's own `model_name`; the alias is only an
-    additional key pointing at that same computed group.
+    additional key pointing at that same computed group, scoped by the
+    `team_id` Router itself requires alongside `team_public_model_name`.
     """
     groups: dict[str, list[dict]] = {}
     for deployment in model_list:
         groups.setdefault(deployment["model_name"], []).append(deployment)
 
-    index: dict[str, list[_ConfiguredLimit]] = {}
+    by_model_name: dict[str, list[_ConfiguredLimit]] = {}
+    by_team_alias: dict[tuple[str, str], list[_ConfiguredLimit]] = {}
     for model_name, deployments in groups.items():
         configured = [limit for unit in _LIMIT_UNITS for limit in _build_group_limits(deployments, unit)]
         if not configured:
             continue
-        index[model_name] = configured
+        by_model_name[model_name] = configured
         for deployment in deployments:
-            team_public_model_name = (deployment.get("model_info") or {}).get("team_public_model_name")
-            if team_public_model_name:
-                index[team_public_model_name] = configured
-    return index
+            model_info = deployment.get("model_info") or {}
+            team_id = model_info.get("team_id")
+            team_public_model_name = model_info.get("team_public_model_name")
+            if team_id and team_public_model_name:
+                by_team_alias[(team_id, team_public_model_name)] = configured
+    return _LimitsIndex(by_model_name=by_model_name, by_team_alias=by_team_alias)
 
 
 # Upper bound on how stale the limits index may be after a length-preserving
@@ -274,9 +312,9 @@ class _TagRateLimitIndex:
         self._time_provider = time_provider
         self._cache_key: Optional[tuple[int, int]] = None
         self._built_at: float = 0.0
-        self._index: dict[str, list[_ConfiguredLimit]] = {}
+        self._index: _LimitsIndex = _LimitsIndex(by_model_name={}, by_team_alias={})
 
-    def get(self, llm_router: Router) -> dict[str, list[_ConfiguredLimit]]:
+    def get(self, llm_router: Router) -> _LimitsIndex:
         model_list = llm_router.model_list or []
         cache_key = (id(llm_router), len(model_list))
         now = self._time_provider().timestamp()
@@ -413,11 +451,11 @@ class _PROXY_TagRateLimiter(CustomLogger):
         if not healthy_deployments or not isinstance(healthy_deployments, list) or self.llm_router is None:
             return healthy_deployments
 
-        configured = self._index.get(self.llm_router).get(model)
+        request_kwargs = request_kwargs or {}
+        configured = self._index.get(self.llm_router).resolve(model, _extract_team_id(request_kwargs))
         if not configured:
             return healthy_deployments
 
-        request_kwargs = request_kwargs or {}
         metadata_variable_name = get_metadata_variable_name_from_kwargs(request_kwargs)
         tags = _get_tags_from_request_kwargs(request_kwargs, metadata_variable_name=metadata_variable_name)
 
@@ -573,7 +611,7 @@ class _PROXY_TagRateLimiter(CustomLogger):
         model_group = request_data.get("model")
         if not model_group:
             return
-        configured = self._index.get(self.llm_router).get(model_group)
+        configured = self._index.get(self.llm_router).resolve(model_group, _extract_team_id(request_data))
         if not configured:
             return
         metadata_variable_name = get_metadata_variable_name_from_kwargs(request_data)
@@ -592,6 +630,52 @@ class _PROXY_TagRateLimiter(CustomLogger):
             await self._release_keys(release_keys)
         return None
 
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        """
+        Release any concurrency slot reserved for this specific hop.
+        `async_post_call_failure_hook` only fires once, if and when the
+        entire request (every fallback exhausted) ultimately fails; a hop
+        that fails but gets recovered by a later fallback never reaches it,
+        so without this, that hop's reservation would sit until its safety
+        TTL expires (up to an hour) even though the overall call succeeded.
+        This fires per hop, on every failure, so it covers that case as well
+        as the one `async_post_call_failure_hook` already covers -- the rare
+        overlap where both fire for the same terminal failure is a harmless
+        double release, bounded the same way a lone release already is (see
+        `_release_keys`): floor-at-zero turns it into brief under-counting,
+        never a negative counter.
+        """
+        if self.llm_router is None:
+            return
+
+        standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
+        if standard_logging_object is None:
+            return
+
+        model_group = standard_logging_object.get("model_group")
+        if not model_group:
+            return
+
+        standard_logging_metadata = standard_logging_object.get("metadata") or {}
+        team_id = standard_logging_metadata.get("user_api_key_team_id")
+        configured = self._index.get(self.llm_router).resolve(model_group, team_id)
+        if not configured:
+            return
+
+        metadata_variable_name = get_metadata_variable_name_from_kwargs(kwargs)
+        tags = _get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name)
+        if not tags:
+            return
+
+        release_keys = [
+            _inflight_key(model_group, configured_limit, tag_value)
+            for configured_limit in configured
+            if configured_limit.unit == "concurrency"
+            and (tag_value := _extract_identity(tags, configured_limit.entry.tag_id)) is not None
+        ]
+        if release_keys:
+            await self._release_keys(release_keys)
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         if self.llm_router is None:
             return
@@ -604,7 +688,9 @@ class _PROXY_TagRateLimiter(CustomLogger):
         if not model_group:
             return
 
-        configured = self._index.get(self.llm_router).get(model_group)
+        standard_logging_metadata = standard_logging_object.get("metadata") or {}
+        team_id = standard_logging_metadata.get("user_api_key_team_id")
+        configured = self._index.get(self.llm_router).resolve(model_group, team_id)
         if not configured:
             return
 
