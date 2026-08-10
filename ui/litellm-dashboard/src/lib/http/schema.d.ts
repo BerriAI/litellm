@@ -34197,6 +34197,8 @@ export interface components {
             routing_strategy_args?: {
                 [key: string]: unknown;
             } | null;
+            /** Tag Routing Prefix */
+            tag_routing_prefix?: string | null;
             /** Timeout */
             timeout?: number | null;
         };
