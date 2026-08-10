@@ -233,6 +233,28 @@ def test_model_without_a_cache_write_price_takes_no_premium(monkeypatch):
     assert result.prompt_caching > 0
 
 
+def test_zero_cache_write_price_is_read_as_unpublished():
+    """A ``0.0`` write price means "no separate price", not "writes are free".
+
+    ``deepseek-chat`` carries an explicit zero in the pricing map. Taken literally the
+    premium would be ``0 - input_cost``, paying out a saving of ``writes * input_cost``
+    on traffic that cached nothing. No provider gives cache writes away, so a falsy
+    price falls open to the input cost like an absent one does.
+    """
+    info = litellm.get_model_info(model="deepseek-chat", custom_llm_provider="deepseek")
+    assert info.get("cache_creation_input_token_cost") == 0.0, (
+        "fixture drifted: this test exists because deepseek-chat publishes a literal 0.0 write price"
+    )
+
+    result = compute_savings_spend(
+        model="deepseek-chat",
+        custom_llm_provider="deepseek",
+        compression_saved_tokens=0,
+        usage_object=_caching_usage(read=0, written=10000),
+    )
+    assert result.prompt_caching == pytest.approx(0.0)
+
+
 def test_sub_input_cache_write_price_is_an_extra_saving(monkeypatch):
     """A few models price writes below input; there the premium is a real credit.
 

@@ -40,6 +40,11 @@ def _input_cache_read_and_write_cost(model: str | None, custom_llm_provider: str
     The cost calculator's ``_get_cost_per_unit`` defaults an absent price to ``0.0``, but
     a zero write price here would make the premium ``0 - input_cost``, turning a model
     that simply has no write pricing into a spurious extra saving.
+
+    A ``0.0`` price is read as unpublished for the same reason. Some entries carry an
+    explicit zero (``deepseek-chat`` does) and no provider gives cache writes away, so
+    the zero means "no separate price" rather than "free"; taking it literally would pay
+    out that same phantom saving on every write.
     """
     if not model:
         return 0.0, 0.0, 0.0
@@ -56,7 +61,7 @@ def _input_cache_read_and_write_cost(model: str | None, custom_llm_provider: str
     return (
         input_cost,
         input_cost if cache_read_cost is None else float(cache_read_cost),
-        input_cost if cache_write_cost is None else float(cache_write_cost),
+        float(cache_write_cost) if cache_write_cost else input_cost,
     )
 
 
