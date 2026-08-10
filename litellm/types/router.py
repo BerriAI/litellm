@@ -121,6 +121,39 @@ class UpdateRouterConfig(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
 
+class TagRateLimitEntry(BaseModel):
+    """
+    One tag-scoped limit: a caller-supplied tag value (identified by `tag_id`,
+    e.g. `end_user_id` in a request tag like `end_user_id:user-123`) is capped
+    at `limit` units per rolling `period_seconds`-second window. Bucketing is
+    `epoch_second // period_seconds`, so `period_seconds=86400` resets at UTC
+    midnight and `period_seconds=60` resets on real clock-minute boundaries.
+    """
+
+    name: str
+    tag_id: str = "end_user_id"
+    limit: float
+    period_seconds: int
+
+    model_config = ConfigDict(protected_namespaces=())
+
+
+class TagRateLimitGroup(BaseModel):
+    limits: list[TagRateLimitEntry] = Field(default_factory=list)
+
+
+class TagRateLimits(BaseModel):
+    """
+    Per-chain/model-group tag rate limits, set under a deployment's
+    `model_info.tag_rate_limits`. Each entry carries its own `tag_id`, so two
+    entries of the same unit on the same chain can key by different tags.
+    """
+
+    token_limits: TagRateLimitGroup | None = None
+    request_limits: TagRateLimitGroup | None = None
+    dollar_limits: TagRateLimitGroup | None = None
+
+
 class ModelInfo(BaseModel):
     id: Optional[str]  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
@@ -144,6 +177,9 @@ class ModelInfo(BaseModel):
 
     # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked
     blocked: Optional[bool] = None
+
+    # tag-scoped token/request/dollar rate limits (see `tag_rate_limiter.py`)
+    tag_rate_limits: TagRateLimits | None = None
 
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
