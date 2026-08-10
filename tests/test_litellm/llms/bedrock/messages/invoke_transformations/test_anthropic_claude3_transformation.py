@@ -29,6 +29,8 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
     AmazonAnthropicClaudeMessagesConfig,
     AmazonAnthropicClaudeMessagesStreamDecoder,
 )
+import litellm
+from litellm.types.router import GenericLiteLLMParams
 
 
 @pytest.fixture
@@ -2580,3 +2582,50 @@ def test_replayed_intercepted_search_turn_leaves_no_unsupported_block_for_bedroc
     assert "server_tool_use" not in serialized
     assert expected_evidence in serialized
     assert "Rome was founded in 753 BC." in serialized
+
+
+def test_bedrock_messages_rejects_anthropic_web_search_server_tool():
+    """Bedrock hosts none of Anthropic's web_search server tools. Forwarding one
+    earns an opaque 'The provided request is not valid' from AWS that names
+    neither the tool nor a way forward, so reject it here with a message that
+    does both."""
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "Anthropic Claude news"}],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 64,
+                "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    message = str(excinfo.value)
+    assert "web_search_20250305" in message
+    assert "websearch_interception" in message
+
+
+def test_bedrock_messages_allows_the_tool_interception_rewrites_it_into():
+    """Web-search interception rewrites the native tool into LiteLLM's own search
+    tool before this transform runs, and that rewritten tool carries an
+    input_schema like any custom tool. Rejecting the native type must not touch
+    it, or enabling interception would break the very path that serves search."""
+    body = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "Anthropic Claude news"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 64,
+            "tools": [
+                {
+                    "name": "litellm_web_search",
+                    "description": "Search the web",
+                    "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+                }
+            ],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert [tool["name"] for tool in body["tools"]] == ["litellm_web_search"]

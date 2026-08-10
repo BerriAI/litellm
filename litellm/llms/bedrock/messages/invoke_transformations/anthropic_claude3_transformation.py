@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
@@ -54,6 +54,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+UNSUPPORTED_BEDROCK_SERVER_TOOL_PREFIX: Final = "web_search_"
 
 
 class AmazonAnthropicClaudeMessagesConfig(
@@ -605,6 +608,39 @@ class AmazonAnthropicClaudeMessagesConfig(
         normalize_bedrock_opus_output_config_effort(model=model, output_config=clamped)
         optional_params["reasoning_effort"] = clamped["effort"]
 
+    def _reject_unsupported_server_tools(self, anthropic_messages_request: Mapping[str, object], model: str) -> None:
+        """Bedrock hosts none of Anthropic's ``web_search_*`` server tools, so
+        forwarding one earns an opaque ``The provided request is not valid`` from
+        AWS that names neither the tool nor a way forward. Web-search
+        interception rewrites the tool before this point, so reaching here means
+        it is not configured for this request.
+        """
+        tools: Final = anthropic_messages_request.get("tools")
+        if not isinstance(tools, list):
+            return
+        entries: Final = cast(list[Mapping[str, object]], tools)  # cast-ok: request body is untyped upstream
+        unsupported: Final = sorted(
+            {
+                tool_type
+                for tool in entries
+                if isinstance(tool_type := tool.get("type"), str)
+                if tool_type.startswith(UNSUPPORTED_BEDROCK_SERVER_TOOL_PREFIX)
+            }
+        )
+        if not unsupported:
+            return
+        raise litellm.BadRequestError(
+            message=(
+                f"Amazon Bedrock does not support the Anthropic server tool(s) {unsupported}. "
+                "Enable LiteLLM's web-search interception to serve them, by adding "
+                '`websearch_interception` to `litellm_settings.callbacks`, listing "bedrock" under '
+                "`litellm_settings.websearch_interception_params.enabled_providers`, and declaring a "
+                "`search_tools` entry. Otherwise remove the tool from the request."
+            ),
+            model=model,
+            llm_provider="bedrock",
+        )
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -626,6 +662,8 @@ class AmazonAnthropicClaudeMessagesConfig(
             headers=headers,
         )
         self._normalize_system_role_messages(anthropic_messages_request, model=model)
+        request_view: Final = cast(Mapping[str, object], anthropic_messages_request)  # cast-ok: body is untyped here
+        self._reject_unsupported_server_tools(request_view, model=model)
         #########################################################
         ############## BEDROCK Invoke SPECIFIC TRANSFORMATION ###
         #########################################################
