@@ -10,7 +10,10 @@ import asyncio
 import math
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, TypeVar, cast
+
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import TypeIs
 
 import litellm
 from litellm._logging import verbose_logger
@@ -71,6 +74,43 @@ WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: Final = "_websearch_interception_emit_native_b
 # Key on ``AgenticLoopPlan.metadata`` carrying the list of pre-built
 # ``web_search_tool_result`` blocks to inject into the final response.
 WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY: Final = "websearch_native_blocks"
+
+_ResponseT = TypeVar("_ResponseT")
+
+_CONTENT_ATTR: Final = "content"
+
+_OBJECT_ITEMS_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
+
+_NATIVE_BLOCKS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
+    tuple[Mapping[str, object], ...]
+)
+
+_WEBSEARCH_CONFIG_ADAPTER: Final[TypeAdapter[WebSearchInterceptionConfig]] = TypeAdapter(WebSearchInterceptionConfig)
+
+
+def _is_json_object(value: object) -> TypeIs[dict[str, object]]:  # guard-ok: trivial isinstance; JSON keys are str
+    return isinstance(value, dict)
+
+
+def _parse_object_items(value: object) -> tuple[object, ...]:
+    try:
+        return _OBJECT_ITEMS_ADAPTER.validate_python(value)
+    except ValidationError:
+        return ()
+
+
+def _parse_native_blocks(value: object) -> tuple[Mapping[str, object], ...]:
+    try:
+        return _NATIVE_BLOCKS_ADAPTER.validate_python(value)
+    except ValidationError:
+        return ()
+
+
+def _parse_websearch_config(value: object) -> WebSearchInterceptionConfig:
+    try:
+        return _WEBSEARCH_CONFIG_ADAPTER.validate_python(value)
+    except ValidationError:
+        return {}
 
 
 class WebSearchInterceptionLogger(CustomLogger):
@@ -833,7 +873,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         Anthropic-native clients (Claude Desktop, the Anthropic SDK) can
         render citations / sources alongside the model's textual reply.
         """
-        native_blocks: Final = plan.metadata.get(WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY)
+        native_blocks: Final = _parse_native_blocks(plan.metadata.get(WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY))
         if not native_blocks:
             return response
         return self._inject_native_blocks(response, native_blocks)
@@ -883,17 +923,20 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
 
     @staticmethod
-    def _inject_native_blocks(response: Any, native_blocks: Sequence[Mapping[str, object]]) -> Any:
+    def _inject_native_blocks(
+        response: _ResponseT,
+        native_blocks: Sequence[Mapping[str, object]],
+    ) -> _ResponseT:
         """Prepend native blocks to response content, dict or object form."""
         if not native_blocks:
             return response
-        if isinstance(response, dict):
-            existing = response.get("content") or []
-            response["content"] = list(native_blocks) + list(existing)
+        if _is_json_object(response):
+            existing_items: Final = _parse_object_items(response.get(_CONTENT_ATTR))
+            response[_CONTENT_ATTR] = [*native_blocks, *existing_items]
             return response
-        existing = getattr(response, "content", None) or []
+        existing_attr_items: Final = _parse_object_items(getattr(response, _CONTENT_ATTR, None))
         try:
-            response.content = list(native_blocks) + list(existing)
+            setattr(response, _CONTENT_ATTR, [*native_blocks, *existing_attr_items])
         except (AttributeError, TypeError):
             # Object refused write — fall through and leave the response
             # untouched rather than crash the request.
@@ -1675,8 +1718,8 @@ class WebSearchInterceptionLogger(CustomLogger):
 
     @staticmethod
     def initialize_from_proxy_config(
-        litellm_settings: dict[str, Any],
-        callback_specific_params: dict[str, Any],
+        litellm_settings: Mapping[str, object],
+        callback_specific_params: Mapping[str, object],
     ) -> "WebSearchInterceptionLogger":
         """
         Static method to initialize WebSearchInterceptionLogger from proxy config.
@@ -1698,16 +1741,11 @@ class WebSearchInterceptionLogger(CustomLogger):
                 )
         """
         # Get websearch_interception_params from litellm_settings or callback_specific_params
-        websearch_params: WebSearchInterceptionConfig = {}
-        if "websearch_interception_params" in litellm_settings:
-            websearch_params = litellm_settings["websearch_interception_params"]
-        elif "websearch_interception" in callback_specific_params and isinstance(
-            callback_specific_params["websearch_interception"], dict
-        ):
-            websearch_params = cast(
-                WebSearchInterceptionConfig,
-                callback_specific_params["websearch_interception"],
-            )
+        raw_params: Final = (
+            litellm_settings["websearch_interception_params"]
+            if "websearch_interception_params" in litellm_settings
+            else callback_specific_params.get("websearch_interception")
+        )
 
         # Use classmethod to initialize from config
-        return WebSearchInterceptionLogger.from_config_yaml(websearch_params)
+        return WebSearchInterceptionLogger.from_config_yaml(_parse_websearch_config(raw_params))
