@@ -860,7 +860,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             if "messages" not in (excluded_fields or []) and standard_logging_object_copy.get("messages") is not None:
                 standard_logging_object_copy["messages"] = [Message(content=redacted_str).model_dump()]
 
-            if "metadata" not in (excluded_fields or []):
+            if not excluded_fields or "metadata" not in excluded_fields:
                 metadata: Final = standard_logging_object_copy.get("metadata")
                 redacted_metadata: Final = redacted_mcp_tool_call_metadata(metadata, redacted_str)
                 if redacted_metadata is not metadata:

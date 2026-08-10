@@ -171,8 +171,8 @@ def redacted_mcp_tool_call_metadata(metadata: object, redacted_str: str) -> obje
         return metadata
 
     redacted_call: Final = {
-        **mcp_tool_call,
-        **{key: redacted_str for key in ("arguments", "result") if mcp_tool_call.get(key) is not None},
+        key: (redacted_str if key in ("arguments", "result") and value is not None else value)
+        for key, value in mcp_tool_call.items()
     }
     return {**metadata, "mcp_tool_call_metadata": redacted_call}
 
