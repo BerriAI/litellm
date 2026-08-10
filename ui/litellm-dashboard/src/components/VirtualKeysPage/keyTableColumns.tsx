@@ -309,7 +309,7 @@ export const getKeyTableColumns = ({
       header: () => (
         <InfoHeader label={t("virtualKeys.columns.lastActive")} tooltip={t("virtualKeys.columns.lastActiveTooltip")} />
       ),
-      size: 130,
+      size: 190,
       enableSorting: false,
       cell: (info) => (
         <DateCell

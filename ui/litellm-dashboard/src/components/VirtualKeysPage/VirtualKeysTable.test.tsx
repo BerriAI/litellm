@@ -216,6 +216,7 @@ it("renders the virtual keys list controls in Russian", async () => {
   expect(await screen.findByTestId(`key-status-${mockKey.token_id}`)).toHaveTextContent("Активен");
   expect(screen.getByRole("button", { name: "Столбцы" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Фильтры" })).toBeInTheDocument();
+  expect(screen.getByRole("columnheader", { name: /Последняя активность/ })).toHaveStyle({ width: "190px" });
   expect(screen.getByTestId("pagination-range")).toHaveTextContent("Показано 1–1 из 1");
 });
 
