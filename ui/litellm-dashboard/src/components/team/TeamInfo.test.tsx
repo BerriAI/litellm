@@ -37,6 +37,11 @@ vi.mock("@/components/networking", () => ({
   getPassThroughEndpointsCall: vi.fn(),
 }));
 
+const can = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
+  default: (...args: unknown[]) => can(...args),
+}));
+
 vi.mock("@/components/utils/dataUtils", () => ({
   copyToClipboard: vi.fn().mockResolvedValue(true),
   formatNumberWithCommas: vi.fn((value: number) => value.toLocaleString()),
@@ -242,6 +247,7 @@ describe("TeamInfoView", () => {
     } as any);
     vi.mocked(useTeamMetadataSchema).mockReturnValue({ data: [], isLoading: false } as any);
 
+    can.mockReturnValue(true);
     vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
     vi.mocked(networking.getPoliciesList).mockResolvedValue({ policies: [] });
     vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
@@ -647,6 +653,43 @@ describe("TeamInfoView", () => {
   });
 
   describe("settings and editing", () => {
+    const policiesFormFieldLabel = () => screen.queryByText("Policies", { selector: "span" });
+
+    it("should offer the policies field and load it for a caller with the viewPolicies capability", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(networking.getPoliciesList).toHaveBeenCalled();
+      });
+      expect(can).toHaveBeenCalledWith("viewPolicies");
+
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      await waitFor(() => {
+        expect(policiesFormFieldLabel()).toBeInTheDocument();
+      });
+    });
+
+    it("should omit the policies field and skip the admin-only list without the capability", async () => {
+      can.mockReturnValue(false);
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      expect(await screen.findByLabelText("Team Name")).toBeInTheDocument();
+
+      expect(networking.getPoliciesList).not.toHaveBeenCalled();
+      expect(policiesFormFieldLabel()).not.toBeInTheDocument();
+    });
+
     it("should open edit mode when edit button is clicked", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
