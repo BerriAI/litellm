@@ -28,6 +28,11 @@ interface SchemaFormFieldsProps {
   form: any;
   overrideLabels?: { [key: string]: string };
   overrideTooltips?: { [key: string]: string };
+  overrideHelpTexts?: { [key: string]: string };
+  jsonPlaceholder?: string;
+  validJsonError?: string;
+  requiredError?: string;
+  errorPrefix?: string;
   customValidation?: {
     [key: string]: (rule: any, value: any) => Promise<void>;
   };
@@ -102,6 +107,11 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
   form,
   overrideLabels = {},
   overrideTooltips = {},
+  overrideHelpTexts = {},
+  jsonPlaceholder = "Enter as JSON",
+  validJsonError = "Please enter valid JSON",
+  requiredError = "is required",
+  errorPrefix = "Error",
   customValidation = {},
   defaultValues = {},
 }) => {
@@ -158,7 +168,7 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
 
     const rules = [];
     if (isRequired) {
-      rules.push({ required: true, message: `${label} is required` });
+      rules.push({ required: true, message: `${label} ${requiredError}` });
     }
     if (customValidation[key]) {
       rules.push({ validator: customValidation[key] });
@@ -167,7 +177,7 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
       rules.push({
         validator: async (_: any, value: string) => {
           if (value && !validateJSON(value)) {
-            throw new Error("Please enter valid JSON");
+            throw new Error(validJsonError);
           }
         },
       });
@@ -186,7 +196,7 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
 
     let inputComponent;
     if (isJSONField(key, property)) {
-      inputComponent = <Input.TextArea rows={4} placeholder="Enter as JSON" className="font-mono" />;
+      inputComponent = <Input.TextArea rows={4} placeholder={jsonPlaceholder} className="font-mono" />;
     } else if (property.enum) {
       inputComponent = (
         <Select>
@@ -213,7 +223,9 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
         className="mt-8"
         rules={rules}
         initialValue={defaultValues[key]}
-        help={<div className="text-xs text-gray-500">{getFieldHelp(key, property, type)}</div>}
+        help={
+          <div className="text-xs text-gray-500">{overrideHelpTexts[key] || getFieldHelp(key, property, type)}</div>
+        }
       >
         {inputComponent}
       </Form.Item>
@@ -221,7 +233,11 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
   };
 
   if (error) {
-    return <div className="text-red-500">Error: {error}</div>;
+    return (
+      <div className="text-red-500">
+        {errorPrefix}: {error}
+      </div>
+    );
   }
 
   if (!schemaProperties?.properties) {
