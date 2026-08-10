@@ -12,7 +12,7 @@ Translations handled by LiteLLM:
 """
 
 from collections.abc import Coroutine
-from typing import Any, Literal, cast, overload
+from typing import Any, Final, Literal, cast, overload
 
 import litellm
 from litellm import verbose_logger
@@ -49,8 +49,8 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
 
         """
 
-        all_openai_params = super().get_supported_openai_params(model=model)
-        non_supported_params = [
+        all_openai_params: Final = super().get_supported_openai_params(model=model)
+        non_supported_params: Final = [
             "logprobs",
             "top_p",
             "presence_penalty",
@@ -58,7 +58,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
             "top_logprobs",
         ]
 
-        o_series_only_param = ["reasoning_effort"]
+        o_series_only_param: Final = ["reasoning_effort"]
 
         all_openai_params.extend(o_series_only_param)
 
@@ -70,9 +70,9 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
             )
             custom_llm_provider = "openai"
 
-        _supports_function_calling = supports_function_calling(model, custom_llm_provider)
-        _supports_response_schema = supports_response_schema(model, custom_llm_provider)
-        _supports_parallel_tool_calls = supports_parallel_function_calling(model, custom_llm_provider)
+        _supports_function_calling: Final = supports_function_calling(model, custom_llm_provider)
+        _supports_response_schema: Final = supports_response_schema(model, custom_llm_provider)
+        _supports_parallel_tool_calls: Final = supports_parallel_function_calling(model, custom_llm_provider)
 
         if not _supports_function_calling:
             non_supported_params.append("tools")
@@ -98,7 +98,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         if "max_tokens" in non_default_params:
             optional_params["max_completion_tokens"] = non_default_params.pop("max_tokens")
         if "temperature" in non_default_params:
-            temperature_value: float | None = non_default_params.pop("temperature")
+            temperature_value: Final[float | None] = non_default_params.pop("temperature")
             if temperature_value is not None:
                 if temperature_value == 1:
                     optional_params["temperature"] = temperature_value
@@ -144,7 +144,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         - modalities: image => drop param (if user opts in to dropping param)
         - role: system ==> translate to role 'user'
         """
-        _supports_system_messages = supports_system_messages(model, "openai")
+        _supports_system_messages: Final = supports_system_messages(model, "openai")
         for i, message in enumerate(messages):
             if message["role"] == "system" and not _supports_system_messages:
                 new_message = ChatCompletionUserMessage(content=message["content"], role="user")

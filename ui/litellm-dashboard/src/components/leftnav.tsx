@@ -64,6 +64,7 @@ import {
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { cn } from "@/lib/cva.config";
+import { rolesWithCapability } from "../utils/capabilities";
 import {
   all_admin_roles,
   internalUserRoles,
@@ -157,7 +158,7 @@ const menuGroups: MenuGroup[] = [
         page: "policies",
         label: "Policies",
         icon: <ScrollText {...ICON} />,
-        roles: all_admin_roles,
+        roles: rolesWithCapability("viewPolicies"),
       },
       {
         key: "tools",
@@ -167,7 +168,13 @@ const menuGroups: MenuGroup[] = [
         children: [
           { key: "search-tools", page: "search-tools", label: "Search Tools", icon: <Search {...ICON} /> },
           { key: "vector-stores", page: "vector-stores", label: "Vector Stores", icon: <Database {...ICON} /> },
-          { key: "tool-policies", page: "tool-policies", label: "Tool Policies", icon: <ShieldCheck {...ICON} /> },
+          {
+            key: "tool-policies",
+            page: "tool-policies",
+            label: "Tool Policies",
+            icon: <ShieldCheck {...ICON} />,
+            roles: rolesWithCapability("viewToolPolicies"),
+          },
         ],
       },
     ],
@@ -261,7 +268,13 @@ const menuGroups: MenuGroup[] = [
         label: "Experimental",
         icon: <FlaskConical {...ICON} />,
         children: [
-          { key: "prompts", page: "prompts", label: "Prompts", icon: <FileText {...ICON} />, roles: all_admin_roles },
+          {
+            key: "prompts",
+            page: "prompts",
+            label: "Prompts",
+            icon: <FileText {...ICON} />,
+            roles: rolesWithCapability("viewPrompts"),
+          },
           {
             key: "transform-request",
             page: "transform-request",
@@ -400,7 +413,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   disableVectorStoresForInternalUsers,
   allowVectorStoresForTeamAdmins,
 }) => {
-  const { userId, accessToken, userRole } = useAuthorized();
+  const { userId, accessToken, userRole, isViewOnly } = useAuthorized();
   const { data: organizations } = useOrganizations();
   const { data: teams } = useTeams();
   const { logoUrl } = useTheme();
@@ -442,6 +455,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
     return items
       .map((item) => ({ ...item, children: item.children ? filterItemsByRole(item.children) : undefined }))
       .filter((item) => {
+        if (item.key === "llm-playground" && isViewOnly) return false;
         if (item.key === "organizations" || item.key === "users") {
           const hasRoleAccess = !item.roles || item.roles.includes(userRole) || isOrgAdmin;
           if (!hasRoleAccess) return false;

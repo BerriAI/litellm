@@ -1,6 +1,8 @@
+from typing import Final
+
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 
-AWS_CREDENTIAL_KWARGS_KEYS = frozenset(
+AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
     {
         "aws_region_name",
         "aws_access_key_id",
@@ -19,7 +21,7 @@ AWS_CREDENTIAL_KWARGS_KEYS = frozenset(
 
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
-OPTIONAL_KWARGS_KEYS = (
+OPTIONAL_KWARGS_KEYS: Final = (
     frozenset(
         {
             "azure_ad_token",
@@ -49,7 +51,7 @@ OPTIONAL_KWARGS_KEYS = (
 )
 
 # Backward-compatible alias for existing imports/tests.
-_OPTIONAL_KWARGS_KEYS = OPTIONAL_KWARGS_KEYS
+_OPTIONAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS
 
 
 def _get_base_model_from_litellm_call_metadata(
@@ -57,7 +59,7 @@ def _get_base_model_from_litellm_call_metadata(
 ) -> str | None:
     if metadata is None:
         return None
-    model_info = metadata.get("model_info")
+    model_info: Final = metadata.get("model_info")
     if model_info:
         return model_info.get("base_model")
     return None
@@ -113,17 +115,20 @@ def get_litellm_params(
     litellm_request_debug: bool | None = None,
     **kwargs,
 ) -> dict:
+    _litellm_metadata_dict: Final = litellm_metadata if isinstance(litellm_metadata, dict) else None
+    resolved_metadata: Final = _litellm_metadata_dict.copy() if not metadata and _litellm_metadata_dict else metadata
+
     # Derive litellm_session_id / litellm_trace_id from metadata when not provided (call chaining)
-    _meta = metadata or {}
+    _meta: Final = resolved_metadata or {}
     if litellm_session_id is None:
         litellm_session_id = _meta.get("session_id") or _meta.get("trace_id")
     if litellm_trace_id is None:
         litellm_trace_id = _meta.get("trace_id") or _meta.get("session_id")
 
-    data_residency: str | None = infer_openai_data_residency(custom_llm_provider, api_base)
+    data_residency: Final[str | None] = infer_openai_data_residency(custom_llm_provider, api_base)
 
     # Build base dict with explicit parameters (always included)
-    litellm_params = {
+    litellm_params: Final = {
         "acompletion": acompletion,
         "allm_passthrough_route": allm_passthrough_route,
         "api_key": api_key,
@@ -137,7 +142,7 @@ def get_litellm_params(
         "model_alias_map": model_alias_map,
         "completion_call_id": completion_call_id,
         "aembedding": aembedding,
-        "metadata": metadata,
+        "metadata": resolved_metadata,
         "model_info": model_info,
         "proxy_server_request": proxy_server_request,
         "preset_cache_key": preset_cache_key,

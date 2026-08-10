@@ -35,7 +35,7 @@ export const useDailyActivityRange = (
 
   const { data, loading, isFetchingMore } = usePaginatedDailyActivity({
     fetchFn: userDailyActivityCall,
-    args: [accessToken, startTime, endTime, effectiveUserId],
+    args: [accessToken, startTime, endTime, effectiveUserId, true],
     enabled: !!accessToken && !!startTime && !!endTime,
   });
 

@@ -1,7 +1,7 @@
 import json
 import time
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -108,7 +108,7 @@ class CohereChatConfig(BaseConfig):
         tool_results: list | None = None,
         seed: int | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -201,8 +201,8 @@ class CohereChatConfig(BaseConfig):
 
         ## Handle Tool Calling
         if "tools" in optional_params:
-            _is_function_call = True
-            cohere_tools = self._construct_cohere_tool(tools=optional_params["tools"])
+            _is_function_call: Final = True
+            cohere_tools: Final = self._construct_cohere_tool(tools=optional_params["tools"])
             optional_params["tools"] = cohere_tools
         if isinstance(most_recent_message, dict):
             optional_params["tool_results"] = [most_recent_message]
@@ -230,8 +230,8 @@ class CohereChatConfig(BaseConfig):
         json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
-            raw_response_json = raw_response.json()
-            model_response.choices[0].message.content = raw_response_json["text"]  # type: ignore
+            raw_response_json: Final = raw_response.json()
+            model_response.choices[0].message.content = raw_response_json["text"]
         except Exception:
             raise CohereError(message=raw_response.text, status_code=raw_response.status_code)
 
@@ -240,10 +240,10 @@ class CohereChatConfig(BaseConfig):
             setattr(model_response, "citations", raw_response_json["citations"])
 
         ## Tool calling response
-        cohere_tools_response = raw_response_json.get("tool_calls", None)
+        cohere_tools_response: Final = raw_response_json.get("tool_calls", None)
         if cohere_tools_response is not None and cohere_tools_response != []:
             # convert cohere_tools_response to OpenAI response format
-            tool_calls = []
+            tool_calls: Final = []
             for tool in cohere_tools_response:
                 function_name = tool.get("name", "")
                 generation_id = tool.get("generation_id", "")
@@ -257,21 +257,21 @@ class CohereChatConfig(BaseConfig):
                     },
                 }
                 tool_calls.append(tool_call)
-            _message = litellm.Message(
+            _message: Final = litellm.Message(
                 tool_calls=tool_calls,
                 content=None,
             )
-            model_response.choices[0].message = _message  # type: ignore
+            model_response.choices[0].message = _message
 
         ## CALCULATING USAGE - use cohere `billed_units` for returning usage
-        billed_units = raw_response_json.get("meta", {}).get("billed_units", {})
+        billed_units: Final = raw_response_json.get("meta", {}).get("billed_units", {})
 
-        prompt_tokens = billed_units.get("input_tokens", 0)
-        completion_tokens = billed_units.get("output_tokens", 0)
+        prompt_tokens: Final = billed_units.get("input_tokens", 0)
+        completion_tokens: Final = billed_units.get("output_tokens", 0)
 
         model_response.created = int(time.time())
         model_response.model = model
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
@@ -285,7 +285,7 @@ class CohereChatConfig(BaseConfig):
     ):
         if tools is None:
             tools = []
-        cohere_tools = []
+        cohere_tools: Final = []
         for tool in tools:
             cohere_tool = self._translate_openai_tool_to_cohere(tool)
             cohere_tools.append(cohere_tool)
@@ -331,7 +331,7 @@ class CohereChatConfig(BaseConfig):
             },
         }
         """
-        cohere_tool = {
+        cohere_tool: Final = {
             "name": openai_tool["function"]["name"],
             "description": openai_tool["function"]["description"],
             "parameter_definitions": {},
