@@ -210,6 +210,7 @@ describe("Sidebar (leftnav)", () => {
       userId: "internal-user-id",
       accessToken: "test-access-token",
       userRole: "internal",
+      isViewOnly: false,
       token: "test-token",
       userEmail: "internal@example.com",
       premiumUser: false,
@@ -243,6 +244,27 @@ describe("Sidebar (leftnav)", () => {
       await waitFor(() => {
         expect(screen.getByText("Tool Policies")).toBeInTheDocument();
       });
+    });
+
+    it("should hide the Policies entry from internal users while keeping Guardrails", () => {
+      mockUseAuthorized.mockReturnValue(internalAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      expect(screen.getByText("Guardrails")).toBeInTheDocument();
+      expect(screen.queryByText("Policies")).not.toBeInTheDocument();
+    });
+
+    it("should hide the Prompts entry from internal users while keeping other Experimental children", async () => {
+      mockUseAuthorized.mockReturnValue(internalAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByText("Experimental"));
+      });
+      await waitFor(() => {
+        expect(screen.getByText("API Playground")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("Prompts")).not.toBeInTheDocument();
     });
   });
 

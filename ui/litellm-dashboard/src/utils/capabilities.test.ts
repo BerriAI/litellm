@@ -6,6 +6,7 @@ const ADMIN_ROLES = ["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer
 const NON_ADMIN_ROLES = [
   "Internal User",
   "Internal Viewer",
+  "internal_user",
   "App User",
   "Org Admin",
   "Unknown Role",
@@ -14,7 +15,15 @@ const NON_ADMIN_ROLES = [
   undefined,
 ];
 
-const ADMIN_ONLY_CAPABILITIES: Capability[] = ["viewToolPolicies", "viewOrganizationUsage", "viewAgentUsage"];
+const ADMIN_ONLY_CAPABILITIES: Capability[] = [
+  "viewToolPolicies",
+  "viewAuditLogs",
+  "viewDeletedTeams",
+  "viewPolicies",
+  "viewPrompts",
+  "viewOrganizationUsage",
+  "viewAgentUsage",
+];
 
 describe("hasCapability", () => {
   describe.each(ADMIN_ONLY_CAPABILITIES)("%s", (capability) => {
@@ -26,19 +35,6 @@ describe("hasCapability", () => {
       expect(hasCapability(role, capability)).toBe(false);
     });
   });
-});
-
-describe.each(["viewAuditLogs", "viewDeletedTeams"] as const)("hasCapability - %s", (capability) => {
-  it.each(["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer"])("should grant it to %s", (role) => {
-    expect(hasCapability(role, capability)).toBe(true);
-  });
-
-  it.each(["Internal User", "Internal Viewer", "App User", "Org Admin", "Unknown Role", "", null, undefined])(
-    "should deny it to %s",
-    (role) => {
-      expect(hasCapability(role, capability)).toBe(false);
-    },
-  );
 });
 
 describe("rolesWithCapability", () => {
