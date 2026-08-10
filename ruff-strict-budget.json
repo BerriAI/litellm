@@ -12,7 +12,7 @@
     "limit": 2031
   },
   "ANN202": {
-    "limit": 865
+    "limit": 864
   },
   "ANN204": {
     "limit": 713
@@ -24,7 +24,7 @@
     "limit": 133
   },
   "ANN401": {
-    "limit": 1555
+    "limit": 1544
   },
   "ASYNC230": {
     "limit": 11
@@ -234,7 +234,7 @@
     "limit": 5
   },
   "TID251": {
-    "limit": 1238
+    "limit": 1235
   },
   "TRY002": {
     "limit": 528
