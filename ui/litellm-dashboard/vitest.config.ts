@@ -44,7 +44,13 @@ const config: ViteUserConfig = {
       ],
     },
     exclude: ["node_modules/**"],
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx", "tests/**/*.test.ts", "tests/**/*.test.tsx"],
+    include: [
+      "src/**/*.test.ts",
+      "src/**/*.test.tsx",
+      "tests/**/*.test.ts",
+      "tests/**/*.test.tsx",
+      "scripts/**/*.test.ts",
+    ],
   },
   resolve: {
     alias: {

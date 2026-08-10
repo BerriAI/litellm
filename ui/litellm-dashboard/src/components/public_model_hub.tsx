@@ -678,7 +678,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
                 <div className="mt-8 text-center">
                   <Text className="text-sm text-gray-600">
-                    Showing {filteredData.length} of {modelHubData?.length || 0} models
+                    {t("publicHub.counts.models", {
+                      shown: filteredData.length,
+                      total: modelHubData?.length || 0,
+                    })}
                   </Text>
                 </div>
               </TabPane>
@@ -752,7 +755,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
                   <div className="mt-8 text-center">
                     <Text className="text-sm text-gray-600">
-                      Showing {filteredAgentData.length} of {agentHubData?.length || 0} agents
+                      {t("publicHub.counts.agents", {
+                        shown: filteredAgentData.length,
+                        total: agentHubData?.length || 0,
+                      })}
                     </Text>
                   </div>
                 </TabPane>
@@ -824,7 +830,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
                   <div className="mt-8 text-center">
                     <Text className="text-sm text-gray-600">
-                      Showing {filteredMcpData.length} of {mcpHubData?.length || 0} MCP servers
+                      {t("publicHub.counts.mcp", {
+                        shown: filteredMcpData.length,
+                        total: mcpHubData?.length || 0,
+                      })}
                     </Text>
                   </div>
                 </TabPane>
@@ -907,20 +916,12 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       <Info className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
                       <div>
                         <Text className="font-medium text-blue-900 mb-2">{t("publicHub.details.wildcardRouting")}</Text>
-                        <Text className="text-sm text-blue-800 mb-2">
-                          This model uses wildcard routing. You can pass any value where you see the{" "}
-                          <code className="bg-blue-100 px-1 py-0.5 rounded-sm text-xs">*</code> symbol.
-                        </Text>
+                        <Text className="text-sm text-blue-800 mb-2">{t("publicHub.details.wildcardDescription")}</Text>
                         <Text className="text-sm text-blue-800">
-                          For example, with{" "}
-                          <code className="bg-blue-100 px-1 py-0.5 rounded-sm text-xs">
-                            {selectedModel.model_group}
-                          </code>
-                          , you can use any string (
-                          <code className="bg-blue-100 px-1 py-0.5 rounded-sm text-xs">
-                            {selectedModel.model_group.replaceAll("*", "my-custom-value")}
-                          </code>
-                          ) that matches this pattern.
+                          {t("publicHub.details.wildcardExample", {
+                            modelGroup: selectedModel.model_group,
+                            exampleModelGroup: selectedModel.model_group.replaceAll("*", "my-custom-value"),
+                          })}
                         </Text>
                       </div>
                     </div>

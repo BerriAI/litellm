@@ -56,6 +56,11 @@ export const ruCommon = {
       transportPlaceholder: "Выберите типы транспорта",
     },
     loading: { models: "Загрузка моделей…", agents: "Загрузка агентов…", mcp: "Загрузка MCP-серверов…" },
+    counts: {
+      models: "Показано моделей: {{shown}} из {{total}}",
+      agents: "Показано агентов: {{shown}} из {{total}}",
+      mcp: "Показано MCP-серверов: {{shown}} из {{total}}",
+    },
     empty: {
       modelsTitle: "Нет доступных моделей",
       modelsFilteredTitle: "Подходящие модели не найдены",
@@ -75,6 +80,10 @@ export const ruCommon = {
       providers: "Провайдеры:",
       notSpecified: "Не указано",
       wildcardRouting: "Маршрутизация по шаблону",
+      wildcardDescription:
+        "Эта модель использует маршрутизацию по шаблону. Вместо символа * можно передать любое значение.",
+      wildcardExample:
+        "Например, {{modelGroup}} принимает любую строку, соответствующую этому шаблону, такую как {{exampleModelGroup}}.",
       tokenCost: "Токены и стоимость",
       maxInputTokens: "Максимум входных токенов:",
       maxOutputTokens: "Максимум выходных токенов:",

@@ -56,6 +56,11 @@ export const enCommon = {
       transportPlaceholder: "Select transport types",
     },
     loading: { models: "Loading models…", agents: "Loading agents…", mcp: "Loading MCP servers…" },
+    counts: {
+      models: "Showing {{shown}} of {{total}} models",
+      agents: "Showing {{shown}} of {{total}} agents",
+      mcp: "Showing {{shown}} of {{total}} MCP servers",
+    },
     empty: {
       modelsTitle: "No models available",
       modelsFilteredTitle: "No matching models",
@@ -75,6 +80,9 @@ export const enCommon = {
       providers: "Providers:",
       notSpecified: "Not specified",
       wildcardRouting: "Wildcard Routing",
+      wildcardDescription: "This model uses wildcard routing. You can pass any value in place of the * symbol.",
+      wildcardExample:
+        "For example, {{modelGroup}} accepts any string matching this pattern, such as {{exampleModelGroup}}.",
       tokenCost: "Token & Cost Information",
       maxInputTokens: "Max Input Tokens:",
       maxOutputTokens: "Max Output Tokens:",

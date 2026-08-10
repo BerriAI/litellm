@@ -17,6 +17,7 @@
     "knip": "knip",
     "knip:ci": "knip --exclude exports,nsExports,types,nsTypes,enumMembers,classMembers,duplicates",
     "knip:fix": "knip --fix",
+    "i18n:audit": "node scripts/audit-localization.mjs",
     "gen:api": "node scripts/gen-api-types.mjs"
   },
   "dependencies": {

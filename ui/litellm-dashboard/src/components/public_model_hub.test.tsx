@@ -10,11 +10,17 @@ vi.mock("react-i18next", async () => {
   const { resources } = await import("@/i18n/catalog");
   return {
     useTranslation: (namespace: "common" | "auth" | "navigation" = "common") => ({
-      t: (key: string) =>
-        key.split(".").reduce<unknown>((copy, segment) => {
+      t: (key: string, values?: Record<string, string | number>) => {
+        const translation = key.split(".").reduce<unknown>((copy, segment) => {
           if (typeof copy !== "object" || copy === null) return undefined;
           return (copy as Record<string, unknown>)[segment];
-        }, resources[translationState.language][namespace]) ?? key,
+        }, resources[translationState.language][namespace]);
+        if (typeof translation !== "string") return key;
+        return Object.entries(values ?? {}).reduce(
+          (copy, [name, value]) => copy.replaceAll(`{{${name}}}`, String(value)),
+          translation,
+        );
+      },
     }),
   };
 });
@@ -91,6 +97,7 @@ describe("PublicModelHub", () => {
     expect(await screen.findByText("Доступные модели")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("Поиск по названиям моделей...")).toBeInTheDocument();
     expect(screen.getByText("openrouter/anthropic/claude-sonnet-4")).toBeInTheDocument();
+    expect(screen.getByText("Показано моделей: 1 из 1")).toBeInTheDocument();
   });
   it("renders", () => {
     const { container } = render(<PublicModelHub />);
