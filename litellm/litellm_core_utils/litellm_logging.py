@@ -4557,13 +4557,6 @@ class StandardLoggingPayloadSetup:
 
     @staticmethod
     def get_system_prompt_from_kwargs(kwargs: Optional[Dict] = None) -> Optional[Union[str, list, dict]]:
-        """
-        Return the system prompt kwargs as sent by the client, without reshaping.
-
-        Coalesces the kwarg names used across call paths (Vertex Gemini, Responses API,
-        Anthropic Messages). Uses `is not None` checks so falsy values like [] do not
-        fall through to a different kwarg.
-        """
         if kwargs is None:
             return None
 
