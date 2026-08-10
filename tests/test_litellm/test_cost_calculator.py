@@ -3530,3 +3530,22 @@ def test_completion_cost_prices_anthropic_shaped_cache_read_tokens():
     )
 
     assert cost == pytest.approx(3 * 5e-6 + 4014 * 5e-7 + 5 * 3e-5, rel=1e-9)
+def test_cost_per_token_unknown_model_with_explicit_provider():
+    """
+    Test: cost_per_token() with a known provider but unknown model.
+    This is the second guard point flagged in PR #27587 review.
+    A fake model name with explicit custom_llm_provider="openai"
+    should not crash — it should return (0.0, 0.0).
+    
+    Ref: https://github.com/BerriAI/litellm/pull/27587
+    """
+    import litellm
+    from litellm import cost_per_token
+
+    result = cost_per_token(
+        model="fake-model-xyz-123",
+        custom_llm_provider="openai",
+        prompt_tokens=10,
+        completion_tokens=5,
+    )
+    assert result == (0.0, 0.0), f"Expected (0.0, 0.0) for unknown model, got {result}"
