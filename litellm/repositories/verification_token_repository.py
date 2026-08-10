@@ -15,6 +15,7 @@ from litellm.repositories.base_repository import (
     DbRecord,
     record_to_dict,
 )
+from litellm.repositories.prisma_protocols import ObjectPermissionOwnerTable
 
 if TYPE_CHECKING:
     from prisma.models import (
@@ -51,6 +52,11 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
     @property
     def deleted_table(self) -> Any:
         return self.prisma_client.db.litellm_deletedverificationtoken
+
+    @property
+    def object_permission_rows(self) -> ObjectPermissionOwnerTable:
+        rows: Final[ObjectPermissionOwnerTable] = self.table
+        return rows
 
     @property
     def model_class(self) -> type[LiteLLM_VerificationToken]:

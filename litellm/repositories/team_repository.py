@@ -15,6 +15,7 @@ from litellm.repositories.base_repository import (
     DbRecord,
     record_to_dict,
 )
+from litellm.repositories.prisma_protocols import ObjectPermissionOwnerTable
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -40,6 +41,11 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
     @property
     def deleted_table(self) -> Any:  # any-ok: PrismaClient.db is an untyped runtime wrapper
         return self.prisma_client.db.litellm_deletedteamtable
+
+    @property
+    def object_permission_rows(self) -> ObjectPermissionOwnerTable:
+        rows: Final[ObjectPermissionOwnerTable] = self.table
+        return rows
 
     @property
     def model_class(self) -> type[LiteLLM_TeamTable]:

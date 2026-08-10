@@ -7,7 +7,7 @@ These are thin wrappers for tables that do not (yet) need domain-specific query
 methods; richer repositories live in their own modules.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Final, Generic, TypeVar
 
 from pydantic import BaseModel, TypeAdapter
@@ -17,7 +17,14 @@ from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.tag import LiteLLM_TagTable
 from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
-from litellm.repositories.prisma_protocols import PrismaTableActions
+from litellm.repositories.prisma_protocols import (
+    DailyToolSpendTable,
+    MemoryTable,
+    PrismaTableActions,
+    SpendLogUsageRecord,
+    SpendLogUsageTable,
+    ToolIndexTable,
+)
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -113,6 +120,10 @@ class OrganizationMembershipRepository(PrismaTableRepository):
 class SpendLogsRepository(PrismaTableRepository):
     table_name = "litellm_spendlogs"
 
+    async def find_usage_by_request_ids(self, request_ids: Sequence[str]) -> Sequence[SpendLogUsageRecord]:
+        rows: Final[SpendLogUsageTable] = self.table
+        return await rows.find_many(where={"request_id": {"in": request_ids}})
+
 
 class ClaudeCodePluginRepository(PrismaTableRepository):
     table_name = "litellm_claudecodeplugintable"
@@ -174,6 +185,11 @@ class ManagedFileRepository(PrismaTableRepository):
 
 class MemoryRepository(PrismaTableRepository):
     table_name = "litellm_memorytable"
+
+    @property
+    def rows(self) -> MemoryTable:
+        rows: Final[MemoryTable] = self.table
+        return rows
 
 
 class SearchToolsRepository(PrismaTableRepository):
@@ -252,9 +268,19 @@ class DailyTagSpendRepository(PrismaTableRepository):
 class SpendLogToolIndexRepository(PrismaTableRepository):
     table_name = "litellm_spendlogtoolindex"
 
+    @property
+    def rows(self) -> ToolIndexTable:
+        rows: Final[ToolIndexTable] = self.table
+        return rows
+
 
 class DailyToolSpendRepository(PrismaTableRepository):
     table_name = "litellm_dailytoolspend"
+
+    @property
+    def rows(self) -> DailyToolSpendTable:
+        rows: Final[DailyToolSpendTable] = self.table
+        return rows
 
 
 class SpendLogGuardrailIndexRepository(PrismaTableRepository):
