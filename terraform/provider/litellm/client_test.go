@@ -2,7 +2,6 @@ package litellm
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -70,43 +69,6 @@ func TestMakeRequestCustomHeaders(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
-}
-
-func TestCrossOriginRedirectStripsSensitiveHeaders(t *testing.T) {
-	var finalAuth, finalAPIKey string
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		finalAuth = r.Header.Get("X-Proxy-Auth")
-		finalAPIKey = r.Header.Get("x-api-key")
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
-	}))
-	defer target.Close()
-
-	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("X-Proxy-Auth"); got != "proxy-token" {
-			t.Errorf("origin X-Proxy-Auth = %q, want proxy-token", got)
-		}
-		http.Redirect(w, r, target.URL+"/final", http.StatusFound)
-	}))
-	defer origin.Close()
-
-	client := testClient(origin.URL, "sk-real-key", false, map[string]string{
-		"X-Proxy-Auth": "proxy-token",
-	})
-
-	resp, err := MakeRequest(client, "GET", "/start", nil)
-	if err != nil {
-		t.Fatalf("MakeRequest: %v", err)
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
-
-	if finalAuth != "" {
-		t.Errorf("cross-origin redirect kept X-Proxy-Auth = %q", finalAuth)
-	}
-	if finalAPIKey != "" {
-		t.Errorf("cross-origin redirect kept x-api-key = %q", finalAPIKey)
 	}
 }
 

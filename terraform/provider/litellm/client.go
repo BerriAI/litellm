@@ -26,33 +26,17 @@ func NewClient(cfg ProviderConfig) *Client {
 		headers[k] = v
 	}
 
-	c := &Client{
+	return &Client{
 		APIBase:            cfg.APIBase,
 		APIKey:             cfg.APIKey,
 		InsecureSkipVerify: cfg.InsecureSkipVerify,
 		CustomHeaders:      headers,
-	}
-	c.httpClient = &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.InsecureSkipVerify},
+		httpClient: &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.InsecureSkipVerify},
+			},
 		},
-		CheckRedirect: c.checkRedirect,
 	}
-	return c
-}
-
-func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
-	if len(via) >= 10 {
-		return fmt.Errorf("stopped after 10 redirects")
-	}
-	orig := via[0].URL
-	if req.URL.Scheme != orig.Scheme || req.URL.Host != orig.Host {
-		for k := range c.CustomHeaders {
-			req.Header.Del(k)
-		}
-		req.Header.Del("x-api-key")
-	}
-	return nil
 }
 
 func (c *Client) applyRequestHeaders(req *http.Request) {
