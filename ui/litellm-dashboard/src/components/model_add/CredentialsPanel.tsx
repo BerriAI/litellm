@@ -3,6 +3,7 @@
 import { UploadProps } from "antd/es/upload";
 import { Plus } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -39,6 +40,7 @@ const withoutRestrictedFields = (values: Record<string, unknown>): Record<string
   Object.fromEntries(Object.entries(values).filter(([key]) => !restrictedFields.includes(key)));
 
 export default function CredentialsPanel({ uploadProps }: CredentialsPanelProps) {
+  const { t } = useTranslation("gateway");
   const { accessToken, userRole } = useAuthorized();
   // Admin Viewer follows the read-parity rule: see credentials, do not modify.
   const canModifyCredentials = isProxyAdminRole(userRole ?? "");
@@ -59,11 +61,11 @@ export default function CredentialsPanel({ uploadProps }: CredentialsPanelProps)
     try {
       const newCredential = buildCredential(values, stripMaskedSecrets(withoutRestrictedFields(values)));
       await credentialUpdateCall(accessToken, values.credential_name as string, newCredential);
-      NotificationsManager.success("Credential updated successfully");
+      NotificationsManager.success(t("models.credentials.notifications.updated"));
       setIsUpdateModalOpen(false);
       await refetchCredentials();
     } catch (error) {
-      NotificationsManager.error("Failed to update credential");
+      NotificationsManager.error(t("models.credentials.notifications.updateFailed"));
     }
   };
 
@@ -74,11 +76,11 @@ export default function CredentialsPanel({ uploadProps }: CredentialsPanelProps)
     try {
       const newCredential = buildCredential(values, withoutRestrictedFields(values));
       await credentialCreateCall(accessToken, newCredential);
-      NotificationsManager.success("Credential added successfully");
+      NotificationsManager.success(t("models.credentials.notifications.added"));
       setIsAddModalOpen(false);
       await refetchCredentials();
     } catch (error) {
-      NotificationsManager.error("Failed to add credential");
+      NotificationsManager.error(t("models.credentials.notifications.addFailed"));
     }
   };
 
@@ -89,10 +91,10 @@ export default function CredentialsPanel({ uploadProps }: CredentialsPanelProps)
     setIsCredentialDeleting(true);
     try {
       await credentialDeleteCall(accessToken, credentialToDelete.credential_name);
-      NotificationsManager.success("Credential deleted successfully");
+      NotificationsManager.success(t("models.credentials.notifications.deleted"));
       await refetchCredentials();
     } catch (error) {
-      NotificationsManager.error("Failed to delete credential");
+      NotificationsManager.error(t("models.credentials.notifications.deleteFailed"));
     } finally {
       setCredentialToDelete(null);
       setIsDeleteModalOpen(false);
@@ -119,12 +121,12 @@ export default function CredentialsPanel({ uploadProps }: CredentialsPanelProps)
     <div className="mx-auto flex w-full flex-auto flex-col gap-4 overflow-y-auto p-2">
       <div className="flex items-center justify-between gap-4">
         <p className="text-sm text-muted-foreground">
-          Configured credentials for different AI providers. Add and manage your API credentials.
+          {t("models.credentials.description")}
         </p>
         {canModifyCredentials && (
           <Button onClick={() => setIsAddModalOpen(true)}>
             <Plus className="size-4" />
-            Add Credential
+            {t("models.credentials.add")}
           </Button>
         )}
       </div>
@@ -161,12 +163,15 @@ export default function CredentialsPanel({ uploadProps }: CredentialsPanelProps)
         isOpen={isDeleteModalOpen}
         onCancel={closeDeleteModal}
         onOk={handleDeleteCredential}
-        title="Delete Credential?"
-        message="Are you sure you want to delete this credential? This action cannot be undone and may break existing integrations."
-        resourceInformationTitle="Credential Information"
+        title={t("models.credentials.deleteDialog.title")}
+        message={t("models.credentials.deleteDialog.message")}
+        resourceInformationTitle={t("models.credentials.deleteDialog.information")}
         resourceInformation={[
-          { label: "Credential Name", value: credentialToDelete?.credential_name },
-          { label: "Provider", value: credentialToDelete?.credential_info?.custom_llm_provider || "-" },
+          { label: t("models.credentials.deleteDialog.name"), value: credentialToDelete?.credential_name },
+          {
+            label: t("models.credentials.deleteDialog.provider"),
+            value: credentialToDelete?.credential_info?.custom_llm_provider || "-",
+          },
         ]}
         confirmLoading={isCredentialDeleting}
         requiredConfirmation={credentialToDelete?.credential_name}
