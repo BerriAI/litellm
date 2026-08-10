@@ -1,7 +1,7 @@
 import enum
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -11,6 +11,7 @@ from pydantic import (
     ConfigDict,
     Field,
     Json,
+    PositiveInt,
     field_validator,
     model_validator,
 )
@@ -1102,6 +1103,8 @@ class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
 
 class KeyRequestBase(GenerateRequestBase):
     key: str | None = None
+    default_estimated_output_tokens: PositiveInt | None = None
+    default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     budget_id: str | None = None
     tags: list[str] | None = None
     disable_global_guardrails: bool | None = None
@@ -1819,6 +1822,8 @@ class NewTeamRequest(TeamBase):
     )
 
     model_tpm_limit: dict[str, int] | None = None
+    default_estimated_output_tokens: PositiveInt | None = None
+    default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     mcp_rpm_limit: dict[str, int] | None = None
     team_member_budget: float | None = None  # allow user to set a budget for all team members
     team_member_rpm_limit: int | None = None  # allow user to set RPM limit for all team members
@@ -1883,6 +1888,8 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     prompts: list[str] | None = None
     model_rpm_limit: dict[str, int] | None = None
     model_tpm_limit: dict[str, int] | None = None
+    default_estimated_output_tokens: PositiveInt | None = None
+    default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     mcp_rpm_limit: dict[str, int] | None = None
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
     enforced_batch_output_expires_after: dict | None = None
@@ -2486,6 +2493,16 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "(see GitHub issue #27639). "
             "A proxy-level WARNING is logged on every request while this flag "
             "is active as a reminder that hard enforcement is relaxed."
+        ),
+    )
+    apply_user_budget_to_team_keys: bool | None = Field(
+        None,
+        description=(
+            "If True, a user's personal max_budget is enforced on every request they "
+            "make, including requests made with a team-scoped key. Defaults to False, "
+            "where a team-scoped key is governed only by the team and team-member "
+            "budgets and the key owner's personal max_budget does not apply "
+            "(see GitHub issue #12905)."
         ),
     )
     user_url_validation: bool | None = Field(
@@ -3884,12 +3901,19 @@ class OrganizationMemberUpdateResponse(MemberUpdateResponse):
 ##########################################
 
 
+class TeamAccessGroupModelGrant(LiteLLMPydanticObjectBase):
+    access_group_id: str
+    access_group_name: str
+    models: tuple[str, ...]
+
+
 class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     team_member_budget_table: LiteLLM_BudgetTableFull | None = None
     # Resources inherited from access groups (separate from direct assignments)
     access_group_models: list[str] | None = None
     access_group_mcp_server_ids: list[str] | None = None
     access_group_agent_ids: list[str] | None = None
+    access_group_details: tuple[TeamAccessGroupModelGrant, ...] | None = None
 
 
 class TeamInfoResponseObject(TypedDict):
@@ -4001,6 +4025,12 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     stream_timeout: float | None
     user: str | None
     num_retries: int | None
+    # True when the effective timeout came from a caller-controlled source (the
+    # `x-litellm-timeout`/`x-litellm-stream-timeout` headers, or a `timeout`/`request_timeout`/
+    # `stream_timeout` field in the request body) rather than deployment config, so a
+    # deliberately tiny value isn't treated as a deployment health signal (see
+    # cooldown_handlers._trigger_cooldown_for_failed_deployment).
+    client_side_timeout: bool
 
 
 class LitellmMetadataFromRequestHeaders(TypedDict, total=False):
@@ -4080,6 +4110,8 @@ class PassThroughEndpointLoggingTypedDict(TypedDict):
 LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "model_rpm_limit",
     "model_tpm_limit",
+    "default_estimated_output_tokens",
+    "default_estimated_output_tokens_per_model",
     "mcp_rpm_limit",
     "tag_rpm_limit",
     "rpm_limit_type",
@@ -4540,10 +4572,10 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
 
     user_role: (
         Literal[
-            LitellmUserRoles.INTERNAL_USER,
-            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
             LitellmUserRoles.PROXY_ADMIN,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         ]
         | None
     ) = Field(
