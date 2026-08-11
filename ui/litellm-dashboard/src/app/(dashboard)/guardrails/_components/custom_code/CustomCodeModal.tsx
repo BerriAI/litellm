@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Modal, Select, Switch, Collapse, Input, Divider } from "antd";
 import { Button, TextInput } from "@tremor/react";
 import {
@@ -96,42 +97,56 @@ const CODE_TEMPLATES = {
 // Available primitives organized by category
 const PRIMITIVES = {
   "Return Values": [
-    { name: "allow()", desc: "Let request/response through" },
-    { name: "block(reason)", desc: "Reject with message" },
-    { name: "modify(texts=[], images=[], tool_calls=[])", desc: "Transform content" },
+    { name: "allow()", desc: "Let request/response through", descKey: "allow" },
+    { name: "block(reason)", desc: "Reject with message", descKey: "block" },
+    { name: "modify(texts=[], images=[], tool_calls=[])", desc: "Transform content", descKey: "modify" },
   ],
   "HTTP Requests (async)": [
-    { name: "await http_request(url, method, headers, body)", desc: "Make async HTTP request" },
-    { name: "await http_get(url, headers)", desc: "Async GET request" },
-    { name: "await http_post(url, body, headers)", desc: "Async POST request" },
+    { name: "await http_request(url, method, headers, body)", desc: "Make async HTTP request", descKey: "http" },
+    { name: "await http_get(url, headers)", desc: "Async GET request", descKey: "httpGet" },
+    { name: "await http_post(url, body, headers)", desc: "Async POST request", descKey: "httpPost" },
   ],
   "Regex Functions": [
-    { name: "regex_match(text, pattern)", desc: "Returns True if pattern found" },
-    { name: "regex_replace(text, pattern, replacement)", desc: "Replace all matches" },
-    { name: "regex_find_all(text, pattern)", desc: "Return list of matches" },
+    { name: "regex_match(text, pattern)", desc: "Returns True if pattern found", descKey: "regexMatch" },
+    { name: "regex_replace(text, pattern, replacement)", desc: "Replace all matches", descKey: "regexReplace" },
+    { name: "regex_find_all(text, pattern)", desc: "Return list of matches", descKey: "regexFindAll" },
   ],
   "JSON Functions": [
-    { name: "json_parse(text)", desc: "Parse JSON string, returns None on error" },
-    { name: "json_stringify(obj)", desc: "Convert to JSON string" },
-    { name: "json_schema_valid(obj, schema)", desc: "Validate against JSON schema" },
+    { name: "json_parse(text)", desc: "Parse JSON string, returns None on error", descKey: "jsonParse" },
+    { name: "json_stringify(obj)", desc: "Convert to JSON string", descKey: "jsonStringify" },
+    { name: "json_schema_valid(obj, schema)", desc: "Validate against JSON schema", descKey: "jsonSchema" },
   ],
   "URL Functions": [
-    { name: "extract_urls(text)", desc: "Extract all URLs from text" },
-    { name: "is_valid_url(url)", desc: "Check if URL is valid" },
-    { name: "all_urls_valid(text)", desc: "Check all URLs in text are valid" },
+    { name: "extract_urls(text)", desc: "Extract all URLs from text", descKey: "extractUrls" },
+    { name: "is_valid_url(url)", desc: "Check if URL is valid", descKey: "validUrl" },
+    { name: "all_urls_valid(text)", desc: "Check all URLs in text are valid", descKey: "allUrlsValid" },
   ],
   "Code Detection": [
-    { name: "detect_code(text)", desc: "Returns True if code detected" },
-    { name: "detect_code_languages(text)", desc: "Returns list of detected languages" },
-    { name: 'contains_code_language(text, ["sql"])', desc: "Check for specific languages" },
+    { name: "detect_code(text)", desc: "Returns True if code detected", descKey: "detectCode" },
+    { name: "detect_code_languages(text)", desc: "Returns list of detected languages", descKey: "codeLanguages" },
+    {
+      name: 'contains_code_language(text, ["sql"])',
+      desc: "Check for specific languages",
+      descKey: "containsLanguage",
+    },
   ],
   "Text Utilities": [
-    { name: "contains(text, substring)", desc: "Check if substring exists" },
-    { name: "contains_any(text, [substr1, substr2])", desc: "Check if any substring exists" },
-    { name: "word_count(text)", desc: "Count words" },
-    { name: "char_count(text)", desc: "Count characters" },
-    { name: "lower(text) / upper(text) / trim(text)", desc: "String transforms" },
+    { name: "contains(text, substring)", desc: "Check if substring exists", descKey: "contains" },
+    { name: "contains_any(text, [substr1, substr2])", desc: "Check if any substring exists", descKey: "containsAny" },
+    { name: "word_count(text)", desc: "Count words", descKey: "wordCount" },
+    { name: "char_count(text)", desc: "Count characters", descKey: "charCount" },
+    { name: "lower(text) / upper(text) / trim(text)", desc: "String transforms", descKey: "stringTransforms" },
   ],
+};
+
+const PRIMITIVE_CATEGORY_KEYS: Record<string, string> = {
+  "Return Values": "returnValues",
+  "HTTP Requests (async)": "httpRequests",
+  "Regex Functions": "regexFunctions",
+  "JSON Functions": "jsonFunctions",
+  "URL Functions": "urlFunctions",
+  "Code Detection": "codeDetection",
+  "Text Utilities": "textUtilities",
 };
 
 const MODE_OPTIONS = [
@@ -166,6 +181,7 @@ interface CustomCodeModalProps {
 }
 
 const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onSuccess, accessToken, editData }) => {
+  const { t } = useTranslation("gateway");
   const isEditMode = !!editData;
   const [guardrailName, setGuardrailName] = useState("");
   const [mode, setMode] = useState<string[]>(["pre_call"]);
@@ -338,15 +354,15 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
   // Save guardrail (create or update)
   const handleSave = async () => {
     if (!guardrailName.trim()) {
-      NotificationsManager.fromBackend("Please enter a guardrail name");
+      NotificationsManager.fromBackend(t("guardrailsPage.customCode.notifications.nameRequired"));
       return;
     }
     if (!code.trim()) {
-      NotificationsManager.fromBackend("Please enter custom code");
+      NotificationsManager.fromBackend(t("guardrailsPage.customCode.notifications.codeRequired"));
       return;
     }
     if (!accessToken) {
-      NotificationsManager.fromBackend("No access token available");
+      NotificationsManager.fromBackend(t("guardrailsPage.customCode.notifications.noToken"));
       return;
     }
 
@@ -374,7 +390,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         }
 
         await updateGuardrailCall(accessToken, editData.guardrail_id, updateData);
-        NotificationsManager.success("Custom code guardrail updated successfully");
+        NotificationsManager.success(t("guardrailsPage.customCode.notifications.updated"));
       } else {
         // Create new guardrail
         const guardrailData = {
@@ -389,15 +405,19 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         };
 
         await createGuardrailCall(accessToken, guardrailData);
-        NotificationsManager.success("Custom code guardrail created successfully");
+        NotificationsManager.success(t("guardrailsPage.customCode.notifications.created"));
       }
       onSuccess();
       onClose();
     } catch (error) {
       console.error("Failed to save guardrail:", error);
       NotificationsManager.fromBackend(
-        `Failed to ${isEditMode ? "update" : "create"} guardrail: ` +
-          (error instanceof Error ? error.message : String(error)),
+        t(
+          isEditMode
+            ? "guardrailsPage.customCode.notifications.updateFailed"
+            : "guardrailsPage.customCode.notifications.createFailed",
+          { error: error instanceof Error ? error.message : String(error) },
+        ),
       );
     } finally {
       setIsSaving(false);
@@ -407,7 +427,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
   // Test guardrail using backend endpoint
   const handleTest = async () => {
     if (!accessToken) {
-      setTestResult({ error: "No access token available" });
+      setTestResult({ error: t("guardrailsPage.customCode.notifications.noToken") });
       return;
     }
 
@@ -420,7 +440,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
       try {
         parsedInput = JSON.parse(testInput);
       } catch (e) {
-        setTestResult({ error: "Invalid test input JSON" });
+        setTestResult({ error: t("guardrailsPage.customCode.notifications.invalidTestJson") });
         setIsTesting(false);
         return;
       }
@@ -457,12 +477,12 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
           error_type: response.error_type,
         });
       } else {
-        setTestResult({ error: "Unknown error occurred" });
+        setTestResult({ error: t("guardrailsPage.customCode.notifications.unknownError") });
       }
     } catch (error) {
       console.error("Failed to test custom code:", error);
       setTestResult({
-        error: error instanceof Error ? error.message : "Failed to test custom code",
+        error: error instanceof Error ? error.message : t("guardrailsPage.customCode.notifications.testFailed"),
       });
     } finally {
       setIsTesting(false);
@@ -485,31 +505,44 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         {/* Header */}
         <div className="pb-4 border-b border-gray-200">
           <h2 className="text-xl font-semibold text-gray-900">
-            {isEditMode ? "Edit Custom Guardrail" : "Create Custom Guardrail"}
+            {isEditMode ? t("guardrailsPage.customCode.editTitle") : t("guardrailsPage.customCode.createTitle")}
           </h2>
-          <p className="text-sm text-gray-500 mt-1">Define custom logic using Python-like syntax</p>
+          <p className="text-sm text-gray-500 mt-1">{t("guardrailsPage.customCode.subtitle")}</p>
         </div>
 
         {/* Top Controls */}
         <div className="flex items-center gap-4 py-4 border-b border-gray-100">
           <div className="flex-1 max-w-[200px]">
-            <label className="block text-xs font-medium text-gray-600 mb-1">Guardrail Name</label>
-            <TextInput value={guardrailName} onValueChange={setGuardrailName} placeholder="e.g., block-pii-custom" />
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              {t("guardrailsPage.customCode.name")}
+            </label>
+            <TextInput
+              value={guardrailName}
+              onValueChange={setGuardrailName}
+              placeholder={t("guardrailsPage.customCode.namePlaceholder")}
+            />
           </div>
           <div className="w-[280px]">
-            <label className="block text-xs font-medium text-gray-600 mb-1">Mode (can select multiple)</label>
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              {t("guardrailsPage.customCode.mode")}
+            </label>
             <Select
               mode="multiple"
               value={mode}
               onChange={setMode}
-              options={MODE_OPTIONS}
+              options={MODE_OPTIONS.map((option) => ({
+                ...option,
+                label: t(`guardrailsPage.customCode.modes.${option.value}`, { defaultValue: option.label }),
+              }))}
               className="w-full"
               size="middle"
-              placeholder="Select modes"
+              placeholder={t("guardrailsPage.customCode.modePlaceholder")}
             />
           </div>
           <div className="w-[180px]">
-            <label className="block text-xs font-medium text-gray-600 mb-1">Template</label>
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              {t("guardrailsPage.customCode.template")}
+            </label>
             <Select
               value={selectedTemplate}
               onChange={handleTemplateChange}
@@ -541,23 +574,23 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                     }}
                   >
                     <UsergroupAddOutlined />
-                    <span>Browse Community templates</span>
+                    <span>{t("guardrailsPage.customCode.browseTemplates")}</span>
                     <ExportOutlined style={{ fontSize: "10px" }} />
                   </div>
                 </>
               )}
             >
-              <Select.OptGroup label="STANDARD">
+              <Select.OptGroup label={t("guardrailsPage.customCode.standard")}>
                 {Object.entries(CODE_TEMPLATES).map(([key, template]) => (
                   <Select.Option key={key} value={key}>
-                    {template.name}
+                    {t(`guardrailsPage.customCode.templates.${key}`, { defaultValue: template.name })}
                   </Select.Option>
                 ))}
               </Select.OptGroup>
             </Select>
           </div>
           <div className="flex items-center gap-2 pt-5">
-            <span className="text-sm text-gray-600">Default On</span>
+            <span className="text-sm text-gray-600">{t("guardrailsPage.customCode.defaultOn")}</span>
             <Switch checked={defaultOn} onChange={setDefaultOn} />
           </div>
         </div>
@@ -567,8 +600,10 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
           {/* Code Editor */}
           <div className="flex-2 flex flex-col min-w-0 overflow-y-auto">
             <div className="flex items-center justify-between mb-2 shrink-0">
-              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Python Logic</span>
-              <span className="text-xs text-gray-400">Restricted environment (no imports)</span>
+              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                {t("guardrailsPage.customCode.pythonLogic")}
+              </span>
+              <span className="text-xs text-gray-400">{t("guardrailsPage.customCode.restrictedEnvironment")}</span>
             </div>
             <div
               className="relative rounded-lg overflow-hidden border border-gray-700 bg-[#1e1e1e] shrink-0"
@@ -617,7 +652,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                 header={
                   <span className="flex items-center gap-2 text-sm font-medium">
                     <PlayCircleOutlined className="text-blue-500" />
-                    Test Your Guardrail
+                    {t("guardrailsPage.customCode.testTitle")}
                   </span>
                 }
                 key="test"
@@ -625,54 +660,58 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                 <div className="space-y-3">
                   <div>
                     <div className="flex items-center justify-between mb-2">
-                      <label className="block text-xs font-medium text-gray-600">Test Input (JSON)</label>
+                      <label className="block text-xs font-medium text-gray-600">
+                        {t("guardrailsPage.customCode.testInput")}
+                      </label>
                       <div className="flex items-center gap-2">
-                        <span className="text-xs text-gray-500">Load example:</span>
+                        <span className="text-xs text-gray-500">{t("guardrailsPage.customCode.loadExample")}:</span>
                         <button
                           type="button"
                           onClick={() => setTestInput(JSON.stringify(TEST_INPUT_EXAMPLES.pre_call.data, null, 2))}
                           className="px-2 py-1 text-xs rounded-sm border border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100 transition-colors"
                         >
-                          Pre-call
+                          {t("guardrailsPage.customCode.preCall")}
                         </button>
                         <button
                           type="button"
                           onClick={() => setTestInput(JSON.stringify(TEST_INPUT_EXAMPLES.pre_mcp_call.data, null, 2))}
                           className="px-2 py-1 text-xs rounded-sm border border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors"
                         >
-                          Pre MCP
+                          {t("guardrailsPage.customCode.preMcp")}
                         </button>
                         <button
                           type="button"
                           onClick={() => setTestInput(JSON.stringify(TEST_INPUT_EXAMPLES.post_call.data, null, 2))}
                           className="px-2 py-1 text-xs rounded-sm border border-green-200 bg-green-50 text-green-700 hover:bg-green-100 transition-colors"
                         >
-                          Post-call
+                          {t("guardrailsPage.customCode.postCall")}
                         </button>
                       </div>
                     </div>
                     <div className="mb-2 p-2 bg-gray-50 rounded-sm text-xs text-gray-600 border border-gray-200">
                       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                         <div>
-                          <strong>texts</strong>: Message content (always)
+                          <strong>texts</strong>: {t("guardrailsPage.customCode.inputFields.texts")}
                         </div>
                         <div>
-                          <strong>images</strong>: Base64 images (vision)
+                          <strong>images</strong>: {t("guardrailsPage.customCode.inputFields.images")}
                         </div>
                         <div>
-                          <strong>tools</strong>: Tool definitions <span className="text-orange-600">(pre_call)</span>,
-                          MCP as OpenAI tool <span className="text-purple-600">(pre_mcp_call)</span>
+                          <strong>tools</strong>: {t("guardrailsPage.customCode.inputFields.tools")}{" "}
+                          <span className="text-orange-600">(pre_call)</span>,{" "}
+                          {t("guardrailsPage.customCode.inputFields.mcpTool")}{" "}
+                          <span className="text-purple-600">(pre_mcp_call)</span>
                         </div>
                         <div>
-                          <strong>tool_calls</strong>: LLM tool calls{" "}
+                          <strong>tool_calls</strong>: {t("guardrailsPage.customCode.inputFields.toolCalls")}{" "}
                           <span className="text-green-600">(post_call)</span>
                         </div>
                         <div>
-                          <strong>structured_messages</strong>: Full messages{" "}
+                          <strong>structured_messages</strong>: {t("guardrailsPage.customCode.inputFields.messages")}{" "}
                           <span className="text-orange-600">(pre_call)</span>
                         </div>
                         <div>
-                          <strong>model</strong>: Model name (always)
+                          <strong>model</strong>: {t("guardrailsPage.customCode.inputFields.model")}
                         </div>
                       </div>
                     </div>
@@ -686,7 +725,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                   </div>
                   <div className="flex items-center gap-3">
                     <Button size="xs" onClick={handleTest} disabled={isTesting} icon={PlayCircleOutlined}>
-                      {isTesting ? "Running..." : "Run Test"}
+                      {isTesting ? t("guardrailsPage.customCode.running") : t("guardrailsPage.customCode.runTest")}
                     </Button>
                     {testResult && (
                       <div
@@ -710,15 +749,15 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                           </>
                         ) : testResult.action === "allow" ? (
                           <>
-                            <CheckCircleOutlined /> Allowed
+                            <CheckCircleOutlined /> {t("guardrailsPage.customCode.allowed")}
                           </>
                         ) : testResult.action === "block" ? (
                           <>
-                            <CloseCircleOutlined /> Blocked: {testResult.reason}
+                            <CloseCircleOutlined /> {t("guardrailsPage.customCode.blocked")}: {testResult.reason}
                           </>
                         ) : testResult.action === "modify" ? (
                           <>
-                            <CheckCircleOutlined /> Modified
+                            <CheckCircleOutlined /> {t("guardrailsPage.customCode.modified")}
                             {testResult.texts && testResult.texts.length > 0 && (
                               <span className="text-xs text-gray-500 ml-1">
                                 → {testResult.texts[0].substring(0, 50)}
@@ -728,7 +767,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                           </>
                         ) : (
                           <>
-                            <CheckCircleOutlined /> {testResult.action || "Unknown"}
+                            <CheckCircleOutlined /> {testResult.action || t("guardrailsPage.customCode.unknown")}
                           </>
                         )}
                       </div>
@@ -744,8 +783,8 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                   <UsergroupAddOutlined className="text-blue-600 text-lg" />
                 </div>
                 <div>
-                  <div className="text-sm font-medium text-gray-900">Built a useful guardrail?</div>
-                  <div className="text-xs text-gray-600">Share it with the community and help others build faster</div>
+                  <div className="text-sm font-medium text-gray-900">{t("guardrailsPage.customCode.builtUseful")}</div>
+                  <div className="text-xs text-gray-600">{t("guardrailsPage.customCode.shareDescription")}</div>
                 </div>
               </div>
               <Button
@@ -754,7 +793,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                 icon={ExportOutlined}
                 className="bg-blue-600 hover:bg-blue-700 text-white border-0"
               >
-                Contribute Template
+                {t("guardrailsPage.customCode.contribute")}
               </Button>
             </div>
           </div>
@@ -763,9 +802,9 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
           <div className="w-[300px] shrink-0 overflow-auto border-l border-gray-200 pl-6">
             <div className="flex items-center gap-2 mb-3">
               <CodeOutlined className="text-blue-500" />
-              <span className="font-semibold text-gray-700">Available Primitives</span>
+              <span className="font-semibold text-gray-700">{t("guardrailsPage.customCode.primitivesTitle")}</span>
             </div>
-            <p className="text-xs text-gray-500 mb-3">Click to copy functions to clipboard</p>
+            <p className="text-xs text-gray-500 mb-3">{t("guardrailsPage.customCode.primitivesHelp")}</p>
 
             <Collapse
               defaultActiveKey={["Return Values"]}
@@ -774,7 +813,13 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
             >
               {Object.entries(PRIMITIVES).map(([category, primitives]) => (
                 <Panel
-                  header={<span className="text-sm font-medium text-gray-700">{category}</span>}
+                  header={
+                    <span className="text-sm font-medium text-gray-700">
+                      {t(`guardrailsPage.customCode.primitiveCategories.${PRIMITIVE_CATEGORY_KEYS[category]}`, {
+                        defaultValue: category,
+                      })}
+                    </span>
+                  }
                   key={category}
                   className="bg-white mb-2 rounded-lg border border-gray-200"
                 >
@@ -789,12 +834,14 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                       >
                         {copiedPrimitive === p.name ? (
                           <span className="flex items-center gap-1 text-xs font-mono text-green-700">
-                            <CheckCircleOutlined /> Copied!
+                            <CheckCircleOutlined /> {t("guardrailsPage.customCode.copied")}
                           </span>
                         ) : (
                           <>
                             <div className="text-xs font-mono text-gray-800">{p.name}</div>
-                            <div className="text-[10px] text-gray-500 mt-0.5">{p.desc}</div>
+                            <div className="text-[10px] text-gray-500 mt-0.5">
+                              {t(`guardrailsPage.customCode.primitives.${p.descKey}`, { defaultValue: p.desc })}
+                            </div>
                           </>
                         )}
                       </button>
@@ -808,10 +855,10 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
 
         {/* Footer */}
         <div className="flex items-center justify-between pt-4 mt-4 border-t border-gray-200">
-          <span className="text-xs text-gray-400">Changes are auto-saved to local draft</span>
+          <span className="text-xs text-gray-400">{t("guardrailsPage.customCode.autoSaved")}</span>
           <div className="flex items-center gap-3">
             <Button variant="secondary" onClick={onClose}>
-              Cancel
+              {t("guardrailsPage.customCode.cancel")}
             </Button>
             <Button
               onClick={handleSave}
@@ -819,7 +866,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
               disabled={isSaving || !guardrailName.trim()}
               icon={SaveOutlined}
             >
-              {isEditMode ? "Update Guardrail" : "Save Guardrail"}
+              {isEditMode ? t("guardrailsPage.customCode.update") : t("guardrailsPage.customCode.save")}
             </Button>
           </div>
         </div>
