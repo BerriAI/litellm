@@ -79,8 +79,23 @@ body:
              If the provider already supports this, link their API docs and paste a direct call to them succeeding, so we can see the shape LiteLLM should be sending
              For UI asks: include screenshots of the page you got stuck on and its URL. Scrub keys and tokens out of screenshots too, they show up in headers, request panels, and the Admin UI -->
 
+        Config / setup the proxy ran with:
+
+        Version or commit:
+
+        Commands and their full output, up to the step that dead-ends:
+
+        What stopped me there:
+
     validations:
       required: true
+  - type: checkboxes
+    id: attempt-attestation
+    attributes:
+      label: About that attempt
+      options:
+        - label: I ran it against a live proxy myself, with no mocks, and the output above is what I actually got back
+          required: true
   - type: dropdown
     id: component
     attributes:
