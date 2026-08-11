@@ -8163,8 +8163,9 @@ async def test_bare_origin_discovery_resolves_single_server_not_aggregate():
         )
         # per-server, not aggregate: the single server's name is in the endpoints
         assert "/test_oauth/authorize" in authorization_response["authorization_endpoint"]
-        assert authorization_response["issuer"] == "https://llm.example.com"
-        assert resource_response["authorization_servers"] == ["https://llm.example.com/test_oauth"]
+        expected_issuer = "https://llm.example.com/test_oauth"
+        assert authorization_response["issuer"] == expected_issuer
+        assert resource_response["authorization_servers"] == [expected_issuer]
     finally:
         global_mcp_server_manager.registry.clear()
 
