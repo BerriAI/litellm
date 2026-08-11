@@ -2416,7 +2416,8 @@ def _build_oauth_authorization_server_response(
     _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth authorization server")
 
     return {
-        "issuer": request_base_url,  # point to your proxy
+        # Match the per-server identifier advertised in protected-resource metadata.
+        "issuer": f"{request_base_url}/{mcp_server_name}" if mcp_server_name else request_base_url,
         "authorization_endpoint": authorization_endpoint,
         "token_endpoint": token_endpoint,
         "response_types_supported": ["code"],
