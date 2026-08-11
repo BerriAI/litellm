@@ -3,6 +3,7 @@ import { CrownOutlined, InfoCircleOutlined, UserAddOutlined, UserOutlined } from
 import { Button, Space, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import React from "react";
+import { useTranslation } from "react-i18next";
 import TableIconActionButton from "./IconActionButton/TableIconActionButtons/TableIconActionButton";
 
 const { Text } = Typography;
@@ -26,36 +27,50 @@ export default function MemberTable({
   onEdit,
   onDelete,
   onAddMember,
-  roleColumnTitle = "Role",
+  roleColumnTitle,
   roleTooltip,
   extraColumns = [],
   showDeleteForMember,
   emptyText,
 }: MemberTableProps) {
+  const { t } = useTranslation("gateway");
+  const effectiveRoleColumnTitle = roleColumnTitle ?? t("teams.memberTable.role");
+  const roleLabel = (role: string) => {
+    const normalized = role?.toLowerCase();
+    if (normalized === "admin") return t("teams.details.member.admin");
+    if (normalized === "org_admin") return t("teams.memberTable.organizationAdmin");
+    if (normalized === "user" || normalized === "member") return t("teams.details.member.user");
+    return role || "-";
+  };
+
   const baseColumns: ColumnsType<Member> = [
     {
-      title: "User Email",
+      title: t("teams.memberTable.userEmail"),
       dataIndex: "user_email",
       key: "user_email",
       render: (email: string | null) => <Text>{email || "-"}</Text>,
     },
     {
-      title: "User ID",
+      title: t("teams.details.member.userId"),
       dataIndex: "user_id",
       key: "user_id",
       render: (userId: string | null) =>
-        userId === "default_user_id" ? <Tag color="blue">Default Proxy Admin</Tag> : <Text>{userId || "-"}</Text>,
+        userId === "default_user_id" ? (
+          <Tag color="blue">{t("teams.memberTable.defaultProxyAdmin")}</Tag>
+        ) : (
+          <Text>{userId || "-"}</Text>
+        ),
     },
     {
       title: roleTooltip ? (
         <Space direction="horizontal">
-          {roleColumnTitle}
+          {effectiveRoleColumnTitle}
           <Tooltip title={roleTooltip}>
             <InfoCircleOutlined />
           </Tooltip>
         </Space>
       ) : (
-        roleColumnTitle
+        effectiveRoleColumnTitle
       ),
       dataIndex: "role",
       key: "role",
@@ -66,13 +81,13 @@ export default function MemberTable({
           ) : (
             <UserOutlined />
           )}
-          <Text style={{ textTransform: "capitalize" }}>{role || "-"}</Text>
+          <Text>{roleLabel(role)}</Text>
         </Space>
       ),
     },
     ...extraColumns,
     {
-      title: "Actions",
+      title: t("teams.table.actions"),
       key: "actions",
       fixed: "right" as const,
       width: 120,
@@ -81,14 +96,14 @@ export default function MemberTable({
           <Space>
             <TableIconActionButton
               variant="Edit"
-              tooltipText="Edit member"
+              tooltipText={t("teams.memberTable.edit")}
               dataTestId="edit-member"
               onClick={() => onEdit(record)}
             />
             {(!showDeleteForMember || showDeleteForMember(record)) && (
               <TableIconActionButton
                 variant="Delete"
-                tooltipText="Delete member"
+                tooltipText={t("teams.memberTable.delete")}
                 dataTestId="delete-member"
                 onClick={() => onDelete(record)}
               />
@@ -101,7 +116,7 @@ export default function MemberTable({
   return (
     <Space direction="vertical" style={{ width: "100%" }}>
       <span className="inline-flex text-sm text-gray-700">
-        {members.length} Member{members.length !== 1 ? "s" : ""}
+        {t("teams.memberTable.count", { count: members.length })}
       </span>
       <Table
         columns={baseColumns}
@@ -110,11 +125,11 @@ export default function MemberTable({
         pagination={false}
         size="small"
         scroll={{ x: "max-content" }}
-        locale={emptyText ? { emptyText } : undefined}
+        locale={{ emptyText: emptyText ?? t("teams.memberTable.empty") }}
       />
       {onAddMember && canEdit && (
         <Button icon={<UserAddOutlined />} type="primary" onClick={onAddMember}>
-          Add Member
+          {t("teams.memberTable.add")}
         </Button>
       )}
     </Space>

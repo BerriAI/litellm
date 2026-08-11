@@ -4,6 +4,7 @@ import { UserAddOutlined } from "@ant-design/icons";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { userFilterUICall } from "@/components/networking";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
+import { useTranslation } from "react-i18next";
 interface User {
   user_id: string;
   user_email: string;
@@ -44,18 +45,24 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   onCancel,
   onSubmit,
   accessToken,
-  title = "Add Team Member",
-  roles = [
-    {
-      label: "admin",
-      value: "admin",
-      description: "Admin role. Can create team keys, add members, and manage settings.",
-    },
-    { label: "user", value: "user", description: "User role. Can view team info, but not manage it." },
-  ],
+  title,
+  roles,
   defaultRole = "user",
   teamId,
 }) => {
+  const { t } = useTranslation("gateway");
+  const availableRoles = roles ?? [
+    {
+      label: t("teams.details.member.admin"),
+      value: "admin",
+      description: t("teams.userSearch.adminDescription"),
+    },
+    {
+      label: t("teams.details.member.user"),
+      value: "user",
+      description: t("teams.userSearch.userDescription"),
+    },
+  ];
   const [form] = Form.useForm<FormValues>();
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
@@ -129,7 +136,14 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   };
 
   return (
-    <Modal title={title} open={isVisible} onCancel={handleClose} footer={null} width={800} maskClosable={!isSubmitting}>
+    <Modal
+      title={title ?? t("teams.userSearch.title")}
+      open={isVisible}
+      onCancel={handleClose}
+      footer={null}
+      width={800}
+      maskClosable={!isSubmitting}
+    >
       <Form<FormValues>
         form={form}
         onFinish={handleSubmit}
@@ -144,15 +158,15 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
           type="info"
           showIcon
           className="mb-4"
-          message="Search selects from users that already exist. To add someone new, ask a proxy admin to create their account first."
+          message={t("teams.userSearch.existingUsersNotice")}
           data-testid="member-existing-users-notice"
         />
 
-        <Form.Item label="Email" name="user_email" className="mb-4">
+        <Form.Item label={t("teams.details.member.email")} name="user_email" className="mb-4">
           <Select
             showSearch
             className="w-full"
-            placeholder="Search by email"
+            placeholder={t("teams.userSearch.searchEmail")}
             filterOption={false}
             onSearch={(value) => handleSearch(value, "user_email")}
             onSelect={(value, option) => handleSelect(value, option as UserOption)}
@@ -163,13 +177,13 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
           />
         </Form.Item>
 
-        <div className="text-center mb-4">OR</div>
+        <div className="text-center mb-4">{t("teams.memberModal.or")}</div>
 
-        <Form.Item label="User ID" name="user_id" className="mb-4">
+        <Form.Item label={t("teams.details.member.userId")} name="user_id" className="mb-4">
           <Select
             showSearch
             className="w-full"
-            placeholder="Search by user ID"
+            placeholder={t("teams.userSearch.searchUserId")}
             filterOption={false}
             onSearch={(value) => handleSearch(value, "user_id")}
             onSelect={(value, option) => handleSelect(value, option as UserOption)}
@@ -179,9 +193,9 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
           />
         </Form.Item>
 
-        <Form.Item label="Member Role" name="role" className="mb-4">
+        <Form.Item label={t("teams.userSearch.memberRole")} name="role" className="mb-4">
           <Select defaultValue={defaultRole}>
-            {roles.map((role) => (
+            {availableRoles.map((role) => (
               <Select.Option key={role.value} value={role.value}>
                 <Tooltip title={role.description}>
                   <span className="font-medium">{role.label}</span>
@@ -194,7 +208,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
 
         <div className="text-right mt-4">
           <Button type="primary" htmlType="submit" icon={<UserAddOutlined />} loading={isSubmitting}>
-            {isSubmitting ? "Adding..." : "Add Member"}
+            {isSubmitting ? t("teams.memberModal.adding") : t("teams.memberTable.add")}
           </Button>
         </div>
       </Form>
