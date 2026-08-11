@@ -11394,6 +11394,66 @@ async def test_execute_virtual_key_regeneration_rejects_preset_over_custom_route
 
 
 @pytest.mark.asyncio
+async def test_regenerate_rejects_route_transition_before_recording_deletion():
+    """A rejected regeneration must not create a deleted-key history row."""
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        regenerate_key_fn,
+    )
+
+    existing_key = _make_regenerate_existing_key()
+    existing_key.allowed_routes = ["/custom/admin-defined-route"]
+    mock_repo = MagicMock()
+    mock_repo.table.find_unique = AsyncMock(return_value=existing_key)
+    persist_deleted_mock = AsyncMock()
+    execute_mock = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: module-global proxy setting for test
+        patch("litellm.proxy.proxy_server.master_key", None),  # test-quality-ok: module-global proxy setting for test
+        patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),  # test-quality-ok: module-global prisma client for test
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),  # test-quality-ok: module-global proxy logger for test
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),  # test-quality-ok: module-global user key cache for test
+        patch("litellm.proxy.proxy_server.hash_token", lambda token: "hashed-old"),  # test-quality-ok: module-global token hasher for test
+        patch(  # test-quality-ok: repository dependency isolation for test
+            "litellm.proxy.management_endpoints.key_management_endpoints.VerificationTokenRepository",
+            return_value=mock_repo,
+        ),
+        patch(  # test-quality-ok: team permission checks isolation for test
+            "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: token modification authorization isolation for test
+            "litellm.proxy.management_endpoints.key_management_endpoints.can_modify_verification_token",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(  # test-quality-ok: verify deletion persistence is not called before validation
+            "litellm.proxy.management_endpoints.key_management_endpoints._persist_deleted_verification_tokens",
+            persist_deleted_mock,
+        ),
+        patch(  # test-quality-ok: verify regeneration execution is not called before validation
+            "litellm.proxy.management_endpoints.key_management_endpoints._execute_virtual_key_regeneration",
+            execute_mock,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await regenerate_key_fn(
+                key="sk-old",
+                data=RegenerateKeyRequest(key_type=LiteLLMKeyType.LLM_API),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                    user_id="user-1",
+                ),
+            )
+
+    assert exc_info.value.status_code == 403
+    assert "allowed_routes" in str(exc_info.value.detail)
+    persist_deleted_mock.assert_not_awaited()
+    execute_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_execute_virtual_key_regeneration_rejects_over_limit_duration(monkeypatch):
     """Regenerate must reject durations exceeding upperbound_key_generate_params.duration."""
     from litellm.proxy._types import RegenerateKeyRequest

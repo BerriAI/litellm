@@ -4817,12 +4817,6 @@ async def _execute_virtual_key_regeneration(
         existing_key_row=key_in_db,
         user_api_key_dict=user_api_key_dict,
     )
-    _check_key_type_transition_against_existing_routes(
-        data=data,
-        existing_key_row=key_in_db,
-        user_api_key_dict=user_api_key_dict,
-    )
-
     # Apply the same membership rule used on /key/update: when the caller
     # asks to point the regenerated key at a different organization_id,
     # require they are a member of (or proxy admin over) the target org.
@@ -5121,6 +5115,15 @@ async def regenerate_key_fn(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"error": "You are not authorized to regenerate this key"},
             )
+
+        # Validate the requested route transition before recording the old
+        # key as deleted. A rejected regeneration must not leave historical
+        # deletion state for a key that remains active.
+        _check_key_type_transition_against_existing_routes(
+            data=data,
+            existing_key_row=_key_in_db,
+            user_api_key_dict=user_api_key_dict,
+        )
 
         if data is not None and (data.access_group_ids or data.object_permission is not None):
             regenerate_team_table: LiteLLM_TeamTableCachedObj | None = None
