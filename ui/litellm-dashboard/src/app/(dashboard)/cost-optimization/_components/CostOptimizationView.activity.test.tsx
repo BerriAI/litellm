@@ -3,6 +3,17 @@ import { describe, expect, it, vi } from "vitest";
 
 const mockUserDailyActivityCall = vi.fn();
 
+vi.mock("@/app/(dashboard)/hooks/useCan", async () => {
+  const useAuthorizedModule = await import("@/app/(dashboard)/hooks/useAuthorized");
+  const { hasCapability } = await import("@/utils/capabilities");
+  return {
+    default: (capability: string) => {
+      const { userRole } = useAuthorizedModule.default();
+      return hasCapability(userRole, capability as never);
+    },
+  };
+});
+
 vi.mock("@/components/networking", () => ({
   userDailyActivityCall: (...args: unknown[]) => mockUserDailyActivityCall(...args),
   getToolSpend: vi.fn().mockResolvedValue({ by_tool: [], daily: [], start_date: null, end_date: null }),

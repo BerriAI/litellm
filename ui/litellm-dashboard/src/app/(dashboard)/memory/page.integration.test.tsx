@@ -9,6 +9,16 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: useAuthorizedMock,
 }));
 
+vi.mock("@/app/(dashboard)/hooks/useCan", async () => {
+  const { hasCapability } = await import("@/utils/capabilities");
+  return {
+    default: (capability: string) => {
+      const { userRole } = useAuthorizedMock();
+      return hasCapability(userRole, capability as never);
+    },
+  };
+});
+
 const fetchMock = vi.fn();
 
 const requestedUrls = () => fetchMock.mock.calls.map(([url]) => String(url));

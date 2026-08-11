@@ -13,6 +13,16 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: useAuthorizedMock,
 }));
 
+vi.mock("@/app/(dashboard)/hooks/useCan", async () => {
+  const { hasCapability } = await import("@/utils/capabilities");
+  return {
+    default: (capability: string) => {
+      const { userRole } = useAuthorizedMock();
+      return hasCapability(userRole, capability as never);
+    },
+  };
+});
+
 vi.mock("@/components/networking", () => ({
   getToolSpend: (...args: unknown[]) => mockGetToolSpend(...args),
 }));
