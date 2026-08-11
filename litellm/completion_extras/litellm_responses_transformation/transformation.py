@@ -267,15 +267,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         }
                     )
             elif role == "tool":
-                # Convert tool message to function call output format
-                # The Responses API expects 'output' to be a list with input_text/input_image types
-                # Using list format for consistency across text and multimodal content
-                tool_output: list[dict[str, Any]]
+                # Convert tool message to function call output format.
+                # Per the Responses API spec, function_call_output.output is a plain
+                # string for text results; only multimodal (list) content is wrapped
+                # into input_text/input_image items.
+                tool_output: Union[str, list[dict[str, Any]]]
                 if content is None:
-                    tool_output = []
+                    tool_output = ""
                 elif isinstance(content, str):
-                    # Convert string to list with input_text
-                    tool_output = [{"type": "input_text", "text": content}]
+                    # Keep plain string as-is to match the Responses API spec
+                    tool_output = content
                 elif isinstance(content, list):
                     # Transform list content to Responses API format
                     tool_output = self._convert_content_to_responses_format(
@@ -283,14 +284,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         "user",  # Use "user" role to get input_* types
                     )
                 else:
-                    # Fallback: convert unexpected types to input_text
-                    tool_output = [{"type": "input_text", "text": str(content)}]
+                    # Fallback: coerce unexpected types to string
+                    tool_output = str(content)
                 if tool_call_id in custom_tool_call_ids:
                     input_items.append(
                         ResponseCustomToolCallOutputParam(
                             type="custom_tool_call_output",
                             call_id=tool_call_id,
-                            output=content if isinstance(content, str) else tool_output,
+                            output=tool_output,
                         )
                     )
                 else:
