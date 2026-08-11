@@ -37,7 +37,7 @@ body:
         - Every step is something the user does or observes: the HTTP method and full URL they hit, what they sent, and what visibly came back (status code, error text, the shape of an ID). UI steps name the page URL and what is on screen
         - No LiteLLM internals: never name functions, files, DB tables, config classes, hooks, callbacks, or code paths. "The upload hands back an ID that looks like OpenAI's own `file-abc123` instead of the scrambled one the gateway returned" is right, "no managed-file row was registered" is wrong
         - Keep the two lists step-for-step identical until they diverge, so the broken step is obvious
-        - If the bug has a security or authorization consequence, end each list with what another user can or could no longer do
+        - If the bug has a security or authorization consequence, end each list with what another user can do that they shouldn't be able to, and what they could no longer do after a fix
       placeholder: |
         Before a (hypothetical) fix: a developer whose app streams chat completions gets no token counts back, so their cost dashboard reads zero
 
@@ -60,11 +60,11 @@ body:
       description: |
         The commands (e.g., curl) and their full output, screenshots, or a screen recording demonstrating that the bug happens. Every rule below applies.
 
-        - The proof must be completely e2e with no mocks, against a live proxy you ran yourself (e.g., `litellm --config config.yaml --detailed_debug` on localhost:4000), hitting real LLM provider APIs and costing real $ where the bug involves a provider call. `pytest` commands are not enough
+        - The proof must be completely e2e with no mocks, against a live proxy you ran yourself (e.g., `litellm --config config.yaml --detailed_debug` on localhost:4000), hitting real LLM provider APIs, costing real $$$ if needed, where the bug involves a provider call. `pytest` commands are not enough
         - Show exactly what the end user sees or does, matching the User Flow above step for step
         - Start with the config.yaml (or SDK setup) and any env vars the proxy ran with, then the exact version or commit hash the proof was captured at, so a maintainer can stand up the same proxy before running your commands. Keep the real values for env vars that aren't sensitive, they are often the reason the bug happens, and redact only the secrets: never paste a real API key, virtual key, database URL, or other credential, here or anywhere else in the issue
         - If the bug applies to more than one of the LLM endpoints (/v1/responses, /v1/chat/completions, /v1/messages), include proof for every one of them, not just one
-        - For UI bugs: include screenshots and the page URLs you were on. Scrub keys and tokens out of screenshots too, they show up in headers, request panels, and the Admin UI
+        - For UI bugs: include screenshots and the page URLs you were on. Scrub keys and tokens out of screenshots too (for example, the virtual key is briefly shown in the panel right after you create a virtual key)
       placeholder: |
         Config / setup the proxy ran with:
 
@@ -73,13 +73,6 @@ body:
         Commands and their full output:
     validations:
       required: true
-  - type: checkboxes
-    id: proof-attestation
-    attributes:
-      label: About that proof
-      options:
-        - label: It came from a live proxy I ran myself, with no mocks, and shows the real commands and their output rather than a `pytest` run
-          required: true
   - type: dropdown
     id: component
     attributes:
