@@ -390,3 +390,77 @@ describe("EditAutoRouterModal session affinity", () => {
     expect(savedConfig().session_affinity).toBe(false);
   });
 });
+
+describe("EditAutoRouterModal custom classifier prompt and fallback", () => {
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  const STORED_CUSTOM_CONFIG = {
+    tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: ["gpt-4o-mini"], COMPLEX: ["gpt-4o-mini"], REASONING: ["gpt-4o-mini"] },
+    classifier_type: "llm",
+    classifier_llm_config: {
+      model: "gpt-4o-mini",
+      timeout_ms: 3000,
+      system_prompt: "Grade data sensitivity, not difficulty.",
+    },
+    classifier_fallback: "default_model",
+  };
+
+  const renderCustomModal = () =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: { ...MODEL_DATA.litellm_params, complexity_router_config: STORED_CUSTOM_CONFIG },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  // Both keys are rewritten from form state on save, so a missing hydration line would silently
+  // wipe an operator's custom prompt the first time they opened this modal for anything else.
+  it("preserves a stored custom prompt and fallback through an untouched open-and-save", async () => {
+    const user = userEvent.setup();
+    renderCustomModal();
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    expect(await screen.findByRole("button", { name: "Edit custom prompt" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Route to the default model/ })).toHaveAttribute("checked");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    const config = savedConfig();
+    expect(config.classifier_llm_config.system_prompt).toBe("Grade data sensitivity, not difficulty.");
+    expect(config.classifier_fallback).toBe("default_model");
+  });
+
+  it("persists a switch back to the heuristic fallback", async () => {
+    const user = userEvent.setup();
+    renderCustomModal();
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("radio", { name: /Score with the heuristic/ }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().classifier_fallback).toBe("heuristic");
+  });
+
+  it("drops the override when the prompt is reset to the default", async () => {
+    const user = userEvent.setup();
+    renderCustomModal();
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("button", { name: "Reset to default" }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().classifier_llm_config).not.toHaveProperty("system_prompt");
+  });
+});

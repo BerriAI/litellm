@@ -436,9 +436,6 @@ describe("useTeam", () => {
       showSSOBanner: false,
     });
 
-    // Import useQueryClient to get access to query client
-    const { useQueryClient } = await import("@tanstack/react-query");
-
     // Manually test the queryFn logic by calling it directly
     // This simulates what would happen if enabled check was bypassed
     const testQueryFn = async () => {

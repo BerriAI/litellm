@@ -8,11 +8,12 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 import certifi
 import httpx
-from aiohttp import ClientSession, TCPConnector
+from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 from httpx._types import RequestFiles
 
@@ -127,6 +128,30 @@ def _default_cached_client_timeout() -> httpx.Timeout:
     if configured is None:
         return _DEFAULT_TIMEOUT
     return httpx.Timeout(timeout=configured, connect=HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS)
+
+
+_CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER: Final = 2
+
+
+def _handler_may_close_client(client_refcount: int, owns_client: bool) -> bool:
+    """
+    Whether a handler being finalized may close its client.
+
+    Only when the handler built the client and is still its sole referrer. Finalization
+    proves that nothing references the *handler*; it proves nothing about the client, which
+    a cached handler may have handed to consumers that outlive it. Callers must read the
+    refcount at the call site, since binding the client to a parameter would inflate it.
+    """
+    return owns_client and client_refcount <= _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER
+
+
+def blocked_cookie_jar() -> CookieJar:
+    """A jar that stores no response cookie and sends none, for httpx clients.
+
+    LiteLLM's outbound clients are pooled and shared by every caller, so a cookie one
+    upstream sets would be replayed to every other upstream on a matching domain.
+    """
+    return CookieJar(policy=DefaultCookiePolicy(allowed_domains=()))
 
 
 _STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS: Final = 5.0
@@ -572,19 +597,21 @@ class AsyncHTTPHandler:
             verify=ssl_config,
             cert=cert,
             headers=default_headers,
+            cookies=blocked_cookie_jar(),
             follow_redirects=True,
         )
 
     async def close(self):
         # Close the client when you're done with it
-        await self._client.aclose()
+        if self._owns_client:
+            await self._client.aclose()
 
     async def __aenter__(self):
         return self.client
 
     async def __aexit__(self):
         # close the client when exiting
-        await self._client.aclose()
+        await self.close()
 
     async def get(
         self,
@@ -603,8 +630,8 @@ class AsyncHTTPHandler:
         response: Final = await self.client.get(
             url,
             params=params,
-            headers=headers,  # type: ignore
-            follow_redirects=_follow_redirects,  # type: ignore
+            headers=headers,
+            follow_redirects=_follow_redirects,
             timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
         )
         return response
@@ -613,7 +640,7 @@ class AsyncHTTPHandler:
     async def post(
         self,
         url: str,
-        data: dict | str | bytes | None = None,  # type: ignore
+        data: dict | str | bytes | None = None,
         json: dict | None = None,
         params: dict | None = None,
         headers: dict | None = None,
@@ -683,7 +710,7 @@ class AsyncHTTPHandler:
     async def put(
         self,
         url: str,
-        data: dict | str | bytes | None = None,  # type: ignore
+        data: dict | str | bytes | None = None,
         json: dict | None = None,
         params: dict | None = None,
         headers: dict | None = None,
@@ -706,7 +733,7 @@ class AsyncHTTPHandler:
                 params=params,
                 headers=headers,
                 timeout=timeout,
-                content=request_content,  # type: ignore
+                content=request_content,
             )
             response: Final = await self.client.send(req)
             response.raise_for_status()
@@ -747,7 +774,7 @@ class AsyncHTTPHandler:
     async def patch(
         self,
         url: str,
-        data: dict | str | bytes | None = None,  # type: ignore
+        data: dict | str | bytes | None = None,
         json: dict | None = None,
         params: dict | None = None,
         headers: dict | None = None,
@@ -770,7 +797,7 @@ class AsyncHTTPHandler:
                 params=params,
                 headers=headers,
                 timeout=timeout,
-                content=request_content,  # type: ignore
+                content=request_content,
             )
             response: Final = await self.client.send(req)
             response.raise_for_status()
@@ -811,7 +838,7 @@ class AsyncHTTPHandler:
     async def delete(
         self,
         url: str,
-        data: dict | str | bytes | None = None,  # type: ignore
+        data: dict | str | bytes | None = None,
         json: dict | None = None,
         params: dict | None = None,
         headers: dict | None = None,
@@ -834,7 +861,7 @@ class AsyncHTTPHandler:
                 params=params,
                 headers=headers,
                 timeout=timeout,
-                content=request_content,  # type: ignore
+                content=request_content,
             )
             response: Final = await self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -863,7 +890,7 @@ class AsyncHTTPHandler:
         self,
         url: str,
         client: httpx.AsyncClient,
-        data: dict | str | bytes | None = None,  # type: ignore
+        data: dict | str | bytes | None = None,
         json: dict | None = None,
         params: dict | None = None,
         headers: dict | None = None,
@@ -885,7 +912,7 @@ class AsyncHTTPHandler:
             json=json,
             params=params,
             headers=headers,
-            content=request_content,  # type: ignore
+            content=request_content,
         )
         response: Final = await client.send(req, stream=stream)
         response.raise_for_status()
@@ -893,7 +920,9 @@ class AsyncHTTPHandler:
 
     def __del__(self) -> None:
         try:
-            asyncio.get_running_loop().create_task(self.close())
+            if not _handler_may_close_client(sys.getrefcount(self._client), self._owns_client):
+                return
+            asyncio.get_running_loop().create_task(self._client.aclose())
         except Exception:
             pass
 
@@ -1045,6 +1074,7 @@ class AsyncHTTPHandler:
         def session_factory() -> ClientSession:
             return ClientSession(
                 connector=TCPConnector(**transport_connector_kwargs),
+                cookie_jar=DummyCookieJar(),
                 trust_env=trust_env,
             )
 
@@ -1114,6 +1144,7 @@ class HTTPHandler:
             verify=ssl_config,
             cert=cert,
             headers=default_headers,
+            cookies=blocked_cookie_jar(),
             follow_redirects=True,
         )
 
@@ -1132,7 +1163,8 @@ class HTTPHandler:
 
     def close(self):
         # Close the client when you're done with it
-        self._client.close()
+        if self._owns_client:
+            self._client.close()
 
     def get(
         self,
@@ -1191,13 +1223,13 @@ class HTTPHandler:
                 req = self.client.build_request(
                     "POST",
                     url,
-                    data=request_data,  # type: ignore
+                    data=request_data,
                     json=json,
                     params=params,
                     headers=headers,
                     timeout=timeout,
                     files=files,
-                    content=request_content,  # type: ignore
+                    content=request_content,
                 )
             else:
                 req = self.client.build_request(
@@ -1208,7 +1240,7 @@ class HTTPHandler:
                     params=params,
                     headers=headers,
                     files=files,
-                    content=request_content,  # type: ignore
+                    content=request_content,
                 )
             response: Final = self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -1248,7 +1280,7 @@ class HTTPHandler:
                     params=params,
                     headers=headers,
                     timeout=timeout,
-                    content=request_content,  # type: ignore
+                    content=request_content,
                 )
             else:
                 req = self.client.build_request(
@@ -1258,7 +1290,7 @@ class HTTPHandler:
                     json=json,
                     params=params,
                     headers=headers,
-                    content=request_content,  # type: ignore
+                    content=request_content,
                 )
             response: Final = self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -1298,7 +1330,7 @@ class HTTPHandler:
                     params=params,
                     headers=headers,
                     timeout=timeout,
-                    content=request_content,  # type: ignore
+                    content=request_content,
                 )
             else:
                 req = self.client.build_request(
@@ -1308,7 +1340,7 @@ class HTTPHandler:
                     json=json,
                     params=params,
                     headers=headers,
-                    content=request_content,  # type: ignore
+                    content=request_content,
                 )
             response: Final = self.client.send(req, stream=stream)
             return response
@@ -1326,7 +1358,7 @@ class HTTPHandler:
     def delete(
         self,
         url: str,
-        data: dict | str | bytes | None = None,  # type: ignore
+        data: dict | str | bytes | None = None,
         json: dict | None = None,
         params: dict | None = None,
         headers: dict | None = None,
@@ -1347,7 +1379,7 @@ class HTTPHandler:
                     params=params,
                     headers=headers,
                     timeout=timeout,
-                    content=request_content,  # type: ignore
+                    content=request_content,
                 )
             else:
                 req = self.client.build_request(
@@ -1357,7 +1389,7 @@ class HTTPHandler:
                     json=json,
                     params=params,
                     headers=headers,
-                    content=request_content,  # type: ignore
+                    content=request_content,
                 )
             response: Final = self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -1375,7 +1407,8 @@ class HTTPHandler:
 
     def __del__(self) -> None:
         try:
-            self.close()
+            if _handler_may_close_client(sys.getrefcount(self._client), self._owns_client):
+                self._client.close()
         except Exception:
             pass
 
@@ -1441,6 +1474,7 @@ def get_async_httpx_client(
         key=_cache_key_name,
         value=_new_client,
         ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+        litellm_owned_client=True,
     )
     return _new_client
 
@@ -1486,5 +1520,6 @@ def _get_httpx_client(params: dict | None = None) -> HTTPHandler:
         key=_cache_key_name,
         value=_new_client,
         ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+        litellm_owned_client=True,
     )
     return _new_client

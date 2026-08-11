@@ -63,7 +63,7 @@ class SearchAPIRouter:
             router_search_tools: Final[list] = []
             for tool in search_tools:
                 # Create dict that matches SearchToolTypedDict structure
-                router_search_tool: SearchToolTypedDict = {  # type: ignore
+                router_search_tool: SearchToolTypedDict = {
                     "search_tool_id": tool.get("search_tool_id"),
                     "search_tool_name": tool.get("search_tool_name"),
                     "litellm_params": tool.get("litellm_params", {}),

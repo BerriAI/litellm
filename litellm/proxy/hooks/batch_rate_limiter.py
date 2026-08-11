@@ -19,7 +19,7 @@ Quick summary:
 
 import json
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Union
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -61,7 +61,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
     from litellm.router import Router as _Router
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
     InternalUsageCache = _InternalUsageCache
     Router = _Router
     ParallelRequestLimiter = _ParallelRequestLimiter
