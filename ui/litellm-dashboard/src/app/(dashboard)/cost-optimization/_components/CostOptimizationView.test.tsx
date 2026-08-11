@@ -7,6 +7,16 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: useAuthorizedMock,
 }));
 
+vi.mock("@/app/(dashboard)/hooks/useCan", async () => {
+  const { hasCapability } = await import("@/utils/capabilities");
+  return {
+    default: (capability: string) => {
+      const { userRole } = useAuthorizedMock();
+      return hasCapability(userRole, capability as never);
+    },
+  };
+});
+
 vi.mock("./UsageTab", () => ({ __esModule: true, default: () => <div data-testid="usage-tab" /> }));
 vi.mock("./PromptCompressionTab", () => ({ __esModule: true, default: () => <div data-testid="compression-tab" /> }));
 vi.mock("./PromptCachingTab", () => ({ __esModule: true, default: () => <div data-testid="caching-tab" /> }));
