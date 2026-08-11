@@ -22,6 +22,7 @@ import weakref
 from collections import defaultdict
 from collections.abc import AsyncGenerator, Callable, Generator, Mapping, Sequence
 from functools import lru_cache
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, Union, cast
 
 import anyio
@@ -46,6 +47,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
+    SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
@@ -109,12 +111,15 @@ from litellm.router_utils.common_utils import (
     filter_team_based_models,
     filter_web_search_deployments,
     resolve_model_group_alias,
+    truncate_fallback_error_detail,
+    warn_on_provider_credential_mismatch,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
     _async_get_cooldown_deployments,
     _async_get_cooldown_deployments_with_debug_info,
+    _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper across router_utils submodules, matching the other cooldown_handlers imports on this line
     _get_cooldown_deployments,
     _set_cooldown_deployments,
     is_advisor_orchestration_failure,
@@ -134,6 +139,7 @@ from litellm.router_utils.handle_error import (
 from litellm.router_utils.health_state_cache import DeploymentHealthCache
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
+    warn_on_unknown_model_group_affinity_flags,
 )
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     build_io_token_rate_limit_headers,
@@ -340,6 +346,12 @@ def _replay_live_router_model_cost() -> None:
 
 
 set_live_deployment_replay(_replay_live_router_model_cost)
+
+
+# Kwargs that log_retry must not copy into a retry breadcrumb. The breadcrumbs reach spend
+# logs and logging callbacks, and these carry either the request payload or router-internal
+# walk state rather than anything that identifies the failed attempt.
+RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(("messages", "original_function", "attempted_targets"))
 
 
 class Router:
@@ -596,6 +608,10 @@ class Router:
         # ``litellm.proxy.auth.auth_checks._is_model_cost_zero``.
         self._zero_cost_cache: dict[str, bool] = {}
 
+        self.deployment_affinity_ttl_seconds = deployment_affinity_ttl_seconds
+        self.model_group_affinity_config = model_group_affinity_config
+        warn_on_unknown_model_group_affinity_flags(model_group_affinity_config)
+
         if model_list is not None:
             # set_model_list will build indices automatically
             self.set_model_list(model_list)
@@ -737,7 +753,6 @@ class Router:
             litellm.failure_callback = [self.deployment_callback_on_failure]
         self.routing_strategy_args = routing_strategy_args
         self.provider_budget_config = provider_budget_config
-        self.deployment_affinity_ttl_seconds = deployment_affinity_ttl_seconds
         self.router_budget_logger: RouterBudgetLimiting | None = None
         if RouterBudgetLimiting.should_init_router_budget_limiter(
             model_list=model_list, provider_budget_config=self.provider_budget_config
@@ -759,7 +774,6 @@ class Router:
                 )
 
         self.model_group_retry_policy: dict[str, RetryPolicy] | None = model_group_retry_policy
-        self.model_group_affinity_config: dict[str, list[str]] | None = model_group_affinity_config
 
         self.allowed_fails_policy: AllowedFailsPolicy | None = None
         if allowed_fails_policy is not None:
@@ -782,21 +796,8 @@ class Router:
         # If model_group_affinity_config is set but no global affinity checks were
         # enabled, we still need the DeploymentAffinityCheck callback (with global
         # flags all False) so per-group config can activate affinity per model group.
-        if self.model_group_affinity_config and not any(
-            isinstance(cb, DeploymentAffinityCheck) for cb in (self.optional_callbacks or [])
-        ):
-            if self.optional_callbacks is None:
-                self.optional_callbacks = []
-            affinity_callback: Final = DeploymentAffinityCheck(
-                cache=self.cache,
-                ttl_seconds=self.deployment_affinity_ttl_seconds,
-                enable_user_key_affinity=False,
-                enable_responses_api_affinity=False,
-                enable_session_id_affinity=False,
-                model_group_affinity_config=self.model_group_affinity_config,
-            )
-            self.optional_callbacks.append(affinity_callback)
-            litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
+        if self.model_group_affinity_config:
+            self._ensure_deployment_affinity_callback()
 
         if self.alerting_config is not None:
             self._initialize_alerting()
@@ -1655,6 +1656,28 @@ class Router:
             _move_before_deployment_affinity(self.optional_callbacks, ec_callback)
             _move_before_deployment_affinity(litellm.callbacks, ec_callback)
 
+    def _ensure_deployment_affinity_callback(self) -> None:
+        """Register the DeploymentAffinityCheck callback (global flags all False) if absent.
+
+        Needed when nothing enabled a global affinity flag but affinity can still
+        activate per request: per-group `model_group_affinity_config` entries, or the
+        session-affinity marker a complexity router stamps at pre-routing time.
+        """
+        if any(isinstance(cb, DeploymentAffinityCheck) for cb in (self.optional_callbacks or [])):
+            return
+        if self.optional_callbacks is None:
+            self.optional_callbacks = []
+        affinity_callback: Final = DeploymentAffinityCheck(
+            cache=self.cache,
+            ttl_seconds=self.deployment_affinity_ttl_seconds,
+            enable_user_key_affinity=False,
+            enable_responses_api_affinity=False,
+            enable_session_id_affinity=False,
+            model_group_affinity_config=self.model_group_affinity_config,
+        )
+        self.optional_callbacks.append(affinity_callback)
+        litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
+
     def add_optional_pre_call_checks(self, optional_pre_call_checks: OptionalPreCallChecks | None):
         if optional_pre_call_checks is None:
             return
@@ -1878,7 +1901,7 @@ class Router:
             # Set per-deployment num_retries on exception for retry logic
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
-                self._set_failed_deployment_id_on_exception(e, deployment)
+                self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
             raise e
 
     def _get_silent_experiment_kwargs(self, **kwargs) -> dict:
@@ -2941,7 +2964,7 @@ class Router:
             # Set per-deployment num_retries on exception for retry logic
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
-                self._set_failed_deployment_id_on_exception(e, deployment)
+                self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
             raise e
         except Exception as e:
             verbose_router_logger.info("litellm.acompletion(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
@@ -2950,7 +2973,7 @@ class Router:
             # Set per-deployment num_retries on exception for retry logic
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
-                self._set_failed_deployment_id_on_exception(e, deployment)
+                self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
             raise e
 
     def _update_kwargs_before_fallbacks(
@@ -2996,7 +3019,7 @@ class Router:
             except (ValueError, TypeError):
                 pass  # Skip if value can't be converted to int
 
-    def _set_failed_deployment_id_on_exception(self, exception: Exception, deployment: dict) -> None:
+    def _set_failed_deployment_id_on_exception(self, exception: Exception, deployment: Mapping[str, Any]) -> None:
         """
         Stamp the failed deployment's `model_info.id` on the exception so the
         fallback layer can exclude it from subsequent re-picks within the same
@@ -3014,6 +3037,16 @@ class Router:
                 exception.failed_deployment_id = deployment_id
             except Exception:
                 pass
+
+    def _stamp_failed_deployment_id_with_effective_model_info(
+        self, exception: Exception, deployment: Mapping[str, Any], kwargs: Mapping[str, Any]
+    ) -> None:
+        # A client-side-credential call gets a dynamic deployment id generated inside
+        # _update_kwargs_with_deployment and stamped into kwargs["model_info"]; stamping
+        # the static shared deployment's id instead would let one tenant's bad credentials
+        # cool down the deployment every other tenant sharing this config relies on.
+        effective_model_info: Final = kwargs.get("model_info") or deployment.get("model_info") or MappingProxyType({})
+        self._set_failed_deployment_id_on_exception(exception, MappingProxyType({"model_info": effective_model_info}))
 
     def _update_kwargs_with_default_litellm_params(
         self, kwargs: dict, metadata_variable_name: str | None = "metadata"
@@ -4501,10 +4534,11 @@ class Router:
 
         passthrough_on_no_deployment: Final = kwargs.pop("passthrough_on_no_deployment", False)
         function_name: Final = "_ageneric_api_call_with_fallbacks"
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
             try:
-                deployment: Final = await self.async_get_available_deployment(
+                deployment = await self.async_get_available_deployment(  # rebind-ok: set on success, see pre-init above
                     model=model,
                     request_kwargs=kwargs,
                     messages=kwargs.get("messages", None),
@@ -4581,6 +4615,8 @@ class Router:
             )
             if model is not None:
                 self.fail_calls[model] += 1
+            if deployment is not None:
+                self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
             raise e
 
     async def _aresponses_with_streaming_fallbacks(
@@ -6361,17 +6397,16 @@ class Router:
                 return response
         except Exception as new_exception:
             parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
-            fallback_failure_exception_str = redact_string(str(new_exception))
+            fallback_failure_exception_str = truncate_fallback_error_detail(redact_string(str(new_exception)))
             cooldown_info: Final = await _async_get_cooldown_deployments_with_debug_info(
                 litellm_router_instance=self,
                 parent_otel_span=parent_otel_span,
             )
             verbose_router_logger.error(
                 "litellm.router.py::async_function_with_fallbacks() - "
-                "Error occurred while trying to do fallbacks - %s\n%s\n"
+                "Error occurred while trying to do fallbacks - %s\n"
                 "Debug Information:\nCooldown Deployments=%s",
                 fallback_failure_exception_str,
-                redact_string(traceback.format_exc()),
                 cooldown_info,
             )
 
@@ -7059,7 +7094,9 @@ class Router:
             )
 
             # Determine cooldown time with priority: deployment config > response header > router default
-            deployment_cooldown: Final = litellm_params.get("cooldown_time", None)
+            deployment_cooldown: Final = _first_present(
+                _model_info if isinstance(_model_info, dict) else None, litellm_params, key="cooldown_time"
+            )
 
             header_cooldown = None
             if exception_headers is not None:
@@ -7162,7 +7199,7 @@ class Router:
                 k,
                 v,
             ) in kwargs.items():  # log everything in kwargs except the old previous_models value - prevent nesting
-                if k not in [_metadata_var, "messages", "original_function"]:
+                if k != _metadata_var and k not in RETRY_BREADCRUMB_EXCLUDED_KWARGS:
                     previous_model[k] = v
                 elif k == _metadata_var and isinstance(v, dict):
                     previous_model[_metadata_var] = {}
@@ -7504,6 +7541,7 @@ class Router:
         """
         try:
             litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(**_litellm_params)
+            warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=_litellm_params)
             deployment = Deployment(
                 **deployment_info,
                 model_name=_model_name,
@@ -7677,6 +7715,8 @@ class Router:
             strategy=complexity_router,
             strategy_label="Complexity-router",
         )
+        if complexity_router._uses_deployment_pin:
+            self._ensure_deployment_affinity_callback()
 
     def _is_adaptive_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """True when this deployment opts in via the `auto_router/adaptive_router` model prefix."""
@@ -8193,6 +8233,11 @@ class Router:
         _deployment_model_id: Final = deployment.model_info.id
         if _deployment_model_id and self.has_model_id(_deployment_model_id):
             return None
+
+        warn_on_provider_credential_mismatch(
+            model_name=deployment.model_name,
+            litellm_params=deployment.litellm_params.model_dump(exclude_none=True),
+        )
 
         # add to model list
         _deployment: Final = deployment.to_json(exclude_none=True)
@@ -11184,6 +11229,9 @@ class Router:
         router_strategy: Final = self._select_pre_routing_strategy(model=model, request_kwargs=request_kwargs)
         if router_strategy is None:
             self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
+            self._stamp_or_clear_metadata_key(
+                request_kwargs=request_kwargs, key=SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, value=None
+            )
             return None
 
         pre_routing_hook_response: Final = await router_strategy.async_pre_routing_hook(
@@ -11196,6 +11244,11 @@ class Router:
         self._record_routing_decision(
             request_kwargs=request_kwargs,
             routing_decision=(pre_routing_hook_response.routing_decision if pre_routing_hook_response else None),
+        )
+        self._stamp_or_clear_metadata_key(
+            request_kwargs=request_kwargs,
+            key=SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+            value=(pre_routing_hook_response.session_affinity_ttl_seconds if pre_routing_hook_response else None),
         )
 
         # `model` (the alias, e.g. "smart-router") is never the deployment actually
@@ -11228,21 +11281,40 @@ class Router:
         to the deployment that actually served the request. Every attempt therefore
         writes or clears, never just writes.
         """
-        if routing_decision is None:
+        Router._stamp_or_clear_metadata_key(
+            request_kwargs=request_kwargs,
+            key="routing_decision",
+            value=(
+                None
+                if routing_decision is None
+                else Router._redact_prompt_text_if_needed(
+                    request_kwargs=request_kwargs, routing_decision=routing_decision
+                )
+            ),
+        )
+
+    @staticmethod
+    def _stamp_or_clear_metadata_key(request_kwargs: dict, key: str, value: object | None) -> None:
+        """Write a proxy-internal metadata key for THIS routing attempt, or clear it.
+
+        Fallbacks and retries re-enter the pre-routing hook with the same
+        `request_kwargs`, so every attempt must write or clear, never just write;
+        a value left behind by an earlier attempt would be attributed to this one.
+        `get_or_create_metadata_bucket` is the single owner of "which dict holds
+        proxy-internal metadata": it picks `litellm_metadata` when present (so the
+        value never lands in the `metadata` dict that routes like /v1/messages
+        forward to the provider) and replaces a non-dict value rather than silently
+        skipping the write. Clearing pops from BOTH buckets so a request whose
+        bucket resolution changed between attempts cannot resurrect a stale value.
+        """
+        if value is None:
             for bucket in (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata")):
                 if isinstance(bucket, dict):
-                    bucket.pop("routing_decision", None)
+                    bucket.pop(key, None)
             return
 
-        # `get_or_create_metadata_bucket` is the single owner of "which dict holds
-        # proxy-internal metadata": it picks `litellm_metadata` when present (so the
-        # decision never lands in the `metadata` dict that routes like /v1/messages
-        # forward to the provider) and replaces a non-dict value rather than silently
-        # skipping the write.
         _, metadata_bucket = get_or_create_metadata_bucket(request_kwargs)
-        metadata_bucket["routing_decision"] = Router._redact_prompt_text_if_needed(
-            request_kwargs=request_kwargs, routing_decision=routing_decision
-        )
+        metadata_bucket[key] = value
 
     @staticmethod
     def _redact_prompt_text_if_needed(
@@ -11752,6 +11824,23 @@ class Router:
             and allowed_fails_policy.BadRequestErrorAllowedFails is not None
         ):
             return allowed_fails_policy.BadRequestErrorAllowedFails
+        if (
+            isinstance(exception, litellm.InternalServerError)
+            and allowed_fails_policy.InternalServerErrorAllowedFails is not None
+        ):
+            return allowed_fails_policy.InternalServerErrorAllowedFails
+        if (
+            isinstance(exception, litellm.ServiceUnavailableError)
+            and allowed_fails_policy.ServiceUnavailableErrorAllowedFails is not None
+        ):
+            return allowed_fails_policy.ServiceUnavailableErrorAllowedFails
+        if (
+            isinstance(exception, litellm.BadGatewayError)
+            and allowed_fails_policy.BadGatewayErrorAllowedFails is not None
+        ):
+            return allowed_fails_policy.BadGatewayErrorAllowedFails
+        if isinstance(exception, litellm.NotFoundError) and allowed_fails_policy.NotFoundErrorAllowedFails is not None:
+            return allowed_fails_policy.NotFoundErrorAllowedFails
 
     def _initialize_alerting(self):
         from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting

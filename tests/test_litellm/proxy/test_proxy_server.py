@@ -7044,6 +7044,39 @@ async def test_update_general_settings_store_model_in_db_false():
 
 
 @pytest.mark.asyncio
+async def test_update_general_settings_propagates_apply_user_budget_to_team_keys():
+    """The Admin UI toggle writes to the DB config, so the flag has to be in the
+    runtime propagation allowlist. The reverted skip_user_budget_on_team_key was
+    exposed in /config/list but never propagated, so its toggle did nothing."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        await proxy_config._update_general_settings(db_general_settings={"apply_user_budget_to_team_keys": "true"})
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["apply_user_budget_to_team_keys"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_apply_user_budget_to_team_keys_yaml_wins():
+    """A DB value must not silently override an explicit YAML setting on reload."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._yaml_general_settings_keys = {"apply_user_budget_to_team_keys"}
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"apply_user_budget_to_team_keys": True}):
+        await proxy_config._update_general_settings(db_general_settings={"apply_user_budget_to_team_keys": False})
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["apply_user_budget_to_team_keys"] is True
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "db_value,expected",
     [(True, True), (False, False), ("true", True), ("false", False), (None, None)],
@@ -9536,6 +9569,38 @@ def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_get_config_list_includes_apply_user_budget_to_team_keys(monkeypatch):
+    """Related to #12905: the opt-in must be discoverable via /config/list so it
+    renders as a Boolean toggle on the Admin UI General Settings table. This needs
+    both the ConfigGeneralSettings field and the allowed_args entry."""
+    import types
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi.testclient import TestClient
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app
+
+    mock_prisma = MagicMock()
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(return_value=None)
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        client = TestClient(app)
+        resp = client.get("/config/list", params={"config_type": "general_settings"})
+        assert resp.status_code == 200, resp.text
+        fields = {item["field_name"]: item for item in resp.json()}
+        assert "apply_user_budget_to_team_keys" in fields
+        assert fields["apply_user_budget_to_team_keys"]["field_type"] == "Boolean"
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_get_config_list_includes_budget_exceeded_throttle_percentage(monkeypatch):
     """The throttle fraction is a litellm_settings scalar surfaced on the General
     Settings table as a Float field so it sits with the other global limits; it
@@ -11213,3 +11278,68 @@ async def test_setup_prisma_client_returns_none_when_connect_itself_fails(monkey
     assert result is None
     assert mock_client.start_db_health_watchdog_task.await_count == 0
     assert mock_client.health_check.await_count == 0
+
+
+async def _run_scheduled_background_jobs():
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=True),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+    import litellm.proxy.proxy_server as ps
+
+    assert ps.scheduler is not None
+    return ps.scheduler
+
+
+@pytest.mark.asyncio
+async def test_ptu_rollup_job_registered_at_startup(monkeypatch):
+    """The PTU rollup cron is registered once an operator opts in; only models with PTU config accrue flat cost (asserted in test_ptu_flat_cost_rollup.py)."""
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
+    from litellm.proxy.spend_tracking.ptu_flat_cost_rollup import (
+        PTU_ROLLUP_JOB_ID,
+    )
+
+    monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
+
+    scheduler = await _run_scheduled_background_jobs()
+
+    assert scheduler.get_job(PTU_ROLLUP_JOB_ID) is not None
+
+
+@pytest.mark.asyncio
+async def test_ptu_rollup_job_not_registered_without_opt_in(monkeypatch):
+    """Without LITELLM_ENABLE_PTU_COST_ATTRIBUTION the rollup never runs, so no sentinel row
+    is ever written. This is the gate that keeps the whole feature inert by default."""
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
+    from litellm.proxy.spend_tracking.ptu_flat_cost_rollup import (
+        PTU_ROLLUP_JOB_ID,
+    )
+
+    monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR, raising=False)
+
+    scheduler = await _run_scheduled_background_jobs()
+
+    assert scheduler.get_job(PTU_ROLLUP_JOB_ID) is None
+    assert len(scheduler.get_jobs()) > 0

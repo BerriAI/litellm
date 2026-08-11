@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,6 +12,13 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
+from litellm._logging import (
+    CorrelationContextFilter,
+    JsonFormatter,
+    session_id_var,
+    trace_id_var,
+    verbose_logger,
+)
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.utils import (
     CallTypes,
@@ -21,6 +29,7 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
+from litellm.types.utils import all_litellm_params
 from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
@@ -28,6 +37,7 @@ from litellm.utils import (
     _is_streaming_request,
     get_api_key,
     get_llm_provider,
+    get_non_default_completion_params,
     get_optional_params_image_gen,
     get_prompt_cache_min_tokens,
     is_cached_message,
@@ -5125,3 +5135,154 @@ def test_ai21_api_key_is_resolved_from_the_documented_env_var(monkeypatch: pytes
     monkeypatch.setenv("AI21_API_KEY", "sk-ai21-resolved-from-env")
 
     assert get_api_key(llm_provider="ai21", dynamic_api_key=None) == "sk-ai21-resolved-from-env"
+
+
+class _JsonCapture(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.formatter = JsonFormatter()
+        self.records: list[dict] = []
+        self.addFilter(CorrelationContextFilter())
+
+    def emit(self, record):
+        self.records.append(json.loads(self.formatter.format(record)))
+
+
+def _make_capture_logger(name: str) -> tuple[logging.Logger, _JsonCapture]:
+    lg = logging.getLogger(name)
+    cap = _JsonCapture()
+    lg.addHandler(cap)
+    lg.setLevel(logging.DEBUG)
+    return lg, cap
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_restores_originating_task_context_after_success(monkeypatch):
+    """A successful acompletion() dispatches async_success_handler via
+    asyncio.create_task + the global logging worker - a different Task than the
+    one running acompletion() itself (this test's own task). That handler's own
+    restore only fixes up the detached child task it runs in; wrapper_async's own
+    finally block (in litellm/utils.py) must separately restore the *originating*
+    task's trace_id/session_id, since nothing else does.
+    """
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    trace_id_var.set("outer-trace-wrapper-test")
+    session_id_var.set("outer-session-wrapper-test")
+    try:
+        await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello there!",
+            litellm_session_id="mock-call-session",
+            num_retries=0,
+        )
+        assert trace_id_var.get() == "outer-trace-wrapper-test"
+        assert session_id_var.get() == "outer-session-wrapper-test"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_function_setup_failure_after_logging_construction_restores_context(monkeypatch):
+    """If function_setup() constructs Logging() (which already mutated
+    trace_id_var/session_id_var in __init__) but then raises before returning,
+    the caller's wrapper() never gets a logging_obj reference to restore from.
+    function_setup()'s own except block must restore the correlation context
+    itself in that case, or it leaks into every subsequent log line in this
+    thread/task until something unrelated happens to reset it."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+
+    def _boom(self, *args, **kwargs):
+        raise RuntimeError("simulated failure after Logging() construction")
+
+    monkeypatch.setattr(Logging, "update_environment_variables", _boom)
+
+    trace_id_var.set("pre-setup-failure-trace")
+    session_id_var.set("pre-setup-failure-session")
+    try:
+        with pytest.raises(RuntimeError, match="simulated failure"):
+            litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response="Hello there!",
+                litellm_session_id="doomed-call-session",
+                num_retries=0,
+            )
+        assert trace_id_var.get() == "pre-setup-failure-trace"
+        assert session_id_var.get() == "pre-setup-failure-session"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_function_setup_failure_log_line_shows_outer_not_doomed_ids(monkeypatch):
+    """The 'Error in function_setup' diagnostic log line itself must be stamped
+    with the outer/pre-call correlation ids, not the doomed call's own ids -
+    restoring context must happen *before* logging the exception, not after,
+    since the failed call never produces a usable logging object for anything
+    else to be attributed to."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+
+    def _boom(self, *args, **kwargs):
+        raise RuntimeError("simulated failure after Logging() construction")
+
+    monkeypatch.setattr(Logging, "update_environment_variables", _boom)
+
+    lg, cap = _make_capture_logger("test.function_setup_failure_log_order")
+    # verbose_logger is a distinct, module-level logger from our throwaway one -
+    # temporarily attach the same capture handler so we see its own emitted record.
+    verbose_logger.addHandler(cap)
+    try:
+        trace_id_var.set("outer-trace")
+        session_id_var.set("outer-session")
+        with pytest.raises(RuntimeError, match="simulated failure"):
+            litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response="Hello there!",
+                litellm_session_id="doomed-call-session",
+                num_retries=0,
+            )
+        setup_failure_records = [r for r in cap.records if "Error in function_setup" in r.get("message", "")]
+        assert len(setup_failure_records) == 1
+        record = setup_failure_records[0]
+        assert record.get("session_id") == "outer-session"
+        assert record.get("trace_id") == "outer-trace"
+    finally:
+        verbose_logger.removeHandler(cap)
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+WEBSEARCH_INTERNAL_CONTROL_FIELDS = (
+    "_websearch_interception_emit_native_blocks",
+    "_websearch_interception_converted_stream",
+)
+
+
+def test_websearch_interception_control_fields_never_reach_the_provider():
+    """The web-search interception hooks stamp these onto kwargs to carry state
+    across the agentic loop. Anything the param builder does not recognize is
+    swept into the provider request, and a provider that validates its body
+    rejects the whole call: Bedrock Converse answers
+    `_websearch_interception_emit_native_blocks: Extra inputs are not permitted`
+    with a 400, so enabling interception breaks every request it touches.
+
+    Their code-interpreter counterparts are already registered; these were not.
+    """
+    kwargs = {
+        "a_real_provider_specific_param": 1,
+        **{field: True for field in WEBSEARCH_INTERNAL_CONTROL_FIELDS},
+    }
+
+    non_default = get_non_default_completion_params(kwargs)
+
+    assert non_default == {"a_real_provider_specific_param": 1}, (
+        "web-search interception control fields leaked into the provider params: "
+        f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
+    )
+    assert set(WEBSEARCH_INTERNAL_CONTROL_FIELDS) <= set(all_litellm_params)

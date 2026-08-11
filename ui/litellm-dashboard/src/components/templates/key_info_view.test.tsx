@@ -186,6 +186,42 @@ describe("KeyInfoView", () => {
     });
   });
 
+  it("should render the estimated output token settings from key metadata", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+    const keyData = {
+      ...MOCK_KEY_DATA,
+      metadata: {
+        ...MOCK_KEY_DATA.metadata,
+        default_estimated_output_tokens: 512,
+        default_estimated_output_tokens_per_model: { "gpt-4": 4096 },
+      },
+    };
+    renderWithProviders(
+      <KeyInfoView keyData={keyData} onClose={() => {}} keyId={"test-key-id"} onKeyDataUpdate={() => {}} teams={[]} />,
+    );
+
+    expect(await screen.findByText("Estimated Output Tokens: 512")).toBeInTheDocument();
+    expect(await screen.findByText('Estimated Output Tokens Per Model: {"gpt-4":4096}')).toBeInTheDocument();
+  });
+
+  it("should fall back to Default when no estimated output tokens are configured", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={MOCK_KEY_DATA}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    expect(await screen.findByText("Estimated Output Tokens: Default")).toBeInTheDocument();
+    expect(await screen.findByText("Estimated Output Tokens Per Model: Default")).toBeInTheDocument();
+  });
+
   it("should allow proxy admin to modify key", async () => {
     vi.mocked(useTeams).mockReturnValue({
       teams: [],

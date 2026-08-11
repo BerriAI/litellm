@@ -6786,6 +6786,8 @@ export interface paths {
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
          *     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
+         *     - default_estimated_output_tokens: Optional[int] - Proxy admin only. Expected output tokens reserved for TPM limiting when a request omits max_tokens. Positive integer. Falls back to the team setting, then to the built-in estimate.
+         *     - default_estimated_output_tokens_per_model: Optional[dict] - Proxy admin only. Per-model override of the above. Example - {"gpt-4": 4096, "gpt-3.5-turbo": 1024}. Takes precedence over the key-wide value.
          *     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
          *     - tag_rpm_limit: Optional[dict] - key-specific per-request-tag rpm limit, keyed by request tag. Example - {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; requests whose tag is absent fall back to the key-level rpm limit.
          *     - tpm_limit_type: Optional[str] - Type of tpm limit. Options: "best_effort_throughput" (no error if we're overallocating tpm), "guaranteed_throughput" (raise an error if we're overallocating tpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
@@ -6904,11 +6906,34 @@ export interface paths {
         /**
          * Info Key Fn
          * @description Retrieve information about a key.
+         *
          *     Parameters:
-         *         key: Optional[str] = Query parameter representing the key in the request
-         *         user_api_key_dict: UserAPIKeyAuth = Dependency representing the user's API key
+         *     - key: str | None (query parameter) - The key to look up. Accepts the plaintext key or its hash.
+         *       Defaults to the key in the Authorization header.
+         *
          *     Returns:
-         *         Dict containing the key and its associated information
+         *     - key: str - The key that was looked up, echoed back as it was passed in
+         *     - info: dict - The key's row, minus the hashed token
+         *         - key_alias: str | None - User-friendly key alias
+         *         - spend: float - Amount spent by the key. When budget_duration is set this covers only the
+         *           current budget window, not the key's lifetime
+         *         - max_budget: float | None - Max budget for the key, enforced against spend
+         *         - budget_duration: str | None - Budget reset period ("30d", "1h", etc.)
+         *         - budget_reset_at: datetime | None - When the current budget window ends and spend is next
+         *           reset to 0, not when it was last reset. Reset times snap to standard boundaries in the
+         *           configured timezone (30d and 1mo land on the 1st of the month, 7d on Monday, 1h on the
+         *           hour), so subtracting budget_duration from it does not give the window's start
+         *         - model_max_budget: dict - Per-model budgets, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+         *         - model_max_budget_usage: dict | None - Current-window spend per model, present only when
+         *           the key has per-model budgets
+         *         - models: list - Model_name's the key is allowed to call
+         *         - tpm_limit / rpm_limit: int | None - Tokens and requests per minute limits
+         *         - metadata: dict - Metadata for the key, e.g. {"team": "core-infra"}
+         *         - blocked: bool | None - Whether the key is blocked
+         *         - expires: datetime | None - When the key stops authenticating requests
+         *         - last_active: datetime | None - When the key was last used
+         *         - object_permission: dict | None - Resolved vector store / MCP permissions when the key has
+         *           an object_permission_id
          *
          *     Example Curl:
          *     ```
@@ -7070,6 +7095,8 @@ export interface paths {
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
          *     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
+         *     - default_estimated_output_tokens: Optional[int] - Proxy admin only. Expected output tokens reserved for TPM limiting when a request omits max_tokens. Positive integer. Falls back to the team setting, then to the built-in estimate.
+         *     - default_estimated_output_tokens_per_model: Optional[dict] - Proxy admin only. Per-model override of the above. Example - {"gpt-4": 4096, "gpt-3.5-turbo": 1024}. Takes precedence over the key-wide value.
          *     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
          *     - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
          *     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
@@ -7201,6 +7228,8 @@ export interface paths {
          *     - mcp_rpm_limit: Optional[dict] - Per-MCP-server RPM limits, keyed by MCP server name {"github": 100, "slack": 200}
          *     - tag_rpm_limit: Optional[dict] - Per-request-tag RPM limits, keyed by request tag {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; absent tags fall back to the key-level rpm limit.
          *     - model_tpm_limit: Optional[dict] - Model-specific TPM limits {"gpt-4": 100000, "claude-v1": 200000}
+         *     - default_estimated_output_tokens: Optional[int] - Proxy admin only. Expected output tokens reserved for TPM limiting when a request omits max_tokens. Positive integer.
+         *     - default_estimated_output_tokens_per_model: Optional[dict] - Proxy admin only. Per-model override of the above {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
          *     - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
          *     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
          *     - allowed_cache_controls: Optional[list] - List of allowed cache control values
@@ -14035,6 +14064,8 @@ export interface paths {
          *     - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"extra_info": "some info"}
          *     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit for this team - applied across all keys for this team.
          *     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit for this team - applied across all keys for this team.
+         *     - default_estimated_output_tokens: Optional[int] - Expected output tokens reserved for TPM limiting when a request omits max_tokens, for keys on this team that do not set their own. Positive integer.
+         *     - default_estimated_output_tokens_per_model: Optional[Dict[str, int]] - Per-model override of the above. Example: {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
          *     - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
          *     - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
          *     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
@@ -14263,6 +14294,8 @@ export interface paths {
          *     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
          *     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
          *     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+         *     - default_estimated_output_tokens: Optional[int] - Expected output tokens reserved for TPM limiting when a request omits max_tokens, for keys on this team that do not set their own. Positive integer.
+         *     - default_estimated_output_tokens_per_model: Optional[Dict[str, int]] - Per-model override of the above. Example: {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
          *     - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
          *     Example - update team TPM Limit
          *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
@@ -21368,6 +21401,13 @@ export interface components {
              * @description What the routed traffic actually cost
              */
             spend: number;
+            /**
+             * Tier Turns
+             * @description Turns per tier, keyed by the tier name the routing decision recorded at request time (never re-derived at read time, since the tier-to-model mapping is mutable config). Tier names are scoped to this group's router_type and are not comparable across types: a complexity router reports 'simple'/'medium'/'complex'/'reasoning', a quality router reports its numeric quality tier, and an adaptive router records no tier at all. Turns no tier served (the classifier fell back to default_model) are absent rather than pooled under a sentinel key, so the values may sum to less than turns
+             */
+            tier_turns?: {
+                [key: string]: number;
+            };
             /** Turns */
             turns: number;
         };
@@ -23390,6 +23430,11 @@ export interface components {
              */
             allowed_routes?: unknown[] | null;
             /**
+             * Apply User Budget To Team Keys
+             * @description If True, a user's personal max_budget is enforced on every request they make, including requests made with a team-scoped key. Defaults to False, where a team-scoped key is governed only by the team and team-member budgets and the key owner's personal max_budget does not apply (see GitHub issue #12905).
+             */
+            apply_user_budget_to_team_keys?: boolean | null;
+            /**
              * Background Health Checks
              * @description run health checks in background
              */
@@ -24218,6 +24263,11 @@ export interface components {
              */
             total_failed_requests: number;
             /**
+             * Total Flat Cost
+             * @default 0
+             */
+            total_flat_cost: number;
+            /**
              * Total Pages
              * @default 1
              */
@@ -24927,6 +24977,12 @@ export interface components {
             config: {
                 [key: string]: unknown;
             } | null;
+            /** Default Estimated Output Tokens */
+            default_estimated_output_tokens?: number | null;
+            /** Default Estimated Output Tokens Per Model */
+            default_estimated_output_tokens_per_model?: {
+                [key: string]: number;
+            } | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -25081,6 +25137,12 @@ export interface components {
             created_at?: string | null;
             /** Created By */
             created_by?: string | null;
+            /** Default Estimated Output Tokens */
+            default_estimated_output_tokens?: number | null;
+            /** Default Estimated Output Tokens Per Model */
+            default_estimated_output_tokens_per_model?: {
+                [key: string]: number;
+            } | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -26696,6 +26758,11 @@ export interface components {
             } | null;
             /** Adaptive Router Default Model */
             adaptive_router_default_model?: string | null;
+            /**
+             * Allow Client Keepalive Override
+             * @default false
+             */
+            allow_client_keepalive_override: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
             /** Api Base */
@@ -26844,6 +26911,8 @@ export interface components {
             input_cost_per_video_token?: number | null;
             /** Itpm */
             itpm?: number | null;
+            /** Keepalive Seconds */
+            keepalive_seconds?: number | null;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Trace Id */
@@ -29236,6 +29305,12 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Default Estimated Output Tokens */
+            default_estimated_output_tokens?: number | null;
+            /** Default Estimated Output Tokens Per Model */
+            default_estimated_output_tokens_per_model?: {
+                [key: string]: number;
+            } | null;
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
             /** Disable Global Guardrails */
@@ -29517,6 +29592,12 @@ export interface components {
             created_at?: string | null;
             /** Created By */
             created_by?: string | null;
+            /** Default Estimated Output Tokens */
+            default_estimated_output_tokens?: number | null;
+            /** Default Estimated Output Tokens Per Model */
+            default_estimated_output_tokens_per_model?: {
+                [key: string]: number;
+            } | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -29988,6 +30069,12 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Default Estimated Output Tokens */
+            default_estimated_output_tokens?: number | null;
+            /** Default Estimated Output Tokens Per Model */
+            default_estimated_output_tokens_per_model?: {
+                [key: string]: number;
+            } | null;
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
             /** Disable Global Guardrails */
@@ -31350,6 +31437,12 @@ export interface components {
             config: {
                 [key: string]: unknown;
             } | null;
+            /** Default Estimated Output Tokens */
+            default_estimated_output_tokens?: number | null;
+            /** Default Estimated Output Tokens Per Model */
+            default_estimated_output_tokens_per_model?: {
+                [key: string]: number;
+            } | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -31661,6 +31754,12 @@ export interface components {
              */
             default_model?: string | null;
             /**
+             * Deployment Affinity
+             * @description When True and a session_id is resolvable on the request, pin the deployment chosen inside each routed model group and reuse it whenever the session returns to that group, without pinning which group the session routes to. Independent of session_affinity, which pins the model group instead (and always carries this deployment pin with it): with session_affinity off, every turn is still classified on its own merits while a session that escalates to a stronger tier and comes back still lands on the deployment it used before, which is what keeps a provider prompt cache warm. Pins are held per model group, so switching tiers does not disturb the pin left behind in the previous group. On by default because re-shuffling a conversation across deployments of the same model discards that cache for no benefit; set False to keep every turn load-balanced across the group, which is what a deployment set with tight per-deployment rate limits wants. Inert when no session_id is resolvable, since there is nothing to key a pin on, and suppressed when plugins are configured, for the same reason session_affinity is.
+             * @default true
+             */
+            deployment_affinity: boolean;
+            /**
              * Dimension Weights
              * @description Weights for each scoring dimension
              */
@@ -31717,13 +31816,13 @@ export interface components {
             semantic_keyword_matching: boolean;
             /**
              * Session Affinity
-             * @description When True and a session_id is resolvable on the request, pin the model chosen on the session's first turn and reuse it for every later turn, skipping re-classification. Off by default so every turn is classified on its own merits and routed to the cheapest adequate tier. Set True to keep a multi-turn session on one model, which preserves provider prompt caches and avoids cross-model conversation-history errors.
+             * @description When True and a session_id is resolvable on the request, pin the model chosen on the session's first turn and reuse it for every later turn, skipping re-classification. Off by default so every turn is classified on its own merits and routed to the cheapest adequate tier. Set True to keep a multi-turn session on one model, which preserves provider prompt caches and avoids cross-model conversation-history errors. Always implies the deployment pin regardless of deployment_affinity: the session sticks to one deployment of the pinned model, since freezing the model while re-shuffling its deployments would still go cache-cold.
              * @default false
              */
             session_affinity: boolean;
             /**
              * Session Affinity Ttl Seconds
-             * @description TTL for the session affinity pin; refreshed on every cache hit
+             * @description TTL for the session affinity pin; refreshed on every cache hit. Bounds both the session_affinity model pin and the deployment_affinity deployment pin, so it measures idle time for the session's routing decisions rather than total session length
              * @default 3600
              */
             session_affinity_ttl_seconds: number;
@@ -32471,6 +32570,11 @@ export interface components {
              * @default 0
              */
             failed_requests: number;
+            /**
+             * Flat Cost
+             * @default 0
+             */
+            flat_cost: number;
             /**
              * Prompt Caching Savings Spend
              * @default 0
@@ -33728,6 +33832,12 @@ export interface components {
             config: {
                 [key: string]: unknown;
             } | null;
+            /** Default Estimated Output Tokens */
+            default_estimated_output_tokens?: number | null;
+            /** Default Estimated Output Tokens Per Model */
+            default_estimated_output_tokens_per_model?: {
+                [key: string]: number;
+            } | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -34141,6 +34251,12 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Default Estimated Output Tokens */
+            default_estimated_output_tokens?: number | null;
+            /** Default Estimated Output Tokens Per Model */
+            default_estimated_output_tokens_per_model?: {
+                [key: string]: number;
+            } | null;
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
             /** Disable Global Guardrails */
@@ -35259,6 +35375,12 @@ export interface components {
             base_model?: string | null;
             /** Blocked */
             blocked?: boolean | null;
+            /** Cache Creation Input Token Cost */
+            cache_creation_input_token_cost?: number | null;
+            /** Cache Read Input Token Cost */
+            cache_read_input_token_cost?: number | null;
+            /** Cost Per Ptu Per Hour */
+            cost_per_ptu_per_hour?: number | null;
             /** Created At */
             created_at?: string | null;
             /** Created By */
@@ -35270,6 +35392,20 @@ export interface components {
             db_model: boolean;
             /** Id */
             id: string | null;
+            /** Input Cost Per Character */
+            input_cost_per_character?: number | null;
+            /** Input Cost Per Token */
+            input_cost_per_token?: number | null;
+            /** Output Cost Per Character */
+            output_cost_per_character?: number | null;
+            /** Output Cost Per Token */
+            output_cost_per_token?: number | null;
+            /** Ptu Count */
+            ptu_count?: number | null;
+            /** Ptu Effective From */
+            ptu_effective_from?: string | null;
+            /** Ptu Effective To */
+            ptu_effective_to?: string | null;
             /** Team Id */
             team_id?: string | null;
             /** Team Public Model Name */
@@ -35300,6 +35436,11 @@ export interface components {
             } | null;
             /** Adaptive Router Default Model */
             adaptive_router_default_model?: string | null;
+            /**
+             * Allow Client Keepalive Override
+             * @default false
+             */
+            allow_client_keepalive_override: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
             /** Api Base */
@@ -35448,6 +35589,8 @@ export interface components {
             input_cost_per_video_token?: number | null;
             /** Itpm */
             itpm?: number | null;
+            /** Keepalive Seconds */
+            keepalive_seconds?: number | null;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Trace Id */

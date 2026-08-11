@@ -1,7 +1,16 @@
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { BarChart, DonutChart } from "@/components/shared/charts";
+import {
+  getProviderSpend,
+  getTopAgents,
+  getTopAPIKeys,
+  getTopModels,
+  type ExtendedDailyData,
+} from "./entityUsageAggregations";
+import { buildCostBreakdownTiles, buildSummaryTiles, hasFlatCost, type SummaryTile } from "./entityUsageSummary";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { hasCapability, type Capability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import {
   Card,
@@ -23,8 +32,8 @@ import {
   Text,
   Title,
 } from "@tremor/react";
-import { ExportOutlined, LoadingOutlined } from "@ant-design/icons";
-import { Alert, Button } from "antd";
+import { DownOutlined, ExportOutlined, InfoCircleOutlined, LoadingOutlined, RightOutlined } from "@ant-design/icons";
+import { Alert, Button, Tooltip } from "antd";
 import React, { type ReactNode, useMemo, useState } from "react";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
@@ -40,13 +49,7 @@ import {
 } from "@/components/networking";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { usePaginatedDailyActivity } from "../../hooks/usePaginatedDailyActivity";
-import {
-  BreakdownMetrics,
-  DailyData,
-  EntityMetricWithMetadata,
-  KeyMetricWithMetadata,
-  TagUsage,
-} from "@/components/UsagePage/types";
+import { EntityMetricWithMetadata } from "@/components/UsagePage/types";
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 import EndpointUsage from "../EndpointUsage/EndpointUsage";
 import ModelViewToggle, { ModelViewType } from "../ModelViewToggle";
@@ -68,14 +71,11 @@ interface EntityMetrics {
   metadata: Record<string, any>;
 }
 
-type ExtendedDailyData = DailyData & {
-  breakdown: BreakdownMetrics;
-};
-
 interface EntitySpendData {
   results: ExtendedDailyData[];
   metadata: {
     total_spend: number;
+    total_flat_cost?: number;
     total_api_requests: number;
     total_successful_requests: number;
     total_failed_requests: number;
@@ -108,13 +108,26 @@ const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
   user: userDailyActivityCall,
 };
 
-const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, entityId, entityList, dateValue }) => {
+const ENTITY_CAPABILITIES: Partial<Record<EntityType, Capability>> = {
+  organization: "viewOrganizationUsage",
+  agent: "viewAgentUsage",
+};
+
+const EntityUsage: React.FC<EntityUsageProps> = ({
+  accessToken,
+  entityType,
+  entityId,
+  entityList,
+  userRole,
+  dateValue,
+}) => {
   const { teams } = useTeams();
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [modelViewType, setModelViewType] = useState<ModelViewType>("groups");
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const [topAgentsLimit, setTopAgentsLimit] = useState<number>(5);
+  const [showCostBreakdown, setShowCostBreakdown] = useState(false);
 
   const startTime = useMemo(() => (dateValue.from ? new Date(dateValue.from) : null), [dateValue.from]);
   const endTime = useMemo(() => (dateValue.to ? new Date(dateValue.to) : null), [dateValue.to]);
@@ -125,7 +138,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   }, [entityType, selectedTags]);
 
   const fetchFn = ENTITY_FETCH_FNS[entityType];
-  const enabled = !!accessToken && !!startTime && !!endTime;
+  const entityCapability = ENTITY_CAPABILITIES[entityType];
+  const canViewEntity = entityCapability === undefined || hasCapability(userRole, entityCapability);
+  const showAgentBreakdown = entityType === "team" && hasCapability(userRole, "viewAgentUsage");
+  const hasRequestWindow = !!accessToken && !!startTime && !!endTime;
+  const enabled = hasRequestWindow && canViewEntity;
 
   const {
     data: spendDataRaw,
@@ -150,7 +167,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   } = usePaginatedDailyActivity({
     fetchFn: agentDailyActivityCall,
     args: [accessToken, startTime, endTime, null],
-    enabled: enabled && entityType === "team",
+    enabled: enabled && showAgentBreakdown,
   });
 
   const agentSpendData = agentSpendDataRaw as unknown as EntitySpendData;
@@ -158,164 +175,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   const modelBreakdownKey = modelViewType === "groups" ? "model_groups" : "models";
   const modelMetrics = processActivityData(spendData, modelBreakdownKey, teams || []);
   const keyMetrics = processActivityData(spendData, "api_keys", teams || []);
-  const agentMetrics = entityType === "team" ? processActivityData(agentSpendData, "entities", teams || []) : {};
-
-  const getTopModels = () => {
-    const modelSpend: { [key: string]: any } = {};
-    spendData.results.forEach((day) => {
-      Object.entries(day.breakdown[modelBreakdownKey] || {}).forEach(([model, metrics]) => {
-        if (!modelSpend[model]) {
-          modelSpend[model] = {
-            spend: 0,
-            requests: 0,
-            successful_requests: 0,
-            failed_requests: 0,
-            tokens: 0,
-          };
-        }
-        try {
-          modelSpend[model].spend += metrics.metrics.spend;
-        } catch (e) {
-          console.error(`Error adding spend for ${model}: ${e}, got metrics: ${JSON.stringify(metrics)}`);
-        }
-        modelSpend[model].requests += metrics.metrics.api_requests;
-        modelSpend[model].successful_requests += metrics.metrics.successful_requests;
-        modelSpend[model].failed_requests += metrics.metrics.failed_requests;
-        modelSpend[model].tokens += metrics.metrics.total_tokens;
-      });
-    });
-
-    return Object.entries(modelSpend)
-      .map(([model, metrics]) => ({
-        key: model,
-        ...metrics,
-      }))
-      .sort((a, b) => b.spend - a.spend)
-      .slice(0, topModelsLimit);
-  };
-
-  const getTopAgents = () => {
-    const agentSpend: { [key: string]: any } = {};
-    agentSpendData.results.forEach((day) => {
-      Object.entries(day.breakdown.entities || {}).forEach(([agentId, data]) => {
-        if (!agentSpend[agentId]) {
-          agentSpend[agentId] = {
-            spend: 0,
-            requests: 0,
-            successful_requests: 0,
-            failed_requests: 0,
-            tokens: 0,
-            agent_name: (data.metadata as any)?.agent_name || agentId,
-          };
-        }
-        agentSpend[agentId].spend += data.metrics.spend;
-        agentSpend[agentId].requests += data.metrics.api_requests;
-        agentSpend[agentId].successful_requests += data.metrics.successful_requests;
-        agentSpend[agentId].failed_requests += data.metrics.failed_requests;
-        agentSpend[agentId].tokens += data.metrics.total_tokens;
-      });
-    });
-
-    return Object.entries(agentSpend)
-      .map(([agentId, metrics]) => ({
-        key: metrics.agent_name,
-        ...metrics,
-      }))
-      .sort((a, b) => b.spend - a.spend)
-      .slice(0, topAgentsLimit);
-  };
-
-  const getTopAPIKeys = () => {
-    const keySpend: { [key: string]: KeyMetricWithMetadata } = {};
-    spendData.results.forEach((day) => {
-      const { breakdown } = day;
-      const { entities } = breakdown;
-      const tagDictionary = Object.keys(entities).reduce((acc: { [key: string]: TagUsage[] }, entity) => {
-        const { api_key_breakdown } = entities[entity];
-        Object.keys(api_key_breakdown).forEach((key) => {
-          const tagUsage = { tag: entity, usage: api_key_breakdown[key].metrics.spend };
-          if (acc[key]) {
-            acc[key].push(tagUsage);
-          } else {
-            acc[key] = [tagUsage];
-          }
-        });
-        return acc;
-      }, {});
-      Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
-        if (!keySpend[key]) {
-          keySpend[key] = {
-            metrics: {
-              spend: 0,
-              prompt_tokens: 0,
-              completion_tokens: 0,
-              total_tokens: 0,
-              api_requests: 0,
-              successful_requests: 0,
-              failed_requests: 0,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
-            metadata: {
-              key_alias: metrics.metadata.key_alias,
-              team_id: metrics.metadata.team_id || null,
-              tags: tagDictionary[key] || [],
-            },
-          };
-        }
-        keySpend[key].metrics.spend += metrics.metrics.spend;
-        keySpend[key].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        keySpend[key].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        keySpend[key].metrics.total_tokens += metrics.metrics.total_tokens;
-        keySpend[key].metrics.api_requests += metrics.metrics.api_requests;
-        keySpend[key].metrics.successful_requests += metrics.metrics.successful_requests;
-        keySpend[key].metrics.failed_requests += metrics.metrics.failed_requests;
-        keySpend[key].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
-        keySpend[key].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
-      });
-    });
-
-    return Object.entries(keySpend)
-      .map(([api_key, metrics]) => ({
-        api_key,
-        key_alias: metrics.metadata.key_alias || "-", // Using truncated key as alias
-        tags: metrics.metadata.tags || "-",
-        spend: metrics.metrics.spend,
-      }))
-      .sort((a, b) => b.spend - a.spend)
-      .slice(0, topKeysLimit);
-  };
-
-  const getProviderSpend = () => {
-    const providerSpend: { [key: string]: any } = {};
-    spendData.results.forEach((day) => {
-      Object.entries(day.breakdown.providers || {}).forEach(([provider, metrics]) => {
-        if (!providerSpend[provider]) {
-          providerSpend[provider] = {
-            provider,
-            spend: 0,
-            requests: 0,
-            successful_requests: 0,
-            failed_requests: 0,
-            tokens: 0,
-          };
-        }
-        try {
-          providerSpend[provider].spend += metrics.metrics.spend;
-          providerSpend[provider].requests += metrics.metrics.api_requests;
-          providerSpend[provider].successful_requests += metrics.metrics.successful_requests;
-          providerSpend[provider].failed_requests += metrics.metrics.failed_requests;
-          providerSpend[provider].tokens += metrics.metrics.total_tokens;
-        } catch (e) {
-          console.error(`Error processing provider ${provider}: ${e}`);
-        }
-      });
-    });
-
-    return Object.values(providerSpend)
-      .filter((provider) => provider.spend > 0)
-      .sort((a, b) => b.spend - a.spend);
-  };
+  const agentMetrics = showAgentBreakdown ? processActivityData(agentSpendData, "entities", teams || []) : {};
 
   const getAllTags = () => {
     if (entityList) {
@@ -408,42 +268,39 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   };
 
   const capitalizedEntityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
+  const showFlatCost = entityType === "team" && hasFlatCost(spendData.metadata);
+
+  const chev = "text-gray-400 text-xs";
+  const expandIcon = showCostBreakdown ? <DownOutlined className={chev} /> : <RightOutlined className={chev} />;
+  const infoIcon = <InfoCircleOutlined className="text-gray-400 hover:text-gray-600" />;
+
+  const renderSummaryTile = ({ title, value, className, tooltip, expandable }: SummaryTile) => (
+    <Card
+      key={title}
+      className={expandable ? "cursor-pointer hover:bg-gray-50 transition-colors" : undefined}
+      onClick={expandable ? () => setShowCostBreakdown(!showCostBreakdown) : undefined}
+    >
+      <div className="flex items-center gap-2">
+        <Title>{title}</Title>
+        {tooltip ? <Tooltip title={tooltip}>{infoIcon}</Tooltip> : null}
+        {expandable ? expandIcon : null}
+      </div>
+      <Text className={`text-2xl font-bold mt-2 ${className ?? ""}`}>{value}</Text>
+    </Card>
+  );
+
+  const breakdownTiles = showFlatCost && showCostBreakdown ? buildCostBreakdownTiles(spendData.metadata) : [];
+  const summaryTiles = [...buildSummaryTiles(spendData.metadata, showFlatCost), ...breakdownTiles];
 
   const modelViewTitle = modelViewType === "groups" ? "Top Public Model Names" : "Top Litellm Models";
 
   const costPanel = (
     <Grid numItems={2} className="gap-2 w-full">
-      {/* Total Spend Card */}
       <Col numColSpan={2}>
         <Card>
           <Title>{capitalizedEntityLabel} Spend Overview</Title>
           <Grid numItems={5} className="gap-4 mt-4">
-            <Card>
-              <Title>Total Spend</Title>
-              <Text className="text-2xl font-bold mt-2">
-                ${formatNumberWithCommas(spendData.metadata.total_spend, 2)}
-              </Text>
-            </Card>
-            <Card>
-              <Title>Total Requests</Title>
-              <Text className="text-2xl font-bold mt-2">{spendData.metadata.total_api_requests.toLocaleString()}</Text>
-            </Card>
-            <Card>
-              <Title>Successful Requests</Title>
-              <Text className="text-2xl font-bold mt-2 text-green-600">
-                {spendData.metadata.total_successful_requests.toLocaleString()}
-              </Text>
-            </Card>
-            <Card>
-              <Title>Failed Requests</Title>
-              <Text className="text-2xl font-bold mt-2 text-red-600">
-                {spendData.metadata.total_failed_requests.toLocaleString()}
-              </Text>
-            </Card>
-            <Card>
-              <Title>Total Tokens</Title>
-              <Text className="text-2xl font-bold mt-2">{spendData.metadata.total_tokens.toLocaleString()}</Text>
-            </Card>
+            {summaryTiles.map(renderSummaryTile)}
           </Grid>
         </Card>
       </Col>
@@ -456,21 +313,40 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
           </CardHeader>
           <CardContent>
             <BarChart
-              data={[...spendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())}
+              data={[...spendData.results]
+                .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                .map((row) => ({
+                  ...row,
+                  "Request cost": row.metrics.spend ?? 0,
+                  "Flat cost": row.metrics.flat_cost ?? 0,
+                }))}
               index="date"
-              categories={["metrics.spend"]}
-              colors={["cyan"]}
+              categories={showFlatCost ? ["Request cost", "Flat cost"] : ["metrics.spend"]}
+              colors={showFlatCost ? ["cyan", "violet"] : ["cyan"]}
+              stack={showFlatCost}
               valueFormatter={valueFormatterSpend}
               yAxisWidth={100}
-              showLegend={false}
+              showLegend={showFlatCost}
               customTooltip={({ payload, active }) => {
                 if (!active || !payload?.[0]) return null;
                 const data = payload[0].payload;
                 const entityCount = Object.keys(data.breakdown.entities || {}).length;
+                const requestSpend = data.metrics.spend ?? 0;
+                const flatCost = data.metrics.flat_cost ?? 0;
                 return (
                   <div className="bg-white p-4 shadow-lg rounded-lg border">
                     <p className="font-bold">{data.date}</p>
-                    <p className="text-cyan-500">Total Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}</p>
+                    {showFlatCost ? (
+                      <>
+                        <p className="text-cyan-500">Request cost: ${formatNumberWithCommas(requestSpend, 2)}</p>
+                        <p className="text-violet-500">Flat cost: ${formatNumberWithCommas(flatCost, 2)}</p>
+                        <p className="font-semibold">
+                          Total cost: ${formatNumberWithCommas(requestSpend + flatCost, 2)}
+                        </p>
+                      </>
+                    ) : (
+                      <p className="text-cyan-500">Total Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}</p>
+                    )}
                     <p className="text-gray-600">Total Requests: {data.metrics.api_requests}</p>
                     <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
                     <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
@@ -597,7 +473,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         <Card>
           <Title>Top Virtual Keys</Title>
           <TopKeyView
-            topKeys={getTopAPIKeys()}
+            topKeys={getTopAPIKeys(spendData.results, topKeysLimit)}
             teams={null}
             showTags={entityType === "tag"}
             topKeysLimit={topKeysLimit}
@@ -614,20 +490,19 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
             <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
           </div>
           <TopModelView
-            topModels={getTopModels()}
+            topModels={getTopModels(spendData.results, modelBreakdownKey, topModelsLimit)}
             topModelsLimit={topModelsLimit}
             setTopModelsLimit={setTopModelsLimit}
           />
         </Card>
       </Col>
 
-      {/* Top Agents - only for team entity type */}
-      {entityType === "team" && (
+      {showAgentBreakdown && (
         <Col numColSpan={2}>
           <Card>
             <Title>Top Agents Driving Spend</Title>
             <TopModelView
-              topModels={getTopAgents()}
+              topModels={getTopAgents(agentSpendData.results, topAgentsLimit)}
               topModelsLimit={topAgentsLimit}
               setTopModelsLimit={setTopAgentsLimit}
             />
@@ -644,7 +519,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
               <Col numColSpan={1}>
                 <DonutChart
                   className="mt-4 h-40"
-                  data={getProviderSpend()}
+                  data={getProviderSpend(spendData.results)}
                   index="provider"
                   category="spend"
                   valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
@@ -666,7 +541,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {getProviderSpend().map((provider) => (
+                    {getProviderSpend(spendData.results).map((provider) => (
                       <TableRow key={provider.provider}>
                         <TableCell>
                           <div className="flex items-center space-x-2">
@@ -708,7 +583,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         </>
       ),
     },
-    ...(entityType === "team"
+    ...(showAgentBreakdown
       ? [{ key: "agents", label: "Agent Activity", content: <ActivityMetrics modelMetrics={agentMetrics} /> }]
       : []),
     {
@@ -757,7 +632,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
           }
         />
       )}
-      {agentIsFetchingMore && entityType === "team" && (
+      {agentIsFetchingMore && showAgentBreakdown && (
         <Alert
           banner
           type="warning"
@@ -781,7 +656,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
           }
         />
       )}
-      {agentCancelled && entityType === "team" && (
+      {agentCancelled && showAgentBreakdown && (
         <Alert
           banner
           type="info"

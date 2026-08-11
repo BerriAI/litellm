@@ -8,7 +8,7 @@
 	lint-basedpyright lint-e2e-basedpyright lint-basedpyright-budget-update lint-type-discipline lint-type-discipline-budget-update \
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
 	install-dev install-proxy-dev install-test-deps install-hooks \
-	install-helm-unittest check-circular-imports check-import-safety pre-commit \
+	install-helm-unittest check-circular-imports check-import-safety check pre-commit \
 	lint-install lint-fetch-base bootstrap
 
 # Default target
@@ -22,7 +22,8 @@ help:
 	@echo "  make install-test-deps  - Install the full local test environment"
 	@echo "  make install-helm-unittest - Install helm unittest plugin"
 	@echo "  make install-hooks      - Install git hooks (Conventional Commits + Branches)"
-	@echo "  make pre-commit         - Run CI-equivalent lint on staged files (run before committing)"
+	@echo "  make check              - Run CI-equivalent lint on staged files, or on the diff vs the base branch when nothing is staged"
+	@echo "  make pre-commit         - Legacy alias for make check"
 	@echo "  make format             - Apply ruff format code formatting"
 	@echo "  make format-check       - Check ruff format code formatting (matches CI)"
 	@echo "  make lint               - Run all linting (Ruff, basedpyright, format check, circular imports, import safety)"
@@ -236,12 +237,19 @@ lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline 
 # Faster linting for local development (only checks changed code)
 lint-dev: lint-format-changed check-circular-imports check-import-safety
 
-# Run the gating CI checks against your staged files right before committing. Mirrors
+# Run the gating CI checks against your changes. Scopes to staged files when anything
+# is staged (warning about changed files left unstaged); with nothing staged it falls
+# back to the working tree's diff against the merge base with the base branch, so a
+# fresh merge commit or an unstaged working tree still gets checked. Mirrors
 # test-linting.yml (Python), test-litellm-ui-build.yml's frontend-lint (dashboard), and
-# check-ui-api-types.yml (API-type drift), skipping any whose files you didn't stage.
+# check-ui-api-types.yml (API-type drift), skipping any whose files aren't in scope.
 # Not auto-installed as a git hook so it never slows an unrelated human commit.
-pre-commit: bootstrap
+check: bootstrap
 	./scripts/pre_commit_lint.sh
+
+pre-commit:
+	@echo "make pre-commit is a legacy alias; use make check" >&2
+	@$(MAKE) check
 
 # Testing targets
 test: install-test-deps

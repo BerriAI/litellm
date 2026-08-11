@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { Modal, Form, Button, Select as AntdSelect, Tooltip } from "antd";
-import { Text, TextInput } from "@tremor/react";
+import { Form, Button, Select as AntdSelect, Tooltip } from "antd";
+import { TextInput } from "@tremor/react";
 import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
@@ -24,6 +24,14 @@ import ComplexityRouterConfig, {
   DEFAULT_TIER_DISTANCE_PENALTY,
 } from "../add_model/ComplexityRouterConfig";
 import NotificationsManager from "../molecules/notifications_manager";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface EditAutoRouterModalProps {
   isVisible: boolean;
@@ -432,27 +440,14 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   }));
 
   return (
-    <Modal
-      title="Edit Auto Router Configuration"
-      open={isVisible}
-      onCancel={onCancel}
-      footer={[
-        <Button key="cancel" onClick={onCancel}>
-          Cancel
-        </Button>,
-        <Tooltip key="submit" title={submitBlockedReason}>
-          <Button loading={loading} disabled={submitBlockedReason !== null} onClick={handleSubmit}>
-            Save Changes
-          </Button>
-        </Tooltip>,
-      ]}
-      width={1000}
-      destroyOnHidden
-    >
-      <div className="space-y-6">
-        <Text className="text-gray-600">
-          Edit the auto router configuration including routing logic, default models, and access settings.
-        </Text>
+    <Dialog open={isVisible} onOpenChange={(open) => !open && onCancel()}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
+        <DialogHeader>
+          <DialogTitle>Edit Auto Router Configuration</DialogTitle>
+          <DialogDescription>
+            Edit the auto router configuration including routing logic, default models, and access settings.
+          </DialogDescription>
+        </DialogHeader>
 
         <Form form={form} layout="vertical" className="space-y-4">
           {/* Auto Router Name */}
@@ -552,8 +547,17 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             </Form.Item>
           )}
         </Form>
-      </div>
-    </Modal>
+
+        <DialogFooter>
+          <Button onClick={onCancel}>Cancel</Button>
+          <Tooltip title={submitBlockedReason}>
+            <Button loading={loading} disabled={submitBlockedReason !== null} onClick={handleSubmit}>
+              Save Changes
+            </Button>
+          </Tooltip>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 

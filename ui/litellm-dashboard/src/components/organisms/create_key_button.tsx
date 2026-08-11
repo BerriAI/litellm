@@ -5,6 +5,7 @@ import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useTags } from "@/app/(dashboard)/hooks/tags/useTags";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import useCan from "@/app/(dashboard)/hooks/useCan";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
@@ -147,6 +148,8 @@ export const fetchUserModels = async (
 const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOpenCreate, prefillData }) => {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
+  const canViewPolicies = useCan("viewPolicies");
+  const canViewPrompts = useCan("viewPrompts");
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
   const { data: projects, isLoading: isProjectsLoading } = useProjects();
   const { data: uiSettingsData } = useUISettings();
@@ -275,9 +278,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     };
 
     fetchGuardrails();
-    fetchPolicies();
-    fetchPrompts();
-  }, [accessToken]);
+    if (canViewPolicies) fetchPolicies();
+    if (canViewPrompts) fetchPrompts();
+  }, [accessToken, canViewPolicies, canViewPrompts]);
 
   // Fetch possible user roles when component mounts
   useEffect(() => {
@@ -1251,74 +1254,78 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   >
                     <Switch disabled={!canEditGuardrails} checkedChildren="Yes" unCheckedChildren="No" />
                   </Form.Item>
-                  <Form.Item
-                    label={
-                      <span>
-                        Policies{" "}
-                        <Tooltip title="Apply policies to this key to control guardrails and other settings">
-                          <a
-                            href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
-                          >
-                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                          </a>
-                        </Tooltip>
-                      </span>
-                    }
-                    name="policies"
-                    className="mt-4"
-                    help={
-                      premiumUser
-                        ? "Select existing policies or enter new ones"
-                        : "Premium feature - Upgrade to set policies by key"
-                    }
-                  >
-                    <Select
-                      mode="tags"
-                      style={{ width: "100%" }}
-                      disabled={!premiumUser}
-                      placeholder={
-                        !premiumUser ? "Premium feature - Upgrade to set policies by key" : "Select or enter policies"
+                  {canViewPolicies && (
+                    <Form.Item
+                      label={
+                        <span>
+                          Policies{" "}
+                          <Tooltip title="Apply policies to this key to control guardrails and other settings">
+                            <a
+                              href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                            >
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </a>
+                          </Tooltip>
+                        </span>
                       }
-                      options={policiesList.map((name) => ({ value: name, label: name }))}
-                    />
-                  </Form.Item>
-                  <Form.Item
-                    label={
-                      <span>
-                        Prompts{" "}
-                        <Tooltip title="Allow this key to use specific prompt templates">
-                          <a
-                            href="https://docs.litellm.ai/docs/proxy/prompt_management"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
-                          >
-                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                          </a>
-                        </Tooltip>
-                      </span>
-                    }
-                    name="prompts"
-                    className="mt-4"
-                    help={
-                      premiumUser
-                        ? "Select existing prompts or enter new ones"
-                        : "Premium feature - Upgrade to set prompts by key"
-                    }
-                  >
-                    <Select
-                      mode="tags"
-                      style={{ width: "100%" }}
-                      disabled={!premiumUser}
-                      placeholder={
-                        !premiumUser ? "Premium feature - Upgrade to set prompts by key" : "Select or enter prompts"
+                      name="policies"
+                      className="mt-4"
+                      help={
+                        premiumUser
+                          ? "Select existing policies or enter new ones"
+                          : "Premium feature - Upgrade to set policies by key"
                       }
-                      options={promptsList.map((name) => ({ value: name, label: name }))}
-                    />
-                  </Form.Item>
+                    >
+                      <Select
+                        mode="tags"
+                        style={{ width: "100%" }}
+                        disabled={!premiumUser}
+                        placeholder={
+                          !premiumUser ? "Premium feature - Upgrade to set policies by key" : "Select or enter policies"
+                        }
+                        options={policiesList.map((name) => ({ value: name, label: name }))}
+                      />
+                    </Form.Item>
+                  )}
+                  {canViewPrompts && (
+                    <Form.Item
+                      label={
+                        <span>
+                          Prompts{" "}
+                          <Tooltip title="Allow this key to use specific prompt templates">
+                            <a
+                              href="https://docs.litellm.ai/docs/proxy/prompt_management"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                            >
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </a>
+                          </Tooltip>
+                        </span>
+                      }
+                      name="prompts"
+                      className="mt-4"
+                      help={
+                        premiumUser
+                          ? "Select existing prompts or enter new ones"
+                          : "Premium feature - Upgrade to set prompts by key"
+                      }
+                    >
+                      <Select
+                        mode="tags"
+                        style={{ width: "100%" }}
+                        disabled={!premiumUser}
+                        placeholder={
+                          !premiumUser ? "Premium feature - Upgrade to set prompts by key" : "Select or enter prompts"
+                        }
+                        options={promptsList.map((name) => ({ value: name, label: name }))}
+                      />
+                    </Form.Item>
+                  )}
                   <Form.Item
                     label={
                       <span>
