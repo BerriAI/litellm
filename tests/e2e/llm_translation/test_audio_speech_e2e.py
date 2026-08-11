@@ -9,13 +9,12 @@ non-zero audio bytes.
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel
-
 from e2e_config import unique_marker
-from e2e_http import require_successful_call, assert_error_or_server_known
+from e2e_http import assert_client_error, require_successful_call
 from endpoints_client import EndpointsClient
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
+from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
 
@@ -89,7 +88,7 @@ class TestAudioSpeech:
             headers=endpoints_client.proxy.transport.bearer(key),
             json=_OptionalSpeechBody(model=model, voice="alloy"),
         )
-        assert_error_or_server_known(result, "speech missing input")
+        assert_client_error(result, "speech missing input")
 
     @pytest.mark.skip(reason="stage red: product gap, /v1/audio/speech 500s on missing model instead of 400")
     @pytest.mark.covers("llm.audio_speech.openai.input_validation.nonstream.works")
@@ -102,7 +101,7 @@ class TestAudioSpeech:
             headers=endpoints_client.proxy.transport.bearer(key),
             json=_OptionalSpeechBody(input="hello", voice="alloy"),
         )
-        assert_error_or_server_known(result, "speech missing model")
+        assert_client_error(result, "speech missing model")
 
     @pytest.mark.skip(reason="stage red: product gap, /v1/audio/speech 500s on invalid voice instead of surfacing the provider 4xx")
     @pytest.mark.covers("llm.audio_speech.openai.input_validation.nonstream.works")
@@ -115,7 +114,7 @@ class TestAudioSpeech:
             headers=endpoints_client.proxy.transport.bearer(key),
             json=_OptionalSpeechBody(model=model, input="hello", voice="invalid_voice_xyz"),
         )
-        assert_error_or_server_known(result, "speech invalid voice")
+        assert_client_error(result, "speech invalid voice")
 
     @pytest.mark.skip(reason="stage red: product gap, /v1/audio/speech 500s on empty input instead of surfacing the provider 4xx")
     @pytest.mark.covers("llm.audio_speech.openai.input_validation.nonstream.works")
@@ -128,5 +127,4 @@ class TestAudioSpeech:
             headers=endpoints_client.proxy.transport.bearer(key),
             json=_OptionalSpeechBody(model=model, input="", voice="alloy"),
         )
-        assert_error_or_server_known(result, "speech empty input")
-
+        assert_client_error(result, "speech empty input")

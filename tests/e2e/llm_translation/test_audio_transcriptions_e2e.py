@@ -11,13 +11,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from pydantic import BaseModel
-
 from e2e_config import unique_marker
 from e2e_http import Success, UnknownApiError, unwrap
 from endpoints_client import EndpointsClient, TranscriptionForm, TranscriptionResult
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
+from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
 

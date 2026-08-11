@@ -19,14 +19,12 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import pytest
-
-from pydantic import BaseModel
-
 from e2e_config import unique_marker
-from e2e_http import unwrap, assert_error_or_server_known
+from e2e_http import assert_client_error, unwrap
 from endpoints_client import EndpointsClient
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody, OcrBody, OcrDocument, OcrResponse
+from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
 
@@ -175,6 +173,5 @@ class TestRustOcrGateway:
             headers=endpoints_client.proxy.transport.bearer(key),
             json=_OptionalOcrBody(model=model),
         )
-        assert_error_or_server_known(result, "ocr missing document")
-
+        assert_client_error(result, "ocr missing document")
 

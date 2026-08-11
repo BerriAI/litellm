@@ -63,7 +63,6 @@ LlmCapability = Literal[
     "assume_role",
     "basic",
     "count_tokens",
-    "input_sanitization",
     "input_validation",
     "long_context_1m",
     "mid_conversation_system",

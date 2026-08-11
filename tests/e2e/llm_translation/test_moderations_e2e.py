@@ -8,13 +8,12 @@ with at least one policy category tripped, and benign text comes back not flagge
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel
-
 from e2e_config import unique_marker
-from e2e_http import unwrap, assert_error_or_server_known
+from e2e_http import assert_client_error, unwrap
 from endpoints_client import EndpointsClient
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
+from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
 
@@ -82,4 +81,4 @@ class TestModerations:
             headers=endpoints_client.proxy.transport.bearer(key),
             json=_OptionalModerationBody(model=model),
         )
-        assert_error_or_server_known(result, "moderations missing input")
+        assert_client_error(result, "moderations missing input")

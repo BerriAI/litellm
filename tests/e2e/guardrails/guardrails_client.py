@@ -9,12 +9,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel
-
-
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, settle_propagation, unique_marker
 from e2e_http import NoBody, Result, StreamingResponse, Success, unwrap
-
 from lifecycle import ResourceManager
 from models import (
     AnthropicMessagesBody,
@@ -32,6 +28,7 @@ from models import (
     TeamNewResponse,
 )
 from proxy_client import ProxyClient
+from pydantic import BaseModel
 
 GuardrailMode = Literal["pre_call", "post_call", "during_call", "logging_only"]
 BlockedWordAction = Literal["BLOCK", "MASK"]
