@@ -155,14 +155,6 @@ class _TextCompletionChoiceLike(Protocol):
     finish_reason: str | None
 
 
-def validated_stream_logging_obj(candidate: object) -> LiteLLMLoggingObject:
-    from litellm.litellm_core_utils.litellm_logging import Logging
-
-    if isinstance(candidate, Logging):
-        return candidate
-    raise TypeError("CustomStreamWrapper requires a LiteLLMLoggingObject")
-
-
 class CustomStreamWrapper:
     def __init__(
         self,

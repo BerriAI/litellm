@@ -96,7 +96,6 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
-from litellm.litellm_core_utils.streaming_handler import validated_stream_logging_obj
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
@@ -597,7 +596,7 @@ async def acompletion(
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            api_base=completion_kwargs.get("base_url", None),
+            api_base=base_url,
         )
 
     fallbacks = fallbacks or litellm.model_fallbacks
@@ -827,7 +826,7 @@ def mock_completion(
     mock_response: MOCK_RESPONSE_TYPE | None = "This is a mock request",
     mock_tool_calls: list | None = None,
     mock_timeout: bool | None = False,
-    logging: LiteLLMLoggingObj | None = None,
+    logging=None,
     custom_llm_provider=None,
     timeout: float | str | httpx.Timeout | None = None,
     **kwargs,
@@ -911,7 +910,7 @@ def mock_completion(
                     ),
                     model=model,
                     custom_llm_provider="openai",
-                    logging_obj=validated_stream_logging_obj(logging),
+                    logging_obj=logging,
                 )
             return CustomStreamWrapper(
                 completion_stream=mock_completion_streaming_obj(
@@ -919,7 +918,7 @@ def mock_completion(
                 ),
                 model=model,
                 custom_llm_provider="openai",
-                logging_obj=validated_stream_logging_obj(logging),
+                logging_obj=logging,
             )
         if isinstance(mock_response, litellm.MockException):
             raise mock_response
