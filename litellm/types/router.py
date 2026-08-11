@@ -155,6 +155,62 @@ def _as_utc(value: datetime.datetime | None) -> datetime.datetime | None:
     return value.astimezone(datetime.timezone.utc)
 
 
+class TagRateLimitEntry(BaseModel):
+    """
+    One tag-scoped limit: a caller-supplied tag value (identified by `tag_id`,
+    e.g. `end_user_id` in a request tag like `end_user_id:user-123`) is capped
+    at `limit` units per rolling `period_seconds`-second window. Bucketing is
+    `epoch_second // period_seconds`, so `period_seconds=86400` resets at UTC
+    midnight and `period_seconds=60` resets on real clock-minute boundaries.
+
+    For a `concurrency_limits` entry specifically, `period_seconds` is not a
+    window: it is a floor under the safety TTL a reserved in-flight slot
+    self-heals after, in case a worker crashes before releasing it (the
+    counter, not a window). The effective TTL is at least one hour regardless
+    of this value, so a slow but genuinely still-running request never has
+    its reservation expire out from under it; set this higher only if an
+    even longer self-heal window is wanted. `concurrency_limits` also only
+    supports chain-wide entries (declared identically by every deployment
+    sharing a `model_name`) -- a divergent per-deployment value is dropped
+    with a warning, not silently scoped to a subset of deployments.
+    """
+
+    name: str
+    tag_id: str = "end_user_id"
+    limit: float
+    period_seconds: int
+    scope_by_key_hash: bool = False
+    """
+    When `True`, the bucket is additionally scoped by the calling virtual
+    key's hash, on top of the existing `tag_id`/tag-value match. Without
+    this, two different keys (e.g. two separate services) that both happen
+    to send the same tag value (e.g. the same `end_user_id`) share one
+    bucket and one counter; opting in gives each calling key its own
+    independent counter for the same tag value. Defaults to `False`, which
+    is today's existing behavior: the bucket is scoped by tag value alone,
+    shared across every key that sends it.
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+
+class TagRateLimitGroup(BaseModel):
+    limits: list[TagRateLimitEntry] = Field(default_factory=list)
+
+
+class TagRateLimits(BaseModel):
+    """
+    Per-chain/model-group tag rate limits, set under a deployment's
+    `model_info.tag_rate_limits`. Each entry carries its own `tag_id`, so two
+    entries of the same unit on the same chain can key by different tags.
+    """
+
+    token_limits: TagRateLimitGroup | None = None
+    request_limits: TagRateLimitGroup | None = None
+    dollar_limits: TagRateLimitGroup | None = None
+    concurrency_limits: TagRateLimitGroup | None = None
+
+
 class ModelInfo(MirroredPricingParams):
     id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
@@ -208,6 +264,8 @@ class ModelInfo(MirroredPricingParams):
     # (requested model group, selected model + provider, router correlation id)
     # in the spend log row's metadata. Set it on every deployment of the group.
     internal_router_model: bool | None = None
+
+    tag_rate_limits: TagRateLimits | None = None
 
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
