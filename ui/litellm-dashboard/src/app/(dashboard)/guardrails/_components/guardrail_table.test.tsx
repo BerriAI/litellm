@@ -1,9 +1,26 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 
 import GuardrailTable from "./guardrail_table";
 import { Guardrail, GuardrailDefinitionLocation } from "@/components/guardrails/types";
+
+const localization = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: (namespace: keyof (typeof resources)["en"] = "common") => ({
+      t: (key: string) => {
+        const copy = key.split(".").reduce<unknown>((value, segment) => {
+          if (typeof value !== "object" || value === null) return undefined;
+          return (value as Record<string, unknown>)[segment];
+        }, resources[localization.language][namespace]);
+        return typeof copy === "string" ? copy : key;
+      },
+    }),
+  };
+});
 
 const baseProps = {
   isLoading: false,
@@ -23,11 +40,24 @@ const makeGuardrail = (overrides: Partial<Guardrail> = {}): Guardrail => ({
 });
 
 describe("GuardrailTable", () => {
+  beforeEach(() => {
+    localization.language = "en";
+  });
+
   it("renders every column header", () => {
     render(<GuardrailTable guardrailsList={[]} {...baseProps} />);
     for (const header of ["Guardrail ID", "Name", "Provider", "Mode", "Default On", "Created At", "Updated At"]) {
       expect(screen.getByText(header)).toBeInTheDocument();
     }
+  });
+
+  it("renders table headings and empty state in Russian", () => {
+    localization.language = "ru";
+    render(<GuardrailTable guardrailsList={[]} {...baseProps} />);
+
+    expect(screen.getByText("ID ограничителя")).toBeInTheDocument();
+    expect(screen.getByText("Название")).toBeInTheDocument();
+    expect(screen.getByText("Ограничителей пока нет")).toBeInTheDocument();
   });
 
   it("renders the provider logo from the bundled guardrail logo map", () => {

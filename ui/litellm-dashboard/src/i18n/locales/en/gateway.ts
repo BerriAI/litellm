@@ -1033,6 +1033,53 @@ export const enGateway = {
       cancelRetry: "Failed to cancel periodic reload. Please try again.",
     },
   },
+  guardrailsPage: {
+    tabs: {
+      garden: "Guardrail Garden",
+      guardrails: "Guardrails",
+      playground: "Test Playground",
+      submitted: "Submitted Guardrails",
+    },
+    actions: {
+      add: "Add New Guardrail",
+      addProvider: "Add Provider Guardrail",
+      addCustom: "Create Custom Code Guardrail",
+      open: "Open guardrail actions",
+      delete: "Delete",
+      configDeleteHint: "Config guardrails are defined in the config file and cannot be deleted from the dashboard.",
+    },
+    loading: "Loading guardrails…",
+    empty: {
+      title: "No guardrails yet",
+      description: "Add a guardrail to start filtering requests and responses.",
+    },
+    columns: {
+      id: "Guardrail ID",
+      name: "Name",
+      provider: "Provider",
+      mode: "Mode",
+      defaultOn: "Default On",
+      createdAt: "Created At",
+      updatedAt: "Updated At",
+      actions: "Actions",
+    },
+    values: {
+      yes: "Yes",
+      no: "No",
+      defaultOn: "Default On",
+      defaultOff: "Default Off",
+      unnamed: "Unnamed Guardrail",
+    },
+    notifications: {
+      deleted: 'Guardrail "{{name}}" deleted successfully',
+      deleteFailed: "Failed to delete guardrail",
+    },
+    delete: {
+      title: "Delete Guardrail",
+      message: "Are you sure you want to delete guardrail: {{name}}? This action cannot be undone.",
+      information: "Guardrail Information",
+    },
+  },
   virtualKeys: {
     title: "Virtual Keys",
     subtitle: "Every key that authenticates requests to the gateway.",

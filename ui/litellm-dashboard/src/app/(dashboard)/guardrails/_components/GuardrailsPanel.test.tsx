@@ -3,6 +3,27 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import GuardrailsPanel from "./GuardrailsPanel";
 import { getGuardrailsList, deleteGuardrailCall } from "@/components/networking";
 
+const localization = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: (namespace: keyof (typeof resources)["en"] = "common") => ({
+      t: (key: string, values?: Record<string, unknown>) => {
+        const copy = key.split(".").reduce<unknown>((value, segment) => {
+          if (typeof value !== "object" || value === null) return undefined;
+          return (value as Record<string, unknown>)[segment];
+        }, resources[localization.language][namespace]);
+        if (typeof copy !== "string") return key;
+        return Object.entries(values ?? {}).reduce(
+          (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+          copy,
+        );
+      },
+    }),
+  };
+});
+
 vi.mock("@/components/networking", () => ({
   getGuardrailsList: vi.fn(),
   deleteGuardrailCall: vi.fn(),
@@ -82,6 +103,7 @@ describe("GuardrailsPanel", () => {
   const mockDeleteGuardrailCall = vi.mocked(deleteGuardrailCall);
 
   beforeEach(() => {
+    localization.language = "en";
     vi.clearAllMocks();
     mockGetGuardrailsList.mockResolvedValue({
       guardrails: [
