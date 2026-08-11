@@ -27,25 +27,25 @@ body:
     id: user-flow
     attributes:
       label: User Flow
-      description: Two numbered lists walking the same end user through the same task, one today without the feature and one with it. Keep the guidance comments in the box while you fill it in, they explain every rule.
+      description: Two numbered lists walking the same end user through the same task, one as it goes today and one as it would ideally go with the feature. Keep the guidance comments in the box while you fill it in, they explain every rule.
       value: |
-        <!-- Two ordered lists, "Today (without the feature)" and "With the feature", walking the same end user through the same task, written strictly from that user's seat
+        <!-- Two ordered lists, "Before this feature (today)" and "After this feature (ideal user flow)", walking the same end user through the same task, written strictly from that user's seat
              Describe the real application and the routes its users actually hit, not a generic scenario. Link any related GitHub issue or provider API docs
              Lead each list with one plain sentence saying where the flow dead-ends today and what it would let them do instead, then number the steps
              Every step is something the user does or observes: the HTTP method and full URL they hit, what they sent, and what visibly came back (status code, error text, the shape of an ID). UI steps name the page URL and what is on screen
              No LiteLLM internals: never name functions, files, DB tables, config classes, hooks, callbacks, or code paths. Ask for the behavior you need, not the implementation you imagine
              Keep the two lists step-for-step identical until they diverge, so the missing capability is obvious
-             "Today" is also where you show the workaround you're living with, which is what tells us how badly this is needed
+             "Before this feature" is also where you show the workaround you're living with, which is what tells us how badly this is needed
 
         Example:
 
-        Today (without the feature): a developer batching nightly summaries has no way to mark those calls as low priority, so they compete with live traffic for the same rate limit
+        Before this feature (today): a developer batching nightly summaries has no way to mark those calls as low priority, so they compete with live traffic for the same rate limit
 
         1. They send POST https://litellm-domain/v1/chat/completions for 500 documents in a loop
         2. Around document 120 they start getting 429s naming the rpm limit, and their user-facing chat app starts getting them too
         3. Their workaround is a hand-rolled sleep between calls, which stretches the batch to 3 hours and still collides at peak
 
-        With the feature: the same batch runs as background work that yields to live traffic
+        After this feature (ideal user flow): the same batch runs as background work that yields to live traffic
 
         1. The developer sends the same POST with `"service_tier": "flex"`
         2. Batch calls queue behind interactive ones instead of 429ing, and the response comes back with the tier it was served at
@@ -53,13 +53,13 @@ body:
         4. https://litellm-domain/ui/?page=logs shows the batch requests tagged with that tier
         -->
 
-        Today (without the feature): 
+        Before this feature (today): 
 
         1. 
         2. 
         3. 
 
-        With the feature: 
+        After this feature (ideal user flow): 
 
         1. 
         2. 
@@ -70,9 +70,9 @@ body:
     id: how-far-you-got
     attributes:
       label: How far you got
-      description: Walk the "With the feature" list against a live proxy and paste the commands and output up to the step where you get stuck. Keep the guidance comments in the box while you fill it in, they explain every rule.
+      description: Walk the "After this feature (ideal user flow)" list against a live proxy and paste the commands and output up to the step where you get stuck. Keep the guidance comments in the box while you fill it in, they explain every rule.
       value: |
-        <!-- Run as many steps of the "With the feature" list as you can against a live proxy you ran yourself (e.g., litellm --config config.yaml --detailed_debug on localhost:4000), then paste the commands (e.g., curl) and their full output, ending at the step that dead-ends
+        <!-- Run as many steps of the "After this feature (ideal user flow)" list as you can against a live proxy you ran yourself (e.g., litellm --config config.yaml --detailed_debug on localhost:4000), then paste the commands (e.g., curl) and their full output, ending at the step that dead-ends
              Say plainly what stopped you there, in user terms: the option you passed came back ignored, the response 400'd naming an unsupported field, there is no button on the page for it. This is what proves the feature is genuinely missing rather than undocumented, and it is the single most useful thing you can give us
              No mocks. Where the flow involves a provider call, hit the real provider API, even though that costs real $. `pytest` commands are not enough
              Include the config.yaml (or SDK setup) and env vars the proxy ran with, plus the version or commit you were on. Keep the real values for env vars that aren't sensitive, and redact only the secrets: never paste a real API key, virtual key, database URL, or other credential, here or anywhere else in the issue
