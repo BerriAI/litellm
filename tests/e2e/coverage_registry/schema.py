@@ -40,6 +40,7 @@ LlmEndpoint = Literal[
     "audio_transcriptions",
     "moderations",
     "realtime",
+    "google_native",
 ]
 
 LlmRoute = Literal[
