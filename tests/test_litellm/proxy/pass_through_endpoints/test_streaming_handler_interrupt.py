@@ -444,6 +444,24 @@ async def test_chunk_processor_injects_cost_into_usage_frame_fragmented_across_c
 
 
 @pytest.mark.asyncio
+async def test_chunk_processor_streams_crlf_delimited_frames_live_and_injects_cost(monkeypatch):
+    """Regression: CRLF-delimited SSE frames must flow as they complete instead of
+    buffering until EOF, and the usage frame must still get cost injected."""
+    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+    chunks = [chunk.replace(b"\n\n", b"\r\n\r\n") for chunk in _openai_passthrough_stream_chunks()]
+
+    received = await _collect_openai_passthrough_chunks(chunks, EndpointType.OPENAI)
+
+    assert len(received) == len(chunks)
+    assert received[0] == chunks[0]
+    reassembled = b"".join(received).decode("utf-8")
+    usage_lines = [ln for ln in reassembled.replace("\r\n", "\n").split("\n") if '"total_tokens"' in ln]
+    assert len(usage_lines) == 1
+    final_payload = json.loads(usage_lines[0].split("data:", 1)[1].strip())
+    assert final_payload["usage"]["cost"] > 0
+
+
+@pytest.mark.asyncio
 async def test_chunk_processor_flag_off_leaves_openai_passthrough_stream_byte_identical(monkeypatch):
     monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
     chunks = _openai_passthrough_stream_chunks()

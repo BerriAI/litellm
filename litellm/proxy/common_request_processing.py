@@ -3066,7 +3066,7 @@ class ProxyBaseLLMRequestProcessing:
             elif isinstance(chunk, (bytes, bytearray)):
                 try:
                     s: Final = chunk.decode("utf-8")
-                    if s.endswith("\n\n"):
+                    if s.endswith(("\n\n", "\r\n\r\n")):
                         maybe_mod = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(s, model_name)
                         if maybe_mod is not None:
                             return maybe_mod.encode("utf-8")

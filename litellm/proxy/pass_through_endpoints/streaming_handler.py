@@ -141,10 +141,12 @@ class PassThroughStreamingHandler:
 
     @staticmethod
     def _split_complete_sse_frames(pending: bytes) -> tuple[bytes, bytes]:
-        frame_boundary: Final = pending.rfind(b"\n\n")
-        if frame_boundary == -1:
+        lf_boundary_end: Final = pending.rfind(b"\n\n") + 2
+        crlf_boundary_end: Final = pending.rfind(b"\r\n\r\n") + 4
+        boundary_end: Final = max(lf_boundary_end if lf_boundary_end >= 2 else 0, crlf_boundary_end if crlf_boundary_end >= 4 else 0)
+        if boundary_end == 0:
             return b"", pending
-        return pending[: frame_boundary + 2], pending[frame_boundary + 2 :]
+        return pending[:boundary_end], pending[boundary_end:]
 
     @staticmethod
     async def _route_streaming_logging_to_handler(
