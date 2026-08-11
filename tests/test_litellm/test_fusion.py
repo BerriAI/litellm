@@ -311,6 +311,68 @@ class TestAFusionWithJudge:
 # Common error cases
 # ---------------------------------------------------------------------------
 
+class TestAFusionKwargs:
+    """Cover temperature/max_tokens/timeout forwarding and system-prompt preservation."""
+
+    @pytest.fixture
+    def panel_responses(self):
+        return [_make_response(f"Answer {m}", m) for m in PANEL_MODELS]
+
+    @pytest.fixture
+    def judge_response(self):
+        return _make_response("Synthesized final answer", JUDGE_MODEL)
+
+    @pytest.mark.asyncio
+    async def test_temperature_max_tokens_timeout_forwarded(self, panel_responses, judge_response):
+        """Lines 309, 311, 313, 336: temperature/max_tokens/timeout set on panel_kwargs and judge_kwargs."""
+        captured: list[dict] = []
+
+        async def mock_acompletion(**kwargs):
+            captured.append(dict(kwargs))
+            return judge_response if kwargs["model"] == JUDGE_MODEL else panel_responses[PANEL_MODELS.index(kwargs["model"])]
+
+        with patch("litellm.acompletion", side_effect=mock_acompletion):
+            await afusion(
+                models=PANEL_MODELS,
+                judge_model=JUDGE_MODEL,
+                messages=MESSAGES,
+                temperature=0.5,
+                max_tokens=128,
+                timeout=10.0,
+            )
+
+        panel_calls = [c for c in captured if c["model"] in PANEL_MODELS]
+        judge_calls = [c for c in captured if c["model"] == JUDGE_MODEL]
+        assert all(c.get("temperature") == 0.5 for c in panel_calls)
+        assert all(c.get("max_tokens") == 128 for c in panel_calls)
+        assert all(c.get("timeout") == 10.0 for c in panel_calls)
+        assert all(c.get("timeout") == 10.0 for c in judge_calls)
+
+    @pytest.mark.asyncio
+    async def test_existing_system_prompt_preserved(self, panel_responses, judge_response):
+        """Lines 126-127: system message in original_messages is carried into judge prompt."""
+        messages_with_system = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "What is 2+2?"},
+        ]
+        captured_judge_messages: list = []
+
+        async def mock_acompletion(**kwargs):
+            if kwargs["model"] == JUDGE_MODEL:
+                captured_judge_messages.extend(kwargs["messages"])
+            return judge_response if kwargs["model"] == JUDGE_MODEL else panel_responses[PANEL_MODELS.index(kwargs["model"])]
+
+        with patch("litellm.acompletion", side_effect=mock_acompletion):
+            await afusion(
+                models=PANEL_MODELS,
+                judge_model=JUDGE_MODEL,
+                messages=messages_with_system,
+            )
+
+        system_contents = [m["content"] for m in captured_judge_messages if m.get("role") == "system"]
+        assert any("helpful assistant" in c for c in system_contents)
+
+
 class TestCommonErrors:
     @pytest.mark.asyncio
     async def test_empty_models_raises(self):
