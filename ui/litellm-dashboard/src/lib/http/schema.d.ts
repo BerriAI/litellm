@@ -36265,8 +36265,11 @@ export interface components {
         };
         /** TagRateLimitGroup */
         TagRateLimitGroup: {
-            /** Limits */
-            limits?: components["schemas"]["TagRateLimitEntry"][];
+            /**
+             * Limits
+             * @default []
+             */
+            limits: components["schemas"]["TagRateLimitEntry"][];
         };
         /** TagRateLimits */
         TagRateLimits: {
