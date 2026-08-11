@@ -6,6 +6,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import TeamInfoView from "./TeamInfo";
 
+const localization = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: (namespace: keyof (typeof resources)["en"] = "common") => ({
+      t: (key: string, values?: Record<string, unknown>) => {
+        const copy = key.split(".").reduce<unknown>((value, segment) => {
+          if (typeof value !== "object" || value === null) return undefined;
+          return (value as Record<string, unknown>)[segment];
+        }, resources[localization.language][namespace]);
+        if (typeof copy !== "string") return key;
+        return Object.entries(values ?? {}).reduce(
+          (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+          copy,
+        );
+      },
+      i18n: { resolvedLanguage: localization.language, language: localization.language },
+    }),
+  };
+});
+
 vi.mock("@/components/networking", () => ({
   teamInfoCall: vi.fn(),
   teamMemberDeleteCall: vi.fn(),
@@ -203,6 +225,7 @@ describe("TeamInfoView", () => {
   };
 
   beforeEach(() => {
+    localization.language = "en";
     mockUseAllProxyModels.mockReturnValue({
       data: { data: [] },
       isLoading: false,
@@ -241,6 +264,21 @@ describe("TeamInfoView", () => {
   });
 
   describe("display and rendering", () => {
+    it("renders the team overview in Russian", async () => {
+      localization.language = "ru";
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Состояние бюджета")).toBeInTheDocument();
+      });
+      expect(screen.getByRole("tab", { name: "Обзор" })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "Виртуальные ключи" })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "Настройки" })).toBeInTheDocument();
+      expect(screen.getByText("Политики не настроены")).toBeInTheDocument();
+    });
+
     it("should render", async () => {
       vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
 
