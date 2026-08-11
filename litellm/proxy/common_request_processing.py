@@ -183,7 +183,10 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
 
     Awaited directly by the shielded cleanup rather than scheduled with
     create_task: the client is already gone so the extra latency is harmless,
-    and an unrooted task could be garbage-collected before it bills.
+    and an unrooted task could be garbage-collected before it bills. Assembly
+    is offloaded to a thread because a partial stream never carries a usage
+    chunk, so it re-tokenizes the whole delivered response with tiktoken, which
+    on a multi-MB stream blocks the event loop for hundreds of milliseconds.
 
     Returns True when a disconnect-time success event owns the request's
     max_parallel_requests slot release (one was dispatched here, or one had
@@ -211,7 +214,8 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     )
     messages: Final[object] = getattr(response, "messages", None)
     try:
-        partial_response: Final = litellm.stream_chunk_builder(
+        partial_response: Final = await asyncio.to_thread(
+            litellm.stream_chunk_builder,
             chunks=chunks,
             messages=messages if isinstance(messages, list) else None,
             logging_obj=logging_obj,

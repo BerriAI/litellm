@@ -3190,6 +3190,63 @@ def test_record_partial_usage_for_failure_stashes_usage_and_cost():
     assert isinstance(logging_obj.model_call_details["response_cost"], float)
 
 
+@pytest.mark.asyncio
+async def test_async_stream_failure_recovers_partial_usage_off_the_event_loop():
+    """Recovering partial usage re-tokenizes everything streamed so far. On a
+    multi-MB stream that costs hundreds of ms of tiktoken, so the async failure
+    path must not run it on the event loop thread and stall the whole worker.
+    """
+    import threading
+
+    class _FailingStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise ValueError("upstream died mid-stream")
+
+    logging_obj = Logging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="partial-usage-offload",
+        function_id="1245",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=_FailingStream(),
+        model="gpt-4o-mini",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper.chunks = [
+        ModelResponseStream(
+            id="chatcmpl-partial-offload",
+            created=1742056047,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+            choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Rome fell", role="assistant"))],
+        )
+    ]
+
+    builder_threads = []
+    real_builder = litellm.stream_chunk_builder
+
+    def _record_thread(*args, **kwargs):
+        builder_threads.append(threading.get_ident())
+        return real_builder(*args, **kwargs)
+
+    with patch.object(litellm, "stream_chunk_builder", _record_thread):
+        with pytest.raises(Exception):
+            await wrapper.__anext__()
+
+    assert len(builder_threads) == 1
+    assert builder_threads[0] != threading.get_ident()
+
+
 def test_record_partial_usage_for_failure_noop_without_chunks():
     """With no chunks delivered there is nothing billed to recover, so the
     failure stash must stay absent and not force a zero-usage row.
