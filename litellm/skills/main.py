@@ -5,8 +5,11 @@ Provides create, list, get, and delete operations for skills
 
 import asyncio
 import contextvars
+import inspect
 from collections.abc import Coroutine
 from functools import partial
+from operator import attrgetter
+from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
@@ -30,9 +33,114 @@ from litellm.utils import ProviderConfigManager, client
 # Initialize HTTP handler
 base_llm_http_handler = BaseLLMHTTPHandler()
 DEFAULT_ANTHROPIC_API_BASE: Final = "https://api.anthropic.com/v1"
+_NATIVE_SKILL_PROVIDERS: Final = frozenset({"openai", "azure"})
+_NATIVE_SKILL_OPERATIONS: Final = MappingProxyType(
+    {
+        "create": ("skills.create", ("files",)),
+        "list": ("skills.list", ("after", "limit", "order")),
+        "get": ("skills.retrieve", ("skill_id",)),
+        "update": ("skills.update", ("skill_id", "default_version")),
+        "delete": ("skills.delete", ("skill_id",)),
+        "content": ("skills.content.retrieve", ("skill_id",)),
+        "create_version": ("skills.versions.create", ("skill_id", "default", "files")),
+        "list_versions": ("skills.versions.list", ("skill_id", "after", "limit", "order")),
+        "version": ("skills.versions.retrieve", ("skill_id", "version")),
+        "delete_version": ("skills.versions.delete", ("skill_id", "version")),
+        "version_content": ("skills.versions.content.retrieve", ("skill_id", "version")),
+    }
+)
 
 # Initialize LiteLLM skills handler (lazy - only used when custom_llm_provider="litellm")
 _litellm_skills_handler = None
+
+
+def _azure_skills_api_base(api_base: str | None) -> str | None:
+    if api_base is None:
+        return None
+    url: Final = httpx.URL(api_base)
+    path: Final = url.path.rstrip("/")
+    suffix: Final = next(
+        (
+            item
+            for item in ("/openai/v1/responses", "/openai/responses", "/openai/v1", "/openai")
+            if path.endswith(item)
+        ),
+        "",
+    )
+    return str(url.copy_with(path=path[: -len(suffix)] if suffix else path, query=None)).rstrip("/")
+
+
+def _native_skill_request(
+    operation: str,
+    request_data: dict[str, Any],
+    custom_llm_provider: str,
+    litellm_params: GenericLiteLLMParams,
+    logging_obj: LiteLLMLoggingObj,
+    litellm_call_id: str | None,
+    is_async: bool,
+) -> object:
+    from litellm.files.main import azure_files_instance, openai_files_instance
+    from litellm.llms.azure.common_utils import get_azure_credentials
+    from litellm.llms.openai.common_utils import get_openai_credentials
+
+    method_path, request_fields = _NATIVE_SKILL_OPERATIONS[operation]
+    extra_headers: Final = request_data.get("extra_headers")
+    headers: Final = (
+        {**(extra_headers or {}), "Foundry-Features": "Skills=V1Preview"}  # mutable-ok: SDK headers
+        if custom_llm_provider == "azure"
+        else extra_headers
+    )
+    params: Final = {  # mutable-ok: SDK request parameters
+        field: value
+        for field, value in (
+            *((field, request_data.get(field)) for field in request_fields),
+            ("extra_headers", headers),
+            ("extra_query", request_data.get("extra_query")),
+            ("extra_body", request_data.get("extra_body")),
+            ("timeout", request_data.get("timeout")),
+        )
+        if value is not None
+    }
+    if custom_llm_provider == "openai":
+        openai_credentials: Final = get_openai_credentials(
+            api_base=litellm_params.api_base,
+            api_key=litellm_params.api_key,
+            organization=litellm_params.organization,
+        )
+        sdk_client = openai_files_instance.get_openai_client(
+            api_key=openai_credentials.api_key,
+            api_base=openai_credentials.api_base,
+            timeout=request_data.get("timeout") or request_timeout,
+            max_retries=litellm_params.max_retries,
+            organization=openai_credentials.organization,
+            client=request_data.get("client"),
+            _is_async=is_async,
+        )
+    else:
+        azure_credentials: Final = get_azure_credentials(
+            api_base=litellm_params.api_base, api_key=litellm_params.api_key
+        )
+        api_base: Final = _azure_skills_api_base(azure_credentials.api_base)
+        if api_base is None:
+            raise ValueError("api_base is required for Azure OpenAI Skills")
+        sdk_client = azure_files_instance.get_azure_openai_client(
+            api_key=azure_credentials.api_key,
+            api_base=api_base,
+            api_version="v1",
+            client=request_data.get("client"),
+            litellm_params=litellm_params.model_dump(exclude_none=True),
+            _is_async=is_async,
+        )
+    if sdk_client is None:
+        raise ValueError(f"{custom_llm_provider} client is not initialized")
+    logging_obj.update_from_kwargs(
+        kwargs=request_data,
+        model=None,
+        optional_params=params,
+        litellm_params={"litellm_call_id": litellm_call_id},  # mutable-ok: logging consumes request data
+        custom_llm_provider=custom_llm_provider,
+    )
+    return attrgetter(method_path)(sdk_client)(**params)
 
 
 def _get_user_api_key_auth_from_kwargs(kwargs: dict[str, Any]) -> Any | None:
@@ -195,6 +303,17 @@ def create_skill(
                 litellm_call_id=litellm_call_id,
             )
 
+        if custom_llm_provider in _NATIVE_SKILL_PROVIDERS:
+            return _native_skill_request(
+                kwargs.get("_skill_operation", "create"),
+                {**local_vars, **kwargs, **create_request},  # mutable-ok: Skills handlers consume request data
+                custom_llm_provider,
+                litellm_params,
+                litellm_logging_obj,
+                litellm_call_id,
+                _is_async,
+            )
+
         # Get provider config for external providers (Anthropic, etc.)
         skills_api_provider_config: BaseSkillsAPIConfig | None = ProviderConfigManager.get_provider_skills_api_config(
             provider=litellm.LlmProviders(custom_llm_provider),
@@ -305,7 +424,7 @@ async def alist_skills(
         func_with_context: Final = partial(ctx.run, func)
         init_response: Final = await loop.run_in_executor(None, func_with_context)
 
-        if asyncio.iscoroutine(init_response):
+        if inspect.isawaitable(init_response):
             response = await init_response
         else:
             response = init_response
@@ -369,6 +488,17 @@ def list_skills(
                 _is_async=_is_async,
                 logging_obj=litellm_logging_obj,
                 litellm_call_id=litellm_call_id,
+            )
+
+        if custom_llm_provider in _NATIVE_SKILL_PROVIDERS:
+            return _native_skill_request(
+                kwargs.get("_skill_operation", "list"),
+                {**local_vars, **kwargs},  # mutable-ok: Skills handlers consume request data
+                custom_llm_provider,
+                litellm_params,
+                litellm_logging_obj,
+                litellm_call_id,
+                _is_async,
             )
 
         # Get provider config for external providers (Anthropic, etc.)
@@ -543,6 +673,17 @@ def get_skill(
                 litellm_call_id=litellm_call_id,
             )
 
+        if custom_llm_provider in _NATIVE_SKILL_PROVIDERS:
+            return _native_skill_request(
+                kwargs.get("_skill_operation", "get"),
+                {**local_vars, **kwargs},  # mutable-ok: Skills handlers consume request data
+                custom_llm_provider,
+                litellm_params,
+                litellm_logging_obj,
+                litellm_call_id,
+                _is_async,
+            )
+
         # Get provider config for external providers (Anthropic, etc.)
         skills_api_provider_config: BaseSkillsAPIConfig | None = ProviderConfigManager.get_provider_skills_api_config(
             provider=litellm.LlmProviders(custom_llm_provider),
@@ -705,6 +846,17 @@ def delete_skill(
                 _is_async=_is_async,
                 logging_obj=litellm_logging_obj,
                 litellm_call_id=litellm_call_id,
+            )
+
+        if custom_llm_provider in _NATIVE_SKILL_PROVIDERS:
+            return _native_skill_request(
+                kwargs.get("_skill_operation", "delete"),
+                {**local_vars, **kwargs},  # mutable-ok: Skills handlers consume request data
+                custom_llm_provider,
+                litellm_params,
+                litellm_logging_obj,
+                litellm_call_id,
+                _is_async,
             )
 
         # Get provider config for external providers (Anthropic, etc.)
