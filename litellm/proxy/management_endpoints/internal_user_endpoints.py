@@ -2417,9 +2417,6 @@ async def _cleanup_service_accounts_on_user_delete(
             seen_sa_ids.add(sa.user_id)
             unique_affected_sas.append(sa)
 
-    if not unique_affected_sas:
-        return
-
     now = datetime.now(timezone.utc)
     seven_days_later = now + timedelta(days=7)
 
@@ -2511,6 +2508,10 @@ async def _cleanup_service_accounts_on_user_delete(
                 html_body=html_body,
             )
         )
+
+    await prisma_client.db.litellm_serviceaccounttable.delete_many(
+        where={"user_id": {"in": deleted_user_ids}}
+    )
 
 
 def _build_service_account_key_rotation_email(

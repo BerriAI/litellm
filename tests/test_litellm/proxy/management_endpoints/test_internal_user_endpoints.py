@@ -24,6 +24,7 @@ from litellm.proxy._types import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     LiteLLM_UserTableWithKeyCount,
     _build_service_account_key_rotation_email,
+    _cleanup_service_accounts_on_user_delete,
     _resolve_user_email_metadata,
     _update_internal_user_params,
     batch_update_user_budgets,
@@ -35,6 +36,29 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
 from litellm.proxy.proxy_server import app
 
 client = TestClient(app)
+
+
+@pytest.mark.asyncio
+async def test_service_account_cleanup_deletes_matching_user_id(mocker):
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_serviceaccounttable.find_many = mocker.AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_serviceaccounttable.delete_many = mocker.AsyncMock(
+        return_value=1
+    )
+
+    await _cleanup_service_accounts_on_user_delete(
+        deleted_user_ids=["service-account-user"],
+        prisma_client=mock_prisma_client,
+    )
+
+    mock_prisma_client.db.litellm_serviceaccounttable.delete_many.assert_awaited_once_with(
+        where={"user_id": {"in": ["service-account-user"]}}
+    )
 
 
 def test_service_account_key_rotation_email_escapes_user_controlled_values():
@@ -2683,6 +2707,15 @@ async def test_delete_user_cleans_up_created_by_invitation_links(mocker):
 
     mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
         side_effect=mock_find_unique
+    )
+    mock_prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_serviceaccounttable.find_many = mocker.AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_serviceaccounttable.delete_many = mocker.AsyncMock(
+        return_value=0
     )
 
     # Mock find_many for teams (no teams)
