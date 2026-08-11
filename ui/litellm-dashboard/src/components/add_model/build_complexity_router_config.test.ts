@@ -80,7 +80,7 @@ describe("buildComplexityRouterConfig", () => {
       classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
     });
     expect(config.classifier_type).toBe("llm");
-    expect(config.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000 });
+    expect(config.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000, rubric: "agentic" });
   });
 
   it("omits classifier_llm_config when classifier_type is heuristic even if config lingers in state", () => {
@@ -421,7 +421,7 @@ describe("classifier prompt and fallback", () => {
       ...llmParams,
       classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400, system_prompt: "   " },
     });
-    expect(config.classifier_llm_config).toEqual({ model: "haiku-classifier", timeout_ms: 400 });
+    expect(config.classifier_llm_config).toEqual({ model: "haiku-classifier", timeout_ms: 400, rubric: "agentic" });
     expect(config.classifier_llm_config).not.toHaveProperty("system_prompt");
   });
 
@@ -447,6 +447,33 @@ describe("classifier prompt and fallback", () => {
     expect(buildComplexityRouterConfig(llmParams)).not.toHaveProperty("classifier_fallback");
   });
 
+  it("sends the chat preset the operator picked", () => {
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400, rubric: "chat" },
+    });
+    expect(config.classifier_llm_config).toEqual({ model: "haiku-classifier", timeout_ms: 400, rubric: "chat" });
+  });
+
+  it("records the default preset explicitly, so a later default change cannot move this router", () => {
+    const config = buildComplexityRouterConfig(llmParams);
+    expect(config.classifier_llm_config?.rubric).toBe("agentic");
+  });
+
+  it("drops the preset when a custom prompt replaces the rubric, which the backend rejects together", () => {
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: {
+        model: "haiku-classifier",
+        timeout_ms: 400,
+        rubric: "chat",
+        system_prompt: "Grade the data sensitivity of the request.",
+      },
+    });
+    expect(config.classifier_llm_config).not.toHaveProperty("rubric");
+    expect(config.classifier_llm_config?.system_prompt).toBe("Grade the data sensitivity of the request.");
+  });
+
   it("normalizeClassifierLlmConfig leaves a real prompt untouched and strips an empty one", () => {
     expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, system_prompt: "x" })).toEqual({
       model: "m",
@@ -456,6 +483,7 @@ describe("classifier prompt and fallback", () => {
     expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, system_prompt: "" })).toEqual({
       model: "m",
       timeout_ms: 1,
+      rubric: "agentic",
     });
   });
 });

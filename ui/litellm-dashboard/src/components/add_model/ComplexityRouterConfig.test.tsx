@@ -535,6 +535,57 @@ describe("ComplexityRouterConfig classifier fallback", () => {
   });
 });
 
+describe("ComplexityRouterConfig classifier rubric", () => {
+  const llmValue: ComplexityRouterConfigValue = {
+    ...defaultValue,
+    classifier_type: "llm",
+    classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+  };
+
+  const openClassificationPanel = (value: ComplexityRouterConfigValue, onChange = vi.fn()) => {
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={value} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    return onChange;
+  };
+
+  it("defaults to the agentic preset, matching the backend field default", () => {
+    openClassificationPanel(llmValue);
+    expect(screen.getByText("Agentic (default)")).toBeInTheDocument();
+    expect(screen.getByText(/does not route to your most expensive tier/)).toBeInTheDocument();
+  });
+
+  it("records the chat preset the operator picks", async () => {
+    const onChange = openClassificationPanel(llmValue);
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: "Rubric" }));
+    await userEvent.click(await screen.findByTitle("Chat"));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ classifier_llm_config: expect.objectContaining({ rubric: "chat" }) }),
+    );
+  });
+
+  it("shows the stored preset when editing a router already on chat", () => {
+    openClassificationPanel({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, rubric: "chat" },
+    });
+    expect(screen.getByText(/only conversational traffic/)).toBeInTheDocument();
+  });
+
+  it("disables the preset once a custom prompt replaces the rubric it would select", () => {
+    // The backend rejects both together, so the picker must not look like it still applies.
+    openClassificationPanel({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, system_prompt: "Grade data sensitivity" },
+    });
+    expect(screen.getByText(/the custom prompt below is the classifier's entire rubric/)).toBeInTheDocument();
+  });
+
+  it("hides the preset for the heuristic classifier, which sends no prompt at all", () => {
+    openClassificationPanel(defaultValue);
+    expect(screen.queryByRole("combobox", { name: "Rubric" })).not.toBeInTheDocument();
+  });
+});
+
 describe("ComplexityRouterConfig tier labels", () => {
   const renamedValue: ComplexityRouterConfigValue = {
     ...defaultValue,

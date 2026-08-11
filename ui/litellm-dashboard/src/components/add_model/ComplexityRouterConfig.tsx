@@ -24,9 +24,32 @@ export interface ComplexityTiers {
   REASONING: string[];
 }
 
+export type RubricPreset = "agentic" | "chat";
+
+export const DEFAULT_RUBRIC_PRESET: RubricPreset = "agentic";
+
+export const RUBRIC_PRESET_DESCRIPTIONS: Record<RubricPreset, { label: string; description: string }> = {
+  agentic: {
+    label: "Agentic (default)",
+    description:
+      "Anchors routine installs, builds, multi-file edits, and standard debugging at " +
+      "Medium, so ordinary engineering does not route to your most expensive tier. Suits agent, terminal, and " +
+      "coding-assistant traffic, and mixed traffic.",
+  },
+  chat: {
+    label: "Chat",
+    description:
+      "Drops the engineering examples, for a router serving only conversational traffic that never sees those " +
+      "requests.",
+  },
+};
+
+export const RUBRIC_PRESET_KEYS = Object.keys(RUBRIC_PRESET_DESCRIPTIONS) as RubricPreset[];
+
 export interface ClassifierLLMConfig {
   model: string;
   timeout_ms: number;
+  rubric?: RubricPreset;
   system_prompt?: string;
 }
 
