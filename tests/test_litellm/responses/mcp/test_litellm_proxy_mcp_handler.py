@@ -701,7 +701,6 @@ def test_create_follow_up_input_preserves_reasoning_when_stateless():
         "summary": [],
         "encrypted_content": "gAAAAA-opaque-blob",
     }
-    # the reasoning item has to come before the function call it produced
     assert follow_up[2] == {
         "type": "function_call",
         "call_id": "call-1",

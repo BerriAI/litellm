@@ -1032,7 +1032,6 @@ class LiteLLM_Proxy_MCP_Handler:
                 }
             )
 
-        # Reasoning items must precede the function calls they produced
         if preserve_reasoning:
             follow_up_input.extend(LiteLLM_Proxy_MCP_Handler._extract_reasoning_items(response))
 
