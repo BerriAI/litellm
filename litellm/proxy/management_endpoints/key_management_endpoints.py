@@ -190,6 +190,16 @@ class _PrismaTableActions(Protocol[_PrismaRowT]):
     ) -> _PrismaRowT | None: ...
 
 
+class _UserRowLike(Protocol):
+    user_id: str | None
+    user_email: str | None
+    user_alias: str | None
+
+    def model_dump(self) -> Mapping[str, object]: ...
+
+    def dict(self) -> Mapping[str, object]: ...
+
+
 class _TxTables(Protocol):
     litellm_proxymodeltable: _PrismaTableActions[object]
 
@@ -4225,7 +4235,7 @@ def _transform_verification_tokens_to_deleted_records(
         record = deleted_record.model_dump()
 
         # Map org_id to organization_id (model uses org_id, but schema expects organization_id)
-        org_id_value = record.pop("org_id", None)
+        org_id_value: object = record.pop("org_id", None)
         if org_id_value is not None:
             record["organization_id"] = org_id_value
 
@@ -4694,7 +4704,7 @@ async def _execute_virtual_key_regeneration(
         grace_period=data.grace_period if data else None,
     )
 
-    updated_token: Final = await VerificationTokenRepository(prisma_client).table.update(
+    updated_token: Final[Mapping[str, object] | None] = await VerificationTokenRepository(prisma_client).table.update(
         where={"token": hashed_api_key},
         data=with_settings_updated_at(jsonified_update_data),
     )
@@ -5991,7 +6001,9 @@ async def _list_key_helper(
         created_by_ids: Final = [key.created_by for key in keys if key.created_by]
         all_ids: Final = list(set(user_ids + created_by_ids))  # Remove duplicates
         if all_ids:
-            users: Final = await UserRepository(prisma_client).table.find_many(where={"user_id": {"in": all_ids}})
+            users: Final[Sequence[_UserRowLike]] = await UserRepository(prisma_client).table.find_many(
+                where={"user_id": {"in": all_ids}}
+            )
             user_map = {user.user_id: user for user in users}
 
     # Prepare response
