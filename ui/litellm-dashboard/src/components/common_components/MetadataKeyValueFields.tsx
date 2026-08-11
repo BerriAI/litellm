@@ -3,6 +3,7 @@ import { Button, Form, FormInstance, Input, Skeleton, Space } from "antd";
 import React, { useEffect, useRef } from "react";
 
 import { TeamMetadataField } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
+import { useTranslation } from "react-i18next";
 
 export interface MetadataPair {
   key: string;
@@ -61,6 +62,7 @@ const MetadataKeyValueFields: React.FC<MetadataKeyValueFieldsProps> = ({
   schemaFields = [],
   schemaLoading = false,
 }) => {
+  const { t } = useTranslation("common");
   const seededRef = useRef(false);
 
   useEffect(() => {
@@ -95,27 +97,27 @@ const MetadataKeyValueFields: React.FC<MetadataKeyValueFieldsProps> = ({
                 {...restField}
                 name={[fieldName, "key"]}
                 rules={[
-                  { required: true, message: "Missing key" },
+                  { required: true, message: t("metadataFields.missingKey") },
                   {
                     validator: (_, value) => {
                       if (!value) return Promise.resolve();
                       const all: (Partial<MetadataPair> | undefined)[] = form.getFieldValue(name) ?? [];
                       const dupes = all.filter((entry) => entry?.key === value);
                       if (dupes.length > 1) {
-                        return Promise.reject(new Error("Duplicate key"));
+                        return Promise.reject(new Error(t("metadataFields.duplicateKey")));
                       }
                       return Promise.resolve();
                     },
                   },
                 ]}
               >
-                <Input placeholder="Key" />
+                <Input placeholder={t("metadataFields.key")} />
               </Form.Item>
               <Form.Item {...restField} name={[fieldName, "value"]}>
-                <Input placeholder="Value" />
+                <Input placeholder={t("metadataFields.value")} />
               </Form.Item>
               <MinusCircleOutlined
-                aria-label="Remove key-value pair"
+                aria-label={t("metadataFields.remove")}
                 onClick={() => remove(fieldName)}
                 style={{ color: "#ef4444" }}
               />
@@ -123,7 +125,7 @@ const MetadataKeyValueFields: React.FC<MetadataKeyValueFieldsProps> = ({
           ))}
           <Form.Item style={{ marginBottom: 0 }}>
             <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>
-              Add Key-Value Pair
+              {t("metadataFields.add")}
             </Button>
           </Form.Item>
         </>

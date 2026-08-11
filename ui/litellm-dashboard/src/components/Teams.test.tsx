@@ -9,6 +9,27 @@ import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_avail
 import { fetchMCPAccessGroups, getGuardrailsList, teamCreateCall } from "./networking";
 import Teams from "./Teams";
 
+const localization = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: (namespace: keyof (typeof resources)["en"] = "common") => ({
+      t: (key: string, values?: Record<string, unknown>) => {
+        const copy = key.split(".").reduce<unknown>((value, segment) => {
+          if (typeof value !== "object" || value === null) return undefined;
+          return (value as Record<string, unknown>)[segment];
+        }, resources[localization.language][namespace]);
+        if (typeof copy !== "string") return key;
+        return Object.entries(values ?? {}).reduce(
+          (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+          copy,
+        );
+      },
+    }),
+  };
+});
+
 const mockTeamInfoView = vi.fn();
 const mockUseOrganizations = vi.fn();
 
@@ -173,6 +194,7 @@ const renderWithQueryClient = (
 // Re-establish safe defaults before every test (clearAllMocks keeps return values, so restore them here).
 beforeEach(() => {
   mockTeamsTableProps = null;
+  localization.language = "en";
 });
 
 describe("Teams - handleCreate organization handling", () => {
@@ -520,6 +542,18 @@ describe("Teams - Create Team CTA is grouped with the tabs on the left", () => {
     // It reads as the left end of the cluster: it precedes the first tab in DOM order.
     const firstTab = screen.getByRole("tab", { name: "Your Teams" });
     expect(createButton.compareDocumentPosition(firstTab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("renders the team shell and create form in Russian when Russian is selected", async () => {
+    localization.language = "ru";
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+
+    expect(screen.getByRole("heading", { name: "Команды" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Ваши команды" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("create-team-button"));
+    expect(await screen.findByText("Создание команды")).toBeInTheDocument();
+    expect(screen.getByText("Название команды")).toBeInTheDocument();
   });
 
   it("omits the Create Team CTA for a role that cannot manage teams", () => {

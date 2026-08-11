@@ -99,6 +99,14 @@ export const ruCommon = {
     descending: "по убыванию",
     sortOptions: "Параметры сортировки: {{fields}}",
   },
+  metadataFields: {
+    missingKey: "Укажите ключ",
+    duplicateKey: "Ключ повторяется",
+    key: "Ключ",
+    value: "Значение",
+    remove: "Удалить пару ключ-значение",
+    add: "Добавить пару ключ-значение",
+  },
   badges: { beta: "Бета" },
   costFeedback: {
     title: "Помогите улучшить оптимизацию затрат",

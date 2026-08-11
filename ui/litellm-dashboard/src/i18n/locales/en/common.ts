@@ -99,6 +99,14 @@ export const enCommon = {
     descending: "descending",
     sortOptions: "Sort options for {{fields}}",
   },
+  metadataFields: {
+    missingKey: "Missing key",
+    duplicateKey: "Duplicate key",
+    key: "Key",
+    value: "Value",
+    remove: "Remove key-value pair",
+    add: "Add Key-Value Pair",
+  },
   badges: { beta: "Beta" },
   costFeedback: {
     title: "Help shape cost optimization",

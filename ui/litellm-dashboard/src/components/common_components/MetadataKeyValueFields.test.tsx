@@ -2,13 +2,34 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Form } from "antd";
 import React from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TeamMetadataField } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import MetadataKeyValueFields, {
   MetadataPair,
   metadataObjectToPairs,
   metadataPairsToObject,
 } from "./MetadataKeyValueFields";
+
+const localization = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: () => ({
+      t: (key: string) => {
+        const copy = key.split(".").reduce<unknown>((value, segment) => {
+          if (typeof value !== "object" || value === null) return undefined;
+          return (value as Record<string, unknown>)[segment];
+        }, resources[localization.language].common);
+        return typeof copy === "string" ? copy : key;
+      },
+    }),
+  };
+});
+
+beforeEach(() => {
+  localization.language = "en";
+});
 
 describe("metadataObjectToPairs", () => {
   it("returns an empty list for null or undefined metadata", () => {
@@ -106,6 +127,13 @@ const Harness: React.FC<HarnessProps> = ({ onFinish, initialMetadata, schemaFiel
 };
 
 describe("MetadataKeyValueFields", () => {
+  it("renders controls in Russian when Russian is selected", () => {
+    localization.language = "ru";
+    render(<Harness onFinish={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: /добавить пару/i })).toBeInTheDocument();
+  });
+
   it("renders one row per existing pair", () => {
     render(
       <Harness

@@ -7,6 +7,27 @@ import { Team } from "../key_team_helpers/key_list";
 import { TeamsResponse, useTeamsTable } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { TeamsTable } from "./TeamsTable";
 
+const localization = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: (namespace: keyof (typeof resources)["en"] = "common") => ({
+      t: (key: string, values?: Record<string, unknown>) => {
+        const copy = key.split(".").reduce<unknown>((value, segment) => {
+          if (typeof value !== "object" || value === null) return undefined;
+          return (value as Record<string, unknown>)[segment];
+        }, resources[localization.language][namespace]);
+        if (typeof copy !== "string") return key;
+        return Object.entries(values ?? {}).reduce(
+          (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+          copy,
+        );
+      },
+    }),
+  };
+});
+
 // Resolve debounced values synchronously so an applied filter lands in the useTeamsTable query within the test tick.
 vi.mock("@tanstack/react-pacer/debouncer", async () => {
   const React = await vi.importActual<typeof import("react")>("react");
@@ -98,7 +119,17 @@ const lastOptions = () => mockUseTeamsTable.mock.calls[mockUseTeamsTable.mock.ca
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localization.language = "en";
   mockUseTeamsTable.mockReturnValue(teamsResult([mockTeam]));
+});
+
+it("renders the team table in Russian when Russian is selected", async () => {
+  localization.language = "ru";
+  renderTable();
+
+  expect(await screen.findByText("Команда")).toBeInTheDocument();
+  expect(screen.getByText("Организация")).toBeInTheDocument();
+  expect(screen.getByPlaceholderText("Поиск команд по названию или ID…")).toBeInTheDocument();
 });
 
 it("renders a team row with alias, organization, and spend/budget", async () => {
