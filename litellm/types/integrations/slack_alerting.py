@@ -137,6 +137,7 @@ class AlertType(str, Enum):
     budget_alerts = "budget_alerts"
     spend_reports = "spend_reports"
     failed_tracking_spend = "failed_tracking_spend"
+    sgr_limit_alerts = "sgr_limit_alerts"
 
     # Database alerts
     db_exceptions = "db_exceptions"
@@ -180,6 +181,7 @@ DEFAULT_ALERT_TYPES: Final[list[AlertType]] = [
     AlertType.budget_alerts,
     AlertType.spend_reports,
     AlertType.failed_tracking_spend,
+    AlertType.sgr_limit_alerts,
     # Database alerts
     AlertType.db_exceptions,
     # Report alerts

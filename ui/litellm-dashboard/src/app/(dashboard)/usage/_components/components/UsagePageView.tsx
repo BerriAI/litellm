@@ -59,6 +59,7 @@ import {
   fetchedRangeKey,
   selectForRange,
   selectGatewayActivity,
+  sgrLimitBanner,
   topGatewayRoutes,
   type FetchedForRange,
   type FetchedGatewayActivity,
@@ -497,6 +498,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     [userSpendData.results],
   );
   const gatewayRequestsByRoute = useMemo(() => topGatewayRoutes(gatewayActivity), [gatewayActivity]);
+  const sgrBanner = useMemo(() => sgrLimitBanner(gatewayActivity), [gatewayActivity]);
   const modelMetrics = useMemo(
     () => processActivityData(userSpendData, modelViewType === "groups" ? "model_groups" : "models", teams),
     [userSpendData, modelViewType, teams],
@@ -556,6 +558,17 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   pages loaded)
                 </span>
               }
+            />
+          )}
+          {sgrBanner && (
+            <Alert
+              banner
+              showIcon
+              data-testid="sgr-limit-banner"
+              type={sgrBanner.severity}
+              className="mb-2"
+              message={sgrBanner.headline}
+              description={sgrBanner.detail}
             />
           )}
           {/* Your Usage / Global Usage Panel */}
