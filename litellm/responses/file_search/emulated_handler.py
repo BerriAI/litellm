@@ -439,9 +439,7 @@ def _build_file_search_call_output(
         include_search_results: Populate search_results when the caller passed
             ``include=["file_search_call.results"]``.
     """
-    search_results: Final = (
-        _build_search_results_for_include(results) if include_search_results and results else None
-    )
+    search_results: Final = _build_search_results_for_include(results) if include_search_results and results else None
     return FileSearchCallOutput(
         type="file_search_call",
         id=call_id,
