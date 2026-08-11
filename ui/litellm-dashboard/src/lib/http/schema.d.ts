@@ -26191,6 +26191,8 @@ export interface components {
             config: {
                 [key: string]: unknown;
             };
+            /** Config Updated At */
+            config_updated_at?: string | null;
             /** Created At */
             created_at?: string | null;
             /** Created By */
@@ -27626,6 +27628,8 @@ export interface components {
             config: {
                 [key: string]: unknown;
             };
+            /** Config Updated At */
+            config_updated_at?: string | null;
             /** Created At */
             created_at?: string | null;
             /** Created By */
@@ -34742,6 +34746,8 @@ export interface components {
             config: {
                 [key: string]: unknown;
             };
+            /** Config Updated At */
+            config_updated_at?: string | null;
             /** Created At */
             created_at?: string | null;
             /** Created By */

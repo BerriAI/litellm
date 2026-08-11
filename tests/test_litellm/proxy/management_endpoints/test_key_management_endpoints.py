@@ -2293,9 +2293,9 @@ async def test_unblock_key_supports_both_sk_and_hashed_tokens(monkeypatch):
     )
 
     # Verify that the database update was called with hashed token
-    mock_prisma_client.db.litellm_verificationtoken.update.assert_called_with(
-        where={"token": test_hashed_token}, data={"blocked": False}
-    )
+    sk_token_call = mock_prisma_client.db.litellm_verificationtoken.update.call_args.kwargs
+    assert sk_token_call["where"] == {"token": test_hashed_token}
+    assert sk_token_call["data"]["blocked"] is False
 
     assert result == mock_key_record
 
@@ -2313,9 +2313,9 @@ async def test_unblock_key_supports_both_sk_and_hashed_tokens(monkeypatch):
     )
 
     # Verify that the database update was called with the same hashed token
-    mock_prisma_client.db.litellm_verificationtoken.update.assert_called_with(
-        where={"token": test_hashed_token}, data={"blocked": False}
-    )
+    hashed_token_call = mock_prisma_client.db.litellm_verificationtoken.update.call_args.kwargs
+    assert hashed_token_call["where"] == {"token": test_hashed_token}
+    assert hashed_token_call["data"]["blocked"] is False
 
     assert result == mock_key_record
 
@@ -2849,9 +2849,10 @@ async def test_block_key_existing_key_succeeds(monkeypatch):
     mock_prisma_client.db.litellm_verificationtoken.find_unique.assert_called_once_with(
         where={"token": test_hashed_token}
     )
-    mock_prisma_client.db.litellm_verificationtoken.update.assert_called_once_with(
-        where={"token": test_hashed_token}, data={"blocked": True}
-    )
+    mock_prisma_client.db.litellm_verificationtoken.update.assert_called_once()
+    block_call = mock_prisma_client.db.litellm_verificationtoken.update.call_args.kwargs
+    assert block_call["where"] == {"token": test_hashed_token}
+    assert block_call["data"]["blocked"] is True
     assert result == mock_updated_record
 
 
@@ -15817,3 +15818,91 @@ async def test_regenerate_key_output_token_estimate_lowered_rejected_for_non_adm
 
     assert exc.value.status_code == 403
     assert "Only proxy admins can set" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_execute_virtual_key_regeneration_stamps_config_updated_at():
+    """Regenerate rewrites the key's config, so it must move config_updated_at."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _execute_virtual_key_regeneration,
+    )
+
+    mock_prisma_client = _make_regenerate_mock_prisma()
+
+    with _patch_regenerate_side_effects():
+        before = datetime.now(timezone.utc)
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=_make_regenerate_existing_key(),
+            hashed_api_key="abc123",
+            key="abc123",
+            data=RegenerateKeyRequest(max_budget=42.0),
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+        after = datetime.now(timezone.utc)
+
+    sent = mock_prisma_client.db.litellm_verificationtoken.update.call_args.kwargs["data"]
+    assert sent["max_budget"] == 42.0
+    assert before <= sent["config_updated_at"] <= after
+
+
+@pytest.mark.asyncio
+async def test_block_key_stamps_config_updated_at(monkeypatch):
+    """Blocking a key is a config change, not spend activity."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy._types import BlockKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import block_key
+
+    mock_prisma_client, _ = _setup_block_unblock_mocks(monkeypatch)
+
+    before = datetime.now(timezone.utc)
+    await block_key(
+        data=BlockKeyRequest(key="sk-test123456789"),
+        http_request=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-admin",
+            user_id="admin_user",
+        ),
+        litellm_changed_by=None,
+    )
+    after = datetime.now(timezone.utc)
+
+    sent = mock_prisma_client.db.litellm_verificationtoken.update.call_args.kwargs["data"]
+    assert sent["blocked"] is True
+    assert before <= sent["config_updated_at"] <= after
+
+
+@pytest.mark.asyncio
+async def test_unblock_key_stamps_config_updated_at(monkeypatch):
+    """Unblocking a key is a config change, not spend activity."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy._types import BlockKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import unblock_key
+
+    mock_prisma_client, _ = _setup_block_unblock_mocks(monkeypatch)
+
+    before = datetime.now(timezone.utc)
+    await unblock_key(
+        data=BlockKeyRequest(key="sk-test123456789"),
+        http_request=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-admin",
+            user_id="admin_user",
+        ),
+        litellm_changed_by=None,
+    )
+    after = datetime.now(timezone.utc)
+
+    sent = mock_prisma_client.db.litellm_verificationtoken.update.call_args.kwargs["data"]
+    assert sent["blocked"] is False
+    assert before <= sent["config_updated_at"] <= after

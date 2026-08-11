@@ -444,6 +444,8 @@ export default function KeyInfoView({
     );
   };
 
+  const lastConfiguredAt = currentKeyData.config_updated_at || currentKeyData.created_at;
+
   const parentTeam = currentKeyData.team_id ? teamsData?.find((team) => team.team_id === currentKeyData.team_id) : null;
 
   const budgetDisplay =
@@ -468,7 +470,7 @@ export default function KeyInfoView({
             currentKeyData.created_by ||
             "",
           createdAt: currentKeyData.created_at ? formatTimestamp(currentKeyData.created_at) : "",
-          lastUpdated: currentKeyData.updated_at ? formatTimestamp(currentKeyData.updated_at) : "",
+          lastUpdated: lastConfiguredAt ? formatTimestamp(lastConfiguredAt) : "",
           lastActive: currentKeyData.last_active ? formatTimestamp(currentKeyData.last_active) : "Never",
           expires: currentKeyData.expires ? formatTimestamp(currentKeyData.expires) : "Never",
         }}
