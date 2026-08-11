@@ -2474,6 +2474,55 @@ def test_filter_and_transform_beta_headers_passes_context_management_for_bedrock
     assert out_converse == []
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "us.anthropic.claude-opus-4-7",
+    ],
+)
+def test_bedrock_messages_tool_search_adds_beta_header(local_beta_headers_config, model):
+    """
+    LIT-4522: Bedrock InvokeModel only admits ``tool_search_tool_*`` tool types
+    when the request body carries the ``tool-search-tool-2025-10-19`` beta;
+    without it Bedrock 400s with "Input tag 'tool_search_tool_regex_20251119'
+    ... does not match any of the expected tags". The allowlist in
+    ``_supports_tool_search_on_bedrock`` previously omitted Haiku 4.5 and
+    Opus 4.7, so the beta was silently dropped for those models and every
+    tool-search request failed. Verified live 2026-08-11: Bedrock returns 200
+    with ``server_tool_use`` for all three models once the beta is sent.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
+    optional_params = {
+        "max_tokens": 64,
+        "tools": [
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+            {
+                "name": "add_numbers",
+                "description": "Add two integers",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+                    "required": ["a", "b"],
+                },
+            },
+        ],
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model=model,
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "tool-search-tool-2025-10-19" in (result.get("anthropic_beta") or [])
+
 
 def test_bedrock_messages_thinking_shape_follows_exact_bedrock_entry_flag(
     local_model_cost_map, monkeypatch
