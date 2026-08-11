@@ -7,6 +7,7 @@ import traceback
 from collections.abc import AsyncGenerator, Callable, Mapping
 from datetime import datetime
 from functools import lru_cache
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import anyio
@@ -3063,12 +3064,12 @@ class ProxyBaseLLMRequestProcessing:
                 if maybe_modified is not None:
                     return maybe_modified
             elif isinstance(chunk, (bytes, bytearray)):
-                # Decode to str, inject, and rebuild as bytes
                 try:
-                    s: Final = chunk.decode("utf-8", errors="ignore")
-                    maybe_mod = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(s, model_name)
-                    if maybe_mod is not None:
-                        return (maybe_mod + ("" if maybe_mod.endswith("\n\n") else "\n\n")).encode("utf-8")
+                    s: Final = chunk.decode("utf-8")
+                    if s.endswith("\n\n"):
+                        maybe_mod = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(s, model_name)
+                        if maybe_mod is not None:
+                            return maybe_mod.encode("utf-8")
                 except Exception:
                     pass
             elif isinstance(chunk, str):
@@ -3114,9 +3115,78 @@ class ProxyBaseLLMRequestProcessing:
             return None
 
     @staticmethod
+    def _anthropic_stream_usage_kwargs(usage: Mapping[str, Any]) -> Mapping[str, Any]:
+        prompt_tokens: Final = int(usage.get("input_tokens", 0) or 0)
+        completion_tokens: Final = int(usage.get("output_tokens", 0) or 0)
+        total_tokens: Final = int(
+            usage.get("total_tokens", prompt_tokens + completion_tokens) or (prompt_tokens + completion_tokens)
+        )
+        web_search_requests: Final = usage.get("web_search_requests")
+        server_tool_use: Final = (
+            ServerToolUse(web_search_requests=web_search_requests) if web_search_requests is not None else None
+        )
+        return MappingProxyType(
+            {
+                key: value
+                for key, value in (
+                    ("prompt_tokens", prompt_tokens),
+                    ("completion_tokens", completion_tokens),
+                    ("total_tokens", total_tokens),
+                    ("completion_tokens_details", usage.get("completion_tokens_details")),
+                    ("prompt_tokens_details", usage.get("prompt_tokens_details")),
+                    ("cache_creation_input_tokens", usage.get("cache_creation_input_tokens")),
+                    ("cache_read_input_tokens", usage.get("cache_read_input_tokens")),
+                    ("server_tool_use", server_tool_use),
+                )
+                if value is not None
+            }
+        )
+
+    @staticmethod
+    def _openai_stream_usage_kwargs(usage: Mapping[str, Any]) -> Mapping[str, Any]:
+        prompt_tokens: Final = int(usage.get("prompt_tokens", 0) or 0)
+        completion_tokens: Final = int(usage.get("completion_tokens", 0) or 0)
+        total_tokens: Final = int(
+            usage.get("total_tokens", prompt_tokens + completion_tokens) or (prompt_tokens + completion_tokens)
+        )
+        return MappingProxyType(
+            {
+                key: value
+                for key, value in (
+                    ("prompt_tokens", prompt_tokens),
+                    ("completion_tokens", completion_tokens),
+                    ("total_tokens", total_tokens),
+                    ("completion_tokens_details", usage.get("completion_tokens_details")),
+                    ("prompt_tokens_details", usage.get("prompt_tokens_details")),
+                )
+                if value is not None
+            }
+        )
+
+    @staticmethod
+    def _stream_usage_kwargs_for_event(obj: Mapping[str, object], usage: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        if obj.get("type") == "message_delta":
+            return ProxyBaseLLMRequestProcessing._anthropic_stream_usage_kwargs(usage)
+        if obj.get("object") == "chat.completion.chunk":
+            return ProxyBaseLLMRequestProcessing._openai_stream_usage_kwargs(usage)
+        return None
+
+    @staticmethod
+    def _completion_cost_or_none(
+        model_response: ModelResponse, model_name: str, service_tier: str | None
+    ) -> float | None:
+        try:
+            return litellm.completion_cost(
+                completion_response=model_response, model=model_name, service_tier=service_tier
+            )
+        except Exception:
+            return None
+
+    @staticmethod
     def _inject_cost_into_usage_dict(obj: dict, model_name: str) -> dict | None:
         """
-        Inject cost information into a usage dictionary for message_delta events.
+        Inject cost information into the usage object of a streamed usage event
+        (Anthropic ``message_delta`` or OpenAI ``chat.completion.chunk``).
 
         Args:
             obj: Dictionary containing the SSE event data
@@ -3125,57 +3195,21 @@ class ProxyBaseLLMRequestProcessing:
         Returns:
             Modified dictionary with cost injected, or None if no modification needed
         """
-        if obj.get("type") == "message_delta" and isinstance(obj.get("usage"), dict):
-            _usage: Final = obj["usage"]
-            prompt_tokens: Final = int(_usage.get("input_tokens", 0) or 0)
-            completion_tokens: Final = int(_usage.get("output_tokens", 0) or 0)
-            total_tokens: Final = int(
-                _usage.get("total_tokens", prompt_tokens + completion_tokens) or (prompt_tokens + completion_tokens)
-            )
-
-            # Extract additional usage fields
-            cache_creation_input_tokens: Final = _usage.get("cache_creation_input_tokens")
-            cache_read_input_tokens: Final = _usage.get("cache_read_input_tokens")
-            web_search_requests: Final = _usage.get("web_search_requests")
-            completion_tokens_details: Final = _usage.get("completion_tokens_details")
-            prompt_tokens_details: Final = _usage.get("prompt_tokens_details")
-
-            usage_kwargs: Final[dict[str, Any]] = {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": total_tokens,
-            }
-
-            # Add optional named parameters
-            if completion_tokens_details is not None:
-                usage_kwargs["completion_tokens_details"] = completion_tokens_details
-            if prompt_tokens_details is not None:
-                usage_kwargs["prompt_tokens_details"] = prompt_tokens_details
-
-            # Handle web_search_requests by wrapping in ServerToolUse
-            if web_search_requests is not None:
-                usage_kwargs["server_tool_use"] = ServerToolUse(web_search_requests=web_search_requests)
-
-            # Add cache-related fields to **params (handled by Usage.__init__)
-            if cache_creation_input_tokens is not None:
-                usage_kwargs["cache_creation_input_tokens"] = cache_creation_input_tokens
-            if cache_read_input_tokens is not None:
-                usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
-
-            _mr: Final = ModelResponse(usage=Usage(**usage_kwargs))
-
-            try:
-                cost_val = litellm.completion_cost(
-                    completion_response=_mr,
-                    model=model_name,
-                )
-            except Exception:
-                cost_val = None
-
-            if cost_val is not None:
-                obj.setdefault("usage", {})["cost"] = cost_val
-                return obj
-        return None
+        usage: Final = obj.get("usage")
+        if not isinstance(usage, dict):
+            return None
+        usage_kwargs: Final = ProxyBaseLLMRequestProcessing._stream_usage_kwargs_for_event(obj, usage)
+        if usage_kwargs is None:
+            return None
+        service_tier: Final = obj.get("service_tier")
+        cost_val: Final = ProxyBaseLLMRequestProcessing._completion_cost_or_none(
+            ModelResponse(usage=Usage(**usage_kwargs)),
+            model_name,
+            service_tier if isinstance(service_tier, str) else None,
+        )
+        if cost_val is None:
+            return None
+        return {**obj, "usage": {**usage, "cost": cost_val}}
 
     def maybe_get_model_id(self, _logging_obj: LiteLLMLoggingObj | None) -> str | None:
         """

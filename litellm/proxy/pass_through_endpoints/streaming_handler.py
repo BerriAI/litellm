@@ -56,7 +56,13 @@ class PassThroughStreamingHandler:
         cost_injection_active: Final = (
             bool(getattr(litellm, "include_cost_in_streaming_usage", False))
             and bool(model_name)
-            and endpoint_type in (EndpointType.VERTEX_AI, EndpointType.ANTHROPIC)
+            and (
+                endpoint_type in (EndpointType.ANTHROPIC, EndpointType.OPENAI)
+                or (
+                    endpoint_type == EndpointType.VERTEX_AI
+                    and ("streamRawPredict" in url_route or "rawPredict" in url_route)
+                )
+            )
         )
         try:
             if not cost_injection_active:
@@ -74,21 +80,7 @@ class PassThroughStreamingHandler:
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
                     PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
-                    if endpoint_type == EndpointType.VERTEX_AI:
-                        if "streamRawPredict" in url_route or "rawPredict" in url_route:
-                            modified_chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
-                                chunk, resolved_model_name
-                            )
-                            if modified_chunk is not None:
-                                chunk = modified_chunk
-                    else:  # EndpointType.ANTHROPIC
-                        modified_chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
-                            chunk, resolved_model_name
-                        )
-                        if modified_chunk is not None:
-                            chunk = modified_chunk
-
-                    yield chunk
+                    yield ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(chunk, resolved_model_name)
         except Exception as e:
             verbose_proxy_logger.error("Error in chunk_processor: %s", e)
             raise
