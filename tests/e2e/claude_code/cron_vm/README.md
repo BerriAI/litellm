@@ -118,11 +118,16 @@ git -C ~/litellm/litellm checkout litellm_internal_staging
 # 4. gh auth — must be a collaborator on BerriAI/litellm-docs.
 gh auth login   # follow prompts; pick HTTPS + token paste flow
 
-# 5. Provider credentials.
+# 5. Provider credentials + the publish token.
 sudo cp ~/litellm/litellm/tests/e2e/claude_code/cron_vm/litellm-compat-matrix.env.example \
         /etc/litellm-compat-matrix.env
 sudoedit /etc/litellm-compat-matrix.env   # fill in real values
 sudo chmod 0600 /etc/litellm-compat-matrix.env
+# The mateo-berri PAT lives in its own file, mapped into the service via
+# systemd LoadCredential so it stays out of the test processes' env
+# (see the env.example comment for why).
+sudo install -m 0600 /dev/null /etc/litellm-compat-matrix-github-token
+sudoedit /etc/litellm-compat-matrix-github-token   # single line: the PAT
 
 # 6. systemd units.
 sudo cp ~/litellm/litellm/tests/e2e/claude_code/cron_vm/litellm-compat-matrix.service /etc/systemd/system/
@@ -171,13 +176,16 @@ sudo systemctl disable --now litellm-compat-matrix.timer
 - **`uv sync --frozen` requires the resolved tag to be tagged on
   GitHub.** If the latest stable release was made but not pushed as a
   git tag, the `git checkout` step fails. Push the tag, then rerun.
-- **`GITHUB_TOKEN` rotation is your problem.** The cron does not
+- **Publish-token rotation is your problem.** The cron does not
   refresh the token; if `mateo-berri`'s PAT in
-  `/etc/litellm-compat-matrix.env` expires, the run fails at the
-  `git push`/`gh pr create` step with a 401 ("Bad credentials" /
-  "Authentication failed"). Mint a fresh PAT and update the env file.
+  `/etc/litellm-compat-matrix-github-token` expires, the run fails at
+  the `git push`/`gh pr create` step with a 401 ("Bad credentials" /
+  "Authentication failed"). Mint a fresh PAT and update that file.
   The token needs write access to `BerriAI/litellm-docs` (classic
-  `repo` scope, or fine-grained Contents:RW + Pull requests:RW).
+  `repo` scope, or fine-grained Contents:RW + Pull requests:RW). It is
+  delivered via systemd `LoadCredential`, not the env file, so pytest,
+  the proxy, and the claude CLI never inherit it; manual runs export
+  `GITHUB_TOKEN` instead.
 - **First run after upgrading the Claude Code CLI is the riskiest one.**
   If the new CLI changes its wire format the matrix run can produce
   systematic failures. Always run with `SKIP_PUBLISH=1` after a CLI
