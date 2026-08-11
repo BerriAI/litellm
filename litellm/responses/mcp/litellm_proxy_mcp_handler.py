@@ -952,10 +952,29 @@ class LiteLLM_Proxy_MCP_Handler:
         return follow_up_messages
 
     @staticmethod
+    def _is_persistence_disabled(call_params: Mapping[str, object]) -> bool:
+        """Whether the caller opted out of server-side response persistence (store=false).
+
+        Zero data retention callers send store=false, so the provider never persisted the
+        first response and previous_response_id cannot be used to link the follow-up call.
+        """
+        return call_params.get("store") is False
+
+    @staticmethod
+    def _extract_reasoning_items(response: ResponsesAPIResponse) -> tuple[Mapping[str, object], ...]:
+        """Reasoning output items, kept whole so reasoning.encrypted_content survives replay."""
+        normalized: Final = tuple(
+            output_item if isinstance(output_item, dict) else output_item.model_dump(exclude_none=True)
+            for output_item in response.output
+        )
+        return tuple(item for item in normalized if item.get("type") == "reasoning")
+
+    @staticmethod
     def _create_follow_up_input(
         response: ResponsesAPIResponse,
         tool_results: Sequence[Mapping[str, object]],
         original_input: str | ResponseInputParam | None = None,
+        preserve_reasoning: bool = False,
     ) -> list[object]:
         """Create follow-up input with tool results in proper format."""
         follow_up_input: Final[list[object]] = []
@@ -1013,6 +1032,10 @@ class LiteLLM_Proxy_MCP_Handler:
                 }
             )
 
+        # Reasoning items must precede the function calls they produced
+        if preserve_reasoning:
+            follow_up_input.extend(LiteLLM_Proxy_MCP_Handler._extract_reasoning_items(response))
+
         # Add function calls (these can come directly after user message for LLM)
         for function_call in function_calls:
             follow_up_input.append(function_call)
@@ -1034,10 +1057,14 @@ class LiteLLM_Proxy_MCP_Handler:
         follow_up_input: list[Any],
         model: str,
         all_tools: Sequence[ResponsesToolParam] | None,
-        response_id: str,
+        response_id: str | None,
         **call_params: Any,
     ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
-        """Make follow-up response API call with tool results."""
+        """Make follow-up response API call with tool results.
+
+        response_id is None for stateless (store=false) requests, where the whole prior
+        turn is replayed in follow_up_input instead of linked by previous_response_id.
+        """
         return await aresponses(
             input=follow_up_input,
             model=model,
