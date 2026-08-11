@@ -22,6 +22,7 @@ E2E_PREFIX: Final = "tests/e2e/"
 PLACEHOLDER_TOKENS: Final = ("<blah>",)
 NO_CAVEATS_PATTERN: Final = re.compile(r"^(none|n/?a)[.!]?$", re.IGNORECASE)
 HTML_COMMENT_PATTERN: Final = re.compile(r"<!--.*?-->", re.DOTALL)
+FENCE_PATTERN: Final = re.compile(r"^\s{0,3}(?:```|~~~)")
 HEADING_PATTERN: Final = re.compile(r"^#{2,6}\s+(?P<title>.+?)\s*$")
 BULLET_PATTERN: Final = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(?P<text>.*)$")
 LABEL_PATTERN: Final = re.compile(r"^[^-*+].*:\s*$")
@@ -44,6 +45,17 @@ class Section:
 
 def strip_html_comments(body: str) -> str:
     return HTML_COMMENT_PATTERN.sub("", body.replace("\r\n", "\n"))
+
+
+def mask_fenced_blocks(body: str) -> str:
+    def step(acc: tuple[tuple[str, ...], bool], line: str) -> tuple[tuple[str, ...], bool]:
+        lines, in_fence = acc
+        if FENCE_PATTERN.match(line):
+            return (*lines, ""), not in_fence
+        return (*lines, "" if in_fence else line), in_fence
+
+    masked, _ = reduce(step, body.split("\n"), ((), False))
+    return "\n".join(masked)
 
 
 def split_sections(body: str) -> tuple[Section, ...]:
@@ -119,7 +131,7 @@ def check_qa_runbook(sections: tuple[Section, ...], changed_files: tuple[str, ..
 
 
 def check_body(body: str, changed_files: tuple[str, ...]) -> tuple[Violation, ...]:
-    sections: Final = split_sections(strip_html_comments(body))
+    sections: Final = split_sections(mask_fenced_blocks(strip_html_comments(body)))
     bullet_violations: Final = tuple(
         violation
         for section in sections

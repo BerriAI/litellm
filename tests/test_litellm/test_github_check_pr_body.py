@@ -104,6 +104,25 @@ def test_empty_body_passes(checker):
     assert checker.check_body("", ()) == ()
 
 
+def test_ellipsis_inside_code_fence_is_not_a_placeholder(checker):
+    body = "## Screenshots / Proof of Fix\n\n```\n$ curl http://localhost:4000/health\n...\n{\"status\": \"ok\"}\n```\n"
+    assert checker.check_body(body, ()) == ()
+
+
+def test_headings_inside_code_fence_do_not_split_sections(checker):
+    body = (
+        "## Screenshots / Proof of Fix\n\nThe old body looked like this:\n\n```\n## TLDR\n\n- <blah>\n- ...\n\n"
+        "## Caveats (if any)\n\nA long prose paragraph that would fail the bullet rule if parsed.\n```\n"
+    )
+    assert checker.check_body(body, ()) == ()
+
+
+def test_ellipsis_outside_fences_still_fails(checker):
+    violations = checker.check_body("## TLDR\n\nProblem this solves:\n\n- ...\n", ())
+    assert len(violations) == 1
+    assert "placeholder" in violations[0].detail
+
+
 def test_multiline_html_comment_spanning_section_is_stripped(checker):
     body = "## QA runbook\n\n<!-- Only needed when your PR edits tests/e2e; delete this section otherwise\n\nExample:\n\n- step one\n-->\n"
     violations = checker.check_body(body, ("litellm/main.py",))
