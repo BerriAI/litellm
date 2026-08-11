@@ -227,7 +227,7 @@ async def afusion(
     timeout: float | None = ...,
     temperature: float | None = ...,
     max_tokens: int | None = ...,
-    **kwargs,
+    **kwargs: object,
 ) -> list[ModelResponse]: ...
 
 
@@ -242,7 +242,7 @@ async def afusion(
     timeout: float | None = ...,
     temperature: float | None = ...,
     max_tokens: int | None = ...,
-    **kwargs,
+    **kwargs: object,
 ) -> ModelResponse: ...
 
 
@@ -354,7 +354,7 @@ def fusion(
     timeout: float | None = ...,
     temperature: float | None = ...,
     max_tokens: int | None = ...,
-    **kwargs,
+    **kwargs: object,
 ) -> list[ModelResponse]: ...
 
 
@@ -369,7 +369,7 @@ def fusion(
     timeout: float | None = ...,
     temperature: float | None = ...,
     max_tokens: int | None = ...,
-    **kwargs,
+    **kwargs: object,
 ) -> ModelResponse: ...
 
 
