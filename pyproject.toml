@@ -63,6 +63,7 @@ proxy = [
     "cryptography>=49.0.0,<51.0",
     "pynacl>=1.6.2,<2.0",
     "websockets>=15.0.1,<16.0",
+    "boto3>=1.43.1,<2.0",
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
     "mcp>=1.28.1,<2.0",
