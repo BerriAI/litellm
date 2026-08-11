@@ -136,8 +136,15 @@ class TestAdvisorySystemMessageValidation:
         """A template with no {reason} placeholder passes str.format() cleanly but
         silently never tells the LLM why the request was flagged, defeating the
         point of advisory mode; this must be rejected too, not just malformed ones."""
-        with pytest.raises(ValueError, match="must include the {reason} placeholder"):
+        with pytest.raises(ValueError, match="must include a real"):
             LakeraAIGuardrail(api_key="test_key", advisory_system_message="This request was flagged.")
+
+    def test_escaped_reason_placeholder_raises_at_construction(self):
+        """{{reason}} contains the substring "{reason}" but str.format() treats
+        double braces as an escaped literal, never substituting the real value --
+        a naive substring check would wrongly accept this."""
+        with pytest.raises(ValueError, match="must include a real"):
+            LakeraAIGuardrail(api_key="test_key", advisory_system_message="Flagged for {{reason}}.")
 
 
 class TestAdvisoryModeDuringCallUnsupported:

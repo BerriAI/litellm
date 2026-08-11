@@ -2,6 +2,7 @@ import copy
 import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from string import Formatter
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -66,6 +67,13 @@ def humanize_lakera_block_reasons(breakdown: Sequence[LakeraAIBreakdownItem] | N
         )
     )
     return ", ".join(phrases) if phrases else "a content safety concern"
+
+
+def _template_uses_reason_placeholder(template: str) -> bool:
+    """True if ``template`` has a real ``{reason}`` format field, not just the
+    literal substring -- an escaped ``{{reason}}`` contains the substring but
+    formats to a literal "{reason}", never substituting the actual value."""
+    return any(field_name == "reason" for _, field_name, _, _ in Formatter().parse(template))
 
 
 def _event_hook_includes_during_call(
@@ -145,10 +153,10 @@ class LakeraAIGuardrail(CustomGuardrail):
         self.on_flagged = on_flagged or "block"
         self.advisory_system_message = advisory_system_message
         if self.advisory_system_message is not None:
-            if "{reason}" not in self.advisory_system_message:
+            if not _template_uses_reason_placeholder(self.advisory_system_message):
                 raise ValueError(
-                    "Invalid advisory_system_message template: must include the {reason} "
-                    "placeholder so the LLM sees why the request was flagged."
+                    "Invalid advisory_system_message template: must include a real {reason} "
+                    "placeholder (not an escaped {{reason}}) so the LLM sees why the request was flagged."
                 )
             try:
                 self.advisory_system_message.format(reason="placeholder")
