@@ -902,6 +902,35 @@ def test_build_limits_index_keeps_different_teams_same_alias_separate():
     assert resolved_b[0].entry.limit == 999
 
 
+def test_build_limits_index_merges_alias_limits_across_different_model_names():
+    """
+    litellm auto-generates each team-added deployment's own internal
+    model_name as model_name_{team_id}_{uuid}, so multiple deployments
+    sharing one team_public_model_name alias routinely have different
+    model_name values -- Router's own team_model_to_deployment_indices
+    aggregates them by (team_id, alias) regardless of that. Computing alias
+    limits once per model_name group and keying the alias to whichever
+    group happened to declare it would silently drop every other same-alias
+    group's limits: with two deployments under different model_names but
+    the same alias, only the entry declared by whichever model_name group
+    is processed last would survive.
+    """
+    dep_a = _deployment("model_name_team1_aaa", "dep-a", {"token_limits": {"limits": [{"name": "daily", "limit": 100, "period_seconds": 86400}]}})
+    dep_a["model_info"]["team_id"] = "team-1"
+    dep_a["model_info"]["team_public_model_name"] = "shared-alias"
+
+    dep_b = _deployment(
+        "model_name_team1_bbb", "dep-b", {"dollar_limits": {"limits": [{"name": "monthly", "limit": 50.0, "period_seconds": 2592000}]}}
+    )
+    dep_b["model_info"]["team_id"] = "team-1"
+    dep_b["model_info"]["team_public_model_name"] = "shared-alias"
+
+    index = _build_limits_index([dep_a, dep_b])
+    resolved = index.resolve("shared-alias", team_id="team-1")
+    units = {c.unit for c in resolved}
+    assert units == {"tokens", "dollars"}
+
+
 @pytest.mark.asyncio
 async def test_filter_deployments_enforces_limit_when_called_with_team_alias(time_controller):
     limiter = _make_limiter(time_controller)

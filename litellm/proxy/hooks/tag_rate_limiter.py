@@ -271,7 +271,9 @@ class _LimitsIndex:
 
 def _build_limits_index(model_list: list[dict]) -> _LimitsIndex:
     """
-    `by_model_name` is keyed by every deployment's own `model_name`.
+    `by_model_name` is keyed by every deployment's own `model_name`, grouping
+    deployments that share one.
+
     `by_team_alias` additionally covers `team_public_model_name`: a team
     calling through its own public alias reaches `async_filter_deployments`
     with that alias as `model`, while the deployment dicts in
@@ -279,28 +281,45 @@ def _build_limits_index(model_list: list[dict]) -> _LimitsIndex:
     `Router` never rewrites it for this path (unlike `model_group_alias`,
     which is resolved to the real model_name before routing even starts).
     Without this, tag limits configured on a team-aliased chain would never
-    be looked up at all. Grouping (which deployments share one bucket) is
-    still by the deployment's own `model_name`; the alias is only an
-    additional key pointing at that same computed group, scoped by the
-    `team_id` Router itself requires alongside `team_public_model_name`.
+    be looked up at all.
+
+    This is a genuinely separate grouping from `by_model_name`, not a lookup
+    into it: litellm auto-generates each team-added deployment's own
+    `model_name` as `model_name_{team_id}_{uuid}` (see
+    `model_listing_utils.py`), so multiple deployments sharing one
+    `team_public_model_name` alias routinely have different, unique
+    `model_name` values -- Router's own `team_model_to_deployment_indices`
+    aggregates them by `(team_id, team_public_model_name)` regardless.
+    Computing alias limits once per `model_name` group and keying the alias
+    to whichever group happened to declare it would drop every other
+    same-alias group's limits whenever more than one model_name shares an
+    alias, since the last one processed would silently overwrite the rest.
+    `_build_group_limits` has no `model_name`-specific logic (it only reads
+    each deployment's own id and its own entries), so it's safe to reuse
+    unchanged for a deployment set spanning multiple `model_name` values.
     """
     groups: dict[str, list[dict]] = {}
+    alias_groups: dict[tuple[str, str], list[dict]] = {}
     for deployment in model_list:
         groups.setdefault(deployment["model_name"], []).append(deployment)
+        model_info = deployment.get("model_info") or {}
+        team_id = model_info.get("team_id")
+        team_public_model_name = model_info.get("team_public_model_name")
+        if team_id and team_public_model_name:
+            alias_groups.setdefault((team_id, team_public_model_name), []).append(deployment)
 
     by_model_name: dict[str, list[_ConfiguredLimit]] = {}
-    by_team_alias: dict[tuple[str, str], list[_ConfiguredLimit]] = {}
     for model_name, deployments in groups.items():
         configured = [limit for unit in _LIMIT_UNITS for limit in _build_group_limits(deployments, unit)]
-        if not configured:
-            continue
-        by_model_name[model_name] = configured
-        for deployment in deployments:
-            model_info = deployment.get("model_info") or {}
-            team_id = model_info.get("team_id")
-            team_public_model_name = model_info.get("team_public_model_name")
-            if team_id and team_public_model_name:
-                by_team_alias[(team_id, team_public_model_name)] = configured
+        if configured:
+            by_model_name[model_name] = configured
+
+    by_team_alias: dict[tuple[str, str], list[_ConfiguredLimit]] = {}
+    for alias_key, deployments in alias_groups.items():
+        configured = [limit for unit in _LIMIT_UNITS for limit in _build_group_limits(deployments, unit)]
+        if configured:
+            by_team_alias[alias_key] = configured
+
     return _LimitsIndex(by_model_name=by_model_name, by_team_alias=by_team_alias)
 
 
