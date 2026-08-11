@@ -609,8 +609,10 @@ class Router:
         self.team_public_model_names: frozenset[str] = frozenset()
 
         # Initialize cache attributes that ``_invalidate_model_group_info_cache``
-        # touches *before* the first ``set_model_list`` below (which calls
-        # that invalidation as part of building the model index).
+        # and ``_invalidate_access_groups_cache`` touch *before* the first
+        # ``set_model_list`` below (which calls those invalidations as part of
+        # building the model index) and before ``_init_routing_groups(None)``
+        # (which calls them on every group rebuild).
         self._access_groups_cache: dict[str, list[str]] | None = None
         # Per-router cache for the proxy auth-layer "is this model explicitly
         # zero-cost?" check. Lives on the router so it is invalidated alongside
@@ -1042,6 +1044,7 @@ class Router:
         self._model_to_group: dict[str, str] = {}
         self._group_selectors: dict[str, dict[str, RouterStrategySelector]] = {}
         self._invalidate_model_group_info_cache()
+        self._invalidate_access_groups_cache()
 
         if not groups_input:
             return
@@ -1109,6 +1112,8 @@ class Router:
         models win over indirection); config-time collisions are rejected by
         `_init_routing_groups`.
         """
+        if not self._routing_groups:
+            return None
         group: Final = self._routing_groups.get(model_name)
         if group is None or model_name in self.model_name_to_deployment_indices:
             return None
@@ -10080,11 +10085,24 @@ class Router:
             else tuple(group for name in self._routing_groups if (group := self.get_routing_group(name)) is not None)
         )
         return tuple(
-            deployment
+            self._as_routing_group_row(deployment)
             for group in groups
             for member in group.models
             for deployment in self._get_all_deployments(model_name=member, model_alias=group.group_name)
         )
+
+    @staticmethod
+    def _as_routing_group_row(deployment: DeploymentTypedDict) -> DeploymentTypedDict:
+        """
+        A member deployment re-emitted under its group's name must not carry
+        the member's `access_groups`: access groups grant member names, never
+        the group, so inheriting them here would let a key holding a member's
+        access group list and call the whole group.
+        """
+        model_info: Final = {  # mutable-ok: DeploymentTypedDict rows are plain dicts
+            k: v for k, v in (deployment.get("model_info") or {}).items() if k != "access_groups"
+        }
+        return {**deployment, "model_info": model_info}  # mutable-ok: DeploymentTypedDict rows are plain dicts
 
     def get_model_list(
         self, model_name: str | None = None, team_id: str | None = None

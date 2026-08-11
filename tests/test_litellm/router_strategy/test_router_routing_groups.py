@@ -916,3 +916,93 @@ def test_failure_callback_reads_model_group_from_litellm_metadata_bucket():
     with patch("litellm.router._set_cooldown_deployments", return_value=True) as cooldown_spy:
         router.deployment_callback_on_failure(kwargs, None, 0, 1)
     assert cooldown_spy.call_args.kwargs["requested_model_group"] == "quality"
+
+
+def _pin_choice_to(deployment_id):
+    def _pick(seq):
+        for candidate in seq:
+            if candidate["model_info"]["id"] == deployment_id:
+                return candidate
+        return seq[0]
+
+    return _pick
+
+
+async def _call_and_get_cooldowns(router, model):
+    from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
+
+    with (
+        patch("litellm.router_strategy.simple_shuffle.random.choice", side_effect=_pin_choice_to("deploy-3")),
+        pytest.raises(litellm.RateLimitError),
+    ):
+        await router.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="litellm.RateLimitError",
+        )
+    return await _async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+
+
+@pytest.mark.asyncio
+async def test_group_call_429_registers_cooldown_end_to_end():
+    router = Router(
+        model_list=_model_list(),
+        routing_groups=_quality_group("simple-shuffle"),
+        num_retries=0,
+        cooldown_time=60,
+    )
+    cooldown_ids = await _call_and_get_cooldowns(router, "quality")
+    assert "deploy-3" in cooldown_ids
+
+
+@pytest.mark.asyncio
+async def test_alias_to_group_429_registers_cooldown_end_to_end():
+    router = Router(
+        model_list=_model_list(),
+        model_group_alias={"quality-alias": "quality"},
+        routing_groups=_quality_group("simple-shuffle"),
+        num_retries=0,
+        cooldown_time=60,
+    )
+    cooldown_ids = await _call_and_get_cooldowns(router, "quality-alias")
+    assert "deploy-3" in cooldown_ids
+
+
+@pytest.mark.asyncio
+async def test_direct_single_deployment_member_429_keeps_exemption_end_to_end():
+    router = Router(
+        model_list=_model_list(),
+        routing_groups=_quality_group("simple-shuffle"),
+        num_retries=0,
+        cooldown_time=60,
+    )
+    cooldown_ids = await _call_and_get_cooldowns(router, "other-model")
+    assert "deploy-3" not in cooldown_ids
+
+
+def test_group_rows_do_not_inherit_member_access_groups():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gated-member",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+                "model_info": {"id": "gated-1", "access_groups": ["restricted-team"]},
+            }
+        ],
+        routing_groups=[
+            {"group_name": "gated-group", "models": ["gated-member"], "routing_strategy": "simple-shuffle"}
+        ],
+    )
+    access_groups = router.get_model_access_groups()
+    assert "gated-group" not in access_groups.get("restricted-team", [])
+    assert all("access_groups" not in (row.get("model_info") or {}) for row in router.get_model_list(model_name="gated-group"))
+    assert "access_groups" in router.get_model_list(model_name="gated-member")[0]["model_info"]
+
+
+def test_group_rebuild_invalidates_access_groups_cache():
+    router = _build_router(routing_groups=_quality_group())
+    router.get_model_access_groups()
+    assert router._access_groups_cache is not None
+
+    router.update_settings(routing_groups=[])
+    assert router._access_groups_cache is None
