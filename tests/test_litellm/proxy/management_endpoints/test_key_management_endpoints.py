@@ -4718,6 +4718,7 @@ def test_transform_verification_tokens_to_deleted_records():
         user_role=LitellmUserRoles.PROXY_ADMIN.value,
     )
 
+    config_stamp = datetime(2026, 8, 10, 12, 30, 45, tzinfo=timezone.utc)
     key1 = LiteLLM_VerificationToken(
         token="hashed-token-1",
         user_id="user-123",
@@ -4734,6 +4735,7 @@ def test_transform_verification_tokens_to_deleted_records():
         model_spend={},
         soft_budget_cooldown=False,
         allowed_routes=[],
+        config_updated_at=config_stamp,
     )
 
     key2 = LiteLLM_VerificationToken(
@@ -4776,6 +4778,7 @@ def test_transform_verification_tokens_to_deleted_records():
     assert record1["token"] == "hashed-token-1"
     assert record1["user_id"] == "user-123"
     assert record1["team_id"] == "team-456"
+    assert record1["config_updated_at"] == config_stamp
     assert isinstance(record1["aliases"], str)
     assert isinstance(record1["config"], str)
     assert isinstance(record1["permissions"], str)
