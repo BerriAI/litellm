@@ -110,8 +110,11 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/oasdiff-bin"
           tar -xzf "${RUNNER_TEMP}/oasdiff.tar.gz" -C "${RUNNER_TEMP}/oasdiff-bin" oasdiff
 
-      - name: Fail on breaking API changes vs the base branch
+      - name: Fail on undeclared breaking API changes vs the base branch
         if: steps.changes.outputs.relevant == 'true'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           set -euo pipefail
           if ! git cat-file -e "HEAD^1:openapi.json" 2>/dev/null; then
@@ -119,10 +122,18 @@ jobs:
             exit 0
           fi
           git show "HEAD^1:openapi.json" > "${RUNNER_TEMP}/base_openapi.json"
-          if ! "${RUNNER_TEMP}/oasdiff-bin/oasdiff" breaking -f githubactions --fail-on ERR "${RUNNER_TEMP}/base_openapi.json" openapi.json; then
-            echo ""
-            echo "This pull request makes a breaking change to the proxy's public API."
-            echo "If the break is intentional and approved, a maintainer can merge over this failing check."
-            exit 1
+          if "${RUNNER_TEMP}/oasdiff-bin/oasdiff" breaking -f githubactions --fail-on ERR "${RUNNER_TEMP}/base_openapi.json" openapi.json; then
+            echo "No breaking API changes against the base branch."
+            exit 0
           fi
-          echo "No breaking API changes against the base branch."
+          if grep -Eq '^[a-z]+(\([^)]+\))?!:' <<< "${PR_TITLE}" || grep -q 'BREAKING CHANGE' <<< "${PR_BODY:-}"; then
+            echo ""
+            echo "Breaking API changes detected, and the PR declares them with a conventional-commits breaking marker. Passing."
+            exit 0
+          fi
+          echo ""
+          echo "::error::This pull request breaks the proxy's public API without declaring it."
+          echo "If the break is intentional, declare it the conventional-commits way:"
+          echo "  add a bang to the PR title, e.g. feat!: drop the deprecated /v1/foo route"
+          echo "  or add a 'BREAKING CHANGE: <description>' line to the PR description."
+          exit 1
