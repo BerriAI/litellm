@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Card, Typography, Select, Switch, Form, Space, InputNumber } from "antd";
 import { getMajorAirlines } from "@/components/networking";
 
@@ -51,6 +52,7 @@ const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps
   onChange,
   accessToken,
 }) => {
+  const { t } = useTranslation("gateway");
   const effectiveConfig = config ?? DEFAULT_CONFIG;
   const [airlineOptions, setAirlineOptions] = useState<MajorAirline[]>([]);
   const [loadingAirlines, setLoadingAirlines] = useState(false);
@@ -117,17 +119,14 @@ const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps
         title={
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <Title level={5} style={{ margin: 0 }}>
-              Competitor Intent Filter
+              {t("guardrailsPage.contentFilter.competitor.title")}
             </Title>
             <Switch checked={false} onChange={handleEnabledChange} />
           </div>
         }
         size="small"
       >
-        <Text type="secondary">
-          Block or reframe competitor comparison questions. When enabled, airline type auto-loads competitors from IATA;
-          generic type requires manual competitor list.
-        </Text>
+        <Text type="secondary">{t("guardrailsPage.contentFilter.competitor.disabledDescription")}</Text>
       </Card>
     );
   }
@@ -137,7 +136,7 @@ const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps
       title={
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <Title level={5} style={{ margin: 0 }}>
-            Competitor Intent Filter
+            {t("guardrailsPage.contentFilter.competitor.title")}
           </Title>
           <Switch checked={enabled} onChange={handleEnabledChange} />
         </div>
@@ -145,28 +144,27 @@ const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps
       size="small"
     >
       <Text type="secondary" style={{ display: "block", marginBottom: 16 }}>
-        Block or reframe competitor comparison questions. Airline type uses major airlines (excluding your brand);
-        generic requires manual competitor list.
+        {t("guardrailsPage.contentFilter.competitor.description")}
       </Text>
       <Form layout="vertical" size="small">
-        <Form.Item label="Type">
+        <Form.Item label={t("guardrailsPage.contentFilter.type")}>
           <Select
             value={effectiveConfig.competitor_intent_type}
             onChange={(v) => handleConfigChange("competitor_intent_type", v)}
             style={{ width: "100%" }}
           >
-            <Option value="airline">Airline (auto-load competitors from IATA)</Option>
-            <Option value="generic">Generic (specify competitors manually)</Option>
+            <Option value="airline">{t("guardrailsPage.contentFilter.competitor.airlineType")}</Option>
+            <Option value="generic">{t("guardrailsPage.contentFilter.competitor.genericType")}</Option>
           </Select>
         </Form.Item>
 
         <Form.Item
-          label="Your Brand (brand_self)"
+          label={t("guardrailsPage.contentFilter.competitor.yourBrand")}
           required
           help={
             effectiveConfig.competitor_intent_type === "airline"
-              ? "Select your airline from the list (excluded from competitors) or type to add a custom term"
-              : "Names/codes users use for your brand"
+              ? t("guardrailsPage.contentFilter.competitor.airlineBrandHelp")
+              : t("guardrailsPage.contentFilter.competitor.brandHelp")
           }
         >
           <Select
@@ -174,10 +172,10 @@ const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps
             style={{ width: "100%" }}
             placeholder={
               loadingAirlines
-                ? "Loading airlines..."
+                ? t("guardrailsPage.contentFilter.competitor.loadingAirlines")
                 : effectiveConfig.competitor_intent_type === "airline"
-                  ? "Search or select airline, or type to add custom"
-                  : "Type and press Enter to add"
+                  ? t("guardrailsPage.contentFilter.competitor.airlinePlaceholder")
+                  : t("guardrailsPage.contentFilter.competitor.tagsPlaceholder")
             }
             value={effectiveConfig.brand_self}
             onChange={(v) =>
@@ -212,13 +210,13 @@ const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps
 
         {effectiveConfig.competitor_intent_type === "airline" && (
           <Form.Item
-            label="Locations (optional)"
-            help="Countries, cities, airports for disambiguation (e.g. qatar, doha)"
+            label={t("guardrailsPage.contentFilter.competitor.locations")}
+            help={t("guardrailsPage.contentFilter.competitor.locationsHelp")}
           >
             <Select
               mode="tags"
               style={{ width: "100%" }}
-              placeholder="Type and press Enter to add"
+              placeholder={t("guardrailsPage.contentFilter.competitor.tagsPlaceholder")}
               value={effectiveConfig.locations ?? []}
               onChange={(v) => handleNestedArrayChange("locations", v ?? [])}
               tokenSeparators={[","]}
@@ -227,11 +225,15 @@ const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps
         )}
 
         {effectiveConfig.competitor_intent_type === "generic" && (
-          <Form.Item label="Competitors" required help="Competitor names to detect (required for generic type)">
+          <Form.Item
+            label={t("guardrailsPage.contentFilter.competitor.competitors")}
+            required
+            help={t("guardrailsPage.contentFilter.competitor.competitorsHelp")}
+          >
             <Select
               mode="tags"
               style={{ width: "100%" }}
-              placeholder="Type and press Enter to add"
+              placeholder={t("guardrailsPage.contentFilter.competitor.tagsPlaceholder")}
               value={effectiveConfig.competitors ?? []}
               onChange={(v) => handleNestedArrayChange("competitors", v ?? [])}
               tokenSeparators={[","]}
@@ -239,52 +241,57 @@ const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps
           </Form.Item>
         )}
 
-        <Form.Item label="Policy: Competitor comparison">
+        <Form.Item label={t("guardrailsPage.contentFilter.competitor.comparisonPolicy")}>
           <Select
             value={effectiveConfig.policy?.competitor_comparison ?? "refuse"}
             onChange={(v) => handlePolicyChange("competitor_comparison", v)}
             style={{ width: "100%" }}
           >
-            <Option value="refuse">Refuse (block request)</Option>
-            <Option value="reframe">Reframe (suggest alternative)</Option>
+            <Option value="refuse">{t("guardrailsPage.contentFilter.competitor.refuse")}</Option>
+            <Option value="reframe">{t("guardrailsPage.contentFilter.competitor.reframe")}</Option>
           </Select>
         </Form.Item>
 
-        <Form.Item label="Policy: Possible competitor comparison">
+        <Form.Item label={t("guardrailsPage.contentFilter.competitor.possibleComparisonPolicy")}>
           <Select
             value={effectiveConfig.policy?.possible_competitor_comparison ?? "reframe"}
             onChange={(v) => handlePolicyChange("possible_competitor_comparison", v)}
             style={{ width: "100%" }}
           >
-            <Option value="refuse">Refuse (block request)</Option>
-            <Option value="reframe">Reframe (suggest alternative to backend LLM)</Option>
+            <Option value="refuse">{t("guardrailsPage.contentFilter.competitor.refuse")}</Option>
+            <Option value="reframe">{t("guardrailsPage.contentFilter.competitor.reframeBackend")}</Option>
           </Select>
         </Form.Item>
 
         <Form.Item
-          label="Confidence thresholds"
+          label={t("guardrailsPage.contentFilter.competitor.confidenceThresholds")}
           help={
             <>
-              Classify competitor intent by confidence (0–1). Higher confidence → stronger intent.
+              {t("guardrailsPage.contentFilter.competitor.confidenceHelp")}
               <ul style={{ marginBottom: 0, marginTop: 4, paddingLeft: 20 }}>
                 <li>
-                  <strong>High (≥)</strong>: Treat as full competitor comparison → uses &quot;Competitor
-                  comparison&quot; policy
+                  <strong>{t("guardrailsPage.contentFilter.severity.high")} (≥)</strong>:{" "}
+                  {t("guardrailsPage.contentFilter.competitor.highHelp")}
                 </li>
                 <li>
-                  <strong>Medium (≥)</strong>: Treat as possible comparison → uses &quot;Possible competitor
-                  comparison&quot; policy
+                  <strong>{t("guardrailsPage.contentFilter.severity.medium")} (≥)</strong>:{" "}
+                  {t("guardrailsPage.contentFilter.competitor.mediumHelp")}
                 </li>
                 <li>
-                  <strong>Low (≥)</strong>: Log only; allow request. Below Low → allow with no action
+                  <strong>{t("guardrailsPage.contentFilter.severity.low")} (≥)</strong>:{" "}
+                  {t("guardrailsPage.contentFilter.competitor.lowHelp")}
                 </li>
               </ul>
-              Raise thresholds to be more permissive; lower them to be stricter.
+              {t("guardrailsPage.contentFilter.competitor.thresholdDirection")}
             </>
           }
         >
           <Space wrap>
-            <Form.Item label="High" style={{ marginBottom: 0 }} help="e.g. 0.7">
+            <Form.Item
+              label={t("guardrailsPage.contentFilter.severity.high")}
+              style={{ marginBottom: 0 }}
+              help={t("guardrailsPage.contentFilter.example", { value: "0.7" })}
+            >
               <InputNumber
                 min={0}
                 max={1}
@@ -294,7 +301,11 @@ const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps
                 style={{ width: 80 }}
               />
             </Form.Item>
-            <Form.Item label="Medium" style={{ marginBottom: 0 }} help="e.g. 0.45">
+            <Form.Item
+              label={t("guardrailsPage.contentFilter.severity.medium")}
+              style={{ marginBottom: 0 }}
+              help={t("guardrailsPage.contentFilter.example", { value: "0.45" })}
+            >
               <InputNumber
                 min={0}
                 max={1}
@@ -304,7 +315,11 @@ const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps
                 style={{ width: 80 }}
               />
             </Form.Item>
-            <Form.Item label="Low" style={{ marginBottom: 0 }} help="e.g. 0.3">
+            <Form.Item
+              label={t("guardrailsPage.contentFilter.severity.low")}
+              style={{ marginBottom: 0 }}
+              help={t("guardrailsPage.contentFilter.example", { value: "0.3" })}
+            >
               <InputNumber
                 min={0}
                 max={1}

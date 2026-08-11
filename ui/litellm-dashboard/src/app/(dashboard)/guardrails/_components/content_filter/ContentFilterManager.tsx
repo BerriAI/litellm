@@ -1,5 +1,6 @@
 import { Alert, Divider, Typography } from "antd";
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import ContentFilterConfiguration from "./ContentFilterConfiguration";
 import ContentFilterDisplay from "./ContentFilterDisplay";
 import type { CompetitorIntentConfig } from "./CompetitorIntentConfiguration";
@@ -74,6 +75,7 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
   onDataChange,
   onUnsavedChanges,
 }) => {
+  const { t } = useTranslation("gateway");
   const [selectedPatterns, setSelectedPatterns] = useState<Pattern[]>([]);
   const [blockedWords, setBlockedWords] = useState<BlockedWord[]>([]);
   const [selectedContentCategories, setSelectedContentCategories] = useState<SelectedContentCategory[]>([]);
@@ -233,18 +235,13 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
   // Edit mode
   return (
     <>
-      <Divider orientation="left">Content Filter Configuration</Divider>
+      <Divider orientation="left">{t("guardrailsPage.contentFilter.title")}</Divider>
       {hasUnsavedChanges && (
         <Alert
           type="warning"
           showIcon
           className="mb-4"
-          message={
-            <Text>
-              You have unsaved changes to patterns or keywords. Remember to click &quot;Save Changes&quot; at the
-              bottom.
-            </Text>
-          }
+          message={<Text>{t("guardrailsPage.contentFilter.unsavedChanges")}</Text>}
         />
       )}
       <div className="mb-6">

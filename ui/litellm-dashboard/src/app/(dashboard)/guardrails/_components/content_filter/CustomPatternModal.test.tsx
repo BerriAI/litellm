@@ -3,6 +3,18 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import CustomPatternModal from "./CustomPatternModal";
 
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  const t = (key: string) => {
+    const copy = key.split(".").reduce<unknown>((value, segment) => {
+      if (typeof value !== "object" || value === null) return undefined;
+      return (value as Record<string, unknown>)[segment];
+    }, resources.en.gateway);
+    return typeof copy === "string" ? copy : key;
+  };
+  return { useTranslation: () => ({ t }) };
+});
+
 describe("CustomPatternModal", () => {
   const mockOnAdd = vi.fn();
   const mockOnCancel = vi.fn();

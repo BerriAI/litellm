@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { Typography, Select, Table, Tag, Button } from "antd";
 import { DeleteOutlined } from "@ant-design/icons";
 
@@ -28,9 +29,10 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
   onRemove,
   readOnly = false,
 }) => {
+  const { t } = useTranslation("gateway");
   const columns = [
     {
-      title: "Category",
+      title: t("guardrailsPage.contentFilter.category"),
       dataIndex: "display_name",
       key: "display_name",
       render: (displayName: string, record: ContentCategory) => (
@@ -47,7 +49,7 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
       ),
     },
     {
-      title: "Severity Threshold",
+      title: t("guardrailsPage.contentFilter.severityThreshold"),
       dataIndex: "severity_threshold",
       key: "severity_threshold",
       width: 180,
@@ -58,7 +60,11 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
             medium: "orange",
             low: "yellow",
           } as const;
-          return <Tag color={colorMap[severity as keyof typeof colorMap]}>{severity.toUpperCase()}</Tag>;
+          return (
+            <Tag color={colorMap[severity as keyof typeof colorMap]}>
+              {t(`guardrailsPage.contentFilter.severity.${severity}`, { defaultValue: severity.toUpperCase() })}
+            </Tag>
+          );
         }
         return (
           <Select
@@ -67,21 +73,25 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
             style={{ width: 150 }}
             size="small"
           >
-            <Option value="high">High</Option>
-            <Option value="medium">Medium</Option>
-            <Option value="low">Low</Option>
+            <Option value="high">{t("guardrailsPage.contentFilter.severity.high")}</Option>
+            <Option value="medium">{t("guardrailsPage.contentFilter.severity.medium")}</Option>
+            <Option value="low">{t("guardrailsPage.contentFilter.severity.low")}</Option>
           </Select>
         );
       },
     },
     {
-      title: "Action",
+      title: t("guardrailsPage.contentFilter.action"),
       dataIndex: "action",
       key: "action",
       width: 150,
       render: (action: string, record: ContentCategory) => {
         if (readOnly) {
-          return <Tag color={action === "BLOCK" ? "red" : "blue"}>{action}</Tag>;
+          return (
+            <Tag color={action === "BLOCK" ? "red" : "blue"}>
+              {action === "BLOCK" ? t("guardrailsPage.contentFilter.block") : t("guardrailsPage.contentFilter.mask")}
+            </Tag>
+          );
         }
         return (
           <Select
@@ -90,8 +100,8 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
             style={{ width: 120 }}
             size="small"
           >
-            <Option value="BLOCK">Block</Option>
-            <Option value="MASK">Mask</Option>
+            <Option value="BLOCK">{t("guardrailsPage.contentFilter.block")}</Option>
+            <Option value="MASK">{t("guardrailsPage.contentFilter.mask")}</Option>
           </Select>
         );
       },
@@ -105,14 +115,18 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
       width: 100,
       render: (_: any, record: ContentCategory) => (
         <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={() => onRemove?.(record.id)}>
-          Delete
+          {t("guardrailsPage.contentFilter.delete")}
         </Button>
       ),
     } as any);
   }
 
   if (categories.length === 0) {
-    return <div style={{ textAlign: "center", padding: "40px 0", color: "#999" }}>No categories configured.</div>;
+    return (
+      <div style={{ textAlign: "center", padding: "40px 0", color: "#999" }}>
+        {t("guardrailsPage.contentFilter.noCategories")}
+      </div>
+    );
   }
 
   return <Table dataSource={categories} columns={columns} rowKey="id" pagination={false} size="small" />;

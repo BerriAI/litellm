@@ -4,6 +4,24 @@ import userEvent from "@testing-library/user-event";
 import ContentFilterManager, { formatContentFilterDataForAPI } from "./ContentFilterManager";
 import React from "react";
 
+const localization = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  const t = (key: string, values?: Record<string, unknown>) => {
+    const copy = key.split(".").reduce<unknown>((value, segment) => {
+      if (typeof value !== "object" || value === null) return undefined;
+      return (value as Record<string, unknown>)[segment];
+    }, resources[localization.language].gateway);
+    if (typeof copy !== "string") return key;
+    return Object.entries(values ?? {}).reduce(
+      (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+      copy,
+    );
+  };
+  return { useTranslation: () => ({ t }) };
+});
+
 const CONTENT_FILTER_GUARDRAIL_DATA = {
   litellm_params: {
     guardrail: "litellm_content_filter",
@@ -100,6 +118,7 @@ vi.mock("antd", async (importOriginal) => {
 
 describe("ContentFilterManager", () => {
   beforeEach(() => {
+    localization.language = "en";
     vi.clearAllMocks();
   });
 
@@ -118,6 +137,22 @@ describe("ContentFilterManager", () => {
     });
 
     expect(screen.getByTestId("divider")).toHaveTextContent("Content Filter Configuration");
+  });
+
+  it("renders the content filter heading in Russian", async () => {
+    localization.language = "ru";
+    render(
+      <ContentFilterManager
+        guardrailData={CONTENT_FILTER_GUARDRAIL_DATA}
+        guardrailSettings={GUARDRAIL_SETTINGS}
+        isEditing={true}
+        accessToken="test-token"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("divider")).toHaveTextContent("Настройка фильтра содержимого");
+    });
   });
 
   it("should return null when guardrail is not litellm_content_filter", () => {

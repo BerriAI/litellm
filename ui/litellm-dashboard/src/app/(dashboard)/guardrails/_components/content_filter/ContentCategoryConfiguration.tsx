@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { Card, Typography, Select, Table, Tag, Collapse, Button } from "antd";
 import { DeleteOutlined, PlusOutlined, FileTextOutlined } from "@ant-design/icons";
 import { getCategoryYaml } from "@/components/networking";
@@ -42,6 +43,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
   pendingSelection,
   onPendingSelectionChange,
 }) => {
+  const { t } = useTranslation("gateway");
   // Use controlled state if parent provides it, otherwise use local state
   const [localSelectedCategoryName, setLocalSelectedCategoryName] = React.useState<string>("");
   const selectedCategoryName = pendingSelection !== undefined ? pendingSelection : localSelectedCategoryName;
@@ -162,7 +164,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
 
   const columns = [
     {
-      title: "Category",
+      title: t("guardrailsPage.contentFilter.category"),
       dataIndex: "display_name",
       key: "display_name",
       render: (text: string, record: SelectedCategory) => {
@@ -178,7 +180,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
       },
     },
     {
-      title: "Action",
+      title: t("guardrailsPage.contentFilter.action"),
       dataIndex: "action",
       key: "action",
       width: 150,
@@ -189,16 +191,16 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
           style={{ width: "100%" }}
         >
           <Option value="BLOCK">
-            <Tag color="red">BLOCK</Tag>
+            <Tag color="red">{t("guardrailsPage.contentFilter.block")}</Tag>
           </Option>
           <Option value="MASK">
-            <Tag color="orange">MASK</Tag>
+            <Tag color="orange">{t("guardrailsPage.contentFilter.mask")}</Tag>
           </Option>
         </Select>
       ),
     },
     {
-      title: "Severity Threshold",
+      title: t("guardrailsPage.contentFilter.severityThreshold"),
       dataIndex: "severity_threshold",
       key: "severity_threshold",
       width: 180,
@@ -208,9 +210,9 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
           onChange={(value) => onCategoryUpdate(record.id, "severity_threshold", value)}
           style={{ width: "100%" }}
         >
-          <Option value="low">Low</Option>
-          <Option value="medium">Medium</Option>
-          <Option value="high">High</Option>
+          <Option value="low">{t("guardrailsPage.contentFilter.severity.low")}</Option>
+          <Option value="medium">{t("guardrailsPage.contentFilter.severity.medium")}</Option>
+          <Option value="high">{t("guardrailsPage.contentFilter.severity.high")}</Option>
         </Select>
       ),
     },
@@ -220,7 +222,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
       width: 80,
       render: (_: any, record: SelectedCategory) => (
         <Button icon={<DeleteOutlined />} onClick={() => onCategoryRemove(record.id)} size="small">
-          Remove
+          {t("guardrailsPage.contentFilter.remove")}
         </Button>
       ),
     },
@@ -237,10 +239,10 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
           style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}
         >
           <Title level={5} style={{ margin: 0 }}>
-            Blocked topics
+            {t("guardrailsPage.contentFilter.blockedTopics")}
           </Title>
           <Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>
-            Select topics to block using keyword and semantic analysis
+            {t("guardrailsPage.contentFilter.blockedTopicsHelp")}
           </Text>
         </div>
       }
@@ -248,7 +250,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
     >
       <div style={{ marginBottom: 16, display: "flex", gap: 8 }}>
         <Select
-          placeholder="Select a content category"
+          placeholder={t("guardrailsPage.contentFilter.selectCategory")}
           value={selectedCategoryName || undefined}
           onChange={setSelectedCategoryName}
           style={{ flex: 1 }}
@@ -268,7 +270,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
           ))}
         </Select>
         <Button type="primary" onClick={handleAddCategory} disabled={!selectedCategoryName} icon={<PlusOutlined />}>
-          Add
+          {t("guardrailsPage.contentFilter.add")}
         </Button>
       </div>
 
@@ -284,7 +286,8 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
           }}
         >
           <div style={{ marginBottom: 8, fontWeight: 500, fontSize: "14px" }}>
-            Preview: {availableCategories.find((c) => c.name === selectedCategoryName)?.display_name}
+            {t("guardrailsPage.contentFilter.preview")}:{" "}
+            {availableCategories.find((c) => c.name === selectedCategoryName)?.display_name}
             {categoryFileTypes[selectedCategoryName] && (
               <span style={{ marginLeft: 8, fontSize: "12px", color: "#888", fontWeight: 400 }}>
                 ({categoryFileTypes[selectedCategoryName]?.toUpperCase()})
@@ -292,7 +295,9 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
             )}
           </div>
           {loadingPreviewYaml ? (
-            <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>Loading content...</div>
+            <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>
+              {t("guardrailsPage.contentFilter.loadingContent")}
+            </div>
           ) : previewYaml ? (
             <pre
               style={{
@@ -314,7 +319,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
             </pre>
           ) : (
             <div style={{ padding: "8px", textAlign: "center", color: "#888", fontSize: "12px" }}>
-              Unable to load category content
+              {t("guardrailsPage.contentFilter.contentUnavailable")}
             </div>
           )}
         </div>
@@ -351,12 +356,17 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <FileTextOutlined />
                       <span>
-                        View {fileTypeLabel} for {category.display_name}
+                        {t("guardrailsPage.contentFilter.viewFile", {
+                          type: fileTypeLabel,
+                          category: category.display_name,
+                        })}
                       </span>
                     </div>
                   ),
                   children: loadingYaml[category.category] ? (
-                    <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>Loading content...</div>
+                    <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>
+                      {t("guardrailsPage.contentFilter.loadingContent")}
+                    </div>
                   ) : categoryYaml[category.category] ? (
                     <pre
                       style={{
@@ -374,7 +384,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
                     </pre>
                   ) : (
                     <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>
-                      Content will load when expanded
+                      {t("guardrailsPage.contentFilter.loadOnExpand")}
                     </div>
                   ),
                 };
@@ -392,7 +402,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
             borderRadius: "4px",
           }}
         >
-          No blocked topics selected. Add topics to detect and block harmful content.
+          {t("guardrailsPage.contentFilter.noBlockedTopics")}
         </div>
       )}
     </Card>

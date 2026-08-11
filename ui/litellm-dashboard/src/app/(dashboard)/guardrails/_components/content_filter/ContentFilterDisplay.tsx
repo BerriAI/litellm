@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { Card, Text, Badge } from "@tremor/react";
 import PatternTable from "./PatternTable";
 import KeywordTable from "./KeywordTable";
@@ -55,6 +56,7 @@ const ContentFilterDisplay: React.FC<ContentFilterDisplayProps> = ({
   onCategorySeverityChange,
   onCategoryRemove,
 }) => {
+  const { t } = useTranslation("gateway");
   if (patterns.length === 0 && blockedWords.length === 0 && categories.length === 0) {
     return null;
   }
@@ -67,8 +69,10 @@ const ContentFilterDisplay: React.FC<ContentFilterDisplayProps> = ({
       {categories.length > 0 && (
         <Card className="mt-6">
           <div className="flex justify-between items-center mb-4">
-            <Text className="text-lg font-semibold">Content Categories</Text>
-            <Badge color="blue">{categories.length} categories configured</Badge>
+            <Text className="text-lg font-semibold">{t("guardrailsPage.contentFilter.contentCategories")}</Text>
+            <Badge color="blue">
+              {t("guardrailsPage.contentFilter.categoriesConfigured", { count: categories.length })}
+            </Badge>
           </div>
           <CategoryTable
             categories={categories}
@@ -83,8 +87,10 @@ const ContentFilterDisplay: React.FC<ContentFilterDisplayProps> = ({
       {patterns.length > 0 && (
         <Card className="mt-6">
           <div className="flex justify-between items-center mb-4">
-            <Text className="text-lg font-semibold">Pattern Detection</Text>
-            <Badge color="blue">{patterns.length} patterns configured</Badge>
+            <Text className="text-lg font-semibold">{t("guardrailsPage.contentFilter.patternDetection")}</Text>
+            <Badge color="blue">
+              {t("guardrailsPage.contentFilter.patternsConfigured", { count: patterns.length })}
+            </Badge>
           </div>
           <PatternTable
             patterns={patterns}
@@ -97,8 +103,10 @@ const ContentFilterDisplay: React.FC<ContentFilterDisplayProps> = ({
       {blockedWords.length > 0 && (
         <Card className="mt-6">
           <div className="flex justify-between items-center mb-4">
-            <Text className="text-lg font-semibold">Blocked Keywords</Text>
-            <Badge color="blue">{blockedWords.length} keywords configured</Badge>
+            <Text className="text-lg font-semibold">{t("guardrailsPage.contentFilter.blockedKeywords")}</Text>
+            <Badge color="blue">
+              {t("guardrailsPage.contentFilter.keywordsConfigured", { count: blockedWords.length })}
+            </Badge>
           </div>
           <KeywordTable
             keywords={blockedWords}
