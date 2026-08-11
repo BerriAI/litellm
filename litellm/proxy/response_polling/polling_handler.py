@@ -3,13 +3,43 @@ Response Polling Handler for Background Responses with Cache
 """
 
 import json
+from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final, Literal
+
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid4
 from litellm.caching.redis_cache import RedisCache
 from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStatus
+
+if TYPE_CHECKING:
+    from litellm.router import Router
+
+_STATE_ADAPTER: Final = TypeAdapter(dict[str, JsonValue])
+
+
+class _DeploymentParams(BaseModel):
+    model_config = ConfigDict(extra="ignore", from_attributes=True)
+
+    custom_llm_provider: str | None = None
+    model: str | None = None
+
+
+class _Deployment(BaseModel):
+    model_config = ConfigDict(extra="ignore", from_attributes=True)
+
+    litellm_params: _DeploymentParams = _DeploymentParams()
+
+
+_DEPLOYMENT_ADAPTER: Final = TypeAdapter(_Deployment)
+
+
+def _deployment_provider(deployment: object) -> str | None:
+    litellm_params: Final = _DEPLOYMENT_ADAPTER.validate_python(deployment).litellm_params
+    dep_model: Final = litellm_params.model or ""
+    return litellm_params.custom_llm_provider or (dep_model.split("/")[0] if "/" in dep_model else None)
 
 
 class ResponsePollingHandler:
@@ -40,7 +70,7 @@ class ResponsePollingHandler:
     async def create_initial_state(
         self,
         polling_id: str,
-        request_data: dict[str, Any],
+        request_data: dict[str, JsonValue],
     ) -> ResponsesAPIResponse:
         """
         Create initial state in Redis for a polling request
@@ -56,6 +86,7 @@ class ResponsePollingHandler:
             ResponsesAPIResponse object following OpenAI spec
         """
         created_timestamp: Final = int(datetime.now(timezone.utc).timestamp())
+        metadata: Final = request_data.get("metadata")
 
         # Create OpenAI-compliant response object
         response: Final = ResponsesAPIResponse(
@@ -64,7 +95,7 @@ class ResponsePollingHandler:
             status="queued",  # OpenAI native status
             created_at=created_timestamp,
             output=[],
-            metadata=request_data.get("metadata", {}),
+            metadata=metadata if isinstance(metadata, dict) else {},
             usage=None,
         )
 
@@ -85,13 +116,13 @@ class ResponsePollingHandler:
         self,
         polling_id: str,
         status: ResponsesAPIStatus | None = None,
-        usage: dict | None = None,
-        error: dict | None = None,
-        incomplete_details: dict | None = None,
-        reasoning: dict | None = None,
-        tool_choice: Any | None = None,
-        tools: list | None = None,
-        output: list | None = None,
+        usage: dict[str, JsonValue] | None = None,
+        error: dict[str, JsonValue] | None = None,
+        incomplete_details: dict[str, JsonValue] | None = None,
+        reasoning: dict[str, JsonValue] | None = None,
+        tool_choice: JsonValue = None,
+        tools: list[JsonValue] | None = None,
+        output: Sequence[JsonValue] | None = None,
         # Additional ResponsesAPIResponse fields
         model: str | None = None,
         instructions: str | None = None,
@@ -99,7 +130,7 @@ class ResponsePollingHandler:
         top_p: float | None = None,
         max_output_tokens: int | None = None,
         previous_response_id: str | None = None,
-        text: dict | None = None,
+        text: dict[str, JsonValue] | None = None,
         truncation: str | None = None,
         parallel_tool_calls: bool | None = None,
         user: str | None = None,
@@ -139,13 +170,13 @@ class ResponsePollingHandler:
         cache_key: Final = self.get_cache_key(polling_id)
 
         # Get current state
-        cached_state: Final = await self.redis_cache.async_get_cache(cache_key)
-        if not cached_state:
+        cached_state: Final[object] = await self.redis_cache.async_get_cache(cache_key)
+        if not isinstance(cached_state, str | bytes) or not cached_state:
             verbose_proxy_logger.warning("No cached state found for polling_id: %s", polling_id)
             return
 
         # Parse existing ResponsesAPIResponse from cache
-        state: Final = json.loads(cached_state)
+        state: Final = _STATE_ADAPTER.validate_json(cached_state)
 
         # Update status (using OpenAI native status values)
         if status:
@@ -153,7 +184,7 @@ class ResponsePollingHandler:
 
         # Replace full output list if provided
         if output is not None:
-            state["output"] = output
+            state["output"] = list(output)
 
         # Update usage
         if usage:
@@ -207,21 +238,22 @@ class ResponsePollingHandler:
             ttl=self.ttl,
         )
 
-        output_count: Final = len(state.get("output", []))
+        final_output: Final = state.get("output")
+        output_count: Final = len(final_output) if isinstance(final_output, list) else 0
         verbose_proxy_logger.debug(
             "Updated polling state for %s: status=%s, output_items=%s", polling_id, state["status"], output_count
         )
 
-    async def get_state(self, polling_id: str) -> dict[str, Any] | None:
+    async def get_state(self, polling_id: str) -> dict[str, JsonValue] | None:
         """Get current polling state from Redis"""
         if not self.redis_cache:
             return None
 
         cache_key: Final = self.get_cache_key(polling_id)
-        cached_state: Final = await self.redis_cache.async_get_cache(cache_key)
+        cached_state: Final[object] = await self.redis_cache.async_get_cache(cache_key)
 
-        if cached_state:
-            return json.loads(cached_state)
+        if isinstance(cached_state, str | bytes) and cached_state:
+            return _STATE_ADAPTER.validate_json(cached_state)
 
         return None
 
@@ -250,11 +282,11 @@ class ResponsePollingHandler:
 
 def should_use_polling_for_request(
     background_mode: bool,
-    polling_via_cache_enabled,  # Can be False, "all", or List[str]
-    redis_cache,  # RedisCache or None
+    polling_via_cache_enabled: bool | Literal["all"] | list[str] | None,
+    redis_cache: RedisCache | None,
     model: str,
-    llm_router,  # Router instance or None
-    native_background_mode: list[str] | None = None,  # List of models that should use native background mode
+    llm_router: "Router | None",
+    native_background_mode: list[str] | None = None,
 ) -> bool:
     """
     Determine if polling via cache should be used for a request.
@@ -296,18 +328,9 @@ def should_use_polling_for_request(
             try:
                 # Get all deployment indices for this model name
                 indices: Final = llm_router.model_name_to_deployment_indices.get(model, [])
+                deployments: Final[list[object]] = llm_router.model_list
                 for idx in indices:
-                    deployment_dict = llm_router.model_list[idx]
-                    litellm_params = deployment_dict.get("litellm_params", {})
-
-                    # Check custom_llm_provider first
-                    dep_provider = litellm_params.get("custom_llm_provider")
-
-                    # Then try to extract from model (e.g., "openai/gpt-5")
-                    if not dep_provider:
-                        dep_model = litellm_params.get("model", "")
-                        if "/" in dep_model:
-                            dep_provider = dep_model.split("/")[0]
+                    dep_provider = _deployment_provider(deployments[idx])
 
                     # If ANY deployment's provider matches, enable polling
                     if dep_provider and dep_provider in polling_via_cache_enabled:
