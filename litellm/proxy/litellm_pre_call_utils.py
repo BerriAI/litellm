@@ -1966,7 +1966,7 @@ async def add_litellm_data_to_request(
         else None
     )
     if _caller_body_tags:
-        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(  # rebind-ok: matches file idiom
             request_tags=data[_metadata_variable_name].get("tags"),
             tags_to_add=_caller_body_tags,
         )
@@ -1978,7 +1978,9 @@ async def add_litellm_data_to_request(
     # key/team/project metadata -- neither is derived by inspecting the shared
     # "tags" list, which a pre-auth pass (apply_client_tag_policy_pre_auth) may
     # have already merged caller header tags into before this function runs.
-    data[_metadata_variable_name]["caller_tags"] = tuple(dict.fromkeys((*(tags or ()), *(_caller_body_tags or ()))))
+    data[_metadata_variable_name]["caller_tags"] = tuple(  # rebind-ok: matches file idiom
+        dict.fromkeys((*(tags or ()), *(_caller_body_tags or ())))
+    )
 
     # Team Callbacks controls
     callback_settings_obj: Final = _get_dynamic_logging_metadata(
