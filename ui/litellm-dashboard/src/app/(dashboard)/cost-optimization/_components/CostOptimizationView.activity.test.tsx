@@ -3,6 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 
 const mockUserDailyActivityCall = vi.fn();
 
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({ accessToken: "test-token", userId: "u1", userRole: "proxy_admin" }),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: () => ({ data: [], isLoading: false, error: null }),
+}));
+
 vi.mock("@/components/networking", () => ({
   userDailyActivityCall: (...args: unknown[]) => mockUserDailyActivityCall(...args),
   getToolSpend: vi.fn().mockResolvedValue({ by_tool: [], daily: [], start_date: null, end_date: null }),
