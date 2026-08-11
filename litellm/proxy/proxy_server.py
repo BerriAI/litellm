@@ -15159,7 +15159,7 @@ async def update_config(
         if config_info.general_settings is not None:
             existing = await _read_section("general_settings")
             before_general_settings: Final = copy.deepcopy(existing)
-            updates = config_info.general_settings.dict(exclude_none=True)
+            updates = config_info.general_settings.model_dump(exclude_none=True, exclude_unset=True)
             for k, v in updates.items():
                 if k == "alert_to_webhook_url":
                     if "alerting" not in existing:
@@ -15234,7 +15234,7 @@ async def update_config(
         if config_info.router_settings is not None:
             existing = await _read_section("router_settings")
             before_router_settings: Final = copy.deepcopy(existing)
-            updates = config_info.router_settings.dict(exclude_none=True)
+            updates = config_info.router_settings.model_dump(exclude_none=True, exclude_unset=True)
             new_router_settings: Final = {**existing, **updates}
             await _upsert_section("router_settings", new_router_settings)
             asyncio.create_task(

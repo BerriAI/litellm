@@ -100,6 +100,85 @@ def test_config_update_no_db_error(client, auth_as, monkeypatch):
     )
 
 
+def _stateful_config_table(mock_prisma: MagicMock, rows: dict[str, dict]) -> MagicMock:
+    """A litellm_config table that reads back what /config/update wrote, so a
+    partial save can be checked against the pre-existing row."""
+    table = _install_litellm_config(mock_prisma)
+
+    async def find_first(where):
+        name = where["param_name"]
+        if name not in rows:
+            return None
+        row = MagicMock()
+        row.param_value = rows[name]
+        return row
+
+    async def upsert(where, data):
+        name = where["param_name"]
+        raw = data["update"]["param_value"] if name in rows else data["create"]["param_value"]
+        rows[name] = json.loads(raw) if isinstance(raw, str) else raw
+
+    table.find_first = find_first
+    table.upsert = upsert
+    return table
+
+
+def test_config_update_partial_router_settings_keeps_model_group_alias(client, auth_as, mock_prisma, monkeypatch):
+    """A router-settings save that never mentions model_group_alias must not
+    clear it. UpdateRouterConfig defaults the field to {}, so serializing
+    unset fields wipes the stored alias map on every unrelated edit."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    rows = {
+        "router_settings": {
+            "model_group_alias": {"security": "luna"},
+            "timeout": 6000,
+            "routing_strategy": "simple-shuffle",
+        }
+    }
+    _stateful_config_table(mock_prisma, rows)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.add_deployment = AsyncMock()
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post(
+            "/config/update",
+            json={"router_settings": {"routing_strategy": "latency-based-routing"}},
+        )
+    assert response.status_code == 200
+    assert rows["router_settings"] == {
+        "model_group_alias": {"security": "luna"},
+        "timeout": 6000,
+        "routing_strategy": "latency-based-routing",
+    }
+
+
+def test_config_update_partial_general_settings_does_not_write_defaults(client, auth_as, mock_prisma, monkeypatch):
+    """Same hazard on general_settings: fields the caller never sent (here
+    ui_access_mode, which gates who can reach the dashboard) must not be
+    written from their pydantic defaults on an unrelated save."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    rows = {"general_settings": {"ui_access_mode": "admin_only", "max_parallel_requests": 5}}
+    _stateful_config_table(mock_prisma, rows)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.add_deployment = AsyncMock()
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post(
+            "/config/update",
+            json={"general_settings": {"max_parallel_requests": 9}},
+        )
+    assert response.status_code == 200
+    assert rows["general_settings"] == {"ui_access_mode": "admin_only", "max_parallel_requests": 9}
+
+
 # ---------------------------------------------------------------------------
 # POST /config/field/update
 # ---------------------------------------------------------------------------
