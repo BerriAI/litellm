@@ -7,7 +7,10 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
-from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
+from litellm.llms.runwayml.videos.transformation import (
+    RunwayMLTaskResponse,
+    RunwayMLVideoConfig,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoObject
 
@@ -126,13 +129,17 @@ class TestRunwayMLVideoTransformation:
             "status": "SUCCEEDED",
             "output": ["https://dnznrvs05pmza.cloudfront.net/video.mp4"],
         }
-        video_url = self.config._extract_video_url_from_response(response_data)
+        video_url = self.config._extract_video_url_from_response(
+            RunwayMLTaskResponse.model_validate(response_data)
+        )
         assert video_url == "https://dnznrvs05pmza.cloudfront.net/video.mp4"
 
         # Test error handling when video is still processing
         processing_response = {"id": "test-id", "status": "RUNNING", "output": None}
         with pytest.raises(ValueError, match="still processing"):
-            self.config._extract_video_url_from_response(processing_response)
+            self.config._extract_video_url_from_response(
+                RunwayMLTaskResponse.model_validate(processing_response)
+            )
 
     def test_transform_video_status_encodes_video_id_path_segment(self):
         """Test task IDs are encoded before being appended to Runway URLs."""
