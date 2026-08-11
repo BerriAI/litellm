@@ -95,6 +95,7 @@ FusionStrategy = Literal["single_judge", "majority_vote", "best_of_n"]
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _build_judge_messages(
     original_messages: list[dict],
     panel_responses: list[ModelResponse],
@@ -193,10 +194,7 @@ async def _run_panel(
     panel_kwargs: dict,
 ) -> tuple[list[ModelResponse], list[str]]:
     """Fan out to all panel models in parallel; filter failed calls."""
-    tasks = [
-        litellm.acompletion(model=m, messages=messages, stream=False, **panel_kwargs)
-        for m in models
-    ]
+    tasks = [litellm.acompletion(model=m, messages=messages, stream=False, **panel_kwargs) for m in models]
     raw: list = list(await asyncio.gather(*tasks, return_exceptions=True))
 
     valid_responses: list[ModelResponse] = []
@@ -217,6 +215,7 @@ async def _run_panel(
 # ---------------------------------------------------------------------------
 # Overloads for precise return-type inference
 # ---------------------------------------------------------------------------
+
 
 @overload
 async def afusion(
@@ -251,6 +250,7 @@ async def afusion(
 # ---------------------------------------------------------------------------
 # Core async implementation
 # ---------------------------------------------------------------------------
+
 
 async def afusion(
     models: List[str],
@@ -291,9 +291,7 @@ async def afusion(
     if not models:
         raise ValueError("fusion: `models` must be a non-empty list")
     if strategy not in _JUDGE_PROMPTS:
-        raise ValueError(
-            f"fusion: unknown strategy {strategy!r}. Choose from {list(_JUDGE_PROMPTS)}"
-        )
+        raise ValueError(f"fusion: unknown strategy {strategy!r}. Choose from {list(_JUDGE_PROMPTS)}")
 
     panel_kwargs: dict = dict(kwargs)
     if temperature is not None:
@@ -344,6 +342,7 @@ async def afusion(
 # ---------------------------------------------------------------------------
 # Sync overloads
 # ---------------------------------------------------------------------------
+
 
 @overload
 def fusion(
