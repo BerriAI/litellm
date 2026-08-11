@@ -1040,6 +1040,7 @@ class Router:
         self._routing_groups: dict[str, RoutingGroup] = {}
         self._model_to_group: dict[str, str] = {}
         self._group_selectors: dict[str, dict[str, RouterStrategySelector]] = {}
+        self._invalidate_model_group_info_cache()
 
         if not groups_input:
             return
@@ -1108,7 +1109,7 @@ class Router:
         `_init_routing_groups`.
         """
         group: Final = self._routing_groups.get(model_name)
-        if group is None or model_name in self.model_names:
+        if group is None or model_name in self.model_name_to_deployment_indices:
             return None
         return group
 
@@ -1135,23 +1136,18 @@ class Router:
             for deployment in self._get_all_deployments(model_name=member, team_id=team_id)
         ]
 
-    def deployment_has_routing_group_alternatives(self, deployment_id: str) -> bool:
+    def routing_group_has_alternatives(self, model_group: str | None) -> bool:
         """
-        True when the deployment's model_name belongs to a routing group whose
-        member union spans more than one deployment. Cooldown handling uses
-        this so a 429 on one member of a multi-deployment group cools it down
-        and lets selection move to the alternatives, instead of the
-        single-deployment-model-group exemption pinning the group to one
-        failing backend. Direct calls to that member share the cooldown; the
-        group's availability wins over the exemption.
+        True when `model_group` names a callable routing group whose member
+        union spans more than one deployment. Cooldown handling passes the
+        FAILING REQUEST's model group here: a 429 on a group call cools the
+        member down so selection moves to the group's alternatives, while a
+        direct call to a single-deployment member keeps the
+        single-deployment-model-group cooldown exemption.
         """
-        deployment: Final = self.get_deployment(model_id=deployment_id)
-        if deployment is None:
+        if model_group is None:
             return False
-        group_name: Final = self._model_to_group.get(deployment.model_name)
-        if group_name is None:
-            return False
-        group: Final = self._routing_groups.get(group_name)
+        group: Final = self.get_routing_group(model_group)
         if group is None:
             return False
         return sum(len(self.model_name_to_deployment_indices.get(member) or ()) for member in group.models) > 1
@@ -7212,6 +7208,7 @@ class Router:
                     original_exception=exception,
                     deployment=deployment_id,
                     time_to_cooldown=_time_to_cooldown,
+                    requested_model_group=(litellm_params.get("metadata") or {}).get("model_group"),
                 )  # setting deployment_id in cooldown deployments
 
                 return result
@@ -8395,6 +8392,7 @@ class Router:
                 self.model_name_to_deployment_indices[model_name] = updated_indices
             else:
                 del self.model_name_to_deployment_indices[model_name]
+                self.model_names.discard(model_name)
 
         # Update team_model_to_deployment_indices
         for key, indices in list(self.team_model_to_deployment_indices.items()):

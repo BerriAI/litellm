@@ -809,6 +809,12 @@ def test_real_model_added_later_shadows_group():
     model, deployments = router._common_checks_available_deployment(model="quality")
     assert [d["model_info"]["id"] for d in deployments] == ["deploy-shadow"]
 
+    router.delete_deployment(id="deploy-shadow")
+    assert "quality" not in router.model_names
+    assert router.get_routing_group("quality") is not None
+    _, restored = router._common_checks_available_deployment(model="quality")
+    assert sorted(d["model_info"]["id"] for d in restored) == ["deploy-1", "deploy-2", "deploy-3"]
+
 
 def test_group_with_no_member_deployments_raises_no_healthy():
     router = Router(
@@ -838,16 +844,17 @@ def test_model_group_info_reports_group():
     assert "openai" in info.providers
 
 
-def test_deployment_has_routing_group_alternatives():
+def test_routing_group_has_alternatives():
     router = _build_router(routing_groups=_quality_group())
-    assert router.deployment_has_routing_group_alternatives("deploy-1") is True
-    assert router.deployment_has_routing_group_alternatives("missing-id") is False
+    assert router.routing_group_has_alternatives("quality") is True
+    assert router.routing_group_has_alternatives("filtered-model") is False
+    assert router.routing_group_has_alternatives(None) is False
 
     solo_router = Router(
         model_list=_model_list(),
         routing_groups=[{"group_name": "solo-group", "models": ["other-model"], "routing_strategy": "simple-shuffle"}],
     )
-    assert solo_router.deployment_has_routing_group_alternatives("deploy-3") is False
+    assert solo_router.routing_group_has_alternatives("solo-group") is False
 
 
 def test_member_direct_call_unchanged_by_callable_groups():
@@ -855,3 +862,19 @@ def test_member_direct_call_unchanged_by_callable_groups():
     model, deployments = router._common_checks_available_deployment(model="other-model")
     assert model == "other-model"
     assert [d["model_info"]["id"] for d in deployments] == ["deploy-3"]
+
+
+def test_update_settings_group_change_invalidates_model_group_info():
+    router = _build_router(routing_groups=_quality_group())
+    assert router.get_model_group_info("quality") is not None
+    assert router.get_model_group_info("renamed-group") is None
+
+    router.update_settings(
+        routing_groups=[
+            {"group_name": "renamed-group", "models": ["filtered-model"], "routing_strategy": "simple-shuffle"}
+        ]
+    )
+    assert router.get_model_group_info("quality") is None
+    info = router.get_model_group_info("renamed-group")
+    assert info is not None
+    assert info.model_group == "renamed-group"
