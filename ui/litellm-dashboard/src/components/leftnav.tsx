@@ -146,8 +146,20 @@ const menuGroups: MenuGroup[] = [
             icon: <Bot {...ICON} />,
             roles: rolesAllowedToViewWriteScopedPages,
           },
-          { key: "workflows", page: "workflows", label: "Workflow Runs", icon: <Workflow {...ICON} /> },
-          { key: "memory", page: "memory", label: "Memory", icon: <Database {...ICON} /> },
+          {
+            key: "workflows",
+            page: "workflows",
+            label: "Workflow Runs",
+            icon: <Workflow {...ICON} />,
+            roles: rolesWithCapability("viewWorkflowRuns"),
+          },
+          {
+            key: "memory",
+            page: "memory",
+            label: "Memory",
+            icon: <Database {...ICON} />,
+            roles: rolesWithCapability("viewMemory"),
+          },
         ],
       },
       { key: "mcp-servers", page: "mcp-servers", label: "MCP Servers", icon: <Server {...ICON} /> },
@@ -206,7 +218,7 @@ const menuGroups: MenuGroup[] = [
         page: "guardrails-monitor",
         label: "Guardrails Monitor",
         icon: <HeartPulse {...ICON} />,
-        roles: [...all_admin_roles, ...internalUserRoles],
+        roles: rolesWithCapability("viewGuardrailUsage"),
       },
     ],
   },
@@ -461,6 +473,9 @@ const Sidebar_: React.FC<SidebarProps> = ({
     return items
       .map((item) => ({ ...item, children: item.children ? filterItemsByRole(item.children) : undefined }))
       .filter((item) => {
+        // A parent whose children were all filtered out renders as a leaf link
+        // to its own page id, which is not a real route. Drop it instead.
+        if (item.children && item.children.length === 0) return false;
         if (item.key === "llm-playground" && isViewOnly) return false;
         if (item.key === "organizations" || item.key === "users") {
           const hasRoleAccess = !item.roles || item.roles.includes(userRole) || isOrgAdmin;
