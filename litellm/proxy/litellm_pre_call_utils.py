@@ -1856,9 +1856,9 @@ async def add_litellm_data_to_request(
     # final merged set) so a caller can't strip an inherited "!"/"&"
     # constraint's protection just by resubmitting its exact value alongside a
     # conflicting one.
-    _key_tags: Final = (key_metadata or {}).get("tags") or []
-    _team_tags: Final = team_metadata.get("tags") or []
-    _project_tags: Final = project_metadata.get("tags") or []
+    _key_tags: Final = (key_metadata or MappingProxyType({})).get("tags") or ()
+    _team_tags: Final = team_metadata.get("tags") or ()
+    _project_tags: Final = project_metadata.get("tags") or ()
     data[_metadata_variable_name]["inherited_tags"] = tuple(  # rebind-ok: matches this file's data[...] mutation idiom
         dict.fromkeys((*_key_tags, *_team_tags, *_project_tags))
     )
