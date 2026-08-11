@@ -10,7 +10,7 @@ import asyncio
 import math
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict, TypeVar, cast, runtime_checkable
 
 import litellm
 from litellm._logging import verbose_logger
@@ -83,6 +83,26 @@ class _AgenticLoopParamsView(TypedDict):
 
 class _WebSearchSettingsView(TypedDict):
     websearch_interception_params: WebSearchInterceptionConfig
+
+
+_ResponseT = TypeVar("_ResponseT")
+
+
+@runtime_checkable
+class _MappingLike(Protocol):
+    def get(self, key: str, /) -> object | None: ...
+
+
+@runtime_checkable
+class _MutableMappingLike(Protocol):
+    def get(self, key: str, /) -> object | None: ...
+
+    def __setitem__(self, key: str, value: object, /) -> None: ...
+
+
+@runtime_checkable
+class _HasContent(Protocol):
+    content: object
 
 
 class WebSearchInterceptionLogger(CustomLogger):
@@ -260,7 +280,32 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
         return response
 
-    async def async_pre_call_deployment_hook(self, kwargs: dict[str, Any], call_type: CallTypes | None) -> dict | None:
+    @staticmethod
+    def _mapping_str(container: object, key: str) -> str:
+        """String value at ``key`` when ``container`` is mapping-like, else empty."""
+        if not isinstance(container, _MappingLike):
+            return ""
+        value: Final = container.get(key)
+        return value if isinstance(value, str) else ""
+
+    @staticmethod
+    def _tool_list(value: object) -> Sequence[dict[str, object]]:
+        """The request's tool list, empty when absent or not a list."""
+        return value if isinstance(value, list) else ()
+
+    @staticmethod
+    def _provider_from_model(kwargs: Mapping[str, object]) -> str:
+        """Provider derived from the request's model name, empty when undeterminable."""
+        model: Final = kwargs.get("model")
+        try:
+            _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model if isinstance(model, str) else "")
+        except Exception:
+            return ""
+        return custom_llm_provider
+
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: CallTypes | None
+    ) -> dict | None:
         """
         Pre-call hook to convert native Anthropic web_search tools to regular tools.
 
@@ -270,19 +315,16 @@ class WebSearchInterceptionLogger(CustomLogger):
         """
         # Check if this is for an enabled provider
         # Try top-level kwargs first, then nested litellm_params, then derive from model name
-        custom_llm_provider = kwargs.get("custom_llm_provider", "") or kwargs.get("litellm_params", {}).get(
-            "custom_llm_provider", ""
+        custom_llm_provider: Final = (
+            self._mapping_str(kwargs, "custom_llm_provider")
+            or self._mapping_str(kwargs.get("litellm_params"), "custom_llm_provider")
+            or self._provider_from_model(kwargs)
         )
-        if not custom_llm_provider:
-            try:
-                _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=kwargs.get("model", ""))
-            except Exception:
-                custom_llm_provider = ""
         if custom_llm_provider not in self.enabled_providers:
             return None
 
         # Check if request has tools with native web_search
-        tools: Final[Sequence[dict[str, object]] | None] = kwargs.get("tools")
+        tools: Final = self._tool_list(kwargs.get("tools"))
         if not tools:
             return None
 
@@ -898,24 +940,31 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
 
     @staticmethod
-    def _inject_native_blocks(response: Any, native_blocks: Sequence[Mapping[str, object]]) -> Any:
+    def _prepended_content(existing: object, native_blocks: Sequence[Mapping[str, object]]) -> list[object]:
+        return [*native_blocks, *existing] if isinstance(existing, (list, tuple)) else list(native_blocks)
+
+    @staticmethod
+    def _inject_native_blocks(response: _ResponseT, native_blocks: Sequence[Mapping[str, object]]) -> _ResponseT:
         """Prepend native blocks to response content, dict or object form."""
         if not native_blocks:
             return response
-        if isinstance(response, dict):
-            existing = response.get("content") or []
-            response["content"] = list(native_blocks) + list(existing)
-            return response
-        existing = getattr(response, "content", None) or []
-        try:
-            response.content = list(native_blocks) + list(existing)
-        except (AttributeError, TypeError):
-            # Object refused write — fall through and leave the response
-            # untouched rather than crash the request.
-            verbose_logger.debug(
-                "WebSearchInterception: could not inject native blocks into response of type %s",
-                type(response).__name__,
+        if isinstance(response, _MutableMappingLike) and isinstance(response, dict):
+            response["content"] = WebSearchInterceptionLogger._prepended_content(
+                response.get("content"), native_blocks
             )
+            return response
+        if isinstance(response, _HasContent):
+            try:
+                response.content = WebSearchInterceptionLogger._prepended_content(response.content, native_blocks)
+                return response
+            except (AttributeError, TypeError):
+                pass
+        # Object refused write — fall through and leave the response
+        # untouched rather than crash the request.
+        verbose_logger.debug(
+            "WebSearchInterception: could not inject native blocks into response of type %s",
+            type(response).__name__,
+        )
         return response
 
     async def async_run_chat_completion_agentic_loop(
@@ -1417,7 +1466,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             valid_token=user_api_key_auth,
         )
 
-        team_id: Final = getattr(user_api_key_auth, "team_id", None)
+        team_id: Final = user_api_key_auth.team_id
         if team_id:
             from litellm.proxy.proxy_server import (
                 prisma_client,
