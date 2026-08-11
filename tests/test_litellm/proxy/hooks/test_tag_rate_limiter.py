@@ -13,10 +13,14 @@ from litellm.caching.dual_cache import DualCache
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.tag_rate_limiter import (
     _CONCURRENCY_MIN_SAFETY_TTL_SECONDS,
+    _bucket_key,
     _build_group_limits,
     _build_limits_index,
     _ConfiguredLimit,
     _extract_identity,
+    _extract_key_hash,
+    _extract_team_id,
+    _inflight_key,
     _pending_concurrency_holder,
     _PROXY_TagRateLimiter,
 )
@@ -70,6 +74,38 @@ def test_extract_identity_returns_none_when_absent():
 def test_extract_identity_skips_negation_tags():
     """A `!end_user_id:u1` routing-negation marker must never be read as identity."""
     assert _extract_identity(["!end_user_id:u1"], "end_user_id") is None
+
+
+# ---------------------------------------------------------------------------
+# _extract_key_hash / _extract_team_id -- must read only the one field the
+# server actually authenticates into, never fall back to the other
+# ---------------------------------------------------------------------------
+
+
+def test_extract_key_hash_ignores_a_forged_value_in_the_non_authoritative_field():
+    """
+    On a route where litellm_metadata is authoritative, the server writes
+    the real hash there and never touches metadata -- so a caller-supplied
+    metadata.user_api_key must not be read at all, let alone win.
+    """
+    request_kwargs = {
+        "metadata": {"user_api_key": "forged-by-caller"},
+        "litellm_metadata": {"user_api_key": "real-authenticated-hash"},
+    }
+    assert _extract_key_hash(request_kwargs, "litellm_metadata") == "real-authenticated-hash"
+
+
+def test_extract_key_hash_reads_metadata_when_it_is_the_authoritative_field():
+    request_kwargs = {"metadata": {"user_api_key": "real-hash"}}
+    assert _extract_key_hash(request_kwargs, "metadata") == "real-hash"
+
+
+def test_extract_team_id_ignores_a_forged_value_in_the_non_authoritative_field():
+    request_kwargs = {
+        "metadata": {"user_api_key_team_id": "forged-team"},
+        "litellm_metadata": {"user_api_key_team_id": "real-team"},
+    }
+    assert _extract_team_id(request_kwargs, "litellm_metadata") == "real-team"
 
 
 # ---------------------------------------------------------------------------
@@ -1225,8 +1261,15 @@ def test_build_limits_index_is_also_keyed_by_team_public_model_name():
     deployment["model_info"]["team_id"] = "team-1"
     deployment["model_info"]["team_public_model_name"] = "team-alias-name"
     index = _build_limits_index([deployment])
-    assert index.resolve("real-model-name", team_id=None) == index.resolve("team-alias-name", team_id="team-1")
-    assert index.resolve("real-model-name", team_id=None) != []
+    by_name = index.resolve("real-model-name", team_id=None)
+    by_alias = index.resolve("team-alias-name", team_id="team-1")
+    assert by_name != ()
+    assert [c.entry for c in by_name] == [c.entry for c in by_alias]
+    # The alias resolution must carry the team_id into the bucket scope --
+    # see test_build_limits_index_keeps_different_teams_same_alias_separate
+    # for why (two teams can publish the identical alias string).
+    assert by_name[0].team_scope is None
+    assert by_alias[0].team_scope == "team-1"
 
 
 def test_build_limits_index_keeps_different_teams_same_alias_separate():
@@ -1254,6 +1297,39 @@ def test_build_limits_index_keeps_different_teams_same_alias_separate():
     resolved_b = index.resolve("shared-alias", team_id="team-b")
     assert resolved_a[0].entry.limit == 100
     assert resolved_b[0].entry.limit == 999
+
+
+def test_bucket_key_differs_across_teams_sharing_an_alias_and_identical_limit_config():
+    """
+    Two teams that happen to publish the identical team_public_model_name
+    AND configure an identically-named, identically-valued limit must not
+    land on the same Redis bucket -- team_public_model_name is only unique
+    per team, so this is a realistic collision, not a contrived one.
+    """
+    team_a = _deployment(
+        "model-a", "dep-a", {"request_limits": {"limits": [{"name": "per_minute", "limit": 5, "period_seconds": 60}]}}
+    )
+    team_a["model_info"]["team_id"] = "team-a"
+    team_a["model_info"]["team_public_model_name"] = "shared-alias"
+
+    team_b = _deployment(
+        "model-b", "dep-b", {"request_limits": {"limits": [{"name": "per_minute", "limit": 5, "period_seconds": 60}]}}
+    )
+    team_b["model_info"]["team_id"] = "team-b"
+    team_b["model_info"]["team_public_model_name"] = "shared-alias"
+
+    index = _build_limits_index([team_a, team_b])
+    limit_a = index.resolve("shared-alias", team_id="team-a")[0]
+    limit_b = index.resolve("shared-alias", team_id="team-b")[0]
+    assert limit_a.entry == limit_b.entry  # identical configuration, by construction
+
+    key_a = _bucket_key("shared-alias", limit_a, tag_value="same-caller-tag", bucket_id=0)
+    key_b = _bucket_key("shared-alias", limit_b, tag_value="same-caller-tag", bucket_id=0)
+    assert key_a != key_b
+
+    inflight_a = _inflight_key("shared-alias", limit_a, tag_value="same-caller-tag")
+    inflight_b = _inflight_key("shared-alias", limit_b, tag_value="same-caller-tag")
+    assert inflight_a != inflight_b
 
 
 def test_build_limits_index_merges_alias_limits_across_different_model_names():

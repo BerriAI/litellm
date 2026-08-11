@@ -3,7 +3,7 @@
 import asyncio
 import contextvars
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from itertools import groupby
 from types import MappingProxyType
@@ -122,6 +122,14 @@ class _ConfiguredLimit:
     # bucket). Otherwise the sorted deployment ids that declared this exact
     # value -- the bucket is shared among only those deployments.
     deployment_scope: tuple[str, ...] | None
+    # The team_id this limit was resolved under via `by_team_alias`, or None
+    # when resolved via `by_model_name`. team_public_model_name is only
+    # unique per team, so two teams can publish the identical alias string;
+    # without the team_id folded into the bucket key too, both teams'
+    # identically-named, identically-configured limits would collide on the
+    # same Redis counter despite the index itself correctly scoping the
+    # lookup by (team_id, alias).
+    team_scope: str | None = None
 
 
 def _extract_identity(tags: Sequence[str], tag_id: str) -> str | None:
@@ -143,25 +151,29 @@ def _deployment_id(deployment: Mapping[str, object]) -> str | None:
     return (deployment.get("model_info") or _EMPTY_MAPPING).get("id")
 
 
-def _extract_team_id(request_kwargs: Mapping[str, object]) -> str | None:
-    """Same two-channel lookup Router itself uses to resolve a caller's own
-    team-scoped deployment (see `Router._common_checks_available_deployment`,
-    which reads `user_api_key_team_id` from `metadata` falling back to
-    `litellm_metadata`)."""
-    metadata: Final = request_kwargs.get("metadata") or _EMPTY_MAPPING
-    litellm_metadata: Final = request_kwargs.get("litellm_metadata") or _EMPTY_MAPPING
-    team_id: Final = metadata.get("user_api_key_team_id") or litellm_metadata.get("user_api_key_team_id")
+def _extract_team_id(request_kwargs: Mapping[str, object], metadata_variable_name: str) -> str | None:
+    """Reads `user_api_key_team_id` from only the one field
+    `get_metadata_variable_name_from_kwargs` names as authoritative for this
+    request -- never falling back to the other field, since
+    `litellm_pre_call_utils.py` writes the real, server-authenticated value
+    into that one field alone and leaves the other exactly as the caller
+    sent it. An OR-fallback across both would let a caller's own
+    `metadata.user_api_key_team_id` (still present, unvalidated, on a route
+    where `litellm_metadata` is the authoritative field) win over the real
+    value."""
+    active: Final = request_kwargs.get(metadata_variable_name) or _EMPTY_MAPPING
+    team_id: Final = active.get("user_api_key_team_id")
     return team_id if isinstance(team_id, str) else None
 
 
-def _extract_key_hash(request_kwargs: Mapping[str, object]) -> str | None:
-    """Same two-channel lookup as `_extract_team_id`, but for the calling
-    virtual key's hash: `LiteLLMProxyRequestSetup` sets `metadata["user_api_key"]`
-    to `user_api_key_dict.api_key`, which despite the plain name is already
-    the hashed token (see `litellm_pre_call_utils.py`)."""
-    metadata: Final = request_kwargs.get("metadata") or _EMPTY_MAPPING
-    litellm_metadata: Final = request_kwargs.get("litellm_metadata") or _EMPTY_MAPPING
-    key_hash: Final = metadata.get("user_api_key") or litellm_metadata.get("user_api_key")
+def _extract_key_hash(request_kwargs: Mapping[str, object], metadata_variable_name: str) -> str | None:
+    """Same single-authoritative-field lookup as `_extract_team_id`, but for
+    the calling virtual key's hash: `LiteLLMProxyRequestSetup` sets
+    `metadata["user_api_key"]` to `user_api_key_dict.api_key`, which despite
+    the plain name is already the hashed token (see `litellm_pre_call_utils.py`).
+    """
+    active: Final = request_kwargs.get(metadata_variable_name) or _EMPTY_MAPPING
+    key_hash: Final = active.get("user_api_key")
     return key_hash if isinstance(key_hash, str) else None
 
 
@@ -367,7 +379,9 @@ def _build_limits_index(model_list: Sequence[Mapping[str, object]]) -> _LimitsIn
             for aliased_group in (tuple(dep for _key, dep in alias_group),)
             if (
                 alias_configured := tuple(
-                    limit for unit in _LIMIT_UNITS for limit in _build_group_limits(aliased_group, unit)
+                    replace(limit, team_scope=alias_key[0])
+                    for unit in _LIMIT_UNITS
+                    for limit in _build_group_limits(aliased_group, unit)
                 )
             )
         }
@@ -447,6 +461,20 @@ def _scope_suffix(deployment_scope: tuple[str, ...] | None) -> str:
     return "chain" if deployment_scope is None else "dep:" + "+".join(deployment_scope)
 
 
+def _hash_tag(model_group: str, configured: _ConfiguredLimit, tag_value: str, key_hash: str | None) -> str:
+    scope: Final = _scope_suffix(configured.deployment_scope)
+    # team_scope disambiguates two teams that publish the identical
+    # team_public_model_name alias with identically-configured limits --
+    # without it their buckets would collide despite the index correctly
+    # scoping the lookup by (team_id, alias). See _ConfiguredLimit.team_scope.
+    team_suffix: Final = f":team:{configured.team_scope}" if configured.team_scope is not None else ""
+    key_suffix: Final = f":key:{key_hash}" if key_hash is not None else ""
+    return (
+        f"tag_rl:{model_group}:{configured.unit}:{configured.entry.name}:{configured.entry.tag_id}:"
+        f"{scope}{team_suffix}:{tag_value}{key_suffix}"
+    )
+
+
 def _bucket_key(
     model_group: str,
     configured: _ConfiguredLimit,
@@ -454,13 +482,7 @@ def _bucket_key(
     bucket_id: int,
     key_hash: str | None = None,
 ) -> str:
-    scope: Final = _scope_suffix(configured.deployment_scope)
-    key_suffix: Final = f":key:{key_hash}" if key_hash is not None else ""
-    hash_tag: Final = (
-        f"tag_rl:{model_group}:{configured.unit}:{configured.entry.name}:{configured.entry.tag_id}:"
-        f"{scope}:{tag_value}{key_suffix}"
-    )
-    return f"{{{hash_tag}}}:{bucket_id}"
+    return f"{{{_hash_tag(model_group, configured, tag_value, key_hash)}}}:{bucket_id}"
 
 
 def _inflight_key(
@@ -472,13 +494,7 @@ def _inflight_key(
     """Concurrency counter key: not epoch-bucketed, since "how many are in
     flight right now" has no window to reset on -- it's released explicitly
     on completion, with a TTL fallback only for a leaked (crashed) reservation."""
-    scope: Final = _scope_suffix(configured.deployment_scope)
-    key_suffix: Final = f":key:{key_hash}" if key_hash is not None else ""
-    hash_tag: Final = (
-        f"tag_rl:{model_group}:{configured.unit}:{configured.entry.name}:{configured.entry.tag_id}:"
-        f"{scope}:{tag_value}{key_suffix}"
-    )
-    return f"{{{hash_tag}}}:inflight"
+    return f"{{{_hash_tag(model_group, configured, tag_value, key_hash)}}}:inflight"
 
 
 class _ClassifiedCheck(NamedTuple):
@@ -494,6 +510,7 @@ def _classify_check(
     tags: Sequence[str],
     present_deployment_ids: frozenset[str],
     request_kwargs: Mapping[str, object],
+    metadata_variable_name: str,
     now: float,
 ) -> _ClassifiedCheck | None:
     if configured_limit.deployment_scope is not None and not (
@@ -503,7 +520,9 @@ def _classify_check(
     tag_value: Final = _extract_identity(tags, configured_limit.entry.tag_id)
     if tag_value is None:
         return None
-    key_hash: Final = _extract_key_hash(request_kwargs) if configured_limit.entry.scope_by_key_hash else None
+    key_hash: Final = (
+        _extract_key_hash(request_kwargs, metadata_variable_name) if configured_limit.entry.scope_by_key_hash else None
+    )
     if configured_limit.unit == "concurrency":
         inflight_key: Final = _inflight_key(model, configured_limit, tag_value, key_hash=key_hash)
         return _ClassifiedCheck(configured_limit, tag_value, inflight_key, is_atomic=True)
@@ -667,11 +686,12 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
             return healthy_deployments
 
         resolved_request_kwargs: Final = request_kwargs or _EMPTY_MAPPING
-        configured: Final = self._index.get(self.llm_router).resolve(model, _extract_team_id(resolved_request_kwargs))
+        metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(resolved_request_kwargs)
+        team_id: Final = _extract_team_id(resolved_request_kwargs, metadata_variable_name)
+        configured: Final = self._index.get(self.llm_router).resolve(model, team_id)
         if not configured:
             return healthy_deployments
 
-        metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(resolved_request_kwargs)
         tags: Final = _get_tags_from_request_kwargs(
             resolved_request_kwargs, metadata_variable_name=metadata_variable_name
         )
@@ -686,7 +706,13 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
             for configured_limit in configured
             if (
                 check := _classify_check(
-                    configured_limit, model, tags, present_deployment_ids, resolved_request_kwargs, now
+                    configured_limit,
+                    model,
+                    tags,
+                    present_deployment_ids,
+                    resolved_request_kwargs,
+                    metadata_variable_name,
+                    now,
                 )
             )
             is not None
