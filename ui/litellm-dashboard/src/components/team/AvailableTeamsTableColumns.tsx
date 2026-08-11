@@ -13,6 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
+import type { TFunction } from "i18next";
 
 export interface AvailableTeam {
   team_id: string;
@@ -22,11 +23,19 @@ export interface AvailableTeam {
   members_with_roles: { user_id?: string; user_email?: string; role: string }[];
 }
 
-function AvailableTeamRowActions({ team, onJoinTeam }: { team: AvailableTeam; onJoinTeam: (teamId: string) => void }) {
+function AvailableTeamRowActions({
+  team,
+  onJoinTeam,
+  t,
+}: {
+  team: AvailableTeam;
+  onJoinTeam: (teamId: string) => void;
+  t: TFunction<"gateway">;
+}) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label="Open team actions"
+        aria-label={t("teams.actions.open")}
         data-testid={`available-team-actions-${team.team_id}`}
         className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-muted-foreground")}
       >
@@ -35,7 +44,7 @@ function AvailableTeamRowActions({ team, onJoinTeam }: { team: AvailableTeam; on
       <DropdownMenuContent align="end" className="w-44">
         <DropdownMenuItem data-testid="available-team-action-join" onClick={() => onJoinTeam(team.team_id)}>
           <UserPlus />
-          Join team
+          {t("teams.available.join")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -44,16 +53,18 @@ function AvailableTeamRowActions({ team, onJoinTeam }: { team: AvailableTeam; on
 
 interface AvailableTeamsTableColumnsDeps {
   onJoinTeam: (teamId: string) => void;
+  t: TFunction<"gateway">;
 }
 
 export const getAvailableTeamsTableColumns = ({
   onJoinTeam,
+  t,
 }: AvailableTeamsTableColumnsDeps): ColumnDef<AvailableTeam>[] => [
   {
     id: "team_alias",
     accessorKey: "team_alias",
-    meta: { title: "Team Name" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Team Name" />,
+    meta: { title: t("teams.create.teamName") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("teams.create.teamName")} />,
     size: 220,
     enableSorting: true,
     cell: ({ row }) => (
@@ -63,15 +74,15 @@ export const getAvailableTeamsTableColumns = ({
   {
     id: "description",
     accessorKey: "description",
-    meta: { title: "Description" },
-    header: "Description",
+    meta: { title: t("teams.available.description") },
+    header: t("teams.available.description"),
     size: 280,
     enableSorting: false,
     cell: ({ row }) => {
       const description = row.original.description;
       return (
         <span className="block max-w-72 truncate text-sm text-muted-foreground" title={description || undefined}>
-          {description || "No description available"}
+          {description || t("teams.available.noDescription")}
         </span>
       );
     },
@@ -79,32 +90,44 @@ export const getAvailableTeamsTableColumns = ({
   {
     id: "members",
     accessorFn: (team) => team.members_with_roles.length,
-    meta: { title: "Members" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Members" />,
+    meta: { title: t("teams.table.members") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("teams.table.members")} />,
     size: 120,
     enableSorting: true,
     cell: ({ row }) => (
-      <span className="text-sm text-muted-foreground">{row.original.members_with_roles.length} members</span>
+      <span className="text-sm text-muted-foreground">
+        {t("teams.available.memberCount", { count: row.original.members_with_roles.length })}
+      </span>
     ),
   },
   {
     id: "models",
-    meta: { title: "Models" },
-    header: "Models",
+    meta: { title: t("teams.table.models") },
+    header: t("teams.table.models"),
     size: 260,
     enableSorting: false,
-    cell: ({ row }) => <ModelsCell models={row.original.models} />,
+    cell: ({ row }) => (
+      <ModelsCell
+        models={row.original.models}
+        labels={{
+          allProxyModels: t("teams.available.allProxyModels"),
+          noModelAccess: t("teams.available.noModelAccess"),
+          scopedRoutes: (scope) => t("teams.available.scopedRoutes", { scope }),
+          more: (count) => t("teams.available.more", { count }),
+        }}
+      />
+    ),
   },
   {
     id: "actions",
     meta: { className: "text-right", headerClassName: "text-right" },
-    header: () => <span className="sr-only">Actions</span>,
+    header: () => <span className="sr-only">{t("teams.table.actions")}</span>,
     size: 64,
     enableSorting: false,
     enableHiding: false,
     cell: ({ row }) => (
       <div className="flex justify-end">
-        <AvailableTeamRowActions team={row.original} onJoinTeam={onJoinTeam} />
+        <AvailableTeamRowActions team={row.original} onJoinTeam={onJoinTeam} t={t} />
       </div>
     ),
   },

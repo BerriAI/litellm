@@ -6,6 +6,28 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import AvailableTeamsPanel from "./AvailableTeamsPanel";
 import type { AvailableTeam } from "./AvailableTeamsTableColumns";
 
+const localization = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: (namespace: keyof (typeof resources)["en"] = "common") => ({
+      t: (key: string, values?: Record<string, unknown>) => {
+        const copy = key.split(".").reduce<unknown>((value, segment) => {
+          if (typeof value !== "object" || value === null) return undefined;
+          return (value as Record<string, unknown>)[segment];
+        }, resources[localization.language][namespace]);
+        if (typeof copy !== "string") return key;
+        return Object.entries(values ?? {}).reduce(
+          (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+          copy,
+        );
+      },
+      i18n: { resolvedLanguage: localization.language, language: localization.language },
+    }),
+  };
+});
+
 vi.mock("@/components/networking", () => ({
   availableTeamListCall: vi.fn(),
   teamMemberAddCall: vi.fn(),
@@ -22,7 +44,22 @@ const team = (overrides: Partial<AvailableTeam> = {}): AvailableTeam => ({
 
 describe("AvailableTeamsPanel", () => {
   afterEach(() => {
+    localization.language = "en";
     vi.clearAllMocks();
+  });
+
+  it("renders available teams in Russian", async () => {
+    localization.language = "ru";
+    vi.mocked(networking.availableTeamListCall).mockResolvedValue([team()]);
+
+    renderWithProviders(<AvailableTeamsPanel accessToken="token-123" userID="user-123" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Название команды")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Описание")).toBeInTheDocument();
+    expect(screen.getByText("Участников: 1")).toBeInTheDocument();
+    expect(screen.getByText("Модели")).toBeInTheDocument();
   });
 
   it("should render the column headers", async () => {

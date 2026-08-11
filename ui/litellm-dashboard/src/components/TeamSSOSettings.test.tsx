@@ -7,6 +7,28 @@ import TeamSSOSettings from "./TeamSSOSettings";
 import * as networking from "./networking";
 import NotificationsManager from "./molecules/notifications_manager";
 
+const localization = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: (namespace: keyof (typeof resources)["en"] = "common") => ({
+      t: (key: string, values?: Record<string, unknown>) => {
+        const copy = key.split(".").reduce<unknown>((value, segment) => {
+          if (typeof value !== "object" || value === null) return undefined;
+          return (value as Record<string, unknown>)[segment];
+        }, resources[localization.language][namespace]);
+        if (typeof copy !== "string") return key;
+        return Object.entries(values ?? {}).reduce(
+          (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+          copy,
+        );
+      },
+      i18n: { resolvedLanguage: localization.language, language: localization.language },
+    }),
+  };
+});
+
 vi.mock("./networking");
 
 vi.mock("./common_components/budget_duration_dropdown", () => {
@@ -214,9 +236,22 @@ describe("TeamSSOSettings", () => {
   const getOrganizationRow = () => screen.getByText("Default Organization").closest(".ant-row") as HTMLElement;
 
   beforeEach(() => {
+    localization.language = "en";
     vi.clearAllMocks();
     testQueryClient.clear();
     mockOrganizationListCall.mockResolvedValue(MOCK_ORGANIZATIONS);
+  });
+
+  it("renders the default settings screen in Russian", async () => {
+    localization.language = "ru";
+    mockGetDefaultTeamSettings.mockResolvedValue(mockSettingsResponse);
+
+    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+
+    expect(await screen.findByText("Настройки команд по умолчанию")).toBeInTheDocument();
+    expect(screen.getByText("Максимальный бюджет")).toBeInTheDocument();
+    expect(screen.getByText("Доступ и разрешения")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Изменить настройки$/ })).toBeInTheDocument();
   });
 
   // --- Loading & Error States ---
