@@ -18,6 +18,8 @@ from pydantic import BaseModel, ConfigDict, RootModel, model_validator
 class ModelBudgetEntry(BaseModel):
     budget_limit: float
     time_period: str
+    rpm_limit: int | None = None
+    tpm_limit: int | None = None
 
 
 class BudgetWindow(BaseModel):
