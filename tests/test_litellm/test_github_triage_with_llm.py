@@ -678,6 +678,19 @@ class TestBuildPrompts:
         assert "unfilled template scaffold" in normalized
         assert "counts as absent, not as evidence" in normalized
 
+    def test_issue_feature_rubric_requires_evidence_of_the_dead_end(
+        self, triage_module
+    ):
+        # The feature form asks the requester to walk the ideal flow against a
+        # live proxy and paste output up to the step that dead-ends, so the
+        # judge has to demand that evidence, and must not accept an unedited
+        # scaffold of bare headings as if it were a real attempt.
+        prompt = triage_module.build_issue_prompt(title="t", body="x")
+        normalized = " ".join(prompt.split())
+        assert "END-TO-END EVIDENCE OF THE DEAD-END" in normalized
+        assert "showing the point where the flow stops today" in normalized
+        assert "unfilled template scaffold" in normalized
+
     def test_should_not_crash_when_pr_body_contains_curly_braces(self, triage_module):
         """User-supplied content with `{` / `}` must NOT be re-parsed by
         `str.format()`. `format` only scans the template literal for
