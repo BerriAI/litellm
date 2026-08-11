@@ -63,7 +63,6 @@ from litellm.proxy.auth.auth_utils import (
     get_request_route,
     get_request_route_template,
     iter_request_fallback_targets,
-    normalize_request_route,
     pre_db_read_auth_checks,
     resolve_request_route_for_metrics,
     route_in_additonal_public_routes,
