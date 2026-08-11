@@ -179,12 +179,13 @@ class _CallFailure:
 
 @dataclass(frozen=True, slots=True)
 class _ShadowResponse:
-    """A successful shadow call: (text, routed model, tier, completion tokens)."""
+    """A successful shadow call, with the ids and token counts the verdict row records."""
 
     text: str
     model: str
     tier: str | None
     completion_tokens: int | None
+    request_id: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,10 +321,20 @@ class ShadowEvalLogger(CustomLogger):
         self._lifecycle_task: asyncio.Task[None] | None = None
 
     def start_lifecycle_loop(self) -> None:
-        """Idempotently start the periodic loop that owns job lifecycle off the request path."""
+        """Idempotently start the periodic loop that owns job lifecycle off the request path.
+
+        Without the loop, jobs never finalize and counters never flush, so a caller
+        registering this logger outside a running event loop gets a warning rather
+        than a silent no-op.
+        """
         if self._lifecycle_task is not None and not self._lifecycle_task.done():
             return
-        self._lifecycle_task = asyncio.create_task(self._lifecycle_loop())
+        try:
+            self._lifecycle_task = asyncio.create_task(self._lifecycle_loop())
+        except RuntimeError:
+            verbose_logger.warning(
+                "shadow_eval: no running event loop; lifecycle loop not started, jobs will not finalize on this process"
+            )
 
     async def _lifecycle_loop(self) -> None:
         while True:
@@ -406,6 +417,7 @@ class ShadowEvalLogger(CustomLogger):
                     else (),
                     response_obj=response_obj,
                     real_model=payload.get("model") or "",
+                    real_response_tokens=payload.get("completion_tokens"),
                     model_parameters=MappingProxyType(
                         dict(payload.get("model_parameters") or {})  # mutable-ok: frozen snapshot
                     ),
@@ -507,6 +519,7 @@ class ShadowEvalLogger(CustomLogger):
         messages: Sequence[Mapping[str, object]],
         response_obj: object,
         real_model: str,
+        real_response_tokens: int | None,
         model_parameters: Mapping[str, object],
         parent_metadata: Mapping[str, object],
         budget_metadata: Mapping[str, object] = _EMPTY_METADATA,
@@ -547,8 +560,10 @@ class ShadowEvalLogger(CustomLogger):
                 data={  # mutable-ok: Prisma payload
                     "job_id": job.id,
                     "request_id": request_id,
+                    "shadow_request_id": shadow.request_id,
                     "tier_classification": shadow.tier,
                     "real_model": real_model,
+                    "real_response_tokens": real_response_tokens,
                     "shadow_model": shadow.model,
                     "shadow_response_tokens": shadow.completion_tokens,
                     "judge_preference": verdict.preference,
@@ -631,11 +646,13 @@ class ShadowEvalLogger(CustomLogger):
         raw_tier: Final = routing_decision.get("tier_label") or routing_decision.get("tier")
         usage: Final = getattr(response, "usage", None)
         raw_tokens: Final = getattr(usage, "completion_tokens", None) if usage is not None else None
+        raw_id: Final = getattr(response, "id", None)
         return _ShadowResponse(
             text=text,
             model=str(getattr(response, "model", None) or routing_decision.get("routed_model") or ""),
             tier=str(raw_tier) if raw_tier is not None else None,
             completion_tokens=int(raw_tokens) if isinstance(raw_tokens, int) else None,
+            request_id=str(raw_id) if raw_id else None,
         )
 
     async def _call_judge(

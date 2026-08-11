@@ -362,7 +362,7 @@ class TestStoppedJobCannotBeReactivated:
 
         logger = ShadowEvalLogger(router_provider=lambda: MagicMock(), prisma_provider=lambda: prisma)
         logger._call_router_shadow = AsyncMock(
-            return_value=_ShadowResponse(text="shadow text", model="shadow-model", tier="SIMPLE", completion_tokens=10)
+            return_value=_ShadowResponse(text="shadow text", model="shadow-model", tier="SIMPLE", completion_tokens=10, request_id="shadow-req-1")
         )
         logger._call_judge = AsyncMock(
             return_value=_JudgeVerdict(preference="real", confidence=0.9, reasoning="clearer", cost=0.01)
@@ -375,6 +375,7 @@ class TestStoppedJobCannotBeReactivated:
             messages=[{"role": "user", "content": "hi"}],
             response_obj={"choices": [{"message": {"content": "real text"}}]},
             real_model="gpt-4o",
+            real_response_tokens=42,
             model_parameters={},
             parent_metadata={},
         )
@@ -385,6 +386,44 @@ class TestStoppedJobCannotBeReactivated:
         assert where["id"] == "j1"
         assert set(where["status"]["in"]) == {"pending", "running"}
         assert call_kwargs["data"]["status"] == "running"
+
+
+@pytest.mark.asyncio
+class TestVerdictRowRecordsBothSides:
+    async def test_verdict_row_carries_ids_and_token_counts_for_both_arms(self):
+        """real_response_tokens next to shadow_response_tokens is what lets a reader
+        check the judge's verdicts for verbosity bias, and shadow_request_id joins the
+        verdict to the shadow call's own spend log for drill-down. Declared columns
+        that are never written are worse than absent ones."""
+        prisma = MagicMock()
+        prisma.db.litellm_shadowevalverdict.create = AsyncMock()
+        prisma.db.litellm_shadowevaljob.update_many = AsyncMock()
+        logger = ShadowEvalLogger(router_provider=_router_mock, prisma_provider=lambda: prisma)
+        logger._call_router_shadow = AsyncMock(
+            return_value=_ShadowResponse(
+                text="shadow text", model="shadow-model", tier="SIMPLE", completion_tokens=10, request_id="shadow-req-1"
+            )
+        )
+        logger._call_judge = AsyncMock(
+            return_value=_JudgeVerdict(preference="real", confidence=0.9, reasoning="clearer", cost=0.01)
+        )
+
+        job = ActiveShadowEvalJob(id="j1", router_name="r", judge_model="m", shadow_percentage=100.0, status="running")
+        await logger._run_shadow_eval(
+            job=job,
+            request_id="req-1",
+            messages=[{"role": "user", "content": "hi"}],
+            response_obj={"choices": [{"message": {"content": "real text"}}]},
+            real_model="gpt-4o",
+            real_response_tokens=42,
+            model_parameters={},
+            parent_metadata={},
+        )
+
+        data = prisma.db.litellm_shadowevalverdict.create.call_args.kwargs["data"]
+        assert data["shadow_request_id"] == "shadow-req-1"
+        assert data["real_response_tokens"] == 42
+        assert data["shadow_response_tokens"] == 10
 
 
 @pytest.mark.asyncio
@@ -403,7 +442,7 @@ class TestVerdictWriteAccumulatesCost:
 
         logger = ShadowEvalLogger(router_provider=lambda: MagicMock(), prisma_provider=lambda: prisma)
         logger._call_router_shadow = AsyncMock(
-            return_value=_ShadowResponse(text="shadow text", model="shadow-model", tier="SIMPLE", completion_tokens=10)
+            return_value=_ShadowResponse(text="shadow text", model="shadow-model", tier="SIMPLE", completion_tokens=10, request_id="shadow-req-1")
         )
         logger._call_judge = AsyncMock(
             return_value=_JudgeVerdict(preference="real", confidence=0.9, reasoning="clearer", cost=0.05)
@@ -416,6 +455,7 @@ class TestVerdictWriteAccumulatesCost:
             messages=[{"role": "user", "content": "hi"}],
             response_obj={"choices": [{"message": {"content": "real text"}}]},
             real_model="gpt-4o",
+            real_response_tokens=42,
             model_parameters={},
             parent_metadata={},
         )
@@ -534,7 +574,7 @@ class TestSubCallsAreAttributedToTheShadowedKey:
         logger, _, _ = _logger_with_mocks(job)
         logger._prisma_provider = lambda: prisma
         logger._call_router_shadow = AsyncMock(
-            return_value=_ShadowResponse(text="shadow text", model="shadow-model", tier="SIMPLE", completion_tokens=10)
+            return_value=_ShadowResponse(text="shadow text", model="shadow-model", tier="SIMPLE", completion_tokens=10, request_id="shadow-req-1")
         )
         logger._call_judge = AsyncMock(
             return_value=_JudgeVerdict(preference="real", confidence=0.9, reasoning="clearer", cost=0.01)
@@ -1109,6 +1149,7 @@ class TestJudgeFailureModes:
             messages=({"role": "user", "content": "hi"},),
             response_obj={"choices": [{"message": {"content": "real says"}}]},
             real_model="gpt-4o",
+            real_response_tokens=42,
             model_parameters={},
             parent_metadata={},
         )

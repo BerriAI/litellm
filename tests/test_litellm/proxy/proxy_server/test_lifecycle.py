@@ -512,19 +512,45 @@ def test_cost_tracking_adds_two_callbacks_when_prisma_set(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_startup_starts_the_shadow_eval_lifecycle_loop(monkeypatch):
-    """The loop owns counter flushes and finishing expired jobs, so a job on a key
-    that goes quiet still ends on schedule; it must be running after startup."""
+async def test_registration_starts_the_lifecycle_loop_on_the_registered_instance(monkeypatch):
+    """Registration owns the loop start, so there is no startup ordering to get
+    wrong, and the start lands on the instance the callback manager kept, which
+    is the ORIGINAL one when its class dedup discards a re-registration."""
     import litellm
     from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
-    logger = ShadowEvalLogger(router_provider=lambda: None, prisma_provider=lambda: None)
-    monkeypatch.setattr(litellm, "callbacks", [logger], raising=False)
+    fake_prisma = MagicMock()
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+    monkeypatch.setattr(litellm, "callbacks", [], raising=False)
+    monkeypatch.setattr(litellm, "_async_success_callback", [], raising=False)
 
-    ps._start_shadow_eval_lifecycle_loop()
+    cost_tracking()
+    cost_tracking()
 
-    assert logger._lifecycle_task is not None and not logger._lifecycle_task.done()
-    logger._lifecycle_task.cancel()
+    loggers = [cb for cb in litellm.callbacks if isinstance(cb, ShadowEvalLogger)]
+    assert len(loggers) == 1
+    task = loggers[0]._lifecycle_task
+    assert task is not None and not task.done()
+    task.cancel()
+
+
+def test_cost_tracking_twice_registers_one_shadow_eval_logger(monkeypatch):
+    """cost_tracking can run again (config reload); the callback manager dedups
+    CustomLogger instances by class, so a second call must not produce a second
+    ShadowEvalLogger with its own snapshot, buffer, and in-flight counter."""
+    import litellm
+    from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
+
+    fake_prisma = MagicMock()
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+    monkeypatch.setattr(litellm, "callbacks", [], raising=False)
+    monkeypatch.setattr(litellm, "_async_success_callback", [], raising=False)
+
+    cost_tracking()
+    cost_tracking()
+
+    shadow_loggers = [cb for cb in litellm.callbacks if isinstance(cb, ShadowEvalLogger)]
+    assert len(shadow_loggers) == 1
 
 
 def test_cost_tracking_no_op_when_prisma_missing(monkeypatch):
