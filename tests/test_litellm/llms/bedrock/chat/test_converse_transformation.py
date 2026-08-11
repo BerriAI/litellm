@@ -370,6 +370,46 @@ def test_output_config_effort_forwarded_into_additional_request_fields(model):
     assert additional.get("output_config") == {"effort": "high"}
 
 
+@pytest.mark.parametrize(
+    "model,effort,expected_effort",
+    [
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "max", "max"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-6-v1", "xhigh", "max"),
+    ],
+)
+def test_explicit_output_config_effort_mapped_for_adaptive_thinking_converse(model, effort, expected_effort):
+    """Regression: Claude Code drives adaptive thinking as ``thinking: {"type":
+    "adaptive"}`` plus ``output_config: {"effort": ...}``. ``output_config`` must
+    be a supported openai param and survive ``map_openai_params`` (clamped to the
+    model's Bedrock effort ceiling), otherwise the Converse request carries
+    adaptive thinking without an effort tier and Bedrock streams zero
+    ``reasoningContent`` blocks."""
+    config = AmazonConverseConfig()
+
+    assert "output_config" in config.get_supported_openai_params(model)
+
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": effort},
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params["thinking"] == {"type": "adaptive"}
+    assert optional_params["output_config"] == {"effort": expected_effort}
+
+
+def test_output_config_supported_param_for_arn_models_converse():
+    """ARN model ids hide the underlying Claude model, so ``output_config`` must
+    be in the blanket ARN supported-params list too."""
+    config = AmazonConverseConfig()
+    arn_model = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abcdef123456"
+    assert "output_config" in config.get_supported_openai_params(arn_model)
+
+
 def test_output_config_format_translated_to_native_output_config_converse():
     """``output_config.format`` becomes Bedrock ``outputConfig`` and is not forwarded raw."""
     config = AmazonConverseConfig()
