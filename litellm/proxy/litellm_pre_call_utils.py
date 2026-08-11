@@ -4,7 +4,7 @@ import json
 import re
 import time
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import HTTPException, Request
 from pydantic import ValidationError as PydanticValidationError
@@ -253,29 +253,37 @@ def _reject_url_valued_destinations(data: dict[str, Any]) -> None:
     are unaffected, while admins can opt specific hosts back in via
     ``litellm.provider_url_destination_allowed_hosts``.
     """
-    allowed_hosts = getattr(litellm, "provider_url_destination_allowed_hosts", []) or []
     for field in _URL_DESTINATION_REQUEST_FIELDS:
         value = data.get(field)
-        if not isinstance(value, str):
+        if isinstance(value, str):
+            reject_url_valued_destination(field, value)
+
+
+def reject_url_valued_destination(field: str, value: str) -> None:
+    """Reject a URL-valued destination identifier unless admin-allowlisted.
+
+    Operates on one field/value pair. ``_reject_url_valued_destinations`` applies
+    it across ``_URL_DESTINATION_REQUEST_FIELDS`` for a request body.
+    """
+    allowed_hosts: Final = getattr(litellm, "provider_url_destination_allowed_hosts", []) or []
+    for candidate in provider_url_destination_candidates(value):
+        if not candidate.lower().startswith(("http://", "https://")):
             continue
-        for candidate in provider_url_destination_candidates(value):
-            if not candidate.lower().startswith(("http://", "https://")):
-                continue
-            if is_url_destination_allowed_by_host(candidate, allowed_hosts):
-                continue
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "invalid_request",
-                    "param": field,
-                    "message": (
-                        f"URL-valued '{field}' is not allowed. Configure custom "
-                        "endpoints with api_base instead, or add the destination "
-                        "host to `provider_url_destination_allowed_hosts` in "
-                        "litellm_settings."
-                    ),
-                },
-            )
+        if is_url_destination_allowed_by_host(candidate, allowed_hosts):
+            continue
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "param": field,
+                "message": (
+                    f"URL-valued '{field}' is not allowed. Configure custom "
+                    "endpoints with api_base instead, or add the destination "
+                    "host to `provider_url_destination_allowed_hosts` in "
+                    "litellm_settings."
+                ),
+            },
+        )
 
 
 def _strip_untrusted_request_header_controls(
