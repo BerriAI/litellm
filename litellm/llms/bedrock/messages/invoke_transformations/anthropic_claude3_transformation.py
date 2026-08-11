@@ -372,8 +372,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         """
         Check if the model supports tool search on Bedrock.
 
-        On Amazon Bedrock, server-side tool search is supported on Claude Opus 4.5
-        and Claude Sonnet 4.5 with the tool-search-tool-2025-10-19 beta header.
+        The model map's ``supports_tool_search`` flag is authoritative when
+        ``model`` resolves to an entry that sets it; the name patterns below
+        cover ids the map cannot resolve (ARNs, unlisted regional variants).
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
 
@@ -383,9 +384,12 @@ class AmazonAnthropicClaudeMessagesConfig(
         Returns:
             True if the model supports tool search on Bedrock
         """
+        catalog: Final = AnthropicModelInfo._get_provider_resolved_capability(model, "supports_tool_search", "bedrock")
+        if catalog is not None:
+            return catalog
+
         model_lower: Final = model.lower()
 
-        # Supported models for tool search on Bedrock
         supported_patterns: Final = [
             # Opus 4.5
             "opus-4.5",
@@ -407,10 +411,16 @@ class AmazonAnthropicClaudeMessagesConfig(
             "sonnet_4.6",
             "sonnet-4-6",
             "sonnet_4_6",
-            # NOTE: Opus 4.7 on Bedrock does not support server-side tool search
-            # as of launch (2026-04-16). Bedrock rejects the tool type with:
-            # "tool type 'tool_search_tool_..._20251119' is not supported for this model".
-            # Re-add the opus-4.7 patterns here once AWS announces support.
+            # Opus 4.7
+            "opus-4.7",
+            "opus_4.7",
+            "opus-4-7",
+            "opus_4_7",
+            # Haiku 4.5
+            "haiku-4.5",
+            "haiku_4.5",
+            "haiku-4-5",
+            "haiku_4_5",
         ]
 
         return any(pattern in model_lower for pattern in supported_patterns)
@@ -426,11 +436,10 @@ class AmazonAnthropicClaudeMessagesConfig(
         """
         Adjust tool search beta header for Bedrock.
 
-        Bedrock requires a different beta header for tool search on Opus 4 models
-        when tool search is used without programmatic tool calling or input examples.
-
-        Note: On Amazon Bedrock, server-side tool search is only supported on Claude Opus 4
-        with the `tool-search-tool-2025-10-19` beta header.
+        Bedrock requires a different beta header for tool search than the
+        Anthropic API when tool search is used without programmatic tool
+        calling or input examples: `tool-search-tool-2025-10-19`, and only on
+        the models listed in `_supports_tool_search_on_bedrock`.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
 

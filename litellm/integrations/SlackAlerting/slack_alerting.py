@@ -17,7 +17,7 @@ import litellm.litellm_core_utils.litellm_logging
 import litellm.types
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.constants import HOURS_IN_A_DAY
+from litellm.constants import HOURS_IN_A_DAY, SLACK_DAILY_REPORT_LOCK_ID
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_type
 from litellm.integrations.SlackAlerting.hanging_request_check import (
@@ -51,6 +51,7 @@ from .batching_handler import send_to_webhook, squash_payloads
 from .utils import process_slack_alerting_variables
 
 if TYPE_CHECKING:
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
     from litellm.router import Router as _Router
 
     Router = _Router
@@ -1576,7 +1577,11 @@ Model Info:
         except Exception:
             pass
 
-    async def _run_scheduler_helper(self, llm_router) -> bool:
+    async def _run_scheduler_helper(
+        self,
+        llm_router,
+        pod_lock_manager: "PodLockManager | None" = None,
+    ) -> bool:
         """
         Returns:
         - True -> report sent
@@ -1601,6 +1606,16 @@ Model Info:
             interval_seconds: Final = self.alerting_args.daily_report_frequency
 
             if current_time - report_sent >= interval_seconds:
+                if (
+                    pod_lock_manager is not None
+                    and (
+                        await pod_lock_manager.acquire_lock(
+                            cronjob_id=SLACK_DAILY_REPORT_LOCK_ID, ttl=interval_seconds, allow_reentrant=False
+                        )
+                    )
+                    is False
+                ):
+                    return False
                 # Sneak in the reporting logic here
                 await self.send_daily_reports(router=llm_router)
                 # Also, don't forget to update the report_sent time after sending the report!
@@ -1612,7 +1627,11 @@ Model Info:
 
         return report_sent_bool
 
-    async def _run_scheduled_daily_report(self, llm_router: Any | None = None):
+    async def _run_scheduled_daily_report(
+        self,
+        llm_router: Any | None = None,
+        pod_lock_manager: "PodLockManager | None" = None,
+    ):
         """
         If 'daily_reports' enabled
 
@@ -1625,7 +1644,7 @@ Model Info:
 
         if "daily_reports" in self.alert_types:
             while True:
-                await self._run_scheduler_helper(llm_router=llm_router)
+                await self._run_scheduler_helper(llm_router=llm_router, pod_lock_manager=pod_lock_manager)
                 interval = random.randint(
                     self.alerting_args.report_check_interval - 3,
                     self.alerting_args.report_check_interval + 3,

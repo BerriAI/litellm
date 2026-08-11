@@ -9,6 +9,7 @@ from typing import Final
 
 import httpx
 
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -40,7 +41,7 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
         print_verbose: Callable,
         encoding,
         api_key,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         timeout: float | httpx.Timeout,
         litellm_params: dict,

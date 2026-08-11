@@ -9,13 +9,14 @@ import random
 import re
 import secrets
 import shutil
+import socket
 import subprocess
 import sys
 import threading
 import time
 import traceback
 import warnings
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping, MutableMapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, UnionType
 from typing import (
@@ -25,6 +26,8 @@ from typing import (
     Literal,
     NamedTuple,
     Optional,
+    Protocol,
+    TypeAlias,
     TypedDict,
     Union,
     cast,
@@ -128,6 +131,7 @@ from litellm.utils import (
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
+    from fastapi.routing import APIRoute
     from opentelemetry.trace import Span as _Span
 
     from litellm.integrations.opentelemetry import OpenTelemetry
@@ -137,7 +141,7 @@ else:
     Span = Any
     OpenTelemetry = Any
 
-REALTIME_REQUEST_SCOPE_TEMPLATE: Final[dict[str, Any]] = {
+REALTIME_REQUEST_SCOPE_TEMPLATE: Final[dict[str, object]] = {
     "type": "http",
     "method": "POST",
     "path": "/v1/realtime",
@@ -233,6 +237,8 @@ from litellm.constants import (
     GLOBAL_PROXY_SPEND_CACHE_KEY,
     LITELLM_PROXY_ADMIN_NAME,
     LITELLM_PROXY_BUDGET_NAME,
+    MONTHLY_SPEND_REPORT_JOB_ID,
+    PROMETHEUS_FALLBACK_STATS_JOB_ID,
     PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
     PROXY_BATCH_POLLING_ENABLED,
     PROXY_BATCH_POLLING_INTERVAL,
@@ -240,6 +246,7 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
+    WEEKLY_SPEND_REPORT_JOB_ID,
 )
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import ModifyResponseException
@@ -596,6 +603,7 @@ from litellm.proxy.utils import (
     update_spend,
 )
 from litellm.proxy.video_endpoints.endpoints import router as video_router
+from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.router import (
     AssistantsTypedDict,
@@ -870,6 +878,18 @@ async def proxy_shutdown_event():
     cleanup_router_config_variables()
 
 
+_AiohttpAddrInfo: TypeAlias = tuple[int | socket.AddressFamily, int | socket.SocketKind, int, str, tuple[object, ...]]
+
+
+class _AiohttpConnectorKwargs(TypedDict, total=False):
+    keepalive_timeout: float
+    ttl_dns_cache: int
+    enable_cleanup_closed: bool
+    limit: int
+    limit_per_host: int
+    socket_factory: Callable[[_AiohttpAddrInfo], socket.socket]
+
+
 async def _initialize_shared_aiohttp_session():
     """Initialize shared aiohttp session for connection reuse with connection limits."""
     try:
@@ -879,7 +899,7 @@ async def _initialize_shared_aiohttp_session():
             _build_aiohttp_keepalive_socket_factory,
         )
 
-        connector_kwargs: Final[dict[str, Any]] = {
+        connector_kwargs: Final[_AiohttpConnectorKwargs] = {
             "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
             "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
         }
@@ -1234,7 +1254,7 @@ async def proxy_startup_event(app: FastAPI):
     await proxy_shutdown_event()
 
 
-def _generate_stable_operation_id(route: Any) -> str:
+def _generate_stable_operation_id(route: "APIRoute") -> str:
     operation_id = re.sub(r"\W", "_", f"{route.name}{route.path_format}")
     route_methods: Final = sorted(route.methods or [])
     if len(route_methods) == 1:
@@ -1493,7 +1513,7 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 
 
 def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Exception | None = None) -> None:
-    parent_otel_span: Final = getattr(request.state, "parent_otel_span", None)
+    parent_otel_span: Final[_Span | None] = getattr(request.state, "parent_otel_span", None)
     if parent_otel_span is None:
         return
     if open_telemetry_logger is None:
@@ -1536,17 +1556,80 @@ async def management_problem_exception_handler(request: Request, exc: Management
     return problem_response(exc.problem)
 
 
+class _ConfigParamRow(Protocol):
+    param_name: str
+    param_value: Mapping[str, JsonValue] | None
+
+
+class _ConfigOverridesRow(Protocol):
+    config_value: Mapping[str, JsonValue] | None
+
+
+class _SSOConfigRow(Protocol):
+    sso_settings: MutableMapping[str, object]
+
+
+class _UISettingsRow(Protocol):
+    ui_settings: Mapping[str, object] | str | None
+
+
+class _InvitationLinkRow(Protocol):
+    user_id: str
+    expires_at: datetime
+    is_accepted: bool
+    accepted_at: datetime | None
+    created_by: str
+
+
+class _UserTableRow(Protocol):
+    user_id: str
+    user_email: str | None
+    user_role: str
+
+
+class _ModelTableRow(Protocol):
+    model_id: str | None
+    created_by: str | None
+
+
+class _TTFTRow(TypedDict):
+    api_base: str
+    model: str
+    time_to_first_token: float
+    request_id: str
+    day: str
+
+
+class _LatencyRow(TypedDict):
+    api_base: str | None
+    model: str
+    day: str
+    avg_latency_per_token: float
+
+
+class _ExceptionRow(TypedDict, total=False):
+    combined_model_api_base: str
+    total_exceptions: int
+    exception_counts: Mapping[str, int]
+
+
+class _ValidationErrorDetail(TypedDict):
+    loc: tuple[int | str, ...]
+    msg: str
+
+
 @app.exception_handler(RequestValidationError)
 async def otel_request_validation_exception_handler(request: Request, exc: RequestValidationError):
     if request.url.path.startswith(MANAGEMENT_V1_PREFIX):
         _close_dangling_otel_server_span(request, 400, exc=exc)
+        validation_errors: Final[Sequence[_ValidationErrorDetail]] = exc.errors()
         return problem_response(
             ProblemDetail(
                 type=f"{PROBLEM_TYPE_BASE}invalid-query-parameter",
                 title="Invalid query parameter",
                 status=400,
                 detail="; ".join(
-                    f"{'.'.join(str(part) for part in error['loc'][1:])}: {error['msg']}" for error in exc.errors()
+                    f"{'.'.join(str(part) for part in error['loc'][1:])}: {error['msg']}" for error in validation_errors
                 )
                 or "The request query parameters are invalid.",
             )
@@ -2150,13 +2233,14 @@ db_writer_client: AsyncHTTPHandler | None = None
 ### logger ###
 
 
-def _resolve_typed_dict_type(typ):
+def _resolve_typed_dict_type(typ: object):
     """Resolve the actual TypedDict class from a potentially wrapped type."""
     from typing_extensions import _TypedDictMeta
 
-    origin: Final = get_origin(typ)
+    origin: Final[object] = get_origin(typ)
     if origin is Union or origin is UnionType:  # Check if it's a Union (like Optional)
-        for arg in get_args(typ):
+        union_args: Final[tuple[object, ...]] = get_args(typ)
+        for arg in union_args:
             if isinstance(arg, _TypedDictMeta):
                 return arg
     elif isinstance(typ, type) and isinstance(typ, dict):
@@ -2164,12 +2248,13 @@ def _resolve_typed_dict_type(typ):
     return None
 
 
-def _resolve_pydantic_type(typ) -> list:
+def _resolve_pydantic_type(typ: object) -> list:
     """Resolve the actual TypedDict class from a potentially wrapped type."""
-    origin: Final = get_origin(typ)
+    origin: Final[object] = get_origin(typ)
     typs: Final = []
     if origin is Union or origin is UnionType:  # Check if it's a Union (like Optional)
-        for arg in get_args(typ):
+        union_args: Final[tuple[object, ...]] = get_args(typ)
+        for arg in union_args:
             if arg is not None and "NoneType" not in str(arg):
                 typs.append(arg)
     elif isinstance(typ, type) and isinstance(typ, BaseModel):
@@ -2499,7 +2584,7 @@ async def increment_spend_counters(
                 increment=cost,
             )
 
-        key_obj: Final = await user_api_key_cache.async_get_cache(key=hashed_token)
+        key_obj: Final[object] = await user_api_key_cache.async_get_cache(key=hashed_token)
         if key_obj is None:
             return
         key_budget_limits = getattr(key_obj, "budget_limits", None) or (
@@ -2530,7 +2615,7 @@ async def increment_spend_counters(
                 increment=cost,
             )
 
-        team_obj: Final = await user_api_key_cache.async_get_cache(key=f"team_id:{scope_team_id}")
+        team_obj: Final[object] = await user_api_key_cache.async_get_cache(key=f"team_id:{scope_team_id}")
         if team_obj is None:
             return
         team_budget_limits = getattr(team_obj, "budget_limits", None) or (
@@ -2824,7 +2909,7 @@ async def _ensure_window_spend_counter_initialized(
 async def _is_spend_counter_cache_warm(counter_key: str) -> bool:
     if spend_counter_cache.redis_cache is not None:
         try:
-            current_value: Final = await spend_counter_cache.redis_cache.async_get_cache(
+            current_value: Final[object] = await spend_counter_cache.redis_cache.async_get_cache(
                 key=counter_key,
             )
             if current_value is None:
@@ -2896,7 +2981,7 @@ async def update_cache(
     Put any alerting logic in here.
     """
 
-    values_to_update_in_cache: Final[list[tuple[Any, Any]]] = []
+    values_to_update_in_cache: Final[list[tuple[str, object]]] = []
 
     ### UPDATE KEY SPEND ###
     async def _update_key_cache(token: str, response_cost: float):
@@ -4108,7 +4193,9 @@ class ProxyConfig:
         if prisma_client is None or not (general_settings.get("store_model_in_db", False) is True or store_model_in_db):
             return
 
-        row = await ConfigRepository(prisma_client).table.find_first(where={"param_name": "environment_variables"})
+        row: Final[_ConfigParamRow | None] = await ConfigRepository(prisma_client).table.find_first(
+            where={"param_name": "environment_variables"}
+        )
         existing: Final[dict] = dict(row.param_value) if row is not None and row.param_value is not None else {}
 
         to_set: Final = {k: v for k, v in updates.items() if v is not None}
@@ -5906,7 +5993,7 @@ class ProxyConfig:
         4. Update router settings
         """
         if llm_router is not None and prisma_client is not None:
-            db_router_settings: Final = await ConfigRepository(prisma_client).table.find_first(
+            db_router_settings: Final[_ConfigParamRow | None] = await ConfigRepository(prisma_client).table.find_first(
                 where={"param_name": "router_settings"}
             )
 
@@ -6391,7 +6478,9 @@ class ProxyConfig:
                     new_models=new_models, proxy_logging_obj=proxy_logging_obj
                 )
 
-            db_general_settings: Final = await get_config_param(prisma_client, "general_settings")
+            db_general_settings: Final[_ConfigParamRow | None] = await get_config_param(
+                prisma_client, "general_settings"
+            )
 
             # update general settings
             if db_general_settings is not None:
@@ -6587,7 +6676,7 @@ class ProxyConfig:
         """
 
         try:
-            sso_settings: Final = await call_with_db_reconnect_retry(
+            sso_settings: Final[_SSOConfigRow | None] = await call_with_db_reconnect_retry(
                 prisma_client,
                 lambda: SSOConfigRepository(prisma_client).table.find_unique(where={"id": "sso_config"}),
                 reason="init_sso_settings_in_db_lookup_failure",
@@ -6618,7 +6707,7 @@ class ProxyConfig:
         )
 
         try:
-            db_record: Final = await call_with_db_reconnect_retry(
+            db_record: Final[_ConfigOverridesRow | None] = await call_with_db_reconnect_retry(
                 prisma_client,
                 lambda: ConfigOverridesRepository(prisma_client).table.find_unique(
                     where={"config_type": "hashicorp_vault"}
@@ -6836,7 +6925,7 @@ class ProxyConfig:
         from litellm.types.prompts.init_prompts import PromptSpec
 
         try:
-            prompts_in_db: Final = await PromptRepository(prisma_client).table.find_many()
+            prompts_in_db: Final[Sequence[object]] = await PromptRepository(prisma_client).table.find_many()
             for prompt in prompts_in_db:
                 # Convert DB object to dict and create versioned prompt_id
                 prompt_spec = self._get_prompt_spec_for_db_prompt(db_prompt=prompt)
@@ -8448,7 +8537,9 @@ class ProxyStartupEvent:
 
             if prisma_client is None:
                 return
-            db_record: Final = await UISettingsRepository(prisma_client).table.find_unique(where={"id": "ui_settings"})
+            db_record: Final[_UISettingsRow | None] = await UISettingsRepository(prisma_client).table.find_unique(
+                where={"id": "ui_settings"}
+            )
             if db_record and db_record.ui_settings:
                 raw: Final = db_record.ui_settings
                 ui_settings: Final = json.loads(raw) if isinstance(raw, str) else dict(raw)
@@ -8597,7 +8688,7 @@ class ProxyStartupEvent:
         # but YAML config has False.
         if store_model_in_db is not True and prisma_client is not None:
             try:
-                _db_gs_record: Final = await ConfigRepository(prisma_client).table.find_first(
+                _db_gs_record: Final[_ConfigParamRow | None] = await ConfigRepository(prisma_client).table.find_first(
                     where={"param_name": "general_settings"}
                 )
                 if _db_gs_record is not None and isinstance(_db_gs_record.param_value, dict):
@@ -9043,41 +9134,76 @@ class ProxyStartupEvent:
             spend_report_frequency: Final[str] = general_settings.get("spend_report_frequency", "7d") or "7d"
 
             days: Final = int(spend_report_frequency[:-1])
-            if spend_report_frequency[-1].lower() != "d":
-                raise ValueError("spend_report_frequency must be specified in days, e.g., '1d', '7d'")
+            if spend_report_frequency[-1].lower() != "d" or days <= 0:
+                raise ValueError("spend_report_frequency must be a positive number of days, e.g., '1d', '7d'")
+
+            pod_lock_manager: Final = proxy_logging_obj.db_spend_update_writer.pod_lock_manager
+            weekly_lock_ttl: Final = duration_in_seconds(spend_report_frequency) - 3600
+
+            async def _scheduled_weekly_spend_report() -> None:
+                # TTL spans the whole reporting window: each pod's interval anchor is its own
+                # boot time + jitter, so a shorter lock would let a later pod re-send the report.
+                # Minus an hour so the next window's first firer finds a free key
+                if (
+                    await pod_lock_manager.acquire_lock(
+                        cronjob_id=WEEKLY_SPEND_REPORT_JOB_ID, ttl=weekly_lock_ttl, allow_reentrant=False
+                    )
+                    is False
+                ):
+                    return
+                await proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report(spend_report_frequency)
+
+            async def _scheduled_monthly_spend_report() -> None:
+                if (
+                    await pod_lock_manager.acquire_lock(
+                        cronjob_id=MONTHLY_SPEND_REPORT_JOB_ID, ttl=3600, allow_reentrant=False
+                    )
+                    is False
+                ):
+                    return
+                await proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report()
 
             scheduler.add_job(
-                proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report,
+                _scheduled_weekly_spend_report,
                 "interval",
                 days=days,
                 next_run_time=datetime.now() + timedelta(seconds=10 + random.randint(0, 300)),
-                args=[spend_report_frequency],
-                id="weekly_spend_report_job",
+                id=WEEKLY_SPEND_REPORT_JOB_ID,
                 replace_existing=True,
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
 
             scheduler.add_job(
-                proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report,
+                _scheduled_monthly_spend_report,
                 "cron",
                 day=1,
-                id="monthly_spend_report_job",
+                id=MONTHLY_SPEND_REPORT_JOB_ID,
                 replace_existing=True,
             )
 
             if os.getenv("PROMETHEUS_URL"):
                 from zoneinfo import ZoneInfo
 
+                async def _scheduled_fallback_stats() -> None:
+                    if (
+                        await pod_lock_manager.acquire_lock(
+                            cronjob_id=PROMETHEUS_FALLBACK_STATS_JOB_ID, ttl=3600, allow_reentrant=False
+                        )
+                        is False
+                    ):
+                        return
+                    await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
+
                 scheduler.add_job(
-                    proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus,
+                    _scheduled_fallback_stats,
                     "cron",
                     hour=PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
                     minute=0,
                     timezone=ZoneInfo("America/Los_Angeles"),
-                    id="prometheus_fallback_stats_job",
+                    id=PROMETHEUS_FALLBACK_STATS_JOB_ID,
                     replace_existing=True,
                 )
-                await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
+                await _scheduled_fallback_stats()
 
     @classmethod
     async def _setup_prisma_client(
@@ -10441,7 +10567,7 @@ async def vertex_ai_live_passthrough_endpoint(
         None,
         description="Override the Vertex AI region (for example, 'us-central1').",
     ),
-    user_api_key_dict=Depends(user_api_key_auth_websocket),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
 ):
     """
     Vertex AI Live API WebSocket Pass-through Endpoint
@@ -10489,7 +10615,7 @@ async def realtime_websocket_endpoint(
         None,
         description="Comma-separated list of guardrail names to apply to this request.",
     ),
-    user_api_key_dict=Depends(user_api_key_auth_websocket),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
 ):
     requested_protocols: Final = [
         p.strip() for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",") if p.strip()
@@ -10521,7 +10647,7 @@ async def realtime_websocket_endpoint(
     # Only use explicit parameters, not all query params
     query_params: Final = cast(RealtimeQueryParams, dict(_realtime_query_params_template(model, intent)))
 
-    data: dict[str, Any] = {
+    data: dict[str, object] = {
         "model": route_model,
         "websocket": websocket,
         "query_params": query_params,  # Only explicit params
@@ -11654,7 +11780,7 @@ async def _check_if_model_is_user_added(
         id = model.get("model_info", {}).get("id", None)
         if id is None:
             continue
-        db_model = await ModelRepository(prisma_client).table.find_unique(where={"model_id": id})
+        db_model: _ModelTableRow | None = await ModelRepository(prisma_client).table.find_unique(where={"model_id": id})
         if db_model is not None:
             if db_model.created_by == user_api_key_dict.user_id:
                 filtered_models.append(model)
@@ -11838,7 +11964,7 @@ async def get_all_team_models(
     team_db_objects_typed: list[LiteLLM_TeamTable] = []
 
     if user_teams == "*":
-        team_db_objects = await TeamRepository(prisma_client).table.find_many()
+        team_db_objects: Sequence[SupportsModelDump] = await TeamRepository(prisma_client).table.find_many()
         team_db_objects_typed = [
             LiteLLM_TeamTable.model_validate(team_db_object.model_dump()) for team_db_object in team_db_objects
         ]
@@ -11917,7 +12043,7 @@ async def _populate_team_access_on_models(
         user_teams = "*"
         direct_access_models = llm_router.get_model_ids(exclude_team_models=True)  # has access to all models
     elif user_api_key_dict.user_id is not None:
-        user_db_object: Final = await UserRepository(prisma_client).table.find_unique(
+        user_db_object: Final[SupportsModelDump | None] = await UserRepository(prisma_client).table.find_unique(
             where={"user_id": user_api_key_dict.user_id}
         )
         if user_db_object is not None:
@@ -12473,7 +12599,9 @@ def _team_models_resolve_to_names(team_models: list[str], access_groups: dict[st
 async def _load_team_object_for_model_filter(team_id: str, prisma_client: PrismaClient) -> LiteLLM_TeamTable | None:
     """Load team row from DB; returns None if missing or on error."""
     try:
-        team_db_object: Final = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
+        team_db_object: Final[SupportsModelDump | None] = await TeamRepository(prisma_client).table.find_unique(
+            where={"team_id": team_id}
+        )
         if team_db_object is None:
             verbose_proxy_logger.warning("Team %s not found in database", team_id)
             return None
@@ -12522,7 +12650,7 @@ async def _gather_team_accessible_model_ids(
     try:
         if team_object.models and SpecialModelNames.all_proxy_models.value not in team_object.models:
             _resolved_names: Final = _team_models_resolve_to_names(team_object.models, access_groups)
-            db_models: Final = await ModelRepository(prisma_client).table.find_many(
+            db_models: Final[Sequence[_ModelTableRow]] = await ModelRepository(prisma_client).table.find_many(
                 where={"model_name": {"in": _resolved_names}}
             )
             for db_model in db_models:
@@ -12984,7 +13112,9 @@ async def model_streaming_metrics(
         """
 
     _all_api_bases: Final = set()
-    db_response: Final = await prisma_client.db.query_raw(sql_query, _selected_model_group, startTime, endTime)
+    db_response: Final[Sequence[_TTFTRow] | None] = await prisma_client.db.query_raw(
+        sql_query, _selected_model_group, startTime, endTime
+    )
     _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
     if db_response is not None:
         for model_data in db_response:
@@ -13106,7 +13236,7 @@ async def model_metrics(
             avg_latency_per_token DESC;
     """
     _all_api_bases: Final = set()
-    db_response: Final = await prisma_client.db.query_raw(
+    db_response: Final[Sequence[_LatencyRow] | None] = await prisma_client.db.query_raw(
         sql_query, _selected_model_group, startTime, endTime, api_key, customer
     )
     _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
@@ -13297,7 +13427,9 @@ async def model_metrics_exceptions(
         ORDER BY total_exceptions DESC
         LIMIT 200;
     """
-    db_response: Final = await prisma_client.db.query_raw(sql_query, startTime, endTime, _selected_model_group, api_key)
+    db_response: Final[Sequence[_ExceptionRow] | None] = await prisma_client.db.query_raw(
+        sql_query, startTime, endTime, _selected_model_group, api_key
+    )
     response: Final[list[dict]] = []
     exception_types: Final = set()
 
@@ -14459,7 +14591,9 @@ async def onboarding(invite_link: str, request: Request):
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    invite_obj: Final = await InvitationLinkRepository(prisma_client).table.find_unique(where={"id": invite_link})
+    invite_obj: Final[_InvitationLinkRow | None] = await InvitationLinkRepository(prisma_client).table.find_unique(
+        where={"id": invite_link}
+    )
     if invite_obj is None:
         raise HTTPException(status_code=401, detail={"error": "Invitation link does not exist in db."})
     #### CHECK IF EXPIRED
@@ -14477,7 +14611,9 @@ async def onboarding(invite_link: str, request: Request):
         )
 
     ### GET USER OBJECT ###
-    user_obj: Final = await UserRepository(prisma_client).table.find_unique(where={"user_id": invite_obj.user_id})
+    user_obj: Final[_UserTableRow | None] = await UserRepository(prisma_client).table.find_unique(
+        where={"user_id": invite_obj.user_id}
+    )
 
     if user_obj is None:
         raise HTTPException(status_code=401, detail={"error": "User does not exist in db."})
@@ -14649,7 +14785,9 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    invite_obj = await InvitationLinkRepository(prisma_client).table.find_unique(where={"id": data.invitation_link})
+    invite_obj: Final[_InvitationLinkRow | None] = await InvitationLinkRepository(prisma_client).table.find_unique(
+        where={"id": data.invitation_link}
+    )
     if invite_obj is None:
         raise HTTPException(status_code=401, detail={"error": "Invitation link does not exist in db."})
     #### CHECK IF EXPIRED
@@ -14704,7 +14842,7 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
             )
 
         ### UPDATE USER OBJECT ###
-        user_obj: Final = await tx.litellm_usertable.update(
+        user_obj: Final[_UserTableRow | None] = await tx.litellm_usertable.update(
             where={"user_id": invite_obj.user_id}, data={"password": hashed_pw}
         )
 
@@ -14930,7 +15068,7 @@ async def new_invitation(data: InvitationNew, user_api_key_dict: UserAPIKeyAuth 
                     detail={"error": "You can only create invitations for users in your organization or team."},
                 )
 
-        response: Final = await create_invitation_for_user(
+        response: Final[object] = await create_invitation_for_user(
             data=data,
             user_api_key_dict=user_api_key_dict,
         )
@@ -14972,7 +15110,9 @@ async def invitation_info(invitation_id: str, user_api_key_dict: UserAPIKeyAuth 
             detail={"error": f"{CommonProxyErrors.not_allowed_access.value}, your role={user_api_key_dict.user_role}"},
         )
 
-    response: Final = await InvitationLinkRepository(prisma_client).table.find_unique(where={"id": invitation_id})
+    response: Final[object] = await InvitationLinkRepository(prisma_client).table.find_unique(
+        where={"id": invitation_id}
+    )
 
     if response is None:
         raise HTTPException(
@@ -15020,7 +15160,7 @@ async def invitation_update(
         )
 
     current_time: Final = litellm.utils.get_utc_datetime()
-    response: Final = await InvitationLinkRepository(prisma_client).table.update(
+    response: Final[object] = await InvitationLinkRepository(prisma_client).table.update(
         where={"id": data.invitation_id},
         data={
             "id": data.invitation_id,
@@ -15086,7 +15226,9 @@ async def invitation_delete(
 
     # Org admins can only delete invitations they created
     if is_other_admin and not is_proxy_admin:
-        invitation = await InvitationLinkRepository(prisma_client).table.find_unique(where={"id": data.invitation_id})
+        invitation: Final[_InvitationLinkRow | None] = await InvitationLinkRepository(prisma_client).table.find_unique(
+            where={"id": data.invitation_id}
+        )
         if invitation is None:
             raise HTTPException(
                 status_code=400,
@@ -15098,7 +15240,9 @@ async def invitation_delete(
                 detail={"error": "Organization admins can only delete invitations they created."},
             )
 
-    response: Final = await InvitationLinkRepository(prisma_client).table.delete(where={"id": data.invitation_id})
+    response: Final[object] = await InvitationLinkRepository(prisma_client).table.delete(
+        where={"id": data.invitation_id}
+    )
 
     if response is None:
         raise HTTPException(
@@ -15136,7 +15280,9 @@ async def update_config(
             raise Exception("No DB Connected")
 
         async def _read_section(param_name: str) -> dict:
-            row: Final = await ConfigRepository(prisma_client).table.find_first(where={"param_name": param_name})
+            row: Final[_ConfigParamRow | None] = await ConfigRepository(prisma_client).table.find_first(
+                where={"param_name": param_name}
+            )
             if row is None or row.param_value is None:
                 return {}
             return dict(row.param_value)
@@ -15159,7 +15305,7 @@ async def update_config(
         if config_info.general_settings is not None:
             existing = await _read_section("general_settings")
             before_general_settings: Final = copy.deepcopy(existing)
-            updates = config_info.general_settings.dict(exclude_none=True)
+            updates: Mapping[str, JsonValue] = config_info.general_settings.dict(exclude_none=True)
             for k, v in updates.items():
                 if k == "alert_to_webhook_url":
                     if "alerting" not in existing:
@@ -15599,7 +15745,7 @@ async def get_config_general_settings(
         )
 
     ## get general settings from db
-    db_general_settings: Final = await ConfigRepository(prisma_client).table.find_first(
+    db_general_settings: Final[_ConfigParamRow | None] = await ConfigRepository(prisma_client).table.find_first(
         where={"param_name": "general_settings"}
     )
     ### pop the value
@@ -15788,12 +15934,12 @@ async def get_config_list(
     is_full_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
     ## get general settings from db
-    db_general_settings: Final = await ConfigRepository(prisma_client).table.find_first(
+    db_general_settings: Final[_ConfigParamRow | None] = await ConfigRepository(prisma_client).table.find_first(
         where={"param_name": "general_settings"}
     )
 
     if db_general_settings is not None and db_general_settings.param_value is not None:
-        db_general_settings_dict = dict(db_general_settings.param_value)
+        db_general_settings_dict: Mapping[str, JsonValue] = dict(db_general_settings.param_value)
     else:
         db_general_settings_dict = {}
 
@@ -15884,7 +16030,7 @@ async def get_config_list(
                 )
                 return_val.append(_response_obj)
 
-    db_litellm_settings_row: Final = await ConfigRepository(prisma_client).table.find_first(
+    db_litellm_settings_row: Final[_ConfigParamRow | None] = await ConfigRepository(prisma_client).table.find_first(
         where={"param_name": "litellm_settings"}
     )
     db_litellm_settings: Final[dict] = (
@@ -15961,7 +16107,7 @@ async def delete_config_general_settings(
         )
 
     ## get general settings from db
-    db_general_settings: Final = await ConfigRepository(prisma_client).table.find_first(
+    db_general_settings: Final[_ConfigParamRow | None] = await ConfigRepository(prisma_client).table.find_first(
         where={"param_name": "general_settings"}
     )
     ### pop the value
@@ -16528,7 +16674,7 @@ async def reload_anthropic_beta_headers(
         last_anthropic_beta_headers_reload = current_time.isoformat()
 
         # Set force reload flag in database for other pods, preserving existing interval_hours
-        existing_beta_config: Final = await ConfigRepository(prisma_client).table.find_unique(
+        existing_beta_config: Final[_ConfigParamRow | None] = await ConfigRepository(prisma_client).table.find_unique(
             where={"param_name": "anthropic_beta_headers_reload_config"}
         )
         existing_beta_interval = None
@@ -17116,7 +17262,7 @@ async def _is_mcp_access_group_cached(name: str) -> bool:
     )
 
     cache_key: Final = f"mcp_access_group_exists:{name}"
-    cached: Final = await user_api_key_cache.async_get_cache(key=cache_key)
+    cached: Final[object] = await user_api_key_cache.async_get_cache(key=cache_key)
     if cached is not None:
         return bool(cached)
     result: Final = bool(await MCPRequestHandler._get_mcp_servers_from_access_groups([name]))

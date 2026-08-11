@@ -1113,6 +1113,7 @@ class KeyRequestBase(GenerateRequestBase):
     budget_id: str | None = None
     tags: list[str] | None = None
     disable_global_guardrails: bool | None = None
+    enable_prompt_caching: bool | None = None
     throttle_on_budget_exceeded: bool | None = None
     enforced_params: list[str] | None = None
     allowed_routes: list | None = []
@@ -4129,6 +4130,7 @@ LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "enforced_batch_output_expires_after",
     "enforced_file_expires_after",
     "throttle_on_budget_exceeded",
+    "enable_prompt_caching",
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium: Final = [

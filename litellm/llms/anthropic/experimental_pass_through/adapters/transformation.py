@@ -1004,6 +1004,17 @@ class LiteLLMAnthropicMessagesAdapter:
         model: Final = new_kwargs.get("model", "")
         if self.is_anthropic_claude_model(model) or self.is_bedrock_arn_model(model):
             new_kwargs["thinking"] = thinking
+            # Adaptive thinking without its effort tier makes Bedrock Converse
+            # return zero reasoning blocks, so forward output_config (minus
+            # `format`, already translated to response_format) for Bedrock
+            # targets only: other bridged providers reject the raw param, and
+            # get_llm_provider strips the `bedrock/` prefix before this runs.
+            if model.startswith(("bedrock/", "converse/", "invoke/")) or self.is_bedrock_arn_model(model):
+                claude_output_config: Final = anthropic_message_request.get("output_config")
+                if isinstance(claude_output_config, dict):
+                    effort_config: Final = {k: v for k, v in claude_output_config.items() if k != "format"}
+                    if effort_config:
+                        new_kwargs["output_config"] = effort_config  # rebind-ok: out-param store like thinking above
             return
 
         reasoning_effort = self.translate_anthropic_thinking_to_reasoning_effort(cast(dict[str, Any], thinking))
