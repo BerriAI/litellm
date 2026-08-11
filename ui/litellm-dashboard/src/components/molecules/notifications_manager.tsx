@@ -104,6 +104,7 @@ const VALIDATION_MATCH = [
   "invalid file type",
   "invalid field",
   "invalid date format",
+  "must be set when",
 ];
 
 const NOT_FOUND_MATCH = [
