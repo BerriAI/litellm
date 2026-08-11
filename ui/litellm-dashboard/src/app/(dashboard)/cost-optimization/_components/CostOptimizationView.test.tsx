@@ -1,10 +1,18 @@
 import { fireEvent, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { hasCapability, type Capability } from "@/utils/capabilities";
 
-const { useAuthorizedMock } = vi.hoisted(() => ({ useAuthorizedMock: vi.fn() }));
+const { useAuthorizedMock, useCanMock } = vi.hoisted(() => ({
+  useAuthorizedMock: vi.fn(),
+  useCanMock: vi.fn(),
+}));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: useAuthorizedMock,
+}));
+
+vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
+  default: useCanMock,
 }));
 
 vi.mock("./UsageTab", () => ({ __esModule: true, default: () => <div data-testid="usage-tab" /> }));
@@ -19,12 +27,14 @@ import CostOptimizationView from "./CostOptimizationView";
 
 const renderView = (userRole = "Admin") => {
   useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole });
+  useCanMock.mockImplementation((capability: Capability) => hasCapability(userRole, capability));
   return render(<CostOptimizationView accessToken="test-token" userId="u1" userRole={userRole} />);
 };
 
 describe("CostOptimizationView", () => {
   beforeEach(() => {
     useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole: "Admin" });
+    useCanMock.mockImplementation((capability: Capability) => hasCapability("Admin", capability));
   });
 
   it("renders the four cost-optimization tabs", () => {

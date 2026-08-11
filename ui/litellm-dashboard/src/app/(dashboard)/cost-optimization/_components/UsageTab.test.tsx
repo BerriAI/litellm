@@ -5,12 +5,21 @@ import type { ToolSpendResponse } from "@/components/networking";
 
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 
+import { hasCapability, type Capability } from "@/utils/capabilities";
+
 const mockGetToolSpend = vi.fn();
 
-const { useAuthorizedMock } = vi.hoisted(() => ({ useAuthorizedMock: vi.fn() }));
+const { useAuthorizedMock, useCanMock } = vi.hoisted(() => ({
+  useAuthorizedMock: vi.fn(),
+  useCanMock: vi.fn(),
+}));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: useAuthorizedMock,
+}));
+
+vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
+  default: useCanMock,
 }));
 
 vi.mock("@/components/networking", () => ({
@@ -106,6 +115,7 @@ const renderWith = (results: DailyData[], options: RenderOptions = {}) => {
   } = options;
   mockGetToolSpend.mockResolvedValue(toolSpend);
   useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole });
+  useCanMock.mockImplementation((capability: Capability) => hasCapability(userRole, capability));
   return render(
     <UsageTab
       accessToken="test-token"
