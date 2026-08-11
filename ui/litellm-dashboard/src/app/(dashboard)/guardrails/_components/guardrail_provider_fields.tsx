@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Form, Select, Spin, Input, Slider } from "antd";
 import {
   guardrail_provider_map,
@@ -41,6 +42,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   providerParams: providerParamsProp = null,
   value = null,
 }) => {
+  const { t } = useTranslation("gateway");
   const [loading, setLoading] = useState(false);
   const [providerParams, setProviderParams] = useState<ProviderParamsResponse | null>(providerParamsProp);
   const [error, setError] = useState<string | null>(null);
@@ -68,7 +70,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
         populateGuardrailProviderMap(data);
       } catch (error) {
         console.error("Error fetching provider params:", error);
-        setError("Failed to load provider parameters");
+        setError(t("guardrailsPage.providerFields.loadFailed"));
       } finally {
         setLoading(false);
       }
@@ -87,7 +89,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
 
   // Show loading state
   if (loading) {
-    return <Spin tip="Loading provider parameters..." />;
+    return <Spin tip={t("guardrailsPage.providerFields.loading")} />;
   }
 
   // Show error state
@@ -102,7 +104,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   const providerFields = providerParams && providerParams[providerKey];
 
   if (!providerFields || Object.keys(providerFields).length === 0) {
-    return <div>No configuration fields available for this provider.</div>;
+    return <div>{t("guardrailsPage.providerFields.empty")}</div>;
   }
 
   // Fields to skip for content filter provider (handled in dedicated steps)
@@ -159,7 +161,11 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
           name={fullFieldKey}
           label={fieldKey}
           tooltip={field.description}
-          rules={field.required ? [{ required: true, message: `${fieldKey} is required` }] : undefined}
+          rules={
+            field.required
+              ? [{ required: true, message: t("guardrailsPage.providerFields.required", { field: fieldKey }) }]
+              : undefined
+          }
           initialValue={resolvedInitialValue}
         >
           {field.type === "select" && field.options ? (
@@ -180,8 +186,8 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
             </Select>
           ) : field.type === "bool" || field.type === "boolean" ? (
             <Select placeholder={field.description}>
-              <Select.Option value={true}>True</Select.Option>
-              <Select.Option value={false}>False</Select.Option>
+              <Select.Option value={true}>{t("guardrailsPage.optionalParams.true")}</Select.Option>
+              <Select.Option value={false}>{t("guardrailsPage.optionalParams.false")}</Select.Option>
             </Select>
           ) : field.type === "percentage" && field.min != null && field.max != null ? (
             <Slider
