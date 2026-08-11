@@ -3155,6 +3155,7 @@ class StandardLoggingPayload(TypedDict):
     cache_hit: bool | None
     cache_key: str | None
     saved_cache_cost: float
+    request_tags: list
     end_user: str | None
     requester_ip_address: str | None
     user_agent: str | None

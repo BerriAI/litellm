@@ -4716,12 +4716,12 @@ class StandardLoggingPayloadSetup:
         if kwargs is None:
             return None
 
-        if kwargs.get("system_instructions") is not None:
-            return kwargs.get("system_instructions")
-        if kwargs.get("instructions") is not None:
-            return kwargs.get("instructions")
-        if kwargs.get("system") is not None:
-            return kwargs.get("system")
+        for key in ("system_instructions", "instructions", "system"):
+            value = kwargs.get(key)
+            if value is None:
+                continue
+            if isinstance(value, (str, list, dict)):
+                return value
         return None
 
     @staticmethod
