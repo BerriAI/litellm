@@ -3,11 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 
 const mockUserDailyActivityCall = vi.fn();
 
-vi.mock("@/components/networking", () => ({
-  userDailyActivityCall: (...args: unknown[]) => mockUserDailyActivityCall(...args),
-  getToolSpend: vi.fn().mockResolvedValue({ by_tool: [], daily: [], start_date: null, end_date: null }),
-  getGeneralSettingsCall: vi.fn().mockResolvedValue([]),
-}));
+vi.mock("@/components/networking", () => {
+  const emptyToolSpend = { by_tool: [], daily: [], start_date: null, end_date: null };
+  return {
+    userDailyActivityCall: (...args: unknown[]) => mockUserDailyActivityCall(...args),
+    getToolSpend: vi.fn().mockResolvedValue(emptyToolSpend),
+    getGeneralSettingsCall: vi.fn().mockResolvedValue([]),
+  };
+});
 
 vi.mock("@/components/shared/advanced_date_picker", () => ({
   __esModule: true,

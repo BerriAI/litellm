@@ -605,8 +605,10 @@ class ShadowEvalLogger(CustomLogger):
         # attributed to, and budget-checked against, the key whose traffic it copies.
         # The router's pre-routing hook also writes its routing decision into this dict;
         # read it back after the call for tier attribution.
-        shadow_metadata: Final[dict[str, object]] = sanitized_forwardable_call_metadata(  # mutable-ok: router writes back
-            parent_metadata, SHADOW_EVAL_ROUTER_CALL_ORIGIN
+        shadow_metadata: Final[dict[str, object]] = (
+            sanitized_forwardable_call_metadata(  # mutable-ok: router writes back
+                parent_metadata, SHADOW_EVAL_ROUTER_CALL_ORIGIN
+            )
         )
         shadow_params: Final = {  # mutable-ok: splatted as kwargs
             k: v for k, v in model_parameters.items() if k not in ("stream", "metadata")

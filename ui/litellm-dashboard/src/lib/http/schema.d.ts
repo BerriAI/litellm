@@ -886,7 +886,7 @@ export interface paths {
         put?: never;
         /**
          * Stop Shadow Eval Job
-         * @description Stop an active shadow eval job. Existing verdicts are kept; sampling halts within ~30s.
+         * @description Stop an active shadow eval job. Existing verdicts are kept; sampling halts within ~10s.
          */
         post: operations["stop_shadow_eval_job_auto_router_shadow_eval__job_id__stop_post"];
         delete?: never;

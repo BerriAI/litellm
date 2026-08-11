@@ -265,6 +265,15 @@ const VerdictBar: React.FC<{ results: NonNullable<ShadowEvalJob["results"]> }> =
   );
 };
 
+const JobFailureBanner: React.FC<{ job: ShadowEvalJob }> = ({ job }) => {
+  if (job.failed_count === 0 || !job.last_error) return null;
+  return (
+    <p className="border-b bg-red-50 px-6 py-2 text-xs text-destructive">
+      Last failure: <span className="font-mono">{job.last_error}</span>
+    </p>
+  );
+};
+
 const JobResults: React.FC<{
   job: ShadowEvalJob;
   onStop: () => void;
@@ -298,11 +307,7 @@ const JobResults: React.FC<{
         ) : null}
       </div>
 
-      {job.failed_count > 0 && job.last_error ? (
-        <p className="border-b bg-red-50 px-6 py-2 text-xs text-destructive">
-          Last failure: <span className="font-mono">{job.last_error}</span>
-        </p>
-      ) : null}
+      <JobFailureBanner job={job} />
 
       {results && results.groups.length > 0 ? (
         <>
@@ -633,6 +638,8 @@ const ShadowEvalSection: React.FC<ShadowEvalSectionProps> = ({ accessToken }) =>
   const latest = useMemo(() => jobs?.[0] ?? null, [jobs]);
   const previous = useMemo(() => jobs?.slice(1) ?? [], [jobs]);
   const { data: latestDetail } = useShadowEvalJob(accessToken, latest?.job_id ?? null);
+  const latestJobIsFinished =
+    latestDetail != null && latestDetail.status !== "pending" && latestDetail.status !== "running";
 
   if (error instanceof ApiError && error.status === 403) return null; // admin-only section
 
@@ -657,9 +664,7 @@ const ShadowEvalSection: React.FC<ShadowEvalSectionProps> = ({ accessToken }) =>
         />
       ) : null}
 
-      {!latest || (latestDetail && latestDetail.status !== "pending" && latestDetail.status !== "running") ? (
-        <StartForm accessToken={accessToken} />
-      ) : null}
+      {!latest || latestJobIsFinished ? <StartForm accessToken={accessToken} /> : null}
 
       <PreviousJobs accessToken={accessToken} jobs={previous} />
     </div>
