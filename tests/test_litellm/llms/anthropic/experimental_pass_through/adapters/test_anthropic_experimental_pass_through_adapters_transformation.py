@@ -1828,6 +1828,88 @@ def test_thinking_disabled_stays_plain_string_when_auto_summary_enabled():
     assert new_kwargs["reasoning_effort"] == "none"
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        # SDK-style model with the provider prefix intact
+        "bedrock/converse/us.anthropic.claude-opus-4-7",
+        # what the bridge actually sees in the proxy: get_llm_provider has
+        # already stripped the `bedrock/` prefix by the time it translates
+        "converse/us.anthropic.claude-opus-4-7",
+    ],
+)
+def test_adaptive_thinking_output_config_effort_preserved_for_claude_model(model):
+    """
+    Regression: Claude Code drives adaptive thinking as `thinking: {"type": "adaptive"}`
+    plus `output_config: {"effort": "max"}`. The Claude branch of the thinking translator
+    forwarded `thinking` verbatim but returned early without reading `output_config`, and
+    the handler strips the raw key from extra_kwargs, so the effort tier never reached the
+    backend. On Bedrock Converse, adaptive thinking without effort streams zero reasoning
+    blocks. The `format` subkey must still be excluded (it is translated to
+    `response_format` separately).
+    """
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    anthropic_request = AnthropicMessagesRequest(
+        model=model,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "hi"}],
+        thinking={"type": "adaptive"},
+        output_config={
+            "effort": "max",
+            "format": {"type": "json_schema", "schema": {"type": "object", "properties": {}}},
+        },
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(anthropic_message_request=anthropic_request)
+
+    assert openai_request["thinking"] == {"type": "adaptive"}
+    assert openai_request["output_config"] == {"effort": "max"}
+    assert "response_format" in openai_request
+
+
+def test_adaptive_thinking_format_only_output_config_not_forwarded_for_claude_model():
+    """When `output_config` carries only `format`, nothing effort-bearing remains, so the
+    translator must not forward an empty `output_config` dict."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    anthropic_request = AnthropicMessagesRequest(
+        model="bedrock/converse/us.anthropic.claude-opus-4-7",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "hi"}],
+        thinking={"type": "adaptive"},
+        output_config={"format": {"type": "json_schema", "schema": {"type": "object", "properties": {}}}},
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(anthropic_message_request=anthropic_request)
+
+    assert openai_request["thinking"] == {"type": "adaptive"}
+    assert "output_config" not in openai_request
+
+
+def test_adaptive_thinking_output_config_not_forwarded_for_non_bedrock_claude_model():
+    """`output_config` is forwarded only for Bedrock-destined Claude models. Other
+    Claude-through-bridge providers (e.g. openrouter) accept `thinking` but reject a raw
+    `output_config` param with UnsupportedParamsError when drop_params is off."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    anthropic_request = AnthropicMessagesRequest(
+        model="openrouter/anthropic/claude-opus-4-7",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "hi"}],
+        thinking={"type": "adaptive"},
+        output_config={"effort": "max"},
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(anthropic_message_request=anthropic_request)
+
+    assert openai_request["thinking"] == {"type": "adaptive"}
+    assert "output_config" not in openai_request
+
+
 def test_stop_sequences_translated_to_stop_for_non_claude_model():
     from litellm.types.llms.anthropic import AnthropicMessagesRequest
 
