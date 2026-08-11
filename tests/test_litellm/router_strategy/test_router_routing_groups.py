@@ -878,3 +878,41 @@ def test_update_settings_group_change_invalidates_model_group_info():
     info = router.get_model_group_info("renamed-group")
     assert info is not None
     assert info.model_group == "renamed-group"
+
+
+def test_is_recognized_model_covers_every_virtual_model_kind():
+    router = Router(
+        model_list=_model_list(),
+        model_group_alias={"my-alias": "filtered-model"},
+        routing_groups=_quality_group(),
+    )
+    assert router.is_recognized_model("filtered-model") is True
+    assert router.is_recognized_model("deploy-1") is True
+    assert router.is_recognized_model("my-alias") is True
+    assert router.is_recognized_model("quality") is True
+    assert router.is_recognized_model("ghost") is False
+
+
+def test_routing_group_has_alternatives_resolves_aliases():
+    router = Router(
+        model_list=_model_list(),
+        model_group_alias={"quality-alias": "quality"},
+        routing_groups=_quality_group(),
+    )
+    assert router.routing_group_has_alternatives("quality-alias") is True
+    assert router.routing_group_has_alternatives("quality") is True
+
+
+def test_failure_callback_reads_model_group_from_litellm_metadata_bucket():
+    router = _build_router(routing_groups=_quality_group())
+    kwargs = {
+        "exception": Exception("boom"),
+        "litellm_params": {
+            "model_info": {"id": "deploy-1"},
+            "litellm_metadata": {"model_group": "quality"},
+            "metadata": {"user_api_key": "hashed"},
+        },
+    }
+    with patch("litellm.router._set_cooldown_deployments", return_value=True) as cooldown_spy:
+        router.deployment_callback_on_failure(kwargs, None, 0, 1)
+    assert cooldown_spy.call_args.kwargs["requested_model_group"] == "quality"

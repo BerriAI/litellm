@@ -54,6 +54,7 @@ from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     coerce_token_limit,
+    get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
 )
@@ -1136,6 +1137,21 @@ class Router:
             for deployment in self._get_all_deployments(model_name=member, team_id=team_id)
         ]
 
+    def is_recognized_model(self, model: str) -> bool:
+        """
+        Whether `model` names something this router serves directly: a
+        deployment model_name, a deployment id, a `model_group_alias`, or a
+        callable routing group. Proxy request gates share this predicate so a
+        new virtual-model kind cannot be forgotten at one of them; wildcard,
+        default-deployment, and deployment-name fallbacks stay caller policy.
+        """
+        return (
+            model in self.model_names
+            or self.has_model_id(model)
+            or (self.model_group_alias is not None and model in self.model_group_alias)
+            or self.get_routing_group(model) is not None
+        )
+
     def routing_group_has_alternatives(self, model_group: str | None) -> bool:
         """
         True when `model_group` names a callable routing group whose member
@@ -1147,7 +1163,8 @@ class Router:
         """
         if model_group is None:
             return False
-        group: Final = self.get_routing_group(model_group)
+        resolved: Final = self._get_model_from_alias(model=model_group) or model_group
+        group: Final = self.get_routing_group(resolved)
         if group is None:
             return False
         return sum(len(self.model_name_to_deployment_indices.get(member) or ()) for member in group.models) > 1
@@ -7208,7 +7225,7 @@ class Router:
                     original_exception=exception,
                     deployment=deployment_id,
                     time_to_cooldown=_time_to_cooldown,
-                    requested_model_group=(litellm_params.get("metadata") or {}).get("model_group"),
+                    requested_model_group=(get_litellm_metadata_from_kwargs(kwargs) or {}).get("model_group"),
                 )  # setting deployment_id in cooldown deployments
 
                 return result
