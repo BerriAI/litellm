@@ -3415,6 +3415,103 @@ class TestSessionAffinity:
         return {"metadata": {"session_id": session_id}}
 
     @pytest.mark.asyncio
+    async def test_hook_response_carries_session_affinity_ttl_on_classify_and_pin_paths(
+        self, mock_router_instance, session_affinity_config
+    ):
+        """The hook response's session_affinity_ttl_seconds is what the Router stamps as
+        the deployment-affinity marker, so both the classify path (turn 1) and the
+        session-pin path (turn 2) must carry the configured TTL."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**session_affinity_config, "session_affinity_ttl_seconds": 321},
+        )
+        request_kwargs = self._request_kwargs("marker-session")
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        second = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert first.session_affinity_ttl_seconds == 321
+        assert second.session_affinity_ttl_seconds == 321
+
+    @pytest.mark.parametrize(
+        "session_affinity,deployment_affinity,plugins,tier_pinned,deployment_pinned",
+        [
+            (False, False, False, False, False),
+            (False, True, False, False, True),
+            (True, False, False, True, True),
+            (True, True, False, True, True),
+            (False, True, True, False, False),
+            (True, True, True, False, False),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_tier_pin_and_deployment_pin_are_independently_gated(
+        self,
+        mock_router_instance,
+        basic_config,
+        session_affinity,
+        deployment_affinity,
+        plugins,
+        tier_pinned,
+        deployment_pinned,
+    ):
+        """deployment_affinity pins the deployment inside each routed group without pinning which
+        group the session routes to, so with session_affinity off the tier must still reclassify
+        on every turn while the marker the Router stamps is still emitted. Turn 1 classifies
+        REASONING and turn 2 SIMPLE, so a reclassified turn 2 moves model while a tier-pinned one
+        does not. plugins suppress both pins, since a stale pin would bypass the plugin pipeline."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "session_affinity": session_affinity,
+                "deployment_affinity": deployment_affinity,
+                **({"plugins": [_DummyPlugin()]} if plugins else {}),
+            },
+        )
+        request_kwargs = self._request_kwargs("matrix-session")
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+        )
+        second = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert first.model == "o1-preview"
+        assert second.model == ("o1-preview" if tier_pinned else "gpt-4o-mini")
+        assert (first.session_affinity_ttl_seconds is not None) is deployment_pinned
+        assert (second.session_affinity_ttl_seconds is not None) is deployment_pinned
+
+    @pytest.mark.asyncio
+    async def test_hook_response_has_no_session_affinity_ttl_when_disabled_or_plugins(
+        self, mock_router_instance, basic_config, session_affinity_config
+    ):
+        mock_router_instance.cache = DualCache()
+        disabled_router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "deployment_affinity": False},
+        )
+        plugin_router = ComplexityRouter(
+            model_name="test-router-plugins",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**session_affinity_config, "plugins": [_DummyPlugin()]},
+        )
+        disabled = await disabled_router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._request_kwargs("s-off"), messages=self.SIMPLE_MESSAGE
+        )
+        with_plugins = await plugin_router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._request_kwargs("s-plugins"), messages=self.SIMPLE_MESSAGE
+        )
+        assert disabled.session_affinity_ttl_seconds is None
+        assert with_plugins.session_affinity_ttl_seconds is None
+
+    @pytest.mark.asyncio
     async def test_disabled_by_default_reclassifies_every_turn(self, mock_router_instance, basic_config):
         """Regression: session_affinity defaults to False, so a shared session_id must NOT
         pin the first turn's model; every turn is classified on its own merits."""
@@ -3476,6 +3573,23 @@ class TestSessionAffinity:
             spy_aclassify.assert_not_called()
         # Pinned to the first turn's model, not re-classified down to SIMPLE.
         assert second.model == "o1-preview"
+
+    @pytest.mark.asyncio
+    async def test_a_pinned_turn_reports_the_tier_that_serves_it(self, mock_router_instance, session_affinity_config):
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+        )
+        pinned = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert pinned.routing_decision["tier"] == "REASONING"
 
     @pytest.mark.asyncio
     async def test_different_sessions_classify_independently(self, mock_router_instance, session_affinity_config):
@@ -4362,7 +4476,24 @@ class TestRoutingDecisionContents:
         assert decision is not None
         assert decision["cause"] == "default_fallback"
         assert decision["routed_model"] == response.model
-        assert "tier" not in decision
+        assert decision.get("tier") == "MEDIUM"
+
+    @pytest.mark.asyncio
+    async def test_a_default_model_fallback_claims_no_tier(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "default_model": "gpt-4o"},
+        )
+        response = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={},
+            messages=[{"role": "system", "content": "be nice"}],
+        )
+        assert response is not None
+        assert response.routing_decision is not None
+        assert response.routing_decision["cause"] == "default_fallback"
+        assert "tier" not in response.routing_decision
 
     @pytest.mark.asyncio
     async def test_session_pin_decision(self, mock_router_instance, basic_config):
@@ -5907,11 +6038,21 @@ class TestConversationShapeDiscriminator:
         )
         builds = source.split("self._build_routing_decision(")[1:]
         assert builds
-        missing = [
-            i
-            for i, block in enumerate(builds)
-            if "conversation_continuing=conversation_continuing" not in block.split("),")[0]
-        ]
+        missing = []
+        for i, block in enumerate(builds):
+            depth = 0
+            end = 0
+            for j, char in enumerate(block):
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                    if depth < 0:
+                        end = j
+                        break
+            extracted = block[:end]
+            if "conversation_continuing=conversation_continuing" not in extracted:
+                missing.append(i)
         assert not missing, f"routing decisions {missing} do not carry the conversation shape"
 
 

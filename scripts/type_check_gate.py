@@ -12,6 +12,18 @@ a red once two PRs each land near the limit and their sum crosses it: the
 bystander's count equals its base, so it is spared, while any PR that actually
 grows the rule past its limit still fails.
 
+Installed packages are part of the measurement: a typed dependency that is
+present changes what basedpyright can prove (and therefore which diagnostics
+fire) versus when it is absent, so counts from two differently provisioned
+venvs are not comparable and their comparison produces phantom breaches no
+diff hunk explains. The gate therefore provisions its own environment at
+``.venv-typecheck`` (a frozen ``uv sync`` of one canonical dependency-group
+set, plus a generated Prisma client) and runs every basedpyright pass from it,
+so pre-commit, the CI lint job, and the artifact publisher measure one package
+set by construction; re-syncs of an up-to-date env are a near-instant no-op.
+The group set is folded into the cache and artifact fingerprint, so counts
+recorded under a different set are never matched, only recomputed.
+
 The gate runs basedpyright itself, for both the head and the base pass, with
 ``NODE_OPTIONS`` raised to the heap this repo needs: basedpyright's node
 process OOMs at the ~4 GB default, and when callers had to remember the flag,
@@ -21,9 +33,9 @@ matters once some rule is over its limit, so when none is the base pass is
 skipped outright. When it is needed, it is a second basedpyright pass over a
 detached worktree at the merge-base, run under the same environment so import
 resolution matches, and its per-rule counts are cached under the repo's git
-common dir keyed by merge-base commit,
-``pyrightconfig.json``, and ``uv.lock``, so re-runs against the same branch
-point pay for it once. A CI workflow publishes every staging commit's counts as
+common dir keyed by merge-base commit, ``pyrightconfig.json``, ``uv.lock``,
+the Prisma schema, and the dependency-group set, so re-runs against the same
+branch point pay for it once. A CI workflow publishes every staging commit's counts as
 an artifact (``--emit-counts-dir`` is its entry point), and on a disk-cache miss
 the gate first tries to download the merge-base's artifact through the ``gh``
 CLI; any fetch failure falls back silently to the local base pass, so the gate
@@ -51,7 +63,7 @@ import sys
 import tempfile
 import zipfile
 from collections import Counter
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Final, NamedTuple
 
@@ -61,13 +73,23 @@ PYRIGHT_CONFIG = REPO_ROOT / "pyrightconfig.json"
 UV_LOCK = REPO_ROOT / "uv.lock"
 DEFAULT_BASE = "origin/litellm_internal_staging"
 CACHE_FILE_PREFIX = "basedpyright-base-"
+CACHE_KEEP_ENTRIES = 8
 ARTIFACT_NAME_PREFIX = "basedpyright-counts-"
 GH_TIMEOUT_SECONDS = 10
+
+# The one environment every basedpyright pass measures in. The group set is
+# the slim one the CI publisher has always installed (not bootstrap's fatter
+# --extra proxy env), so the committed budgets stay valid; changing it re-keys
+# every cache and artifact fingerprint, so stale counts can never be matched.
+TYPECHECK_ENV_DIR = REPO_ROOT / ".venv-typecheck"
+TYPECHECK_DEP_GROUPS = ("proxy-dev", "e2e-dev")
+PRISMA_GENERATE_SCRIPT = REPO_ROOT / "scripts" / "prisma_generate_if_needed.py"
+PRISMA_SCHEMA = REPO_ROOT / "litellm" / "proxy" / "schema.prisma"
 
 # basedpyright's node process needs more than the ~4 GB default heap on this
 # repo; appended last so it wins node's last-flag-wins resolution over any
 # caller-set value while preserving the caller's other NODE_OPTIONS flags.
-NODE_HEAP_OPTION = "--max-old-space-size=12288"
+NODE_HEAP_OPTION = "--max-old-space-size=8192"
 
 # Bucket for a basedpyright diagnostic with no `rule`. Counted so it's gated.
 UNCODED = "<uncoded>"
@@ -129,14 +151,83 @@ def node_options_with_heap(base_env: Mapping[str, str]) -> str:
     return f"{base_env.get('NODE_OPTIONS', '')} {NODE_HEAP_OPTION}".strip()
 
 
-def run_basedpyright(cwd: Path = REPO_ROOT) -> str:
-    """One basedpyright pass over `cwd` with the raised node heap exported.
+def typecheck_python_version() -> str | None:
+    """The interpreter version to build the owned env with, read from
+    pyrightconfig's `pythonVersion` so the packages installed for basedpyright
+    to see always come from the same version it type-checks against."""
+    try:
+        config = json.loads(PYRIGHT_CONFIG.read_text())
+    except (OSError, ValueError):
+        return None
+    version: Final = config.get("pythonVersion") if isinstance(config, dict) else None
+    return version if isinstance(version, str) else None
 
-    Exit 0 (clean) and 1 (errors found) are both output-bearing runs; anything
-    else is a crash and fails loudly instead of reading as zero errors."""
-    exe = shutil.which("basedpyright") or "basedpyright"
+
+def typecheck_env_commands(env_dir: Path = TYPECHECK_ENV_DIR) -> tuple[tuple[str, ...], ...]:
+    python_pin: Final = typecheck_python_version()
+    sync: Final = (
+        "uv",
+        "sync",
+        "--frozen",
+        *(("--python", python_pin) if python_pin else ()),
+        *(flag for group in TYPECHECK_DEP_GROUPS for flag in ("--group", group)),
+    )
+    generate: Final = (str(env_dir / "bin" / "python"), str(PRISMA_GENERATE_SCRIPT))
+    return (sync, generate)
+
+
+def _run_provision_step(cmd: tuple[str, ...], env: Mapping[str, str]) -> int:
     proc = subprocess.run(
-        [exe, "--outputjson"],
+        list(cmd), cwd=REPO_ROOT, env=dict(env), capture_output=True, text=True
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+    return proc.returncode
+
+
+def ensure_typecheck_env(
+    env_dir: Path = TYPECHECK_ENV_DIR,
+    run: Callable[[tuple[str, ...], Mapping[str, str]], int] = _run_provision_step,
+) -> Path:
+    """Sync the gate-owned venv (and its generated Prisma client) before a
+    measurement pass. Unconditional on purpose: an up-to-date env makes both
+    steps near-instant no-ops, and skipping them on a heuristic is how the
+    measured environment and the fingerprinted one drift apart."""
+    if not env_dir.exists():
+        sys.stderr.write(
+            f"provisioning {env_dir.name} (first run installs packages and "
+            "generates the Prisma client; re-runs are near-instant no-ops)\n"
+        )
+    env: Final = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(env_dir)}
+    for cmd in typecheck_env_commands(env_dir):
+        if run(cmd, env) != 0:
+            raise SystemExit(
+                f"could not provision the type-check environment at {env_dir}: "
+                f"`{' '.join(cmd)}` failed"
+            )
+    return env_dir
+
+
+def run_basedpyright(cwd: Path = REPO_ROOT, env_dir: Path = TYPECHECK_ENV_DIR) -> str:
+    """One basedpyright pass over `cwd` from the gate-owned venv, with the
+    raised node heap exported.
+
+    `--pythonpath` pins import resolution to the owned env's interpreter; it is
+    the only pin that works, because basedpyright auto-detects a `.venv` in the
+    project root and that beats both PATH order and VIRTUAL_ENV, silently
+    measuring the caller's fatter venv (whose extra typed packages flip
+    diagnostics) whenever the repo has one. Exit 0 (clean) and 1 (errors
+    found) are both output-bearing runs; anything else is a crash and fails
+    loudly instead of reading as zero errors."""
+    bin_dir: Final = env_dir / "bin"
+    proc = subprocess.run(
+        [
+            str(bin_dir / "basedpyright"),
+            "--outputjson",
+            "--pythonpath",
+            str(bin_dir / "python"),
+        ],
         cwd=cwd,
         capture_output=True,
         text=True,
@@ -208,11 +299,16 @@ def over_ceiling(
     )
 
 
-def environment_fingerprints() -> tuple[str, ...]:
-    return tuple(
-        hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in (PYRIGHT_CONFIG, UV_LOCK)
-        if path.exists()
+def environment_fingerprints(
+    dep_groups: tuple[str, ...] = TYPECHECK_DEP_GROUPS,
+) -> tuple[str, ...]:
+    return (
+        *(
+            hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in (PYRIGHT_CONFIG, UV_LOCK, PRISMA_SCHEMA)
+            if path.exists()
+        ),
+        "groups:" + ",".join(dep_groups),
     )
 
 
@@ -272,16 +368,30 @@ def counts_payload(base_point: str, counts: Mapping[str, int]) -> str:
     )
 
 
+def entry_recency(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def evicted_beyond_cap(entries: Sequence[Path], keep: int) -> tuple[Path, ...]:
+    newest_first: Final = sorted(entries, key=entry_recency, reverse=True)
+    return tuple(newest_first[keep:])
+
+
 def store_counts(
     directory: Path, path: Path, base_point: str, counts: Mapping[str, int]
 ) -> None:
     directory.mkdir(parents=True, exist_ok=True)
-    for stale in directory.glob(f"{CACHE_FILE_PREFIX}*.json"):
-        if stale != path:
-            stale.unlink(missing_ok=True)
     scratch = scratch_path(path)
     scratch.write_text(counts_payload(base_point, counts))
     scratch.replace(path)
+    siblings: Final = tuple(
+        entry for entry in directory.glob(f"{CACHE_FILE_PREFIX}*.json") if entry != path
+    )
+    for stale in evicted_beyond_cap(siblings, CACHE_KEEP_ENTRIES - 1):
+        stale.unlink(missing_ok=True)
 
 
 def parse_origin_slug(url: str) -> str | None:
@@ -560,6 +670,7 @@ def main() -> None:
     parser.add_argument("--update", action="store_true")
     parser.add_argument("--emit-counts-dir", type=Path)
     args = parser.parse_args()
+    ensure_typecheck_env()
     head = count_basedpyright(run_basedpyright())
     if args.emit_counts_dir is not None:
         cmd_emit_counts(

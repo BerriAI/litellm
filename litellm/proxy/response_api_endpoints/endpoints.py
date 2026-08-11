@@ -95,7 +95,7 @@ def _normalize_tool_dialect(
 
 def _is_chat_completions_body(data: Mapping[str, Any]) -> bool:
     messages: Final = data.get("messages")
-    if isinstance(messages, list) and len(messages) > 0:
+    if isinstance(messages, list) and messages:
         return True
     return "messages" in data and "input" not in data
 

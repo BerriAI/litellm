@@ -6,6 +6,7 @@ from typing import Final
 
 import litellm
 from litellm.constants import REPLICATE_POLLING_DELAY_SECONDS
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -128,7 +129,7 @@ def completion(
     print_verbose: Callable,
     optional_params: dict,
     litellm_params: dict,
-    logging_obj,
+    logging_obj: LiteLLMLoggingObj,
     api_key,
     encoding,
     custom_prompt_dict={},
@@ -246,7 +247,7 @@ async def async_completion(
     input_data,
     api_key,
     api_base,
-    logging_obj,
+    logging_obj: LiteLLMLoggingObj,
     print_verbose,
     headers: dict,
 ) -> ModelResponse | CustomStreamWrapper:

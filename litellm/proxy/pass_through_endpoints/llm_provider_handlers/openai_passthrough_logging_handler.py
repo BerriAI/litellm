@@ -327,7 +327,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     optional_params=request_body.get("optional_params", {}),
                     api_key="",
                     request_data=request_body,
-                    encoding=litellm.encoding,
+                    encoding=getattr(litellm, "encoding", None),
                     json_mode=request_body.get("response_format", {}).get("type") == "json_object",
                     litellm_params=existing_litellm_params,
                 )
