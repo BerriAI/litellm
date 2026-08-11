@@ -7,6 +7,28 @@ import ModelInfoView from "./model_info_view";
 import NotificationsManager from "./molecules/notifications_manager";
 import * as networking from "./networking";
 
+const localization = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: (namespace: keyof (typeof resources)["en"] = "common") => ({
+      t: (key: string, values?: Record<string, unknown>) => {
+        const copy = key.split(".").reduce<unknown>((value, segment) => {
+          if (typeof value !== "object" || value === null) return undefined;
+          return (value as Record<string, unknown>)[segment];
+        }, resources[localization.language][namespace]);
+        if (typeof copy !== "string") return key;
+        return Object.entries(values ?? {}).reduce(
+          (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+          copy,
+        );
+      },
+      i18n: { resolvedLanguage: localization.language, language: localization.language },
+    }),
+  };
+});
+
 vi.mock("../../utils/dataUtils", () => ({
   copyToClipboard: vi.fn().mockResolvedValue(true),
 }));
@@ -91,6 +113,7 @@ describe("ModelInfoView", () => {
   };
 
   beforeEach(() => {
+    localization.language = "en";
     queryClient = new QueryClient({
       defaultOptions: {
         queries: {
@@ -179,6 +202,16 @@ describe("ModelInfoView", () => {
     await waitFor(() => {
       expect(screen.getByText("Model Settings")).toBeInTheDocument();
     });
+  });
+
+  it("renders model details in Russian", async () => {
+    localization.language = "ru";
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByText("Настройки модели")).toBeInTheDocument();
+    expect(screen.getByText("Публичное название модели: GPT-4")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Проверить подключение" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Удалить модель" })).toBeInTheDocument();
   });
 
   it("should display loading state when model data is loading", () => {
