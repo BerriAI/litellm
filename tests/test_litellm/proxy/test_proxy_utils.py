@@ -7,7 +7,10 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.caching.caching import DualCache
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.proxy._types import ProxyErrorTypes
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
@@ -1169,3 +1172,52 @@ async def test_prisma_health_check_failure_redacts_database_credentials(caplog):
     assert emitted
     assert all("hunter2" not in message for message in emitted)
     assert any("postgresql://REDACTED@db.internal" in message for message in emitted)
+
+
+class _DecoratedMCPGuardrail(_RecordingMCPGuardrail):
+    """Unified guardrail whose apply_guardrail auto-records, as presidio and noma_v2 do."""
+
+    @log_guardrail_information
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return await _RecordingMCPGuardrail.apply_guardrail(
+            self, inputs=inputs, request_data=request_data, input_type=input_type, **kwargs
+        )
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_records_guardrail_info_on_logging_obj(restore_callbacks):
+    """post_mcp_call used to read the logging object out of request_data, a key
+    model_call_details never carries, so the result scan was never recorded."""
+    from datetime import datetime
+
+    from mcp.types import CallToolResult, TextContent
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    guardrail = _DecoratedMCPGuardrail(event_hook=GuardrailEventHooks.post_mcp_call)
+    litellm.callbacks = [guardrail]
+    ProxyLogging._callback_capabilities_cache.clear()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+
+    logging_obj = Logging(
+        model="MCP: echo",
+        messages=[],
+        stream=False,
+        call_type="call_mcp_tool",
+        start_time=datetime.now(),
+        litellm_call_id="post-mcp-guardrail-info-test",
+        function_id="post-mcp-guardrail-info-test",
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data=logging_obj.model_call_details,
+        user_api_key_dict=None,
+        litellm_logging_obj=logging_obj,
+    )
+
+    entries = logging_obj.litellm_params["metadata"].get("standard_logging_guardrail_information", [])
+    assert len(entries) == 1
+    assert entries[0]["guardrail_name"] == guardrail.guardrail_name

@@ -122,6 +122,49 @@ def test_noop_when_logging_obj_is_none():
     _sync_guardrail_info_to_logging_obj(request_data, None)
 
 
+def test_syncs_using_logging_obj_from_request_data():
+    """Hooks with no logging_obj parameter (async_pre_call_hook) leave the decorator's
+    kwarg None; the object must then come off request_data or direct-hook guardrails
+    record nothing on the MCP path."""
+    entry = _make_slg_entry()
+    logging_obj = _FakeLogging()
+    request_data = {
+        "metadata": {"standard_logging_guardrail_information": [entry]},
+        "litellm_logging_obj": logging_obj,
+    }
+
+    _sync_guardrail_info_to_logging_obj(request_data, None)
+
+    assert logging_obj.litellm_params["metadata"][
+        "standard_logging_guardrail_information"
+    ] == [entry]
+
+
+def test_explicit_logging_obj_wins_over_request_data():
+    entry = _make_slg_entry()
+    explicit, on_data = _FakeLogging(), _FakeLogging()
+    request_data = {
+        "metadata": {"standard_logging_guardrail_information": [entry]},
+        "litellm_logging_obj": on_data,
+    }
+
+    _sync_guardrail_info_to_logging_obj(request_data, explicit)
+
+    assert explicit.litellm_params["metadata"][
+        "standard_logging_guardrail_information"
+    ] == [entry]
+    assert (
+        "standard_logging_guardrail_information" not in on_data.litellm_params["metadata"]
+    )
+
+
+def test_no_logging_obj_anywhere_is_a_noop():
+    _sync_guardrail_info_to_logging_obj(
+        {"metadata": {"standard_logging_guardrail_information": [_make_slg_entry()]}},
+        None,
+    )
+
+
 def test_writes_to_model_call_details_too():
     """Also writes into model_call_details["litellm_params"]["metadata"]."""
     entry = _make_slg_entry()

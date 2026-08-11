@@ -2824,6 +2824,7 @@ if MCP_AVAILABLE:
                 proxy_logging_obj=proxy_logging_obj,
                 server=mcp_server,
                 raw_headers=raw_headers,
+                litellm_logging_obj=litellm_logging_obj,
             )
             # `pre_call_tool_check` may return guardrail-modified
             # arguments; honor them on the local path too.
@@ -2962,6 +2963,7 @@ if MCP_AVAILABLE:
                     proxy_logging_obj=proxy_logging_obj,
                     server=prefix_server,
                     raw_headers=raw_headers,
+                    litellm_logging_obj=litellm_logging_obj,
                 )
                 if "arguments" in hook_result:
                     arguments = hook_result["arguments"]  # pyright: ignore[reportAny]  # hook returns untyped args
@@ -3000,6 +3002,7 @@ if MCP_AVAILABLE:
                 litellm_logging_obj.model_call_details if litellm_logging_obj is not None else dict(request_data)
             ),
             user_api_key_dict=user_api_key_auth,
+            litellm_logging_obj=litellm_logging_obj,
         )
 
     _MCP_CREDENTIAL_REQUEST_FIELDS: Final = frozenset(
@@ -3326,6 +3329,7 @@ if MCP_AVAILABLE:
             raw_headers=raw_headers,
             proxy_logging_obj=proxy_logging_obj,
             host_progress_callback=host_progress_callback,
+            litellm_logging_obj=litellm_logging_obj,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result

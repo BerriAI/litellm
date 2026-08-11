@@ -161,6 +161,7 @@ if TYPE_CHECKING:
     from mcp.types import CreateMessageRequestParams
 
     from litellm.caching.caching import InMemoryCache
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.mcp_server.mcp_toolset import MCPToolset
 
 try:
@@ -4542,6 +4543,7 @@ class MCPServerManager:
         proxy_logging_obj: ProxyLogging | None,
         server: MCPServer,
         raw_headers: dict[str, str] | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> dict[str, Any]:
         """
         Run pre-call checks and guardrail hooks for an MCP tool call.
@@ -4609,7 +4611,9 @@ class MCPServerManager:
         mcp_request_obj: Final = proxy_logging_obj._create_mcp_request_object_from_kwargs(pre_hook_kwargs)
 
         # Convert to LLM format for existing guardrail compatibility
-        synthetic_llm_data: Final = proxy_logging_obj._convert_mcp_to_llm_format(mcp_request_obj, pre_hook_kwargs)
+        synthetic_llm_data: Final = proxy_logging_obj._convert_mcp_to_llm_format(
+            mcp_request_obj, pre_hook_kwargs, litellm_logging_obj=litellm_logging_obj
+        )
 
         try:
             # Use standard pre_call_hook
@@ -4645,6 +4649,7 @@ class MCPServerManager:
         user_api_key_auth: UserAPIKeyAuth | None,
         proxy_logging_obj: ProxyLogging,
         start_time: datetime.datetime,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ):
         """Create and return a during hook task for MCP tool calls."""
         from litellm.types.llms.base import HiddenParams
@@ -4665,7 +4670,9 @@ class MCPServerManager:
             "user_api_key_auth": user_api_key_auth,
         }
 
-        synthetic_llm_data: Final = proxy_logging_obj._convert_mcp_to_llm_format(request_obj, during_hook_kwargs)
+        synthetic_llm_data: Final = proxy_logging_obj._convert_mcp_to_llm_format(
+            request_obj, during_hook_kwargs, litellm_logging_obj=litellm_logging_obj
+        )
 
         return asyncio.create_task(
             proxy_logging_obj.during_call_hook(
@@ -5202,6 +5209,7 @@ class MCPServerManager:
         oauth2_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
         host_progress_callback: Callable | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments
@@ -5244,6 +5252,7 @@ class MCPServerManager:
             proxy_logging_obj=proxy_logging_obj,
             server=mcp_server,
             raw_headers=raw_headers,
+            litellm_logging_obj=litellm_logging_obj,
         )
         if "arguments" in hook_result:
             arguments = hook_result["arguments"]
@@ -5258,6 +5267,7 @@ class MCPServerManager:
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 start_time=start_time,
+                litellm_logging_obj=litellm_logging_obj,
             )
             tasks.append(during_hook_task)
 
