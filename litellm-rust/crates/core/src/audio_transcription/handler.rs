@@ -132,7 +132,7 @@ async fn aws_sigv4_headers(
 
     Ok(headers
         .into_iter()
-        .chain(signed_headers.into_iter())
+        .chain(signed_headers)
         .collect::<BTreeMap<_, _>>()
         .into_iter()
         .collect())
