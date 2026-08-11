@@ -248,7 +248,9 @@ class RouteChecks:
             method=RouteChecks._get_request_method(request=request),
         ):
             RouteChecks._require_auth_pass_through_access(route=route, valid_token=valid_token)
-        elif RouteChecks.is_llm_api_route(route=route):
+        elif RouteChecks.is_llm_api_route(route=route) or RouteChecks.is_public_pass_through_route(
+            route=route, method=RouteChecks._get_request_method(request=request)
+        ):
             pass
         elif RouteChecks.is_info_route(route=route):
             # check if user allowed to call an info route
@@ -628,6 +630,19 @@ class RouteChecks:
         if route_info is None:
             return False
         return route_info.get("auth") is True
+
+    @staticmethod
+    def is_public_pass_through_route(route: str, method: str | None = None) -> bool:
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            InitPassThroughEndpointHelpers,
+        )
+
+        route_info: Final = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+            route=route, method=method
+        )
+        if route_info is None:
+            return False
+        return route_info.get("auth") is False
 
     @staticmethod
     def _auth_pass_through_denied_exception(route: str) -> HTTPException:

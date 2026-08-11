@@ -1176,6 +1176,62 @@ def test_non_proxy_admin_allows_auth_pass_through_with_team_allowlist():
         )
 
 
+@pytest.mark.parametrize(
+    "route,registered_type",
+    [
+        ("/myprefix", "exact"),
+        ("/myprefix/models", "subpath"),
+    ],
+)
+def test_non_proxy_admin_allows_non_auth_pass_through_with_llm_api_routes(
+    route, registered_type
+):
+    mock_registered_routes = {
+        f"test-uuid-1:{registered_type}:/myprefix:GET": {
+            "endpoint_id": "test-uuid-1",
+            "path": "/myprefix",
+            "type": registered_type,
+            "methods": ["GET"],
+            "auth": False,
+        },
+    }
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        allowed_routes=["llm_api_routes"],
+    )
+    request = MagicMock(spec=Request)
+    request.method = "GET"
+    request.query_params = {}
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            mock_registered_routes,
+        ),
+        patch(
+            "litellm.proxy.utils.get_server_root_path",
+            return_value="/",
+        ),
+    ):
+        assert (
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route=route,
+                valid_token=valid_token,
+                request=request,
+            )
+            is True
+        )
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+
 def test_virtual_key_without_llm_api_routes_cannot_access_pass_through():
     """
     Test that virtual keys without llm_api_routes permission cannot access registered pass-through endpoints.
