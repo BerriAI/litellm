@@ -73,6 +73,7 @@ LlmCapability = Literal[
     "tool_use",
     "vision",
     "web_search",
+    "web_search_server_tool",
 ]
 
 
