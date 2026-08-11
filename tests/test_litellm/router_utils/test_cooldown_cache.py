@@ -373,6 +373,38 @@ class TestCooldownCacheTTLCorrection:
         assert len(active) == 1
         assert active[0][0] == model_id
 
+    def test_get_min_cooldown_ignores_expired_entry(self):
+        """
+        get_min_cooldown must skip a payload whose cooldown window has elapsed, otherwise a
+        stale short cooldown keeps shrinking the retry-after time reported to callers.
+        """
+        cc = self._make_cooldown_cache()
+        expired_model_id = "min-cooldown-expired"
+        active_model_id = "min-cooldown-active"
+
+        cc.cache.in_memory_cache.set_cache(
+            CooldownCache.get_cooldown_cache_key(expired_model_id),
+            {
+                "exception_received": "Rate limit",
+                "status_code": "429",
+                "timestamp": time.time() - 120.0,
+                "cooldown_time": 10.0,
+            },
+            ttl=600,
+        )
+        cc.cache.in_memory_cache.set_cache(
+            CooldownCache.get_cooldown_cache_key(active_model_id),
+            {
+                "exception_received": "Rate limit",
+                "status_code": "429",
+                "timestamp": time.time(),
+                "cooldown_time": 120.0,
+            },
+            ttl=120,
+        )
+
+        assert cc.get_min_cooldown(model_ids=[expired_model_id, active_model_id], parent_otel_span=None) == 120.0
+
 
 class TestCorrectedActiveCooldown:
     def _make_cooldown_cache(self) -> CooldownCache:

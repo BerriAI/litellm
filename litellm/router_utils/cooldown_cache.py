@@ -181,20 +181,21 @@ class CooldownCache:
         """Return min cooldown time required for a group of model id's."""
 
         # Generate the keys for the deployments
-        keys: Final = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
+        keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
 
         # Retrieve the values for the keys using mget
         results: Final = self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span) or []
 
-        min_cooldown_time: float | None = None
-        # Process the results
-        for model_id, result in zip(model_ids, results):
-            if result and isinstance(result, dict):
-                cooldown_cache_value = CooldownCacheValue(**result)
-                if min_cooldown_time is None or cooldown_cache_value["cooldown_time"] < min_cooldown_time:
-                    min_cooldown_time = cooldown_cache_value["cooldown_time"]
+        current_time: Final = time.time()
+        active_cooldown_times: Final = tuple(
+            cooldown_cache_value["cooldown_time"]
+            for key, result in zip(keys, results)
+            if result
+            and isinstance(result, dict)
+            and (cooldown_cache_value := self._corrected_active_cooldown(key, result, current_time)) is not None
+        )
 
-        return min_cooldown_time or self.default_cooldown_time
+        return min(active_cooldown_times, default=0.0) or self.default_cooldown_time
 
 
 # Usage example:
