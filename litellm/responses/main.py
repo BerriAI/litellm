@@ -326,8 +326,13 @@ async def aresponses_api_with_mcp(
             )
 
             if tool_results:
+                persistence_disabled: Final = LiteLLM_Proxy_MCP_Handler._is_persistence_disabled(call_params)
+
                 follow_up_input: Final = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
-                    response=response, tool_results=tool_results, original_input=input
+                    response=response,
+                    tool_results=tool_results,
+                    original_input=input,
+                    preserve_reasoning=persistence_disabled,
                 )
 
                 # Prepare parameters for follow-up call (restores original stream setting)
@@ -346,7 +351,7 @@ async def aresponses_api_with_mcp(
                     follow_up_input=follow_up_input,
                     model=model,
                     all_tools=all_tools,
-                    response_id=response.id,
+                    response_id=None if persistence_disabled else response.id,
                     **follow_up_call_params,
                 )
 

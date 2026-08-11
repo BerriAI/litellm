@@ -9,10 +9,13 @@ from fastapi import HTTPException
 import importlib
 
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
+from litellm.responses import main as responses_main
+from litellm.responses.mcp import litellm_proxy_mcp_handler as mcp_handler_module
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from typing import Any, cast
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import ModelResponse
 from litellm.types.responses.main import OutputFunctionToolCall
 
@@ -648,3 +651,149 @@ def test_extract_tool_call_details_still_prefers_openai_arguments():
     assert name == "get_weather"
     assert call_id == "call_123"
     assert arguments == '{"city": "Paris"}'
+
+
+def _response_with_reasoning_and_tool_call() -> Any:
+    """A first-turn response as a reasoning model returns it: reasoning item, then a function call."""
+    return ResponsesAPIResponse(
+        id="resp_first",
+        created_at=1234567890,
+        model="gpt-5",
+        object="response",
+        status="completed",
+        output=[
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "summary": [],
+                "encrypted_content": "gAAAAA-opaque-blob",
+            },
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call-1",
+                "name": "foo",
+                "arguments": "{}",
+                "status": "completed",
+            },
+        ],
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+    )
+
+
+def test_create_follow_up_input_preserves_reasoning_when_stateless():
+    """
+    Regression test (LIT-5427): a store=false follow-up has to replay the reasoning
+    item, including reasoning.encrypted_content, since the provider kept no state.
+    """
+    follow_up = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+        response=_response_with_reasoning_and_tool_call(),
+        tool_results=[{"tool_call_id": "call-1", "name": "foo", "result": "done"}],
+        original_input="hi",
+        preserve_reasoning=True,
+    )
+
+    assert follow_up[1] == {
+        "type": "reasoning",
+        "id": "rs_1",
+        "summary": [],
+        "encrypted_content": "gAAAAA-opaque-blob",
+    }
+    # the reasoning item has to come before the function call it produced
+    assert follow_up[2] == {
+        "type": "function_call",
+        "call_id": "call-1",
+        "name": "foo",
+        "arguments": "{}",
+    }
+    assert follow_up[3] == {
+        "type": "function_call_output",
+        "call_id": "call-1",
+        "output": "done",
+    }
+
+
+def test_create_follow_up_input_omits_reasoning_when_stateful():
+    """With store=true the provider still holds the reasoning item, so don't resend it."""
+    follow_up = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+        response=_response_with_reasoning_and_tool_call(),
+        tool_results=[{"tool_call_id": "call-1", "name": "foo", "result": "done"}],
+        original_input="hi",
+    )
+
+    assert not [item for item in follow_up if isinstance(item, dict) and item.get("type") == "reasoning"]
+
+
+@pytest.mark.parametrize(
+    "call_params, expected",
+    [
+        ({"store": False}, True),
+        ({"store": True}, False),
+        ({"store": None}, False),
+        ({}, False),
+    ],
+)
+def test_is_persistence_disabled(call_params: dict[str, Any], expected: bool):
+    assert LiteLLM_Proxy_MCP_Handler._is_persistence_disabled(call_params) is expected
+
+
+@pytest.mark.parametrize(
+    "store, expected_previous_response_id",
+    [(False, None), (True, "resp_first")],
+)
+@pytest.mark.asyncio
+async def test_mcp_follow_up_call_is_stateless_when_store_is_false(
+    monkeypatch: pytest.MonkeyPatch, store: bool, expected_previous_response_id: str | None
+):
+    """
+    Regression test (LIT-5427): linking the MCP follow-up call with
+    previous_response_id fails for zero data retention callers, because store=false
+    means the first response was never persisted.
+    """
+    captured_calls: list[dict[str, Any]] = []
+    first_response = _response_with_reasoning_and_tool_call()
+
+    async def fake_aresponses(**kwargs: Any) -> ResponsesAPIResponse:
+        captured_calls.append(kwargs)
+        return first_response if len(captured_calls) == 1 else ResponsesAPIResponse(
+            id="resp_follow_up",
+            created_at=1234567891,
+            model="gpt-5",
+            object="response",
+            status="completed",
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+        )
+
+    async def fake_process(**kwargs: Any) -> tuple[list[Any], dict[str, str]]:
+        return ([], {"foo": "litellm_proxy"})
+
+    async def fake_execute(**kwargs: Any) -> list[dict[str, Any]]:
+        return [{"tool_call_id": "call-1", "name": "foo", "result": "done"}]
+
+    monkeypatch.setattr(responses_main, "aresponses", fake_aresponses)
+    monkeypatch.setattr(mcp_handler_module, "aresponses", fake_aresponses)
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler, "_process_mcp_tools_without_openai_transform", staticmethod(fake_process)
+    )
+    monkeypatch.setattr(LiteLLM_Proxy_MCP_Handler, "_execute_tool_calls", staticmethod(fake_execute))
+
+    await responses_main.aresponses_api_with_mcp(
+        input="hi",
+        model="gpt-5",
+        tools=[{"type": "mcp", "server_url": "litellm_proxy", "require_approval": "never"}],
+        store=store,
+    )
+
+    assert len(captured_calls) == 2
+    follow_up_call = captured_calls[1]
+    assert follow_up_call["previous_response_id"] == expected_previous_response_id
+
+    reasoning_items = [
+        item for item in follow_up_call["input"] if isinstance(item, dict) and item.get("type") == "reasoning"
+    ]
+    assert bool(reasoning_items) is (store is False)
