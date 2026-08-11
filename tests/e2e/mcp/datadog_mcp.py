@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 
 from e2e_config import datadog_mcp_url, unique_marker
 from lifecycle import ResourceManager
 from mcp_client import McpClient
 
 SEARCH_LOGS_TOOL = "search_datadog_logs"
+
+
+@dataclass(frozen=True, slots=True)
+class DatadogMcpServer:
+    server_id: str
+    alias: str
 
 
 def _dd_api_key() -> str:
@@ -30,25 +37,31 @@ def assert_dd_mcp_creds() -> None:
         )
 
 
+def _dd_static_headers() -> dict[str, str]:
+    return {
+        "DD-API-KEY": _dd_api_key(),
+        "DD-APPLICATION-KEY": _dd_app_key(),
+    }
+
+
 def register_datadog_mcp(
     client: McpClient,
     resources: ResourceManager,
     *,
     mcp_access_groups: list[str] | None = None,
-) -> str:
+    allowed_tools: list[str] | None = None,
+    toolsets: str = "core",
+) -> DatadogMcpServer:
     assert_dd_mcp_creds()
     name = f"e2e_dd_mcp_{unique_marker()}"
     server_id = client.register_server(
         server_name=name,
         alias=name,
-        url=datadog_mcp_url(toolsets="core"),
+        url=datadog_mcp_url(toolsets=toolsets),
         transport="http",
-        static_headers={
-            "DD-API-KEY": _dd_api_key(),
-            "DD-APPLICATION-KEY": _dd_app_key(),
-        },
-        allowed_tools=[SEARCH_LOGS_TOOL],
+        static_headers=_dd_static_headers(),
+        allowed_tools=allowed_tools if allowed_tools is not None else [SEARCH_LOGS_TOOL],
         mcp_access_groups=mcp_access_groups,
     )
     resources.defer(lambda: client.delete_server(server_id))
-    return server_id
+    return DatadogMcpServer(server_id=server_id, alias=name)
