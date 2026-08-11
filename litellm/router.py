@@ -112,6 +112,7 @@ from litellm.router_utils.common_utils import (
     filter_web_search_deployments,
     resolve_model_group_alias,
     truncate_fallback_error_detail,
+    warn_on_provider_credential_mismatch,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
@@ -7540,6 +7541,7 @@ class Router:
         """
         try:
             litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(**_litellm_params)
+            warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=_litellm_params)
             deployment = Deployment(
                 **deployment_info,
                 model_name=_model_name,
@@ -8231,6 +8233,11 @@ class Router:
         _deployment_model_id: Final = deployment.model_info.id
         if _deployment_model_id and self.has_model_id(_deployment_model_id):
             return None
+
+        warn_on_provider_credential_mismatch(
+            model_name=deployment.model_name,
+            litellm_params=deployment.litellm_params.model_dump(exclude_none=True),
+        )
 
         # add to model list
         _deployment: Final = deployment.to_json(exclude_none=True)
