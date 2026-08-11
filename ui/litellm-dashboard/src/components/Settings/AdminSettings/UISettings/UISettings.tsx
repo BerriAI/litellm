@@ -14,6 +14,7 @@ export default function UISettings() {
 
   const schema = data?.field_schema;
   const property = schema?.properties?.disable_model_add_for_internal_users;
+  const allowModelAddTeamAdminsProperty = schema?.properties?.allow_model_add_for_team_admins;
   const disableTeamAdminDeleteProperty = schema?.properties?.disable_team_admin_delete_team_user;
   const requireAuthForPublicAIHubProperty = schema?.properties?.require_auth_for_public_ai_hub;
   const forwardClientHeadersProperty = schema?.properties?.forward_client_headers_to_llm_api;
@@ -36,6 +37,20 @@ export default function UISettings() {
   const handleToggle = (checked: boolean) => {
     updateSettings(
       { disable_model_add_for_internal_users: checked },
+      {
+        onSuccess: () => {
+          NotificationManager.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
+  const handleToggleAllowModelAddTeamAdmins = (checked: boolean) => {
+    updateSettings(
+      { allow_model_add_for_team_admins: checked },
       {
         onSuccess: () => {
           NotificationManager.success("UI settings updated successfully");
@@ -263,6 +278,24 @@ export default function UISettings() {
             <Space direction="vertical" size={4}>
               <Typography.Text strong>Disable model add for internal users</Typography.Text>
               {property?.description && <Typography.Text type="secondary">{property.description}</Typography.Text>}
+            </Space>
+          </Space>
+
+          <Space align="start" size="middle" style={{ marginLeft: 32 }}>
+            <Switch
+              checked={Boolean(values.allow_model_add_for_team_admins)}
+              disabled={isUpdating || !isDisabledForInternalUsers}
+              loading={isUpdating}
+              onChange={handleToggleAllowModelAddTeamAdmins}
+              aria-label={allowModelAddTeamAdminsProperty?.description ?? "Allow model add for team admins"}
+            />
+            <Space direction="vertical" size={4}>
+              <Typography.Text strong type={!isDisabledForInternalUsers ? "secondary" : undefined}>
+                Allow model add for team admins
+              </Typography.Text>
+              {allowModelAddTeamAdminsProperty?.description && (
+                <Typography.Text type="secondary">{allowModelAddTeamAdminsProperty.description}</Typography.Text>
+              )}
             </Space>
           </Space>
 

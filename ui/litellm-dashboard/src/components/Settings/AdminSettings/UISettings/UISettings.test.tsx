@@ -35,6 +35,9 @@ const buildSettingsResponse = (overrides?: Partial<Record<string, unknown>>) => 
         disable_model_add_for_internal_users: {
           description: "Disable model add for internal users",
         },
+        allow_model_add_for_team_admins: {
+          description: "Allow model add for team admins",
+        },
         disable_team_admin_delete_team_user: {
           description: "Disable team admin delete team user",
         },
@@ -45,6 +48,7 @@ const buildSettingsResponse = (overrides?: Partial<Record<string, unknown>>) => 
     },
     values: {
       disable_model_add_for_internal_users: false,
+      allow_model_add_for_team_admins: false,
       disable_team_admin_delete_team_user: false,
       require_auth_for_public_ai_hub: false,
     },
@@ -72,6 +76,7 @@ describe("UISettings", () => {
 
     expect(screen.getByText("UI Settings")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Disable model add for internal users" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Allow model add for team admins" })).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Disable team admin delete team user" })).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Require authentication for public AI Hub" })).toBeInTheDocument();
   });
@@ -132,6 +137,75 @@ describe("UISettings", () => {
       }),
     );
     expect(NotificationManager.success).toHaveBeenCalledWith("UI settings updated successfully");
+  });
+
+  it("should toggle allow model add for team admins setting and call update", () => {
+    const mutateMock = vi.fn((_settings, options) => {
+      options?.onSuccess?.();
+    });
+
+    mockUseUpdateUISettings.mockReturnValue({
+      mutate: mutateMock,
+      isPending: false,
+      error: null,
+    });
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({
+        data: {
+          field_schema: buildSettingsResponse().data.field_schema,
+          values: {
+            ...buildSettingsResponse().data.values,
+            disable_model_add_for_internal_users: true,
+          },
+        },
+      }),
+    );
+
+    render(<UISettings />);
+
+    const toggle = screen.getByRole("switch", { name: "Allow model add for team admins" });
+
+    act(() => {
+      fireEvent.click(toggle);
+    });
+
+    expect(mutateMock).toHaveBeenCalledWith(
+      { allow_model_add_for_team_admins: true },
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onError: expect.any(Function),
+      }),
+    );
+    expect(NotificationManager.success).toHaveBeenCalledWith("UI settings updated successfully");
+  });
+
+  // The exemption only matters once the kill switch is on, so the control stays disabled until then.
+  it("should disable the team-admin exemption toggle until the kill switch is on", () => {
+    render(<UISettings />);
+
+    const toggle = screen.getByRole("switch", { name: "Allow model add for team admins" });
+
+    expect(toggle).toBeDisabled();
+  });
+
+  it("should enable the team-admin exemption toggle once the kill switch is on", () => {
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({
+        data: {
+          field_schema: buildSettingsResponse().data.field_schema,
+          values: {
+            ...buildSettingsResponse().data.values,
+            disable_model_add_for_internal_users: true,
+          },
+        },
+      }),
+    );
+
+    render(<UISettings />);
+
+    const toggle = screen.getByRole("switch", { name: "Allow model add for team admins" });
+
+    expect(toggle).not.toBeDisabled();
   });
 
   it("should toggle require auth for public AI Hub setting and call update", () => {

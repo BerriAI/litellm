@@ -25,6 +25,7 @@ export default function AutoRoutersTabPanel() {
     {
       teams: teams ?? null,
       disabledForInternalUsers: isInternalUser && uiSettings?.values?.disable_model_add_for_internal_users === true,
+      allowTeamAdmins: uiSettings?.values?.allow_model_add_for_team_admins === true,
     },
   );
 

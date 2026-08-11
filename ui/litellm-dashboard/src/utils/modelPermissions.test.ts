@@ -10,7 +10,7 @@ const PROXY_ADMIN = { userRole: "Admin", userID: "u-admin" };
 const TEAM_ADMIN = { userRole: "Internal User", userID: "u-team-admin" };
 const MEMBER = { userRole: "Internal User", userID: "u-member" };
 
-const noLimits = { disabledForInternalUsers: false };
+const noLimits = { disabledForInternalUsers: false, allowTeamAdmins: false };
 
 describe("modelCreationScope", () => {
   it("lets a proxy admin create without naming a team", () => {
@@ -31,9 +31,32 @@ describe("modelCreationScope", () => {
 
   // The admin setting is scoped to internal users and must never lock out a proxy admin.
   it("honours the internal-user kill switch without touching proxy admins", () => {
-    const limits = { teams: teamWhere("u-team-admin", "admin"), disabledForInternalUsers: true };
+    const limits = { teams: teamWhere("u-team-admin", "admin"), disabledForInternalUsers: true, allowTeamAdmins: false };
     expect(modelCreationScope(TEAM_ADMIN, limits)).toBe("forbidden");
     expect(modelCreationScope(PROXY_ADMIN, limits)).toBe("unscoped-ok");
+  });
+
+  // allow_model_add_for_team_admins exempts team admins from the internal-user kill switch,
+  // but leaves a plain member forbidden and never grants an unscoped create.
+  it("lets a team admin through the kill switch when the team-admin exemption is on", () => {
+    const limits = { teams: teamWhere("u-team-admin", "admin"), disabledForInternalUsers: true, allowTeamAdmins: true };
+    expect(modelCreationScope(TEAM_ADMIN, limits)).toBe("team-required");
+  });
+
+  it("still forbids a plain member when the team-admin exemption is on", () => {
+    const limits = { teams: teamWhere("u-member", "user"), disabledForInternalUsers: true, allowTeamAdmins: true };
+    expect(modelCreationScope(MEMBER, limits)).toBe("forbidden");
+  });
+
+  it("does not change a proxy admin's unscoped create when the team-admin exemption is on", () => {
+    const limits = { teams: teamWhere("u-team-admin", "admin"), disabledForInternalUsers: true, allowTeamAdmins: true };
+    expect(modelCreationScope(PROXY_ADMIN, limits)).toBe("unscoped-ok");
+  });
+
+  // With the kill switch off, the exemption is a no-op: a team admin already gets team-required.
+  it("leaves team admin access unchanged when the exemption is on but the kill switch is off", () => {
+    const limits = { teams: teamWhere("u-team-admin", "admin"), disabledForInternalUsers: false, allowTeamAdmins: true };
+    expect(modelCreationScope(TEAM_ADMIN, limits)).toBe("team-required");
   });
 
   // org_admin and Admin Viewer are in all_admin_roles but are not PROXY_ADMIN to the API, so

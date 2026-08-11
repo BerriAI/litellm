@@ -1403,6 +1403,57 @@ class TestProxySettingEndpoints:
         stored_settings = json.loads(create_data["ui_settings"])
         assert stored_settings["disable_model_add_for_internal_users"] is True
 
+    def test_update_ui_settings_allow_model_add_for_team_admins(self, mock_auth, monkeypatch):
+        """allow_model_add_for_team_admins is allowlisted and round-trips through GET"""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        payload = {
+            "disable_model_add_for_internal_users": True,
+            "allow_model_add_for_team_admins": True,
+        }
+
+        try:
+            response = client.patch("/update/ui_settings", json=payload)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["settings"]["allow_model_add_for_team_admins"] is True
+
+        call_args = mock_prisma.db.litellm_uisettings.upsert.call_args
+        stored_settings = json.loads(call_args.kwargs["data"]["create"]["ui_settings"])
+        assert stored_settings["allow_model_add_for_team_admins"] is True
+
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(
+            return_value=MagicMock(ui_settings=stored_settings)
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+        try:
+            get_response = client.get("/get/ui_settings")
+        finally:
+            app.dependency_overrides.clear()
+
+        assert get_response.status_code == 200
+        get_data = get_response.json()
+        assert "allow_model_add_for_team_admins" in get_data["field_schema"]["properties"]
+        assert get_data["values"]["allow_model_add_for_team_admins"] is True
+
     def test_update_ui_settings_ignores_non_allowlisted_value(
         self, mock_auth, monkeypatch
     ):

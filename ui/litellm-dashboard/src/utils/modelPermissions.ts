@@ -24,6 +24,8 @@ export interface ModelCreationLimits {
   teams: Team[] | null;
   /** The admin setting that withdraws model creation from internal users. */
   disabledForInternalUsers: boolean;
+  /** The admin setting that exempts team admins from disabledForInternalUsers. */
+  allowTeamAdmins: boolean;
 }
 
 const isTeamAdminOf = (teams: Team[] | null, userID: string, teamId: string): boolean => {
@@ -38,15 +40,13 @@ const isTeamAdminOf = (teams: Team[] | null, userID: string, teamId: string): bo
  */
 export const modelCreationScope = (
   { userRole, userID }: ModelActor,
-  { teams, disabledForInternalUsers }: ModelCreationLimits,
+  { teams, disabledForInternalUsers, allowTeamAdmins }: ModelCreationLimits,
 ): ModelWriteScope => {
   if (userRole != null && isProxyAdminRole(userRole)) {
     return "unscoped-ok";
   }
-  if (disabledForInternalUsers) {
-    return "forbidden";
-  }
-  if (userID != null && isUserTeamAdminForAnyTeam(teams, userID)) {
+  const isTeamAdmin = userID != null && isUserTeamAdminForAnyTeam(teams, userID);
+  if (isTeamAdmin && (!disabledForInternalUsers || allowTeamAdmins)) {
     return "team-required";
   }
   return "forbidden";

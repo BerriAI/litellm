@@ -202,6 +202,11 @@ class UISettings(BaseModel):
         description="If true, internal users cannot add models from the UI",
     )
 
+    allow_model_add_for_team_admins: bool = Field(
+        default=False,
+        description="If true, team admins can add models (scoped to their team) from the UI, even when disable_model_add_for_internal_users is true.",
+    )
+
     disable_team_admin_delete_team_user: bool = Field(
         default=False,
         description="Prevents Team Admins from deleting users from the teams they manage. Useful for SCIM provisioning where team membership is defined externally.",
@@ -292,6 +297,7 @@ class UISettingsResponse(SettingsResponse):
 # Allowlist of UI settings that can be stored
 ALLOWED_UI_SETTINGS_FIELDS: Final = {
     "disable_model_add_for_internal_users",
+    "allow_model_add_for_team_admins",
     "disable_team_admin_delete_team_user",
     "enabled_ui_pages_internal_users",
     "require_auth_for_public_ai_hub",
