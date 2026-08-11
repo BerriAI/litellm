@@ -85,6 +85,12 @@ class RichMessagesRequest(BaseModel):
     messages: list[RichMessage]
 
 
+class CompletionsRequest(BaseModel):
+    model: str
+    prompt: str
+    max_tokens: int = 32
+
+
 class EmbeddingsRequest(BaseModel):
     model: str
     input: str
@@ -193,6 +199,14 @@ class MessagesResult(BaseModel):
         return "".join(block.text or "" for block in self.content)
 
 
+class CompletionChoice(BaseModel):
+    text: str | None = None
+
+
+class CompletionsResult(BaseModel):
+    choices: list[CompletionChoice] = []
+
+
 class EmbeddingItem(BaseModel):
     embedding: list[float] = []
 
@@ -221,6 +235,12 @@ class ImageItem(BaseModel):
 
 class ImagesResult(BaseModel):
     data: list[ImageItem] = []
+
+
+class ImageEditForm(BaseModel):
+    model: str
+    prompt: str
+    n: int = 1
 
 
 class TranscriptionResult(BaseModel):
@@ -326,6 +346,15 @@ class EndpointsClient:
             ),
         )
 
+    def text_completions(
+        self, key: str, model: str, prompt: str, *, max_tokens: int = 32
+    ) -> StreamingResponse:
+        return self._send(
+            "/v1/completions",
+            key,
+            CompletionsRequest(model=model, prompt=prompt, max_tokens=max_tokens),
+        )
+
     def embeddings(self, key: str, model: str, text: str) -> StreamingResponse:
         return self._send("/embeddings", key, EmbeddingsRequest(model=model, input=text))
 
@@ -378,6 +407,20 @@ class EndpointsClient:
     def images(self, key: str, model: str, prompt: str) -> StreamingResponse:
         return self._send(
             "/v1/images/generations", key, ImageRequest(model=model, prompt=prompt)
+        )
+
+    def image_edit(
+        self, key: str, model: str, prompt: str, image: bytes, *, filename: str = "image.png"
+    ) -> Result[ImagesResult]:
+        return self.proxy.transport.upload(
+            "/v1/images/edits",
+            headers=self.proxy.transport.bearer(key),
+            form=ImageEditForm(model=model, prompt=prompt),
+            filename=filename,
+            content=image,
+            file_content_type="image/png",
+            file_field="image",
+            response_type=ImagesResult,
         )
 
 

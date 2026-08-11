@@ -290,3 +290,105 @@ def test_default_ttl_paths_unchanged_without_storage_ttl():
     server = _server(oauth2_flow=None)
     assert _compute_per_user_token_ttl(server, expires_in=86400) == 86400 - MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS
     assert _compute_per_user_token_ttl(server, expires_in=None) == MCP_PER_USER_TOKEN_DEFAULT_TTL
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "configured, expected",
+    [
+        (None, None),
+        ("auto", "https://mcp.example.com/mcp"),
+        ("api://m2m-audience", "api://m2m-audience"),
+    ],
+)
+async def test_client_credentials_sends_rfc8707_resource(configured, expected):
+    """The client_credentials fetch carries the RFC 8707 resource indicator too, resolved through
+    the same helper the interactive legs use, so the knob means one thing for every oauth2 flow on
+    a server. Unset omits it, which is the default and preserves today's request body."""
+    server = _server(server_id=f"srv-{configured}", upstream_resource=configured)
+    mock_client = AsyncMock()
+    mock_client.post.return_value = _token_response("m2m-tok")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        await resolve_mcp_auth(server)
+
+    post_data = mock_client.post.call_args[1]["data"]
+    assert post_data.get("resource") == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"upstream_resource": "api://new-audience"},
+        {"scopes": ["other.scope"]},
+        {"client_secret": "rotated-secret"},
+        {"token_url": "https://auth.example.com/other/token"},
+    ],
+)
+async def test_token_cache_mints_afresh_when_the_token_request_changes(changed):
+    """A minted token is only reusable for the exact request that produced it. Keying the cache on
+    server_id alone kept serving a token carrying the previous scopes, secret, or audience until it
+    expired, so setting upstream_resource on a live server appeared to do nothing. Each input that
+    reaches the wire must miss the cache."""
+    cache = MCPOAuth2TokenCache()
+    mock_client = AsyncMock()
+    mock_client.post.side_effect = [_token_response("tok-before"), _token_response("tok-after")]
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        before = await cache.async_get_token(_server())
+        after = await cache.async_get_token(_server(**changed))
+
+    assert before == "tok-before"
+    assert after == "tok-after"
+    assert mock_client.post.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_token_cache_still_reuses_a_token_when_nothing_changed():
+    """The flip side: an unchanged config must keep hitting the cache, so the identity key does not
+    turn every call into a fresh mint."""
+    cache = MCPOAuth2TokenCache()
+    mock_client = AsyncMock()
+    mock_client.post.return_value = _token_response("tok-reused")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        first = await cache.async_get_token(_server(upstream_resource="auto"))
+        second = await cache.async_get_token(_server(upstream_resource="auto"))
+
+    assert first == second == "tok-reused"
+    assert mock_client.post.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_invalidate_clears_every_identity_for_a_server():
+    """A 401 invalidates the server, not one configuration of it, so entries left behind by an
+    earlier config cannot be served after the eviction."""
+    cache = MCPOAuth2TokenCache()
+    mock_client = AsyncMock()
+    mock_client.post.side_effect = [
+        _token_response("tok-a"),
+        _token_response("tok-b"),
+        _token_response("tok-after-invalidate"),
+    ]
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        await cache.async_get_token(_server())
+        await cache.async_get_token(_server(upstream_resource="api://second"))
+        cache.invalidate("srv-1")
+        refetched = await cache.async_get_token(_server())
+
+    assert refetched == "tok-after-invalidate"
+    assert mock_client.post.call_count == 3

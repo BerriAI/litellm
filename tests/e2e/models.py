@@ -43,10 +43,12 @@ class KeyLoggingCallback(BaseModel):
 
 class KeyMetadata(BaseModel):
     logging: list[KeyLoggingCallback] | None = None
+    priority: str | None = None
 
 
 class ObjectPermission(BaseModel):
     mcp_servers: list[str] | None = None
+    mcp_access_groups: list[str] | None = None
 
 
 class KeyGenerateBody(BaseModel):
@@ -96,6 +98,7 @@ class LiteLLMBudgetTable(BaseModel):
 
 class KeyInfo(BaseModel):
     key_alias: str | None = None
+    metadata: KeyMetadata | None = None
     models: list[str] = []
     tpm_limit: int | None = None
     rpm_limit: int | None = None
@@ -344,14 +347,26 @@ class ToolInputSchema(BaseModel):
     required: list[str] = []
 
 
-class AnthropicToolSearchTool(BaseModel):
-    """The tool_search discovery tool. `type` carries the SDK-version-pinned
-    suffix (e.g. ``tool_search_tool_regex_20251119``) that LiteLLM keys its
-    per-provider beta-header translation on; `name` is the unsuffixed
-    canonical name the upstream accepts."""
+class AnthropicServerTool(BaseModel):
+    """An Anthropic-managed tool the upstream executes itself. It carries no
+    `input_schema`; `type` is the SDK-version-pinned identifier LiteLLM keys its
+    per-provider translation on, and `name` is the unsuffixed canonical name the
+    upstream accepts."""
 
     type: str
     name: str
+
+
+class AnthropicToolSearchTool(AnthropicServerTool):
+    """The tool_search discovery tool, e.g. ``tool_search_tool_regex_20251119``."""
+
+
+class AnthropicWebSearchTool(AnthropicServerTool):
+    """The web_search server tool, e.g. ``web_search_20250305``. Distinct from
+    Claude Code's client-side ``WebSearch`` tool, which is an ordinary custom
+    tool the CLI executes and feeds back as a tool_result."""
+
+    max_uses: int | None = None
 
 
 class AnthropicCustomTool(BaseModel):
@@ -360,7 +375,7 @@ class AnthropicCustomTool(BaseModel):
     input_schema: ToolInputSchema
 
 
-type AnthropicTool = AnthropicToolSearchTool | AnthropicCustomTool
+type AnthropicTool = AnthropicToolSearchTool | AnthropicWebSearchTool | AnthropicCustomTool
 
 
 class AnthropicMessagesBody(BaseModel):
@@ -693,6 +708,7 @@ class LiteLLMParamsBody(BaseModel):
     complexity_router_config: dict[str, object] | None = None
     mock_response: str | None = None
     timeout: float | None = None
+    tpm: int | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
