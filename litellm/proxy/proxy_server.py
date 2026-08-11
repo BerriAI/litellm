@@ -14193,11 +14193,8 @@ async def login(request: Request):
 
     # Build redirect URL
     litellm_dashboard_ui = get_custom_url(str(request.base_url))
-    if litellm_dashboard_ui.endswith("/"):
-        litellm_dashboard_ui += "ui/"
-    else:
-        litellm_dashboard_ui += "/ui/"
-    litellm_dashboard_ui += "?login=success"
+    litellm_dashboard_ui = litellm_dashboard_ui.rstrip("/")
+    litellm_dashboard_ui += "/ui?login=success"
 
     # Honor a same-origin return_to preserved by the sign-in page (e.g. the aggregate DCR connect flow's
     # authorize round-trip), mirroring the SSO callback; otherwise land on the dashboard. Gated by
@@ -14267,11 +14264,8 @@ async def login_v2(request: Request):
         jwt_token: Final = encode_ui_session_jwt(returned_ui_token_object, cast(str, master_key))
 
         litellm_dashboard_ui = get_custom_url(str(request.base_url))
-        if litellm_dashboard_ui.endswith("/"):
-            litellm_dashboard_ui += "ui/"
-        else:
-            litellm_dashboard_ui += "/ui/"
-        litellm_dashboard_ui += "?login=success"
+        litellm_dashboard_ui = litellm_dashboard_ui.rstrip("/")
+        litellm_dashboard_ui += "/ui?login=success"
 
         # Token is included in the response body so the UI can set a JS-accessible
         # cookie even when a reverse proxy (e.g. nginx-ingress) adds HttpOnly to the
@@ -14340,11 +14334,8 @@ async def login_v3(request: Request):
         jwt_token: Final = encode_ui_session_jwt(returned_ui_token_object, cast(str, master_key))
 
         litellm_dashboard_ui = get_custom_url(str(request.base_url))
-        if litellm_dashboard_ui.endswith("/"):
-            litellm_dashboard_ui += "ui/"
-        else:
-            litellm_dashboard_ui += "/ui/"
-        litellm_dashboard_ui += "?login=success"
+        litellm_dashboard_ui = litellm_dashboard_ui.rstrip("/")
+        litellm_dashboard_ui += "/ui?login=success"
 
         # Store JWT behind a single-use opaque code (60s TTL)
         code: Final = secrets.token_urlsafe(32)
@@ -14492,10 +14483,8 @@ async def onboarding(invite_link: str, request: Request):
         raise HTTPException(status_code=401, detail={"error": "User does not exist in db."})
 
     litellm_dashboard_ui = get_custom_url(str(request.base_url))
-    if litellm_dashboard_ui.endswith("/"):
-        litellm_dashboard_ui += "ui/onboarding"
-    else:
-        litellm_dashboard_ui += "/ui/onboarding"
+    litellm_dashboard_ui = litellm_dashboard_ui.rstrip("/")
+    litellm_dashboard_ui += "/ui/onboarding"
     import jwt
 
     user_email: Final = user_obj.user_email
@@ -14751,11 +14740,8 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
         ) from e
 
     litellm_dashboard_ui = get_custom_url(str(request.base_url))
-    if litellm_dashboard_ui.endswith("/"):
-        litellm_dashboard_ui += "ui/"
-    else:
-        litellm_dashboard_ui += "/ui/"
-    litellm_dashboard_ui += "?login=success"
+    litellm_dashboard_ui = litellm_dashboard_ui.rstrip("/")
+    litellm_dashboard_ui += "/ui?login=success"
     return {
         "login_url": litellm_dashboard_ui,
         "token": jwt_token,
