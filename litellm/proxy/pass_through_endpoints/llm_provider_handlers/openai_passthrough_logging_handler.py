@@ -26,7 +26,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
     PassthroughStandardLoggingPayload,
@@ -464,7 +464,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
     def _build_complete_streaming_response(
         self,
-        all_chunks: list,
+        all_chunks: list[str],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
     ) -> ModelResponse | TextCompletionResponse | None:
@@ -519,6 +519,15 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             return None
 
     @staticmethod
+    def _build_complete_streaming_responses_response(all_chunks: list[str]) -> ResponsesAPIResponse | None:
+        for chunk_str in reversed(all_chunks):
+            try:
+                return ResponseCompletedEvent.model_validate_json(chunk_str.removeprefix("data: ")).response
+            except ValueError:
+                continue
+        return None
+
+    @staticmethod
     def _handle_logging_openai_collected_chunks(
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
@@ -536,13 +545,19 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             # Extract model from request body
             model: Final = request_body.get("model", "gpt-4o")
 
+            is_responses: Final = OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
+
             # Build complete response from chunks using our streaming handler
             handler: Final = OpenAIPassthroughLoggingHandler()
             handler_instance: Final = handler
-            complete_response: Final = handler._build_complete_streaming_response(
-                all_chunks=all_chunks,
-                litellm_logging_obj=litellm_logging_obj,
-                model=model,
+            complete_response: Final = (
+                handler._build_complete_streaming_responses_response(all_chunks=all_chunks)
+                if is_responses
+                else handler._build_complete_streaming_response(
+                    all_chunks=all_chunks,
+                    litellm_logging_obj=litellm_logging_obj,
+                    model=model,
+                )
             )
 
             if complete_response is None:
@@ -554,10 +569,19 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
             custom_llm_provider: Final = litellm_logging_obj.model_call_details.get("custom_llm_provider", "openai")
             # Calculate cost using LiteLLM's cost calculator
-            response_cost: Final = litellm.completion_cost(
-                completion_response=complete_response,
-                model=model,
-                custom_llm_provider=custom_llm_provider,
+            response_cost: Final = (
+                litellm.completion_cost(
+                    completion_response=complete_response,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    call_type="responses",
+                )
+                if is_responses
+                else litellm.completion_cost(
+                    completion_response=complete_response,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                )
             )
 
             # Preserve existing litellm_params to maintain metadata tags
