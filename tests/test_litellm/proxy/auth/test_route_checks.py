@@ -462,6 +462,8 @@ def test_virtual_key_llm_api_routes_rejects_mcp_multi_segment_admin_subpaths(
         ("/mcp", "POST"),
         ("/mcp/", "POST"),
         ("/mcp/my-server", "POST"),  # matches the /mcp/{subpath} pattern
+        ("/mcp/my-server/", "POST"),  # same server, trailing slash
+        ("/mcp/my-server/mcp", "POST"),  # streamable-http transport sub-path
         ("/mcp/tools", "GET"),
         ("/mcp/tools/list", "POST"),
         ("/mcp/tools/call", "POST"),
