@@ -4,6 +4,24 @@ import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AddGuardrailForm from "./add_guardrail_form";
 
+const localization = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  const t = (key: string, values?: Record<string, unknown>) => {
+    const copy = key.split(".").reduce<unknown>((value, segment) => {
+      if (typeof value !== "object" || value === null) return undefined;
+      return (value as Record<string, unknown>)[segment];
+    }, resources[localization.language].gateway);
+    if (typeof copy !== "string") return key;
+    return Object.entries(values ?? {}).reduce(
+      (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+      copy,
+    );
+  };
+  return { useTranslation: () => ({ t }) };
+});
+
 vi.mock("@/components/networking", () => ({
   createGuardrailCall: vi.fn(),
   getGuardrailProviderSpecificParams: vi.fn().mockResolvedValue({}),
@@ -19,6 +37,7 @@ const renderForm = () => {
 
 describe("AddGuardrailForm close behavior", () => {
   beforeEach(() => {
+    localization.language = "en";
     vi.clearAllMocks();
   });
 
@@ -37,13 +56,14 @@ describe("AddGuardrailForm close behavior", () => {
 
   it("closes when the user clicks the explicit close button", () => {
     const { onClose } = renderForm();
-    fireEvent.click(screen.getByRole("button", { name: "✕" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("AddGuardrailForm provider options", () => {
   beforeEach(() => {
+    localization.language = "en";
     vi.clearAllMocks();
   });
 
@@ -53,5 +73,16 @@ describe("AddGuardrailForm provider options", () => {
 
     const logo = await screen.findByAltText("Presidio PII logo");
     expect(logo.getAttribute("src")).toContain("microsoft_azure.svg");
+  });
+
+  it("renders the creation wizard in Russian", () => {
+    localization.language = "ru";
+    renderForm();
+
+    expect(screen.getByText("Создать ограничитель")).toBeInTheDocument();
+    expect(screen.getByText("Основные сведения")).toBeInTheDocument();
+    expect(screen.getByLabelText("Название ограничителя")).toBeInTheDocument();
+    expect(screen.getByLabelText("Провайдер ограничителя")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Далее" })).toBeInTheDocument();
   });
 });
