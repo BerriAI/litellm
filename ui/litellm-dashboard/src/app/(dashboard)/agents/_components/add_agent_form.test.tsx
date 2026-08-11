@@ -5,6 +5,24 @@ import AddAgentForm from "./add_agent_form";
 import * as networking from "@/components/networking";
 import type { AgentCreateInfo } from "@/components/networking";
 
+const localization = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  const t = (key: string, values?: Record<string, unknown>) => {
+    const copy = key.split(".").reduce<unknown>((value, segment) => {
+      if (typeof value !== "object" || value === null) return undefined;
+      return (value as Record<string, unknown>)[segment];
+    }, resources[localization.language].gateway);
+    if (typeof copy !== "string") return key;
+    return Object.entries(values ?? {}).reduce(
+      (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+      copy,
+    );
+  };
+  return { useTranslation: () => ({ t }) };
+});
+
 vi.mock("@/components/networking", () => ({
   createAgentCall: vi.fn(),
   getAgentCreateMetadata: vi.fn(),
@@ -37,10 +55,22 @@ const renderForm = () =>
 
 describe("AddAgentForm logos", () => {
   beforeEach(() => {
+    localization.language = "en";
     vi.mocked(networking.getAgentCreateMetadata).mockReset().mockResolvedValue([a2aInfo]);
     vi.mocked(networking.getAgentsList).mockReset().mockResolvedValue({ agents: [] });
     vi.mocked(networking.keyListCall).mockReset().mockResolvedValue({ keys: [] });
     vi.mocked(networking.modelAvailableCall).mockReset().mockResolvedValue({ data: [] });
+  });
+
+  it("renders the creation wizard in Russian", async () => {
+    localization.language = "ru";
+    renderForm();
+
+    expect(await screen.findByText("Добавление агента")).toBeInTheDocument();
+    expect(screen.getByText("Настройка")).toBeInTheDocument();
+    expect(screen.getByText("Доступ")).toBeInTheDocument();
+    expect(screen.getByText("Контроль")).toBeInTheDocument();
+    expect(screen.getByText("Далее →")).toBeInTheDocument();
   });
 
   it("renders the modal title and agent type selection logos as images from logo_url", async () => {

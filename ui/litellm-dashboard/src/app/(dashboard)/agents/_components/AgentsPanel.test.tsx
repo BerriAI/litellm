@@ -5,6 +5,24 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import AgentsPanel from "./AgentsPanel";
 import * as networking from "@/components/networking";
 
+const localization = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  const t = (key: string, values?: Record<string, unknown>) => {
+    const copy = key.split(".").reduce<unknown>((value, segment) => {
+      if (typeof value !== "object" || value === null) return undefined;
+      return (value as Record<string, unknown>)[segment];
+    }, resources[localization.language].gateway);
+    if (typeof copy !== "string") return key;
+    return Object.entries(values ?? {}).reduce(
+      (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+      copy,
+    );
+  };
+  return { useTranslation: () => ({ t }) };
+});
+
 vi.mock("@/components/networking", () => ({
   getAgentsList: vi.fn().mockResolvedValue({ agents: [] }),
   deleteAgentCall: vi.fn().mockResolvedValue({}),
@@ -20,9 +38,21 @@ vi.mock("./agent_info", () => ({
 
 describe("AgentsPanel", () => {
   beforeEach(() => {
+    localization.language = "en";
     // mockReset (not mockClear) so an unconsumed *Once queue cannot leak into the next test
     vi.mocked(networking.getAgentsList).mockReset().mockResolvedValue({ agents: [] });
     vi.mocked(networking.deleteAgentCall).mockReset().mockResolvedValue({});
+  });
+
+  it("renders the agents page in Russian", async () => {
+    localization.language = "ru";
+    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
+
+    expect(screen.getByRole("heading", { name: "Агенты" })).toBeInTheDocument();
+    expect(screen.getByText("Добавить агента")).toBeInTheDocument();
+    expect(screen.getByText("Проверка доступности")).toBeInTheDocument();
+    expect(await screen.findByText("Агентов пока нет")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Название агента" })).toBeInTheDocument();
   });
 
   it("should render the Agents panel title", () => {

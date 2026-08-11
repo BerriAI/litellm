@@ -15,17 +15,19 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
+import type { TFunction } from "i18next";
 
 interface AgentRowActionsProps {
   agent: Agent;
   onDeleteClick: (agentId: string, agentName: string) => void;
+  t: TFunction<"gateway">;
 }
 
-function AgentRowActions({ agent, onDeleteClick }: AgentRowActionsProps) {
+function AgentRowActions({ agent, onDeleteClick, t }: AgentRowActionsProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label="Open agent actions"
+        aria-label={t("agents.actions.open")}
         data-testid={`agent-actions-${agent.agent_id}`}
         className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-muted-foreground")}
       >
@@ -38,7 +40,7 @@ function AgentRowActions({ agent, onDeleteClick }: AgentRowActionsProps) {
           onClick={() => onDeleteClick(agent.agent_id, agent.agent_name)}
         >
           <Trash2 />
-          Delete
+          {t("agents.actions.delete")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -49,18 +51,20 @@ interface AgentsTableColumnsDeps {
   isAdmin: boolean;
   onAgentClick: (agentId: string) => void;
   onDeleteClick: (agentId: string, agentName: string) => void;
+  t: TFunction<"gateway">;
 }
 
 export const getAgentsTableColumns = ({
   isAdmin,
   onAgentClick,
   onDeleteClick,
+  t,
 }: AgentsTableColumnsDeps): ColumnDef<Agent>[] => [
   {
     id: "agent_name",
     accessorKey: "agent_name",
-    meta: { title: "Agent Name" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Agent Name" />,
+    meta: { title: t("agents.columns.name") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("agents.columns.name")} />,
     size: 200,
     enableSorting: true,
     cell: ({ row }) => {
@@ -75,8 +79,8 @@ export const getAgentsTableColumns = ({
   {
     id: "agent_id",
     accessorKey: "agent_id",
-    meta: { title: "Agent ID" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Agent ID" />,
+    meta: { title: t("agents.columns.id") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("agents.columns.id")} />,
     size: 200,
     enableSorting: true,
     cell: ({ row }) => (
@@ -90,22 +94,22 @@ export const getAgentsTableColumns = ({
   {
     id: "spend",
     accessorKey: "spend",
-    meta: { title: "Spend (USD)" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Spend (USD)" />,
+    meta: { title: t("agents.columns.spend") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("agents.columns.spend")} />,
     size: 130,
     enableSorting: true,
     cell: ({ row }) => <MoneyCell value={row.original.spend} decimals={4} />,
   },
   {
     id: "model",
-    meta: { title: "Model" },
-    header: "Model",
+    meta: { title: t("agents.columns.model") },
+    header: t("agents.columns.model"),
     size: 170,
     enableSorting: false,
     cell: ({ row }) => {
       const model = row.original.litellm_params?.model;
       if (!model) {
-        return <span className="text-muted-foreground">N/A</span>;
+        return <span className="text-muted-foreground">{t("agents.status.unavailable")}</span>;
       }
       return (
         <Badge variant="outline" className="max-w-40 font-normal">
@@ -122,24 +126,24 @@ export const getAgentsTableColumns = ({
       const timestamp = agent.created_at ? new Date(agent.created_at).getTime() : 0;
       return Number.isNaN(timestamp) ? 0 : timestamp;
     },
-    meta: { title: "Created" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Created" />,
+    meta: { title: t("agents.columns.created") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("agents.columns.created")} />,
     size: 150,
     enableSorting: true,
     cell: ({ row }) => <DateCell value={row.original.created_at} precision="date" />,
   },
   {
     id: "status",
-    meta: { title: "Status" },
-    header: "Status",
+    meta: { title: t("agents.columns.status") },
+    header: t("agents.columns.status"),
     size: 130,
     enableSorting: false,
     cell: ({ row }) => {
       const hasKeys = (row.original.keys?.length ?? 0) > 0;
       return hasKeys ? (
-        <StatusBadge tone="success" label="Active" />
+        <StatusBadge tone="success" label={t("agents.status.active")} />
       ) : (
-        <StatusBadge tone="warning" label="Needs Setup" />
+        <StatusBadge tone="warning" label={t("agents.status.needsSetup")} />
       );
     },
   },
@@ -148,13 +152,13 @@ export const getAgentsTableColumns = ({
         {
           id: "actions",
           meta: { className: "text-right", headerClassName: "text-right" },
-          header: () => <span className="sr-only">Actions</span>,
+          header: () => <span className="sr-only">{t("agents.columns.actions")}</span>,
           size: 64,
           enableSorting: false,
           enableHiding: false,
           cell: ({ row }) => (
             <div className="flex justify-end">
-              <AgentRowActions agent={row.original} onDeleteClick={onDeleteClick} />
+              <AgentRowActions agent={row.original} onDeleteClick={onDeleteClick} t={t} />
             </div>
           ),
         } satisfies ColumnDef<Agent>,
