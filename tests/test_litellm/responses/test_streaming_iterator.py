@@ -235,3 +235,24 @@ def test_sync_transport_error_before_completed_event_raises():
     with pytest.raises(httpx.ReadError):
         for _ in iterator:
             pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_completed_event_is_unwrapped_only_for_non_streaming_callers(stream: bool):
+    """A non-streaming caller can still drain this iterator (chat -> responses bridge
+    against a provider that always answers with SSE). The success handlers only unwrap
+    the completion event when logging in stream mode, so a wrapped event there yields no
+    standard_logging_object and the SpendLogs row is dropped (#36426)."""
+    logging_obj = _logging_obj_stub()
+    logging_obj.stream = stream
+
+    iterator = _make_iterator(sse_events=_COMPLETE_STREAM_EVENTS, logging_obj=logging_obj)
+    async for _ in iterator:
+        pass
+
+    logged = logging_obj.dispatch_success_handlers.call_args.args[0]
+    if stream:
+        assert logged.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    else:
+        assert isinstance(logged, ResponsesAPIResponse)
