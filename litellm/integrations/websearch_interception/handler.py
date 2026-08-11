@@ -949,9 +949,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         if not native_blocks:
             return response
         if isinstance(response, _MutableMappingLike) and isinstance(response, dict):
-            response["content"] = WebSearchInterceptionLogger._prepended_content(
-                response.get("content"), native_blocks
-            )
+            response["content"] = WebSearchInterceptionLogger._prepended_content(response.get("content"), native_blocks)
             return response
         if isinstance(response, _HasContent):
             try:

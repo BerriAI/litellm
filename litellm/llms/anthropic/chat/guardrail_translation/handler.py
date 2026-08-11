@@ -1163,9 +1163,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         """
         try:
             sse_string: Final = sse_bytes.decode("utf-8")
-            return "".join(
-                self._sse_text_delta(event) for event in sse_string.split("\n\n") if event.strip()
-            )
+            return "".join(self._sse_text_delta(event) for event in sse_string.split("\n\n") if event.strip())
         except Exception as e:
             verbose_proxy_logger.error("Error extracting text from SSE: %s", e)
             return ""
