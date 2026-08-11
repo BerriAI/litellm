@@ -219,10 +219,31 @@ async def test_auth_type_switch_clears_stale_flow_scoped_fields():
 
 
 @pytest.mark.asyncio
-async def test_url_change_clears_stale_discovered_oauth_fields():
-    """Re-pointing the server url at a potentially different upstream must clear the discovered or
-    trust-on-first-use OAuth issuer and endpoints, so the new upstream re-discovers instead of
-    anchoring on the previous upstream's issuer (RFC 8414 §3.3 against a stale anchor)."""
+async def test_explicit_null_clears_upstream_resource_and_keeps_the_rest_of_the_blob():
+    """The knob's own guidance tells an operator to unset it when the authorization server rejects
+    resource indicators, so the edit form sends an explicit null for it rather than omitting it. The
+    credential merge must drop that key while every omitted key still means keep-existing."""
+    mock_prisma = _mock_prisma()
+    existing = MagicMock()
+    existing.auth_type = "oauth2"
+    existing.url = "https://up.example.com/mcp"
+    existing.credentials = json.dumps({"client_secret": "csec", "upstream_resource": "api://audience"})
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(server_id="my-test-server", credentials={"upstream_resource": None})
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    merged = json.loads(data_dict["credentials"])
+    assert merged["upstream_resource"] is None
+    assert merged["client_secret"] == "csec"
+
+
+@pytest.mark.asyncio
+async def test_url_change_clears_stale_oauth_fields():
+    """Re-pointing the server url at a potentially different upstream must clear the OAuth issuer and
+    endpoints, so the new upstream re-discovers instead of anchoring on the previous upstream's issuer
+    (RFC 8414 §3.3 against a stale anchor)."""
     mock_prisma = _mock_prisma()
     existing = MagicMock()
     existing.auth_type = "oauth2"
@@ -329,11 +350,13 @@ async def test_repointing_pinned_issuer_clears_stale_endpoints_keeps_new_issuer(
 
 
 @pytest.mark.asyncio
-async def test_establishing_issuer_first_time_preserves_discovered_fields():
-    """Establishing an issuer for the first time (None -> X), which is exactly what the trust-on-first-use
-    discovery write-back does, must NOT clear the endpoints or oauth2_flow it discovered in the same
-    write. Only an issuer that was already pinned and is now changed or cleared invalidates its
-    endpoints, so the discovery persist cannot wipe the fields it just resolved."""
+async def test_establishing_issuer_first_time_preserves_endpoints_set_in_the_same_write():
+    """Establishing an issuer for the first time (None -> X) must NOT clear endpoints or oauth2_flow
+    submitted in the same write. Only an issuer that was already pinned and is now changed or cleared
+    invalidates its endpoints, so an admin configuring an issuer and its endpoints together keeps
+    both. The write-back this once guarded (trust-on-first-use discovery stamping the issuer it had
+    just resolved) no longer exists; the db.py rule it relies on still governs admin writes, which is
+    what this now covers."""
     mock_prisma = _mock_prisma()
     existing = MagicMock()
     existing.auth_type = "oauth2"
@@ -349,7 +372,7 @@ async def test_establishing_issuer_first_time_preserves_discovered_fields():
         token_url="https://discovered-idp.example.com/token",
         oauth2_flow="authorization_code",
     )
-    await update_mcp_server(mock_prisma, data, "mcp_oauth_discovery")
+    await update_mcp_server(mock_prisma, data, "some-admin@example.com")
     data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
 
     assert data_dict["issuer"] == "https://discovered-idp.example.com"
@@ -359,9 +382,9 @@ async def test_establishing_issuer_first_time_preserves_discovered_fields():
 
 
 @pytest.mark.asyncio
-async def test_unchanged_url_does_not_clear_discovered_oauth_fields():
-    """A partial update that resends the same url (or omits it) must not clear the discovered OAuth
-    fields, so a routine save does not force needless re-discovery."""
+async def test_unchanged_url_does_not_clear_oauth_fields():
+    """A partial update that resends the same url (or omits it) must not clear the OAuth fields, so a
+    routine save does not force needless re-discovery."""
     mock_prisma = _mock_prisma()
     existing = MagicMock()
     existing.auth_type = "oauth2"

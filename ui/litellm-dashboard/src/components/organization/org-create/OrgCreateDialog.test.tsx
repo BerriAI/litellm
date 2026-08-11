@@ -84,6 +84,28 @@ describe("OrgCreateDialog", () => {
     await waitFor(() => expect(screen.queryByLabelText("Organization Name")).not.toBeInTheDocument());
   });
 
+  it("creates with a sub-cent max budget the browser would veto under a 0.01 step", async () => {
+    const user = userEvent.setup();
+    const { createOrganization } = renderDialog();
+
+    await user.type(screen.getByLabelText("Organization Name"), "new-org");
+    const budget: HTMLInputElement = screen.getByLabelText("Max Budget (USD)");
+    await user.type(budget, "0.001");
+
+    // jsdom never blocks the submit itself, so assert the constraint the real browser
+    // enforces before handleSubmit ever runs
+    expect(budget.checkValidity()).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "Create Organization" }));
+
+    await waitFor(() => expect(createOrganization).toHaveBeenCalledTimes(1));
+    expect(createOrganization.mock.calls[0][0]).toStrictEqual({
+      organization_alias: "new-org",
+      models: [],
+      max_budget: 0.001,
+    });
+  });
+
   it("maps selectors and limits into the create body", async () => {
     const user = userEvent.setup();
     const { createOrganization } = renderDialog();

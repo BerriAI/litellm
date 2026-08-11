@@ -24,7 +24,7 @@ import NotificationsManager from "@/components/molecules/notifications_manager";
 import { deleteMCPServer } from "@/components/networking";
 import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
 import { MCPToolsetsTab } from "./MCPToolsetsTab";
-import CreateMCPServer from "./create_mcp_server";
+import CreateMCPServer from "./CreateMCPServer";
 import MCPConnect from "./mcp_connect";
 import MCPServerCard from "./MCPServerCard";
 import { MCPServerView } from "./mcp_server_view";
@@ -517,31 +517,29 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           accessToken={accessToken}
         />
         <Tabs defaultValue="servers" className="mt-2 w-full">
-          <TabsList className="w-full justify-start">
-            <TabsTrigger value="servers" className="flex-none">
+          <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
+            <TabsTrigger value="servers" className="flex-none rounded-none px-4 py-2">
               All Servers
             </TabsTrigger>
-            <TabsTrigger value="toolsets" className="flex-none">
+            <TabsTrigger value="toolsets" className="flex-none rounded-none px-4 py-2">
               Toolsets
             </TabsTrigger>
-            <TabsTrigger value="connect" className="flex-none">
+            <TabsTrigger value="connect" className="flex-none rounded-none px-4 py-2">
               Connect
             </TabsTrigger>
             {isAdminRole(userRole) && (
-              <TabsTrigger value="semantic-filter" className="flex-none">
+              <TabsTrigger value="semantic-filter" className="flex-none rounded-none px-4 py-2">
                 Semantic Filter
               </TabsTrigger>
             )}
             {isAdminRole(userRole) && (
-              <TabsTrigger value="network-settings" className="flex-none">
+              <TabsTrigger value="network-settings" className="flex-none rounded-none px-4 py-2">
                 Network Settings
               </TabsTrigger>
             )}
             {isAdminRole(userRole) && (
-              <TabsTrigger value="submitted" className="flex-none">
-                <span className="flex items-center gap-2">
-                  Submitted MCPs <NewBadge />
-                </span>
+              <TabsTrigger value="submitted" className="flex-none gap-2 rounded-none px-4 py-2">
+                Submitted MCPs <NewBadge />
               </TabsTrigger>
             )}
           </TabsList>

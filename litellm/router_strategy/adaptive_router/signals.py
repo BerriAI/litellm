@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Final
 
 from litellm.router_strategy.adaptive_router.config import (
     LOOP_REPEAT_THRESHOLD,
@@ -98,7 +98,7 @@ class Turn:
 
 # ---- Detection helpers ----------------------------------------------------
 
-_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+_TOKEN_RE: Final = re.compile(r"[A-Za-z0-9]+")
 
 
 def _tokens(text: str | None) -> set[str]:
@@ -108,19 +108,19 @@ def _tokens(text: str | None) -> set[str]:
 
 
 def _jaccard(a: set[str], b: set[str]) -> float:
-    union = a | b
+    union: Final = a | b
     if not union:
         return 0.0
     return len(a & b) / len(union)
 
 
-_DISENGAGEMENT_PATTERNS = [
+_DISENGAGEMENT_PATTERNS: Final = [
     re.compile(r"\b(forget it|never mind|give up|talk to (?:a )?human|cancel)\b", re.IGNORECASE),
     re.compile(r"\b(this (?:isn'?t|is not) working|stop|abort)\b", re.IGNORECASE),
     re.compile(r"\bi'?ll do it (?:myself|manually)\b", re.IGNORECASE),
 ]
 
-_SATISFACTION_PATTERNS = [
+_SATISFACTION_PATTERNS: Final = [
     re.compile(
         r"\b(that worked|that did it|works now|fixed it|solved it|nice)\b",
         re.IGNORECASE,
@@ -136,7 +136,7 @@ def _detect_misalignment(prev_user: str | None, curr_user: str | None) -> bool:
     rephrasing, not changing topic, not repeating."""
     if not prev_user or not curr_user:
         return False
-    j = _jaccard(_tokens(prev_user), _tokens(curr_user))
+    j: Final = _jaccard(_tokens(prev_user), _tokens(curr_user))
     return 0.0 < j < MISALIGNMENT_JACCARD_THRESHOLD
 
 
@@ -144,7 +144,7 @@ def _detect_stagnation(prev_asst: str | None, curr_asst: str | None) -> bool:
     """Fires when consecutive assistant messages are near-duplicates."""
     if not prev_asst or not curr_asst:
         return False
-    j = _jaccard(_tokens(prev_asst), _tokens(curr_asst))
+    j: Final = _jaccard(_tokens(prev_asst), _tokens(curr_asst))
     return j >= STAGNATION_JACCARD_NEAR_DUP
 
 
@@ -175,7 +175,7 @@ def _detect_failure(tool_results: list[dict[str, Any]]) -> bool:
 
 def _signature(call: dict[str, Any]) -> str:
     """Stable signature for loop detection: name + sorted JSON-ish args."""
-    name = call.get("name") or call.get("function", {}).get("name", "")
+    name: Final = call.get("name") or call.get("function", {}).get("name", "")
     call_args = call.get("arguments")
     if call_args is None:
         call_args = call.get("function", {}).get("arguments", "")
@@ -197,9 +197,9 @@ def _detect_loop(history: list[str], new_calls: list[dict[str, Any]]) -> bool:
     return False
 
 
-_EXHAUSTION_STATUSES = {408, 413, 429, 503, 504}
+_EXHAUSTION_STATUSES: Final = {408, 413, 429, 503, 504}
 
-_EXHAUSTION_KEYWORDS = (
+_EXHAUSTION_KEYWORDS: Final = (
     "context length",
     "context window",
     "token limit",
@@ -303,13 +303,13 @@ def apply_turn(state: SessionState, turn: Turn) -> SignalDelta:
     O(1) per turn (no full-history rescan). Only inspects last_*, recent tool history
     (which is bounded at TOOL_CALL_HISTORY_MAX), and the new turn payload.
     """
-    feedback_delta = detect_user_feedback(
+    feedback_delta: Final = detect_user_feedback(
         state.last_user_content,
         turn.user_content,
         turn.tool_results,
         allow_satisfaction=(not state.clean_credit_awarded and state.turn_count + 1 >= MIN_TURNS_FOR_CLEAN_CREDIT),
     )
-    response_delta = detect_response_signals(
+    response_delta: Final = detect_response_signals(
         state.last_assistant_content,
         turn.assistant_content,
         state.tool_call_history,
@@ -317,7 +317,7 @@ def apply_turn(state: SessionState, turn: Turn) -> SignalDelta:
         turn.tool_results,
         turn.response_status,
     )
-    delta = merge_signal_deltas(
+    delta: Final = merge_signal_deltas(
         feedback_delta,
         response_delta,
     )

@@ -3503,6 +3503,44 @@ async def test_single_scan_response_stays_a_dict():
 
 
 @pytest.mark.asyncio
+async def test_scan_result_reaches_the_logger_on_a_seeded_route():
+    """On routes that seed `litellm_metadata` the scan result must land in that bucket
+    and be found by `_process_response`. Writing the file-scan result through the shared
+    resolver while the text-scan writers and the reader used a hard-coded `metadata` key
+    split the record in two, so the logged guardrail payload came back empty."""
+    guardrail = _make_guardrail()
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    request_data = {
+        "model": "claude-haiku",
+        "messages": [_file_message(pdf_b64)],
+        "metadata": {"user_id": "device-account-session"},
+        "litellm_metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ):
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    assert "_model_armor_response" not in request_data["metadata"]
+    assert "_model_armor_response" in request_data["litellm_metadata"]
+
+    before = len(request_data["litellm_metadata"].get("standard_logging_guardrail_information", []))
+    guardrail._process_response(response=None, request_data=request_data)
+
+    logged = request_data["litellm_metadata"]["standard_logging_guardrail_information"]
+    assert len(logged) == before + 1
+    assert logged[-1]["guardrail_response"], "the logger recorded an empty Model Armor payload"
+
+
+@pytest.mark.asyncio
 async def test_pre_call_blocks_supported_document_with_undecodable_base64():
     """A supported document whose inline base64 will not decode cannot be scanned, so it fails closed."""
     guardrail = _make_guardrail()

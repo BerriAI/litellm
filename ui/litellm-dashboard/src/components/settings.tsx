@@ -20,12 +20,10 @@ import {
 } from "@tremor/react";
 import React, { useEffect, useState } from "react";
 
-import { Button as Button2, Form, Input, Modal, Select, Typography } from "antd";
+import { Button as Button2, Form, Input, Modal, Select } from "antd";
 import EmailSettings from "./email_settings";
 import { Logo } from "@/components/molecules/logo/Logo";
 import NotificationsManager from "./molecules/notifications_manager";
-
-const { Title, Paragraph } = Typography;
 
 import FormItem from "antd/es/form/FormItem";
 import AlertingSettings from "./alerting/alerting_settings";
@@ -46,12 +44,6 @@ interface SettingsPageProps {
   userRole: string | null;
   userID: string | null;
   premiumUser: boolean;
-}
-
-interface genericCallbackParams {
-  litellm_callback_name: string; // what to send in request
-  ui_callback_name: string; // what to show on UI
-  litellm_callback_params: string[] | null; // known required params for this callback
 }
 
 const assetsLogoFolder = "/ui/assets/logos/";
@@ -214,7 +206,6 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
   const [isLoadingCallbacks, setIsLoadingCallbacks] = useState(true);
   const [alerts, setAlerts] = useState<any[]>([]);
-  const [isModalVisible, setIsModalVisible] = useState(false);
   const [addForm] = Form.useForm();
   const [editForm] = Form.useForm();
   const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
@@ -417,119 +408,6 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       NotificationsManager.fromBackend(error);
     }
     NotificationsManager.success("Alerts updated successfully");
-  };
-  const handleSaveChanges = (callback: any) => {
-    if (!accessToken) {
-      return;
-    }
-
-    const updatedVariables = Object.fromEntries(
-      Object.entries(callback.variables).map(([key, value]) => [
-        key,
-        (document.querySelector(`input[name="${key}"]`) as HTMLInputElement)?.value || value,
-      ]),
-    );
-
-    const payload = {
-      environment_variables: updatedVariables,
-      litellm_settings: {
-        success_callback: [callback.name],
-      },
-    };
-
-    try {
-      setCallbacksCall(accessToken, payload);
-    } catch (error) {
-      NotificationsManager.fromBackend(error);
-    }
-    NotificationsManager.success("Callback updated successfully");
-  };
-
-  const handleOk = () => {
-    if (!accessToken) {
-      return;
-    }
-    // Handle form submission
-    addForm.validateFields().then((values) => {
-      // Call API to add the callback
-      let payload;
-      if (values.callback === "langfuse" || values.callback === "langfuse_otel") {
-        payload = {
-          environment_variables: {
-            LANGFUSE_PUBLIC_KEY: values.langfusePublicKey,
-            LANGFUSE_SECRET_KEY: values.langfusePrivateKey,
-          },
-          litellm_settings: {
-            success_callback: [values.callback],
-          },
-        };
-        setCallbacksCall(accessToken, payload);
-        let newCallback: AlertingObject = {
-          name: values.callback,
-          variables: {
-            SLACK_WEBHOOK_URL: null,
-            LANGFUSE_HOST: null,
-            LANGFUSE_PUBLIC_KEY: values.langfusePublicKey,
-            LANGFUSE_SECRET_KEY: values.langfusePrivateKey,
-            OPENMETER_API_KEY: null,
-          },
-        };
-        // add langfuse to callbacks
-        setCallbacks(callbacks ? [...callbacks, newCallback] : [newCallback]);
-      } else if (values.callback === "slack") {
-        payload = {
-          general_settings: {
-            alerting: ["slack"],
-            alerting_threshold: 300,
-          },
-          environment_variables: {
-            SLACK_WEBHOOK_URL: values.slackWebhookUrl,
-          },
-        };
-        setCallbacksCall(accessToken, payload);
-
-        let newCallback: AlertingObject = {
-          name: values.callback,
-          variables: {
-            SLACK_WEBHOOK_URL: values.slackWebhookUrl,
-            LANGFUSE_HOST: null,
-            LANGFUSE_PUBLIC_KEY: null,
-            LANGFUSE_SECRET_KEY: null,
-            OPENMETER_API_KEY: null,
-          },
-        };
-        setCallbacks(callbacks ? [...callbacks, newCallback] : [newCallback]);
-      } else if (values.callback == "openmeter") {
-        payload = {
-          environment_variables: {
-            OPENMETER_API_KEY: values.openMeterApiKey,
-          },
-          litellm_settings: {
-            success_callback: [values.callback],
-          },
-        };
-        setCallbacksCall(accessToken, payload);
-        let newCallback: AlertingObject = {
-          name: values.callback,
-          variables: {
-            SLACK_WEBHOOK_URL: null,
-            LANGFUSE_HOST: null,
-            LANGFUSE_PUBLIC_KEY: null,
-            LANGFUSE_SECRET_KEY: null,
-            OPENMETER_API_KEY: values.openMeterAPIKey,
-          },
-        };
-        // add langfuse to callbacks
-        setCallbacks(callbacks ? [...callbacks, newCallback] : [newCallback]);
-      } else {
-        payload = {
-          error: "Invalid callback value",
-        };
-      }
-      setIsModalVisible(false);
-      addForm.resetFields();
-      setSelectedCallback(null);
-    });
   };
 
   const handleDeleteCallback = (callback: any) => {

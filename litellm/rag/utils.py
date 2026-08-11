@@ -4,13 +4,13 @@ RAG utility functions.
 Provides provider configuration utilities similar to ProviderConfigManager.
 """
 
-from typing import TYPE_CHECKING, Type
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 
 
-def get_rag_ingestion_class(custom_llm_provider: str) -> Type["BaseRAGIngestion"]:
+def get_rag_ingestion_class(custom_llm_provider: str) -> type["BaseRAGIngestion"]:
     """
     Get the appropriate RAG ingestion class for a provider.
 
@@ -27,13 +27,13 @@ def get_rag_ingestion_class(custom_llm_provider: str) -> Type["BaseRAGIngestion"
     from litellm.rag.ingestion.bedrock_ingestion import BedrockRAGIngestion
     from litellm.rag.ingestion.openai_ingestion import OpenAIRAGIngestion
 
-    provider_map = {
+    provider_map: Final = {
         "openai": OpenAIRAGIngestion,
         "bedrock": BedrockRAGIngestion,
         "vertex_ai": VertexAIRAGIngestion,
     }
 
-    ingestion_class = provider_map.get(custom_llm_provider)
+    ingestion_class: Final = provider_map.get(custom_llm_provider)
     if ingestion_class is None:
         raise ValueError(
             f"RAG ingestion not supported for provider: {custom_llm_provider}. "

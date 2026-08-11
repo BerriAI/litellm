@@ -1,4 +1,5 @@
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import { parseAsString, useQueryState } from "nuqs";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "antd";
@@ -30,7 +31,7 @@ import {
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { modelAvailableCall, userDeleteCall } from "@/components/networking";
-import DefaultUserSettings from "./DefaultUserSettings";
+import { DefaultUserSettingsForm } from "./default-user-settings/DefaultUserSettingsForm";
 import { UsersTable } from "./view_users/UsersTable";
 import UserInfoView from "./view_users/user_info_view";
 import { UserInfo } from "@/components/networking";
@@ -72,7 +73,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [selectionMode, setSelectionMode] = useState(false);
   const [isBulkEditModalVisible, setIsBulkEditModalVisible] = useState(false);
 
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [selectedUserId, setSelectedUserId] = useQueryState("user", parseAsString.withOptions({ history: "push" }));
   const [openInEditMode, setOpenInEditMode] = useState(false);
 
   const [editModalVisible, setEditModalVisible] = useState(false);
@@ -139,15 +140,18 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     setRowSelection({});
   }, []);
 
-  const handleUserClick = useCallback((userId: string, openInEdit: boolean = false) => {
-    setSelectedUserId(userId);
-    setOpenInEditMode(openInEdit);
-  }, []);
+  const handleUserClick = useCallback(
+    (userId: string, openInEdit: boolean = false) => {
+      void setSelectedUserId(userId);
+      setOpenInEditMode(openInEdit);
+    },
+    [setSelectedUserId],
+  );
 
   const handleCloseUserInfo = useCallback(() => {
-    setSelectedUserId(null);
+    void setSelectedUserId(null);
     setOpenInEditMode(false);
-  }, []);
+  }, [setSelectedUserId]);
 
   const handleDelete = useCallback((user: UserInfo) => {
     setUserToDelete(user);
@@ -412,12 +416,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                   <Skeleton active paragraph={{ rows: 4 }} />
                 </div>
               ) : (
-                <DefaultUserSettings
-                  accessToken={accessToken}
-                  possibleUIRoles={possibleUIRoles}
-                  userID={userID}
-                  userRole={userRole}
-                />
+                <DefaultUserSettingsForm possibleUIRoles={possibleUIRoles} />
               )}
             </TabPanel>
           </TabPanels>

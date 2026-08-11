@@ -3,7 +3,7 @@ Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if t
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from litellm.proxy._types import LiteLLM_ManagedObjectTable
     from litellm.proxy.utils import PrismaClient, ProxyLogging
     from litellm.router import Router
+    from litellm.types.router import Deployment
     from litellm.types.utils import LiteLLMBatch
 
 
@@ -42,11 +43,15 @@ class CheckBatchCost:
         # the guaranteed-failing primary query on every subsequent cycle.
         self._has_batch_processed_column: bool = True
 
-    async def _get_user_info(self, batch_id, user_id) -> dict:
+    async def _get_user_info(self, batch_id: str, user_id: Optional[str]) -> Dict[str, Any]:
         """
         Look up user email and key alias by user_id for enriching the S3 callback metadata.
         Returns a dict with user_api_key_user_email and user_api_key_alias (both may be None).
+        Returns an empty dict when user_id is None: batches created by a team or service
+        account key carry no user id, and find_unique(where={"user_id": None}) raises.
         """
+        if not user_id:
+            return {}
         try:
             user_row = await self.prisma_client.db.litellm_usertable.find_unique(
                 where={"user_id": user_id}
@@ -60,6 +65,66 @@ class CheckBatchCost:
         except Exception as e:
             verbose_proxy_logger.error(f"CheckBatchCost: could not look up user {user_id} for batch {batch_id}: {e}")
             return {}
+
+    async def _get_key_alias(self, batch_id: str, api_key: str | None) -> str | None:
+        """Resolve the creating virtual key's alias from its hashed token."""
+        if not api_key:
+            return None
+        try:
+            key_row = await self.prisma_client.db.litellm_verificationtoken.find_unique(
+                where={"token": api_key}
+            )
+            return getattr(key_row, "key_alias", None) if key_row is not None else None
+        except Exception as e:
+            verbose_proxy_logger.error(f"CheckBatchCost: could not look up key alias for batch {batch_id}: {e}")
+            return None
+
+    async def _get_team_alias(self, team_id: str | None) -> str | None:
+        """Resolve a team's alias from its id."""
+        if not team_id:
+            return None
+        try:
+            team_row = await self.prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
+            )
+            return getattr(team_row, "team_alias", None) if team_row is not None else None
+        except Exception as e:
+            verbose_proxy_logger.error(f"CheckBatchCost: could not look up team alias for team {team_id}: {e}")
+            return None
+
+    async def _build_creator_attribution_metadata(
+        self, job: "LiteLLM_ManagedObjectTable", batch_id: str
+    ) -> Dict[str, Any]:
+        """
+        Rebuild the spend-tracking metadata for the key, team, and tags that created the
+        batch so the batch-cost spend log is attributed the same way a non-batch request
+        is. Rows created before api_key and request_tags were persisted carry only
+        created_by and team_id, and fall back to those. A named creating key owns
+        user_api_key_alias; when it has no alias, or the key has since been rotated or
+        deleted, the field keeps the creating user's alias that _get_user_info filled in,
+        because a resolvable name is more useful on the spend row than a null.
+        """
+        api_key = getattr(job, "api_key", None)
+        team_id = getattr(job, "team_id", None)
+        request_tags = getattr(job, "request_tags", None)
+
+        metadata: Dict[str, Any] = {
+            "user_api_key_user_id": job.created_by,
+            "user_api_key": api_key,
+            "user_api_key_team_id": team_id,
+            **(await self._get_user_info(batch_id, job.created_by)),
+        }
+
+        key_alias = await self._get_key_alias(batch_id, api_key)
+        if key_alias is not None:
+            metadata["user_api_key_alias"] = key_alias
+        team_alias = await self._get_team_alias(team_id)
+        if team_alias is not None:
+            metadata["user_api_key_team_alias"] = team_alias
+        if isinstance(request_tags, list) and request_tags:
+            metadata["tags"] = [tag for tag in request_tags if isinstance(tag, str)]
+
+        return metadata
 
     async def _cleanup_stale_managed_objects(self) -> None:
         """
@@ -281,6 +346,28 @@ class CheckBatchCost:
                 return deployment_id
         return None
 
+    @classmethod
+    def _get_managed_file_model_name(
+        cls,
+        job: "LiteLLM_ManagedObjectTable",
+        deployment_info: "Deployment",
+    ) -> Optional[str]:
+        """
+        Public model group name to encode as ``target_model_names`` on unified output file ids.
+
+        Key model-access checks resolve a managed file id back to a model via its
+        ``target_model_names``, so this must be the model group the caller requested, never the
+        underlying provider model (e.g. ``gpt-5.5``), which no key is allowed to call.
+        """
+        from litellm.proxy.openai_files_endpoints.common_utils import (
+            resolve_managed_output_file_model_name,
+        )
+
+        return resolve_managed_output_file_model_name(
+            unified_input_file_id=cls._get_input_file_id(job),
+            fallback_model_name=deployment_info.model_name or None,
+        )
+
     @staticmethod
     def _get_input_file_id(job: "LiteLLM_ManagedObjectTable") -> Optional[str]:
         import json
@@ -406,6 +493,10 @@ class CheckBatchCost:
         managed_files_hook = self.proxy_logging_obj.get_proxy_hook("managed_files")
         if managed_files_hook is not None:
             from litellm.proxy._types import UserAPIKeyAuth
+
+            managed_file_model_name = self._get_managed_file_model_name(
+                job=job, deployment_info=deployment_info
+            )
             _minimal_auth = UserAPIKeyAuth(
                 user_id=job.created_by or "default-user-id",
                 team_id=getattr(job, "team_id", None),
@@ -417,7 +508,7 @@ class CheckBatchCost:
                         _unified_file_id = managed_files_hook.get_unified_output_file_id(
                             output_file_id=_raw_file_id,
                             model_id=model_id,
-                            model_name=str(model_name) if model_name else deployment_info.model_name or None,
+                            model_name=managed_file_model_name,
                         )
                         await managed_files_hook.store_unified_file_id(
                             file_id=_unified_file_id,
@@ -458,9 +549,6 @@ class CheckBatchCost:
             function_id=str(uuid.uuid4()),
         )
 
-        creator_user_id = job.created_by
-        user_info = await self._get_user_info(batch_id, job.created_by)
-
         logging_obj.update_environment_variables(
             litellm_params={
                 # set the user-agent header so that S3 callback consumers can easily identify CheckBatchCost callbacks
@@ -469,10 +557,7 @@ class CheckBatchCost:
                         "user-agent": CHECK_BATCH_COST_USER_AGENT,
                     }
                 },
-                "metadata": {
-                    "user_api_key_user_id": creator_user_id,
-                    **user_info,
-                },
+                "metadata": await self._build_creator_attribution_metadata(job, batch_id),
             },
             optional_params={},
         )
@@ -629,6 +714,20 @@ class CheckBatchCost:
 
             elif response.status in ("failed", "expired", "cancelled"):
                 try:
+                    from litellm.proxy.openai_files_endpoints.common_utils import (
+                        _is_base64_encoded_unified_file_id,
+                        ensure_batch_response_managed_file_ids,
+                    )
+
+                    response.id = job.unified_object_id
+                    await ensure_batch_response_managed_file_ids(
+                        response=response,
+                        managed_files_obj=self.proxy_logging_obj.get_proxy_hook("managed_files"),
+                        prisma_client=self.prisma_client,
+                        verbose_proxy_logger=verbose_proxy_logger,
+                        db_batch_object=job,
+                        unified_batch_id=_is_base64_encoded_unified_file_id(job.unified_object_id),
+                    )
                     update_data = {
                         "status": response.status,
                         "file_object": response.model_dump_json(),

@@ -21,7 +21,25 @@ sys.path.insert(
 import litellm
 from litellm import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.utils import (
+    _invalidate_model_cost_lowercase_map,
+    reapply_runtime_model_cost_registrations,
+)
+
+
+def _simulate_price_data_reload(fetched_catalog):
+    """Drive what a price data reload does to this process's litellm state.
+
+    Mirrors `litellm.proxy.proxy_server._swap_in_model_cost_map`, which is the
+    one place both reload paths adopt a freshly fetched catalog; that wiring is
+    covered in the proxy's own tests, so these exercise the replay itself
+    without dragging the proxy in. The provider model sets that helper also
+    repopulates are left alone, since nothing here reads them and rebuilding
+    them from a two-entry catalog would outlive the test.
+    """
+    litellm.model_cost = fetched_catalog
+    _invalidate_model_cost_lowercase_map()
+    reapply_runtime_model_cost_registrations()
 
 
 def _restore_model_cost_entries(original_entries):
@@ -944,3 +962,512 @@ def test_wildcard_zero_cost_request_does_not_poison_named_deployment_pricing():
         assert named_cost == pytest.approx(10 * builtin_input_cost)
     finally:
         _restore_model_cost_entries(model_keys)
+
+
+def test_price_data_reload_preserves_router_registered_model_info(monkeypatch):
+    """
+    A price-data reload replaces litellm.model_cost wholesale. Deployment
+    model_info registered by the Router is not in the fetched catalog, so
+    without a replay of runtime registrations the reload silently strips
+    max_input_tokens / max_output_tokens from every custom model group and
+    /model_group/info starts reporting nulls.
+    """
+    from litellm import utils as litellm_utils
+    monkeypatch.setattr(
+        litellm_utils,
+        "_runtime_registered_model_cost",
+        dict(litellm_utils._runtime_registered_model_cost),
+    )
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "custom-alias",
+                "litellm_params": {"model": "hosted_vllm/not-in-the-catalog"},
+                "model_info": {
+                    "id": "custom-alias-id",
+                    "max_input_tokens": 128000,
+                    "max_output_tokens": 16384,
+                },
+            }
+        ],
+    )
+
+    before = router.get_model_group_info(model_group="custom-alias")
+    assert before is not None
+    assert before.max_input_tokens == 128000
+    assert before.max_output_tokens == 16384
+
+    saved_model_cost = litellm.model_cost
+    try:
+        _simulate_price_data_reload(
+            {"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}},
+        )
+
+        after = router.get_model_group_info(model_group="custom-alias")
+        assert after is not None
+        assert after.max_input_tokens == 128000
+        assert after.max_output_tokens == 16384
+    finally:
+        litellm.model_cost = saved_model_cost
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_price_data_reload_preserves_custom_override_of_a_catalog_model(monkeypatch):
+    """
+    A deployment whose backend model IS in the catalog is the quieter half of
+    the same bug: the reload does not blank the metadata, it reverts the
+    operator's model_info override to the upstream catalog values.
+    """
+    from litellm import utils as litellm_utils
+    monkeypatch.setattr(
+        litellm_utils,
+        "_runtime_registered_model_cost",
+        dict(litellm_utils._runtime_registered_model_cost),
+    )
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "capped-gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {
+                    "id": "capped-gpt-4o-id",
+                    "max_input_tokens": 12345,
+                    "max_output_tokens": 678,
+                },
+            }
+        ],
+    )
+
+    saved_model_cost = litellm.model_cost
+    try:
+        _simulate_price_data_reload(
+            {
+                "openai/gpt-4o": {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "max_input_tokens": 999999,
+                    "max_output_tokens": 888888,
+                }
+            },
+        )
+
+        after = router.get_model_group_info(model_group="capped-gpt-4o")
+        assert after is not None
+        assert after.max_input_tokens == 12345
+        assert after.max_output_tokens == 678
+    finally:
+        litellm.model_cost = saved_model_cost
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_deleted_deployments_are_not_replayed_onto_later_reloads(monkeypatch):
+    """
+    Runtime registrations are replayed onto every price data reload, so a
+    deleted deployment has to be withdrawn or it is re-asserted for the life of
+    the process and the registry grows with every create/delete cycle. A backend
+    key that another live deployment still points at must survive the same
+    deletion.
+    """
+    from litellm import utils as litellm_utils
+    monkeypatch.setattr(
+        litellm_utils,
+        "_runtime_registered_model_cost",
+        dict(litellm_utils._runtime_registered_model_cost),
+    )
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "doomed",
+                "litellm_params": {"model": "hosted_vllm/shared-backend"},
+                "model_info": {"id": "doomed-id", "max_input_tokens": 111},
+            },
+            {
+                "model_name": "kept",
+                "litellm_params": {"model": "hosted_vllm/shared-backend"},
+                "model_info": {"id": "kept-id", "max_input_tokens": 222},
+            },
+            {
+                "model_name": "solo",
+                "litellm_params": {"model": "hosted_vllm/solo-backend"},
+                "model_info": {"id": "solo-id", "max_input_tokens": 333},
+            },
+        ],
+    )
+
+    saved_model_cost = litellm.model_cost
+    try:
+        assert router.delete_deployment(id="doomed-id") is not None
+        assert router.delete_deployment(id="solo-id") is not None
+
+        _simulate_price_data_reload(
+            {"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}},
+        )
+
+        assert "doomed-id" not in litellm.model_cost
+        assert "solo-id" not in litellm.model_cost
+        assert "hosted_vllm/solo-backend" not in litellm.model_cost
+
+        surviving = litellm.model_cost["kept-id"]
+        assert surviving["max_input_tokens"] == 222
+        assert "hosted_vllm/shared-backend" in litellm.model_cost
+    finally:
+        litellm.model_cost = saved_model_cost
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_deleting_a_deployment_leaves_catalog_pricing_for_its_backend_model(monkeypatch):
+    """
+    A backend key is shared with the fetched catalog, so withdrawing the entries
+    a deleted deployment owns must not take real upstream pricing down with it.
+    """
+    from litellm import utils as litellm_utils
+
+    monkeypatch.setattr(
+        litellm_utils,
+        "_runtime_registered_model_cost",
+        dict(litellm_utils._runtime_registered_model_cost),
+    )
+
+    backend_model = "gemini/gemini-2.5-pro"
+    catalog_entry = litellm.get_model_info(model=backend_model)
+    catalog_input_cost = catalog_entry["input_cost_per_token"]
+    assert catalog_input_cost > 0, "Test requires a catalog model with non-zero pricing"
+
+    saved_catalog = litellm.model_cost
+    fetched_catalog = copy.deepcopy(litellm.model_cost)
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "doomed-gemini",
+                    "litellm_params": {"model": backend_model, "api_key": "sk-fake"},
+                    "model_info": {"id": "doomed-gemini-id"},
+                }
+            ],
+        )
+
+        assert router.delete_deployment(id="doomed-gemini-id") is not None
+
+        _simulate_price_data_reload(
+            copy.deepcopy(fetched_catalog),
+        )
+
+        assert "doomed-gemini-id" not in litellm.model_cost
+        assert litellm.model_cost[backend_model]["input_cost_per_token"] == catalog_input_cost
+    finally:
+        litellm.model_cost = saved_catalog
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_repointing_a_deployment_drops_its_previous_backend_key(monkeypatch):
+    """
+    An update that moves a deployment onto a different backend model leaves the
+    old backend key behind, and a replayed registry would re-assert it onto every
+    later catalog for the life of the process.
+    """
+    from litellm import utils as litellm_utils
+    monkeypatch.setattr(
+        litellm_utils,
+        "_runtime_registered_model_cost",
+        dict(litellm_utils._runtime_registered_model_cost),
+    )
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "moving-target",
+                "litellm_params": {"model": "hosted_vllm/old-backend"},
+                "model_info": {"id": "moving-target-id"},
+            }
+        ],
+    )
+
+    saved_model_cost = litellm.model_cost
+    try:
+        router.upsert_deployment(
+            deployment=Deployment(
+                model_name="moving-target",
+                litellm_params=LiteLLM_Params(model="hosted_vllm/new-backend"),
+                model_info=ModelInfo(id="moving-target-id"),
+            )
+        )
+
+        _simulate_price_data_reload(
+            {"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}},
+        )
+
+        assert "hosted_vllm/old-backend" not in litellm.model_cost
+        assert "hosted_vllm/new-backend" in litellm.model_cost
+        assert "moving-target-id" in litellm.model_cost
+    finally:
+        litellm.model_cost = saved_model_cost
+        _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize(
+    "model, custom_llm_provider, expected",
+    [
+        ("gpt-4o", None, ("gpt-4o",)),
+        ("gpt-4o", "openai", ("openai/gpt-4o",)),
+        ("openai/gpt-4o", None, ("openai/gpt-4o",)),
+        ("responses/gpt-4o", "openai", ("openai/responses/gpt-4o", "openai/gpt-4o")),
+        ("responses/gpt-4o", None, ("responses/gpt-4o", "gpt-4o")),
+    ],
+)
+def test_backend_cost_map_keys_matches_what_registration_writes(model, custom_llm_provider, expected):
+    """
+    The withdrawal path drops exactly the keys the registration wrote, so the two
+    have to agree on the provider prefix and on the responses/ alias. The first
+    key is also the one the registration uses as the shared backend key, so its
+    position is load-bearing rather than incidental.
+    """
+    keys = Router._backend_cost_map_keys(model=model, custom_llm_provider=custom_llm_provider)
+    assert keys == expected
+    assert keys[0] == (model if custom_llm_provider is None else f"{custom_llm_provider}/{model}")
+
+
+def test_a_discarded_router_stops_contributing_to_later_reloads(monkeypatch):
+    """
+    `_route_user_config_request` builds a Router per request from caller-supplied
+    config and discards it. Nothing can withdraw entries on its behalf afterwards,
+    so a rebuild driven off live routers is what keeps a caller from growing the
+    cost map one request at a time.
+    """
+    saved_model_cost = litellm.model_cost
+    try:
+        kept = Router(
+            model_list=[
+                {
+                    "model_name": "kept",
+                    "litellm_params": {"model": "hosted_vllm/kept-backend"},
+                    "model_info": {"id": "kept-router-id", "max_input_tokens": 4242},
+                }
+            ],
+        )
+        throwaway = Router(
+            model_list=[
+                {
+                    "model_name": "throwaway",
+                    "litellm_params": {"model": "hosted_vllm/throwaway-backend"},
+                    "model_info": {"id": "throwaway-router-id", "max_input_tokens": 111},
+                }
+            ],
+        )
+        throwaway.discard()
+
+        _simulate_price_data_reload(
+            {"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}},
+        )
+
+        assert "throwaway-router-id" not in litellm.model_cost
+        assert "hosted_vllm/throwaway-backend" not in litellm.model_cost
+        assert litellm.model_cost["kept-router-id"]["max_input_tokens"] == 4242
+        assert "hosted_vllm/kept-backend" in litellm.model_cost
+        assert kept.model_list  # keep the live router referenced for the duration
+    finally:
+        litellm.model_cost = saved_model_cost
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_a_reload_rebuilds_exactly_what_a_fresh_boot_registered():
+    """
+    The rebuild is only correct if it reproduces the entries the original
+    registration wrote, including the pieces that are derived rather than stored:
+    custom pricing carried on litellm_params, and the cache pricing inherited from
+    the built-in cost map.
+    """
+    saved_catalog = litellm.model_cost
+    fetched_catalog = copy.deepcopy(litellm.model_cost)
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "priced",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.000123,
+                        "output_cost_per_token": 0.000456,
+                    },
+                    "model_info": {"id": "priced-id", "max_input_tokens": 4242},
+                }
+            ],
+        )
+        at_boot = copy.deepcopy(litellm.model_cost["priced-id"])
+        assert at_boot["input_cost_per_token"] == 0.000123
+        assert at_boot["cache_read_input_token_cost"] is not None
+
+        _simulate_price_data_reload(
+            copy.deepcopy(fetched_catalog),
+        )
+
+        rebuilt = litellm.model_cost["priced-id"]
+        assert at_boot.items() <= rebuilt.items(), (
+            f"the rebuild changed or dropped a field the boot registration wrote: "
+            f"{ {k: (v, rebuilt.get(k)) for k, v in at_boot.items() if rebuilt.get(k) != v} }"
+        )
+        # The rebuild goes through the deployment stored in model_list, which also
+        # carries the router's own db_model flag; add_deployment already registers it.
+        assert set(rebuilt) - set(at_boot) <= {"db_model"}
+        assert router.model_list
+    finally:
+        litellm.model_cost = saved_catalog
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_replay_model_cost_registrations_survives_a_malformed_deployment():
+    """
+    The rebuild reads whatever dicts are sitting in model_list, so one entry that
+    cannot be rebuilt into a Deployment must not stop the rest being restored.
+    """
+    saved_model_cost = litellm.model_cost
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "healthy",
+                    "litellm_params": {"model": "hosted_vllm/healthy-backend"},
+                    "model_info": {"id": "healthy-id", "max_input_tokens": 777},
+                }
+            ],
+        )
+        router.model_list.insert(0, {"litellm_params": {}})
+
+        litellm.model_cost = {"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}}
+        _invalidate_model_cost_lowercase_map()
+        router._replay_model_cost_registrations()
+
+        assert litellm.model_cost["healthy-id"]["max_input_tokens"] == 777
+    finally:
+        litellm.model_cost = saved_model_cost
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_deployment_model_cost_payload_folds_in_litellm_params_pricing():
+    """
+    Custom pricing is configured on litellm_params but has to land in the
+    cost-map entry, and setting it pulls in the built-in cache pricing for the
+    backend model. Both are what make the entry reproducible from a deployment.
+    """
+    payload = Router._deployment_model_cost_payload(
+        deployment=Deployment(
+            model_name="priced",
+            litellm_params=LiteLLM_Params(
+                model="gemini/gemini-2.5-pro",
+                input_cost_per_token=0.000123,
+            ),
+            model_info=ModelInfo(id="payload-id", max_input_tokens=4242),
+        )
+    )
+
+    assert payload["id"] == "payload-id"
+    assert payload["max_input_tokens"] == 4242
+    assert payload["input_cost_per_token"] == 0.000123
+    assert payload["cache_read_input_token_cost"] > 0
+
+
+def test_register_deployment_in_model_cost_writes_both_key_families():
+    """
+    A deployment contributes its full model_info under its unique id and the
+    cost-map subset under the shared backend key, and the shared key must not
+    pick up the deployment's private metadata.
+    """
+    model_keys = {
+        "both-families-id": copy.deepcopy(litellm.model_cost.get("both-families-id")),
+        "hosted_vllm/both-families-backend": copy.deepcopy(
+            litellm.model_cost.get("hosted_vllm/both-families-backend")
+        ),
+    }
+    try:
+        Router._register_deployment_in_model_cost(
+            model_id="both-families-id",
+            model_info={"id": "both-families-id", "max_input_tokens": 999, "litellm_provider": "hosted_vllm"},
+            model="hosted_vllm/both-families-backend",
+            custom_llm_provider=None,
+        )
+
+        assert litellm.model_cost["both-families-id"]["max_input_tokens"] == 999
+        shared = litellm.model_cost["hosted_vllm/both-families-backend"]
+        assert shared["max_input_tokens"] == 999
+        assert "id" not in shared
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def test_reload_keeps_custom_pricing_configured_on_litellm_params_for_a_db_model():
+    """
+    A deployment added at runtime, which is what /model/new does, configures its
+    custom pricing on litellm_params rather than on model_info. A price data
+    reload must not revert that to the catalog's pricing.
+    """
+    saved_catalog = litellm.model_cost
+    fetched_catalog = copy.deepcopy(litellm.model_cost)
+    try:
+        router = Router(model_list=[])
+        router.add_deployment(
+            deployment=Deployment(
+                model_name="db-priced",
+                litellm_params=LiteLLM_Params(
+                    model="openai/gpt-4o",
+                    api_key="sk-fake",
+                    input_cost_per_token=0.000123,
+                    output_cost_per_token=0.000456,
+                ),
+                model_info=ModelInfo(id="db-priced-id"),
+            )
+        )
+
+        assert litellm.model_cost["db-priced-id"]["input_cost_per_token"] == 0.000123
+
+        _simulate_price_data_reload(
+            copy.deepcopy(fetched_catalog),
+        )
+
+        assert litellm.model_cost["db-priced-id"]["input_cost_per_token"] == 0.000123
+        assert litellm.model_cost["db-priced-id"]["output_cost_per_token"] == 0.000456
+    finally:
+        litellm.model_cost = saved_catalog
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_replay_live_router_model_cost_rebuilds_every_live_router():
+    """
+    A process can hold more than one Router, so the rebuild has to fan out across
+    all of them rather than restoring whichever one happens to be reachable.
+    """
+    from litellm.router import _replay_live_router_model_cost
+
+    saved_model_cost = litellm.model_cost
+    try:
+        first = Router(
+            model_list=[
+                {
+                    "model_name": "first",
+                    "litellm_params": {"model": "hosted_vllm/first-backend"},
+                    "model_info": {"id": "first-id", "max_input_tokens": 111},
+                }
+            ],
+        )
+        second = Router(
+            model_list=[
+                {
+                    "model_name": "second",
+                    "litellm_params": {"model": "hosted_vllm/second-backend"},
+                    "model_info": {"id": "second-id", "max_input_tokens": 222},
+                }
+            ],
+        )
+
+        litellm.model_cost = {"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}}
+        _invalidate_model_cost_lowercase_map()
+        _replay_live_router_model_cost()
+
+        assert litellm.model_cost["first-id"]["max_input_tokens"] == 111
+        assert litellm.model_cost["second-id"]["max_input_tokens"] == 222
+        assert first.model_list and second.model_list
+    finally:
+        litellm.model_cost = saved_model_cost
+        _invalidate_model_cost_lowercase_map()

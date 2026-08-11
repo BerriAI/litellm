@@ -200,6 +200,15 @@ describe("AllModelsTable", () => {
     expect(screen.getByText("+2 more")).toBeInTheDocument();
   });
 
+  it("renders the toolbar divider centered rather than stretched to the top of the row", () => {
+    const { container } = render(<AllModelsTable {...baseProps} />);
+
+    const separators = container.querySelectorAll('[data-slot="separator"][data-orientation="vertical"]');
+    expect(separators).toHaveLength(1);
+    expect(separators[0].className).not.toMatch(/self-stretch/);
+    expect(separators[0].className).toContain("data-vertical:self-center");
+  });
+
   describe("pause / resume", () => {
     it("renders the toggle on for an active DB model and off for a blocked one", () => {
       const { rerender } = render(<AllModelsTable {...baseProps} />);
@@ -356,6 +365,30 @@ describe("AllModelsTable", () => {
       await user.click(await screen.findByRole("option", { name: "Engineering" }));
 
       expect(onTeamChange).toHaveBeenCalledWith("team-1");
+    });
+
+    it("truncates long team options instead of clipping them at the popup edge", async () => {
+      const user = userEvent.setup();
+      const longLabel = "db29687d-0ca2-4bbe-a0f1-9c5f0f7c2a11";
+      render(
+        <AllModelsTable
+          {...baseProps}
+          teamOptions={[
+            { value: "personal", label: "Personal" },
+            { value: "team-long", label: longLabel },
+          ]}
+        />,
+      );
+
+      await user.click(screen.getByTestId("models-team-select"));
+
+      const option = await screen.findByRole("option", { name: longLabel });
+      const label = option.querySelector("[data-slot='select-item-label']");
+
+      expect(label).not.toBeNull();
+      expect(label).toHaveClass("truncate");
+      expect(label).toHaveAttribute("title", longLabel);
+      expect(option).toHaveClass("[&>div]:min-w-0");
     });
 
     it("runs the full reset from the filter drawer", async () => {

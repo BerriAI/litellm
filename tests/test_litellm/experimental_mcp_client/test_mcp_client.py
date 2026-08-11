@@ -552,9 +552,15 @@ class TestMCPClientResolvedAuth:
             await http_client.aclose()
 
 
+def _rendered_log_message(call):
+    message = str(call.args[0])
+    values = call.args[1:]
+    return message % values if values else message
+
+
 def _all_logged_messages(mock_logger):
     return " ".join(
-        str(call.args[0])
+        _rendered_log_message(call)
         for level in ("info", "debug", "warning", "error", "exception")
         for call in getattr(mock_logger, level).call_args_list
         if call.args
