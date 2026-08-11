@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { renderWithProviders } from "../../../../../tests/test-utils";
 import ViewUserDashboard from "./view_users";
 
 const userListCall = vi.fn();
@@ -78,7 +79,7 @@ const defaultProps = {
 };
 
 const renderDashboard = () =>
-  render(
+  renderWithProviders(
     <QueryClientProvider client={createQueryClient()}>
       <ViewUserDashboard {...defaultProps} />
     </QueryClientProvider>,

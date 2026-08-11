@@ -544,6 +544,11 @@ class ProxyLogging:
         for hook in PROXY_HOOKS:
             proxy_hook = get_proxy_hook(hook)
             expected_args = inspect.getfullargspec(proxy_hook).args
+            if "prisma_client" in expected_args and prisma_client is None:
+                verbose_proxy_logger.debug(
+                    "Skipping proxy hook %s: it requires a database and no prisma client is configured", hook
+                )
+                continue
             passed_in_args: dict[str, Any] = {}
             if "internal_usage_cache" in expected_args:
                 passed_in_args["internal_usage_cache"] = self.internal_usage_cache
@@ -3481,13 +3486,15 @@ class PrismaClient:
                                 r.expires = r.expires.isoformat()
                 elif query_type == "find_all" and expires is not None and reset_at is not None:
                     response = await VerificationTokenRepository(self).table.find_many(
+                        take=limit,
                         where={
                             "OR": [
                                 {"expires": None},
                                 {"expires": {"gt": expires}},
                             ],
                             "budget_reset_at": {"lt": reset_at},
-                        }
+                            "NOT": {"budget_duration": None},
+                        },
                     )
                     if response is not None and len(response) > 0:
                         for r in response:
@@ -3537,6 +3544,7 @@ class PrismaClient:
                     response = await UserRepository(self).table.find_many(where=key_val)
                 elif query_type == "find_all" and reset_at is not None:
                     response = await UserRepository(self).table.find_many(
+                        take=limit,
                         where={
                             # A user seeded from default_internal_user_params
                             # (or created via /user/new without an explicit
@@ -3547,16 +3555,12 @@ class PrismaClient:
                             # of the row, silently exceeding max_budget. Treat a
                             # NULL budget_reset_at with a non-NULL budget_duration
                             # as due, matching the budget-table query below.
+                            "NOT": {"budget_duration": None},
                             "OR": [
-                                {
-                                    "AND": [
-                                        {"budget_reset_at": None},
-                                        {"NOT": {"budget_duration": None}},
-                                    ]
-                                },
+                                {"budget_reset_at": None},
                                 {"budget_reset_at": {"lt": reset_at}},
                             ],
-                        }
+                        },
                     )
                 elif query_type == "find_all" and user_id_list is not None:
                     response = await UserRepository(self).table.find_many(where={"user_id": {"in": user_id_list}})
@@ -3612,17 +3616,14 @@ class PrismaClient:
             elif table_name == "budget" and reset_at is not None:
                 if query_type == "find_all":
                     response = await BudgetRepository(self).table.find_many(
+                        take=limit,
                         where={
+                            "NOT": {"budget_duration": None},
                             "OR": [
-                                {
-                                    "AND": [
-                                        {"budget_reset_at": None},
-                                        {"NOT": {"budget_duration": None}},
-                                    ]
-                                },
+                                {"budget_reset_at": None},
                                 {"budget_reset_at": {"lt": reset_at}},
-                            ]
-                        }
+                            ],
+                        },
                     )
                     return response
 
@@ -3640,20 +3641,17 @@ class PrismaClient:
                     )
                 elif query_type == "find_all" and reset_at is not None:
                     response = await TeamRepository(self).table.find_many(
+                        take=limit,
                         where={
                             # Same NULL budget_reset_at gap as the user query
                             # above: a team with a budget_duration but no
                             # initialized budget_reset_at would never be reset.
+                            "NOT": {"budget_duration": None},
                             "OR": [
-                                {
-                                    "AND": [
-                                        {"budget_reset_at": None},
-                                        {"NOT": {"budget_duration": None}},
-                                    ]
-                                },
+                                {"budget_reset_at": None},
                                 {"budget_reset_at": {"lt": reset_at}},
                             ],
-                        }
+                        },
                     )
                 elif query_type == "find_all" and user_id is not None:
                     response = await TeamRepository(self).table.find_many(

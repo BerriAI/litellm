@@ -3129,6 +3129,7 @@ class StandardAuditLogPayload(TypedDict):
 class StandardLoggingPayload(TypedDict):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
+    session_id: str  # End-user/conversation session id (litellm_session_id), independent of trace_id
     litellm_call_id: str | None  # UUID returned in x-litellm-call-id response header
     call_type: str
     stream: bool | None
@@ -3245,10 +3246,23 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     litellm_disabled_callbacks: list[str] | None
 
 
-class CustomPricingLiteLLMParams(BaseModel):
-    ## CUSTOM PRICING ##
+class MirroredPricingParams(BaseModel):
+    """Pricing overrides that ``Deployment.__init__`` mirrors from ``litellm_params``
+    onto ``model_info``, so both blobs hold the same rate.
+
+    Declared once and inherited by both sides of that mirror, so the two can't drift.
+    """
+
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    input_cost_per_character: float | None = None
+    output_cost_per_character: float | None = None
+    cache_read_input_token_cost: float | None = None
+    cache_creation_input_token_cost: float | None = None
+
+
+class CustomPricingLiteLLMParams(MirroredPricingParams):
+    ## CUSTOM PRICING ##
     input_cost_per_second: float | None = None
     output_cost_per_second: float | None = None
     output_cost_per_second_1080p: float | None = None
@@ -3259,7 +3273,6 @@ class CustomPricingLiteLLMParams(BaseModel):
     # This allows any model_info parameter to be set in litellm_params
     input_cost_per_token_flex: float | None = None
     input_cost_per_token_priority: float | None = None
-    cache_creation_input_token_cost: float | None = None
     cache_creation_input_token_cost_above_1hr: float | None = None
     cache_creation_input_token_cost_above_200k_tokens: float | None = None
     cache_creation_input_token_cost_above_272k_tokens: float | None = None
@@ -3268,7 +3281,6 @@ class CustomPricingLiteLLMParams(BaseModel):
     cache_creation_input_token_cost_flex: float | None = None
     cache_creation_input_token_cost_priority: float | None = None
     cache_creation_input_audio_token_cost: float | None = None
-    cache_read_input_token_cost: float | None = None
     cache_read_input_token_cost_flex: float | None = None
     cache_read_input_token_cost_priority: float | None = None
     cache_read_input_token_cost_above_200k_tokens: float | None = None
@@ -3276,7 +3288,6 @@ class CustomPricingLiteLLMParams(BaseModel):
     cache_read_input_token_cost_above_272k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None = None
     cache_read_input_audio_token_cost: float | None = None
-    input_cost_per_character: float | None = None
     input_cost_per_character_above_128k_tokens: float | None = None
     input_cost_per_audio_token: float | None = None
     input_cost_per_token_cache_hit: float | None = None
@@ -3298,7 +3309,6 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_token_batches: float | None = None
     output_cost_per_token_flex: float | None = None
     output_cost_per_token_priority: float | None = None
-    output_cost_per_character: float | None = None
     output_cost_per_audio_token: float | None = None
     output_cost_per_token_above_128k_tokens: float | None = None
     output_cost_per_token_above_200k_tokens: float | None = None
@@ -3375,6 +3385,8 @@ agentic_loop_internal_litellm_params: Final = [
     "_code_interpreter_interception_sandbox_key",
     "_code_interpreter_interception_session_scoped",
     "_code_interpreter_interception_converted_stream",
+    "_websearch_interception_emit_native_blocks",
+    "_websearch_interception_converted_stream",
 ]
 
 # Proxy-owned callback credentials, stamped from admin-configured team/key callback
@@ -3389,6 +3401,8 @@ all_litellm_params = (
     + [
         "metadata",
         "litellm_metadata",
+        "keepalive_seconds",
+        "allow_client_keepalive_override",
         "litellm_trace_id",
         "litellm_request_debug",
         "guardrails",
