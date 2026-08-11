@@ -10,7 +10,14 @@ export interface OrganizationListFilters {
   org_alias?: string | null;
 }
 
-export const useOrganizations = (filters?: OrganizationListFilters): UseQueryResult<Organization[]> => {
+export interface UseOrganizationsOptions {
+  enabled?: boolean;
+}
+
+export const useOrganizations = (
+  filters?: OrganizationListFilters,
+  options?: UseOrganizationsOptions,
+): UseQueryResult<Organization[]> => {
   const { accessToken, userId, userRole } = useAuthorized();
   const orgId = filters?.org_id || null;
   const orgAlias = filters?.org_alias || null;
@@ -21,7 +28,7 @@ export const useOrganizations = (filters?: OrganizationListFilters): UseQueryRes
         : {},
     ),
     queryFn: async () => await organizationListCall(accessToken!, orgId, orgAlias),
-    enabled: Boolean(accessToken && userId && userRole),
+    enabled: (options?.enabled ?? true) && Boolean(accessToken && userId && userRole),
   });
 };
 

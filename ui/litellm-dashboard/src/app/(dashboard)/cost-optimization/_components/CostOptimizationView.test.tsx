@@ -1,5 +1,7 @@
-import { fireEvent, render } from "@testing-library/react";
+import { fireEvent } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { renderWithProviders, testQueryClient } from "../../../../../tests/test-utils";
 
 const { useAuthorizedMock } = vi.hoisted(() => ({ useAuthorizedMock: vi.fn() }));
 
@@ -19,11 +21,12 @@ import CostOptimizationView from "./CostOptimizationView";
 
 const renderView = (userRole = "Admin") => {
   useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole });
-  return render(<CostOptimizationView accessToken="test-token" userId="u1" userRole={userRole} />);
+  return renderWithProviders(<CostOptimizationView accessToken="test-token" userId="u1" userRole={userRole} />);
 };
 
 describe("CostOptimizationView", () => {
   beforeEach(() => {
+    testQueryClient.clear();
     useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole: "Admin" });
   });
 

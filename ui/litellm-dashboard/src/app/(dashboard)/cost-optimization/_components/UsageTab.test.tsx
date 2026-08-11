@@ -1,9 +1,10 @@
-import { render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolSpendResponse } from "@/components/networking";
 
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
+
+import { renderWithProviders, testQueryClient } from "../../../../../tests/test-utils";
 
 const mockGetToolSpend = vi.fn();
 
@@ -106,7 +107,7 @@ const renderWith = (results: DailyData[], options: RenderOptions = {}) => {
   } = options;
   mockGetToolSpend.mockResolvedValue(toolSpend);
   useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole });
-  return render(
+  return renderWithProviders(
     <UsageTab
       accessToken="test-token"
       activity={{
@@ -124,6 +125,7 @@ const readSeries = (element: HTMLElement) => JSON.parse(element.getAttribute("da
 
 describe("UsageTab", () => {
   beforeEach(() => {
+    testQueryClient.clear();
     mockGetToolSpend.mockReset();
   });
 
