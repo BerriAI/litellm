@@ -287,6 +287,7 @@ async def test_daily_report_skipped_when_another_pod_holds_the_lock():
     pod_lock_manager.acquire_lock.assert_awaited_once_with(
         cronjob_id="slack_daily_report",
         ttl=_DAILY_REPORT_FREQUENCY,
+        allow_reentrant=False,
     )
 
 
@@ -309,6 +310,7 @@ async def test_daily_report_sent_by_the_pod_that_wins_the_lock():
     pod_lock_manager.acquire_lock.assert_awaited_once_with(
         cronjob_id="slack_daily_report",
         ttl=_DAILY_REPORT_FREQUENCY,
+        allow_reentrant=False,
     )
 
 

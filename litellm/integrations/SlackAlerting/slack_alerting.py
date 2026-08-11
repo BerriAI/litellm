@@ -1563,7 +1563,9 @@ Model Info:
                 if (
                     pod_lock_manager is not None
                     and (
-                        await pod_lock_manager.acquire_lock(cronjob_id=SLACK_DAILY_REPORT_LOCK_ID, ttl=interval_seconds)
+                        await pod_lock_manager.acquire_lock(
+                            cronjob_id=SLACK_DAILY_REPORT_LOCK_ID, ttl=interval_seconds, allow_reentrant=False
+                        )
                     )
                     is False
                 ):

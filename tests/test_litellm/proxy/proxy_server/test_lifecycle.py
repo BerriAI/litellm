@@ -831,6 +831,7 @@ async def test_weekly_spend_report_skipped_when_another_pod_holds_the_lock():
     proxy_logging_obj.db_spend_update_writer.pod_lock_manager.acquire_lock.assert_awaited_once_with(
         cronjob_id="weekly_spend_report_job",
         ttl=7 * 86400 - 3600,
+        allow_reentrant=False,
     )
 
 
@@ -857,6 +858,7 @@ async def test_weekly_spend_report_lock_ttl_tracks_the_configured_window():
     proxy_logging_obj.db_spend_update_writer.pod_lock_manager.acquire_lock.assert_awaited_once_with(
         cronjob_id="weekly_spend_report_job",
         ttl=86400 - 3600,
+        allow_reentrant=False,
     )
     proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report.assert_awaited_once_with("1d")
 
@@ -871,6 +873,7 @@ async def test_monthly_spend_report_skipped_when_another_pod_holds_the_lock():
     proxy_logging_obj.db_spend_update_writer.pod_lock_manager.acquire_lock.assert_awaited_once_with(
         cronjob_id="monthly_spend_report_job",
         ttl=3600,
+        allow_reentrant=False,
     )
 
 
@@ -910,6 +913,7 @@ async def test_prometheus_fallback_stats_job_skipped_when_another_pod_holds_the_
     proxy_logging_obj.db_spend_update_writer.pod_lock_manager.acquire_lock.assert_awaited_with(
         cronjob_id="prometheus_fallback_stats_job",
         ttl=3600,
+        allow_reentrant=False,
     )
     assert proxy_logging_obj.db_spend_update_writer.pod_lock_manager.acquire_lock.await_count == 2
 

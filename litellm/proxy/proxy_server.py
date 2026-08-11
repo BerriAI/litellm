@@ -9057,14 +9057,21 @@ class ProxyStartupEvent:
                 # boot time + jitter, so a shorter lock would let a later pod re-send the report.
                 # Minus an hour so the next window's first firer finds a free key
                 if (
-                    await pod_lock_manager.acquire_lock(cronjob_id=WEEKLY_SPEND_REPORT_JOB_ID, ttl=weekly_lock_ttl)
+                    await pod_lock_manager.acquire_lock(
+                        cronjob_id=WEEKLY_SPEND_REPORT_JOB_ID, ttl=weekly_lock_ttl, allow_reentrant=False
+                    )
                     is False
                 ):
                     return
                 await proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report(spend_report_frequency)
 
             async def _scheduled_monthly_spend_report() -> None:
-                if await pod_lock_manager.acquire_lock(cronjob_id=MONTHLY_SPEND_REPORT_JOB_ID, ttl=3600) is False:
+                if (
+                    await pod_lock_manager.acquire_lock(
+                        cronjob_id=MONTHLY_SPEND_REPORT_JOB_ID, ttl=3600, allow_reentrant=False
+                    )
+                    is False
+                ):
                     return
                 await proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report()
 
@@ -9091,7 +9098,9 @@ class ProxyStartupEvent:
 
                 async def _scheduled_fallback_stats() -> None:
                     if (
-                        await pod_lock_manager.acquire_lock(cronjob_id=PROMETHEUS_FALLBACK_STATS_JOB_ID, ttl=3600)
+                        await pod_lock_manager.acquire_lock(
+                            cronjob_id=PROMETHEUS_FALLBACK_STATS_JOB_ID, ttl=3600, allow_reentrant=False
+                        )
                         is False
                     ):
                         return
