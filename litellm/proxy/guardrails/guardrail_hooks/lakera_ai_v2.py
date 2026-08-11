@@ -325,21 +325,6 @@ class LakeraAIGuardrail(CustomGuardrail):
             verbose_proxy_logger.warning("Lakera AI: not running guardrail. No inspectable text in data")
             return data
 
-        # Advisory mode never masks (it only appends), so scoping inspection to
-        # user-authored content avoids flagging system/assistant/tool text the
-        # LLM already has full context on.
-        # TODO(https://github.com/BerriAI/litellm/pull/34940): compose with
-        # filter_messages_by_skip_flags once that PR merges, instead of this
-        # standalone role filter.
-        inspected_messages: Final = (
-            [m for m in new_messages if m.get("role") == "user"]
-            if self.on_flagged == "inject_system_message"
-            else new_messages
-        )
-        if not inspected_messages:
-            verbose_proxy_logger.warning("Lakera AI: not running guardrail. No user messages to inspect")
-            return data
-
         # Mask-in-place uses offsets returned by Lakera and can only
         # preserve non-text parts (images, audio, …) when the original
         # content is a plain string. For multimodal/Responses-API input
@@ -351,7 +336,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         ########## 1. Make the Lakera AI v2 guard API request ##########
         #########################################################
         lakera_guardrail_response, masked_entity_count = await self.call_v2_guard(
-            messages=inspected_messages,
+            messages=new_messages,
             request_data=data,
             event_type=GuardrailEventHooks.pre_call,
         )
@@ -416,16 +401,6 @@ class LakeraAIGuardrail(CustomGuardrail):
             verbose_proxy_logger.warning("Lakera AI: not running guardrail. No inspectable text in data")
             return
 
-        # See ``async_pre_call_hook`` for why advisory mode scopes to user-only content.
-        inspected_messages: Final = (
-            [m for m in new_messages if m.get("role") == "user"]
-            if self.on_flagged == "inject_system_message"
-            else new_messages
-        )
-        if not inspected_messages:
-            verbose_proxy_logger.warning("Lakera AI: not running guardrail. No user messages to inspect")
-            return
-
         # See ``async_pre_call_hook`` — multimodal input degrades to
         # block-on-detect because mask-in-place would drop image parts.
         is_multimodal_input: Final = has_non_string_content(data)
@@ -434,7 +409,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         ########## 1. Make the Lakera AI v2 guard API request ##########
         #########################################################
         lakera_guardrail_response, masked_entity_count = await self.call_v2_guard(
-            messages=inspected_messages,
+            messages=new_messages,
             request_data=data,
             event_type=GuardrailEventHooks.during_call,
         )

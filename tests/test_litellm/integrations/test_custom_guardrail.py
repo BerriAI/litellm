@@ -1205,8 +1205,29 @@ class TestInjectAdvisoryMessage:
         guardrail.inject_advisory_message(data, DEFAULT_ADVISORY_MESSAGE.format(reason="a content safety concern"))
 
         assert len(data["messages"]) == 2
-        assert data["messages"][-1]["role"] == "system"
-        assert "a content safety concern" in data["messages"][-1]["content"]
+
+    def test_appends_to_responses_api_input_string(self):
+        """
+        The Responses API stores its content in "input", not "messages". Appending
+        only to "messages" would leave the advisory unreachable for that endpoint,
+        since the Responses backend never reads a "messages" key.
+        """
+        guardrail = CustomGuardrail()
+        data = {"model": "gpt-5-mini", "input": "What's the weather today?"}
+
+        guardrail.inject_advisory_message(data, "This looks suspicious.")
+
+        assert data["input"] == "What's the weather today?\n\nThis looks suspicious."
+        assert "messages" not in data
+
+    def test_appends_to_both_messages_and_input_when_both_present(self):
+        guardrail = CustomGuardrail()
+        data = {"messages": [{"role": "user", "content": "hi"}], "input": "hi"}
+
+        guardrail.inject_advisory_message(data, "Advisory note.")
+
+        assert data["messages"][-1] == {"role": "system", "content": "Advisory note."}
+        assert data["input"] == "hi\n\nAdvisory note."
 
 
 class TestEventTypeLogging:

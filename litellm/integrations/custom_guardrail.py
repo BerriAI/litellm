@@ -260,14 +260,20 @@ class CustomGuardrail(CustomLogger):
 
         Args:
             data: The request data dictionary, mutated in place to append the
-                advisory message to its "messages" list.
+                advisory message to its "messages" list and/or "input" text.
             message: The formatted advisory message to append as a system message.
         """
-        existing_messages: Final = data.get("messages")
         advisory_message: Final = {"role": "system", "content": message}
-        data["messages"] = (
-            [*existing_messages, advisory_message] if isinstance(existing_messages, list) else [advisory_message]
-        )
+        existing_messages: Final = data.get("messages")
+        existing_input: Final = data.get("input")
+        if isinstance(existing_messages, list):
+            data["messages"] = [*existing_messages, advisory_message]  # rebind-ok: mutates caller's dict by design
+        if isinstance(existing_input, str):
+            # The Responses API reads "input", not "messages" -- appending only to
+            # "messages" would leave the advisory unreachable for that endpoint.
+            data["input"] = f"{existing_input}\n\n{message}"  # rebind-ok: mutates caller's dict by design
+        if not isinstance(existing_messages, list) and not isinstance(existing_input, str):
+            data["messages"] = [advisory_message]  # rebind-ok: mutates caller's dict by design
 
     def raise_sensitive_data_route_exception(
         self,
