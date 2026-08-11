@@ -4062,6 +4062,46 @@ def test_get_deployment_credentials_with_provider_bedrock_batch_fields():
     assert credentials["aws_batch_role_arn"] == "arn:aws:iam::123:role/batch-role"
 
 
+def test_get_deployment_credentials_with_provider_preserves_aws_auth_params():
+    """
+    Test that get_deployment_credentials_with_provider preserves every AWS auth
+    selector (session token, assume-role, web identity, profile) so bedrock
+    files/batches deployments using temporary or role-based credentials do not
+    silently fall back to the server's ambient identity (#36155).
+    """
+    aws_auth_params = {
+        "aws_access_key_id": "deployment-access-key",
+        "aws_secret_access_key": "deployment-secret",
+        "aws_session_token": "deployment-session-token",
+        "aws_region_name": "us-west-2",
+        "aws_session_name": "deployment-session",
+        "aws_profile_name": "deployment-profile",
+        "aws_role_name": "arn:aws:iam::123:role/deployment-role",
+        "aws_web_identity_token": "deployment-web-identity",
+        "aws_sts_endpoint": "https://sts.us-west-2.amazonaws.com",
+        "aws_external_id": "deployment-external-id",
+    }
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    **aws_auth_params,
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="bedrock-batch-model"
+    )
+
+    assert credentials is not None
+    for key, value in aws_auth_params.items():
+        assert credentials.get(key) == value, key
+
+
 def _team_wildcard_model(api_key: str, model_id: str = "team-wildcard-id") -> dict:
     return {
         "model_name": f"model_name_team-1_{model_id}",
