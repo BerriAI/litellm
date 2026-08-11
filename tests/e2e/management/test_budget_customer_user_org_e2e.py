@@ -19,7 +19,7 @@ import time
 from collections.abc import Callable
 
 import pytest
-from pydantic import BaseModel, Field, RootModel
+from pydantic import AliasChoices, BaseModel, Field, RootModel
 
 from e2e_config import unique_marker
 from e2e_http import NoBody, Success, UnauthorizedError, UnknownApiError, is_ok, unwrap
@@ -55,20 +55,15 @@ class BudgetNewResponse(BaseModel):
     budget_id: str
 
 
-class ModelBudgetRequest(BaseModel):
-    budget_limit: float
-    time_period: str
-
-
-class StoredModelBudget(BaseModel):
-    max_budget: float
-    budget_duration: str
+class ModelBudgetEntry(BaseModel):
+    budget_limit: float = Field(validation_alias=AliasChoices("budget_limit", "max_budget"))
+    time_period: str = Field(validation_alias=AliasChoices("time_period", "budget_duration"))
 
 
 class BudgetUpdateBody(BaseModel):
     budget_id: str
     max_budget: float | None = None
-    model_max_budget: dict[str, ModelBudgetRequest] | None = None
+    model_max_budget: dict[str, ModelBudgetEntry] | None = None
 
 
 class BudgetInfoBody(BaseModel):
@@ -79,7 +74,7 @@ class BudgetRow(BaseModel):
     budget_id: str | None = None
     max_budget: float | None = None
     soft_budget: float | None = None
-    model_max_budget: dict[str, StoredModelBudget] | None = None
+    model_max_budget: dict[str, ModelBudgetEntry] | None = None
 
 
 class BudgetInfoResponse(RootModel[list[BudgetRow]]):
@@ -132,7 +127,7 @@ def _budget_rows(client: ManagementClient, budget_id: str) -> tuple[BudgetRow, .
 
 def _stored_model_budget(
     client: ManagementClient, budget_id: str, model_name: str
-) -> StoredModelBudget | None:
+) -> ModelBudgetEntry | None:
     row = next(
         (r for r in _budget_rows(client, budget_id) if r.budget_id == budget_id), None
     )
@@ -200,19 +195,14 @@ class TestBudgetManagement:
         budget_id = _create_budget(
             client, resources, BudgetNewBody(max_budget=_INITIAL_MAX_BUDGET)
         )
-        expected = StoredModelBudget(max_budget=5.0, budget_duration="1d")
+        expected = ModelBudgetEntry(budget_limit=5.0, time_period="1d")
 
         result = client.proxy.transport.post(
             "/budget/update",
             headers=client.proxy.transport.master,
             json=BudgetUpdateBody(
                 budget_id=budget_id,
-                model_max_budget={
-                    model_name: ModelBudgetRequest(
-                        budget_limit=expected.max_budget,
-                        time_period=expected.budget_duration,
-                    )
-                },
+                model_max_budget={model_name: expected},
             ),
             response_type=NoBody,
         )
@@ -222,7 +212,7 @@ class TestBudgetManagement:
             f"a customer cannot cap spend per model on an existing budget"
         )
 
-        def persisted() -> StoredModelBudget | None:
+        def persisted() -> ModelBudgetEntry | None:
             stored = _stored_model_budget(client, budget_id, model_name)
             return stored if stored == expected else None
 
