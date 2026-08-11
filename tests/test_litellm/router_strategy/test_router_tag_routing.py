@@ -1873,6 +1873,59 @@ async def test_allow_fail_open_per_hop_across_fallback_chain():
     assert response._hidden_params["model_id"] == "fallback-model"
 
 
+@pytest.mark.asyncio()
+async def test_allow_fail_open_resolves_locally_without_triggering_external_fallback():
+    # allow_fail_open on the primary group's own default deployment absorbs the
+    # exhaustion internally (_resolve_or_fail_open returns a non-empty pool, so
+    # get_deployments_for_tag never raises); router.async_function_with_fallbacks
+    # only invokes the configured "fallbacks" chain on an exception, so a
+    # separate, unrelated fallback group must never be touched even though one is
+    # configured. A fallback deployment that would trivially satisfy the request
+    # tag if it were ever consulted makes this a meaningful negative assertion,
+    # not a vacuous one.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:high"],
+                },
+                "model_info": {"id": "primary-high-reasoning"},
+            },
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["default", "reasoning_type:low"],
+                },
+                "model_info": {"id": "primary-default", "allow_fail_open": True},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["region:eu"],
+                },
+                "model_info": {"id": "fallback-should-never-be-used"},
+            },
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        enable_tag_filtering=True,
+    )
+
+    response = await router.acompletion(
+        model="primary",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"tags": ["&region:eu"]},
+        mock_response="hi",
+    )
+    assert response._hidden_params["model_id"] == "primary-default"
+
+
 # --- allow_fail_open must also gate "!" exhaustion combined with a plain positive tag ---
 
 
