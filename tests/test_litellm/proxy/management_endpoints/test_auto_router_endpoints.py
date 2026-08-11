@@ -642,6 +642,27 @@ class TestShadowEvalJobsAreTimeBound:
         return prisma
 
     @pytest.mark.asyncio
+    async def test_start_rejects_an_unresolvable_judge_model_before_creating_the_job(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Regression: a judge name the dispatch path cannot resolve (a bare deployment
+        alias on a proxy without that deployment) was accepted at start and then failed
+        every sampled turn, billing shadow calls with nothing to show but failed_count.
+        The gate must fire in the endpoint itself, not only in the helper."""
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.auto_router_endpoints import start_shadow_eval
+
+        prisma = self._proxy_mocks(monkeypatch, recent_requests=700)
+        proxy_server.llm_router.model_group_alias = {}
+        proxy_server.llm_router.get_model_list = MagicMock(return_value=None)
+
+        with pytest.raises(HTTPException) as exc:
+            await start_shadow_eval(self._start_request(judge_model="opus"), ADMIN)
+
+        assert exc.value.status_code == 400
+        prisma.db.litellm_shadowevaljob.create.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_losing_a_concurrent_start_race_is_a_409_not_a_500(self, monkeypatch: pytest.MonkeyPatch):
         """Two admins can pass the advisory read simultaneously; the partial unique
         index rejects the second create, which must read as the same conflict."""
