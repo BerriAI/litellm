@@ -432,6 +432,7 @@ class Router:
         health_check_staleness_threshold: int | None = None,
         health_check_ignore_transient_errors: bool = False,
         enable_weighted_failover: bool = False,
+        disable_mid_stream_continuation: bool = False,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -687,6 +688,7 @@ class Router:
         _content_policy_fallbacks: Final = content_policy_fallbacks or litellm.content_policy_fallbacks
         self.validate_fallbacks(fallback_param=_content_policy_fallbacks)
         self.content_policy_fallbacks = _content_policy_fallbacks
+        self.disable_mid_stream_continuation = disable_mid_stream_continuation
         self.total_calls: defaultdict = defaultdict(int)  # dict to store total calls made to each model
         self.fail_calls: defaultdict = defaultdict(int)  # dict to store fail_calls made to each model
         self.success_calls: defaultdict = defaultdict(int)  # dict to store success_calls  made to each model
@@ -2161,8 +2163,13 @@ class Router:
                 async for item in model_response:
                     yield item
             except MidStreamFallbackError as e:
-                if not e.is_pre_first_chunk and (
-                    e.generated_content or _stream_chunks_have_generated_content(model_response.chunks)
+                if (
+                    not self.disable_mid_stream_continuation
+                    and not e.is_pre_first_chunk
+                    and (
+                        e.generated_content
+                        or _stream_chunks_have_generated_content(model_response.chunks)
+                    )
                 ):
                     if e.original_exception is not None:
                         raise e.original_exception from e
@@ -2595,7 +2602,11 @@ class Router:
                     # original_generic_function is preserved by the caller so
                     # the helper knows what underlying API to invoke per attempt.
                     initial_kwargs["original_function"] = self._ageneric_api_call_with_fallbacks_helper
-                    if e.is_pre_first_chunk or not e.generated_content:
+                    if (
+                        e.is_pre_first_chunk
+                        or not e.generated_content
+                        or self.disable_mid_stream_continuation
+                    ):
                         # No content generated before the error — retry with the
                         # original input. Adding a continuation prompt would
                         # waste tokens and confuse the model.
@@ -2706,8 +2717,13 @@ class Router:
                 for item in model_response:
                     yield item
             except MidStreamFallbackError as e:
-                if not e.is_pre_first_chunk and (
-                    e.generated_content or _stream_chunks_have_generated_content(model_response.chunks)
+                if (
+                    not router_self.disable_mid_stream_continuation
+                    and not e.is_pre_first_chunk
+                    and (
+                        e.generated_content
+                        or _stream_chunks_have_generated_content(model_response.chunks)
+                    )
                 ):
                     if e.original_exception is not None:
                         raise e.original_exception from e
@@ -10109,6 +10125,7 @@ class Router:
             "model_group_alias",
             "enable_weighted_failover",
             "enable_tag_filtering",
+            "disable_mid_stream_continuation",
         ]
 
         for var in vars_to_include:
@@ -10146,6 +10163,7 @@ class Router:
             "model_group_alias",
             "enable_weighted_failover",
             "enable_tag_filtering",
+            "disable_mid_stream_continuation",
         ]
 
         _int_settings: Final = [
