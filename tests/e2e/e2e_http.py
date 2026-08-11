@@ -124,12 +124,7 @@ class StreamingResponse(BaseModel):
     non-streaming `application/json`), the response headers (lowercased names, e.g.
     the x-ratelimit-* pacing headers and retry-after on a 429), and the body.
     SpendLogs.request_id is the completion body id, not call_id. Used by passthrough
-    and streaming, where one validated JSON model does not fit.
-
-    `stream_done` records whether the terminal OpenAI `data: [DONE]` line arrived.
-    The consumed body is elided to "<streamed>", so that line is otherwise
-    unobservable, and routes differ on whether sending it is correct: OpenAI-shaped
-    streams must, while Google-native streams must not."""
+    and streaming, where one validated JSON model does not fit."""
 
     status_code: int
     call_id: str | None = None  # x-litellm-call-id header
@@ -139,7 +134,6 @@ class StreamingResponse(BaseModel):
     body: str
     chunks: int = 0  # streamed events (0 for non-streaming)
     stream_events: list[str] = []
-    stream_done: bool = False
     # First in-stream error event, if any. A streamed call commits its HTTP 200
     # before the upstream completes, so upstream failures (e.g. insufficient
     # quota) arrive as SSE error events inside an otherwise-successful response;

@@ -131,12 +131,12 @@ class GenerateContentPart(BaseModel):
 
 
 class GenerateContentContent(BaseModel):
-    role: str = "user"
-    parts: list[GenerateContentPart]
+    role: Literal["user"] = "user"
+    parts: tuple[GenerateContentPart, ...]
 
 
 class GenerateContentBody(BaseModel):
-    contents: list[GenerateContentContent]
+    contents: tuple[GenerateContentContent, ...]
 
 
 class ResponsesOutputContent(BaseModel):
@@ -436,28 +436,17 @@ class EndpointsClient:
             response_type=ImagesResult,
         )
 
-    def generate_content(self, key: str, model: str, text: str) -> StreamingResponse:
-        """Google-native GenerateContent on a litellm-managed deployment.
-
-        This is the un-prefixed `/v1beta/models/...` route the google-genai and
-        Vertex SDKs talk to, not the `/gemini/...` or `/vertex_ai/...` passthrough.
-        """
+    def generate_content(
+        self, key: str, model: str, text: str, *, stream: bool = False
+    ) -> StreamingResponse:
+        operation = "streamGenerateContent" if stream else "generateContent"
         return self._send(
-            f"/v1beta/models/{model}:generateContent",
+            f"/v1beta/models/{model}:{operation}",
             key,
             GenerateContentBody(
-                contents=[GenerateContentContent(parts=[GenerateContentPart(text=text)])]
+                contents=(GenerateContentContent(parts=(GenerateContentPart(text=text),)),)
             ),
-        )
-
-    def stream_generate_content(self, key: str, model: str, text: str) -> StreamingResponse:
-        return self._send(
-            f"/v1beta/models/{model}:streamGenerateContent",
-            key,
-            GenerateContentBody(
-                contents=[GenerateContentContent(parts=[GenerateContentPart(text=text)])]
-            ),
-            stream=True,
+            stream=stream,
         )
 
 

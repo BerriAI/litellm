@@ -1,18 +1,3 @@
-"""Live e2e: the Prometheus request-queue-time histogram is actually emitted.
-
-`litellm_request_queue_time_seconds` is how operators see how long a request
-waited before the proxy started working on it, so it feeds saturation alerts. It
-regressed to never being emitted at all (LIT-2034): the family was registered, so
-a scrape still listed the metric, but no observation was ever recorded and every
-dashboard built on it read empty.
-
-That is why asserting the family exists is not enough. This drives a real call on
-a uniquely-aliased key and then requires a sample carrying that alias with a
-positive count, which is the part that stayed silent through the regression. The
-histogram is written on the success-logging callback, so the scrape polls to a
-deadline rather than sleeping once.
-"""
-
 from __future__ import annotations
 
 import time
@@ -32,14 +17,15 @@ ALIAS_LABEL = "api_key_alias"
 
 
 def _observation_count(exposition: str, alias: str) -> float | None:
-    """The histogram's `_count` for our key's series, or None if never observed."""
-    for family in text_string_to_metric_families(exposition):
-        if family.name != QUEUE_TIME_METRIC:
-            continue
-        for sample in family.samples:
-            if sample.name == f"{QUEUE_TIME_METRIC}_count" and sample.labels.get(ALIAS_LABEL) == alias:
-                return sample.value
-    return None
+    return next(
+        (
+            sample.value
+            for family in text_string_to_metric_families(exposition)
+            for sample in family.samples
+            if sample.name == f"{QUEUE_TIME_METRIC}_count" and sample.labels.get(ALIAS_LABEL) == alias
+        ),
+        None,
+    )
 
 
 class TestPrometheusRequestQueueTime:
