@@ -9240,4 +9240,51 @@ async def test_upstream_resource_sent_on_dcr_bridge_relay_authorize():
 
     query = await _authorize_query(server)
     assert query["resource"] == ["https://mcp.example.com/mcp"]
+
+
+def test_authorization_server_issuer_matches_protected_resource_authorization_servers():
+    """RFC 8414 requires issuer to equal the URL from which the metadata was fetched.
+    For a named server, the PRM advertises {base}/{server_name} in authorization_servers,
+    so the AS metadata must return the same value as issuer (issue #36479)."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_authorization_server_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    server = MCPServer(
+        server_id="example-server",
+        name="example-server",
+        server_name="example-server",
+        alias="example-server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="client_id",
+        client_secret="client_secret",
+        authorization_url="https://idp.example.com/authorize",
+        token_url="https://idp.example.com/token",
+    )
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://proxy.example.com/"
+    mock_request.headers = {}
+
+    try:
+        response = _build_oauth_authorization_server_response(
+            request=mock_request,
+            mcp_server_name="example-server",
+        )
+        assert response["issuer"] == "https://proxy.example.com/example-server"
+    finally:
+        global_mcp_server_manager.registry.clear()
     assert query["client_id"] == ["caller-client"]
