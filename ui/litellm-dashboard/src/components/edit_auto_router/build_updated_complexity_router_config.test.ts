@@ -227,3 +227,67 @@ describe("buildUpdatedComplexityRouterConfig session affinity", () => {
     expect(result.session_affinity).toBe(false);
   });
 });
+
+describe("buildUpdatedComplexityRouterConfig deployment affinity", () => {
+  it("writes deployment_affinity=false when the toggle is off", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, deployment_affinity: false });
+    expect(result.deployment_affinity).toBe(false);
+  });
+
+  it("writes deployment_affinity=true when the toggle is on", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, deployment_affinity: true });
+    expect(result.deployment_affinity).toBe(true);
+  });
+
+  it("re-asserts the backend's on-by-default when the form value is absent, rather than dropping the key", () => {
+    const result = buildUpdatedComplexityRouterConfig({ ...STORED, deployment_affinity: false }, FORM_VALUE);
+    expect(result.deployment_affinity).toBe(true);
+  });
+
+  it("stops a stored deployment_affinity=false from surviving a save that turned the toggle back on", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, deployment_affinity: false },
+      { ...FORM_VALUE, deployment_affinity: true },
+    );
+    expect(result.deployment_affinity).toBe(true);
+  });
+});
+
+describe("buildUpdatedComplexityRouterConfig tier labels", () => {
+  const RENAMED = { ...STORED, tier_labels: { SIMPLE: "Cheap", REASONING: "Deep" } };
+
+  it("round-trips stored labels through an untouched edit", () => {
+    const result = buildUpdatedComplexityRouterConfig(RENAMED, {
+      ...FORM_VALUE,
+      tier_labels: { SIMPLE: "Cheap", REASONING: "Deep" },
+    });
+    expect(result.tier_labels).toEqual({ SIMPLE: "Cheap", REASONING: "Deep" });
+  });
+
+  it("persists a renamed tier", () => {
+    const result = buildUpdatedComplexityRouterConfig(RENAMED, {
+      ...FORM_VALUE,
+      tier_labels: { SIMPLE: "Budget", REASONING: "Deep" },
+    });
+    expect(result.tier_labels).toEqual({ SIMPLE: "Budget", REASONING: "Deep" });
+  });
+
+  it("drops the key when every label is cleared back to the default", () => {
+    const result = buildUpdatedComplexityRouterConfig(RENAMED, { ...FORM_VALUE, tier_labels: {} });
+    expect(result.tier_labels).toBeUndefined();
+    expect("tier_labels" in result).toBe(false);
+  });
+
+  it("leaves an unrenamed router without the key", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE);
+    expect("tier_labels" in result).toBe(false);
+  });
+
+  it("keeps the tiers keys canonical alongside a rename", () => {
+    const result = buildUpdatedComplexityRouterConfig(RENAMED, {
+      ...FORM_VALUE,
+      tier_labels: { SIMPLE: "Cheap" },
+    });
+    expect(Object.keys(result.tiers as Record<string, unknown>)).toEqual(["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]);
+  });
+});

@@ -46,6 +46,7 @@ from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
 )
+from litellm.proxy.common_utils.sse_keepalive import wrap_sse_stream_with_keepalive_pings
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
@@ -67,7 +68,10 @@ if TYPE_CHECKING:
     ProxyConfig = _ProxyConfig
 else:
     ProxyConfig = Any
-from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+from litellm.proxy.litellm_pre_call_utils import (
+    add_litellm_data_to_request,
+    reject_url_valued_destination,
+)
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -682,7 +686,7 @@ async def create_response(
         # Generator was empty. Default status
         async def empty_gen() -> AsyncGenerator[str, None]:
             if False:
-                yield  # type: ignore
+                yield
 
         return StreamingResponse(
             empty_gen(),
@@ -906,6 +910,28 @@ def _get_cost_breakdown_from_logging_obj(
     return original_cost, discount_amount, margin_total_amount, margin_percent
 
 
+def _classifier_cost_from_request_data(request_data: Mapping[str, object] | None) -> float | None:
+    """Cost of the auto-router's LLM classifier call, read from the request's routing_decision.
+
+    The pre-routing hook records the decision in `litellm_metadata` on messages/batch-style
+    routes and in `metadata` on chat-style routes, so both buckets are consulted, in the same
+    precedence `get_or_create_metadata_bucket` writes them.
+    """
+    data: Final = request_data or {}
+    for metadata_key in ("litellm_metadata", "metadata"):
+        metadata = data.get(metadata_key)
+        if not isinstance(metadata, dict):
+            continue
+        decision = metadata.get("routing_decision")
+        if not isinstance(decision, dict):
+            continue
+        cost = decision.get("classifier_cost")
+        if isinstance(cost, bool) or not isinstance(cost, (int, float)):
+            continue
+        return float(cost)
+    return None
+
+
 def _has_attribute_error_in_chain(exc: Exception) -> bool:
     """Walk the exception chain to find an AttributeError at any depth.
 
@@ -1029,6 +1055,7 @@ class ProxyBaseLLMRequestProcessing:
                 pass
 
         model_name: Final = ProxyBaseLLMRequestProcessing._get_deployment_model_name(litellm_logging_obj)
+        classifier_cost: Final = _classifier_cost_from_request_data(request_data)
 
         headers: Final = {
             "x-litellm-call-id": call_id,
@@ -1047,6 +1074,7 @@ class ProxyBaseLLMRequestProcessing:
                 str(margin_total_amount) if margin_total_amount is not None else None
             ),
             "x-litellm-response-cost-margin-percent": (str(margin_percent) if margin_percent is not None else None),
+            "x-litellm-classifier-cost": (str(classifier_cost) if classifier_cost is not None else None),
             "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
             "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
@@ -1286,6 +1314,9 @@ class ProxyBaseLLMRequestProcessing:
                 self.data[_metadata_variable_name] = {}
             self.data[_metadata_variable_name]["queue_time_seconds"] = queue_time_seconds
 
+        if isinstance(model, str):
+            reject_url_valued_destination("model", model)
+
         self.data["model"] = (
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
@@ -1395,10 +1426,10 @@ class ProxyBaseLLMRequestProcessing:
             trust_client_model_info=False,
         )
 
-        self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore
+        self.data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=self.data,
-            call_type=route_type,  # type: ignore
+            call_type=route_type,
         )
 
         if "messages" in self.data and self.data["messages"]:
@@ -1751,7 +1782,7 @@ class ProxyBaseLLMRequestProcessing:
         if _post_call_guardrails_active and not self._is_streaming_request(
             data=self.data, is_streaming_request=is_streaming_request
         ):
-            logging_obj._defer_async_logging = True  # type: ignore
+            logging_obj._defer_async_logging = True
 
         tasks: Final = []
         # Start the moderation check (during_call_hook) as early as possible
@@ -1761,7 +1792,7 @@ class ProxyBaseLLMRequestProcessing:
                 proxy_logging_obj.during_call_hook(
                     data=self.data,
                     user_api_key_dict=user_api_key_dict,
-                    call_type=route_type,  # type: ignore
+                    call_type=route_type,
                 )
             )
         )
@@ -1884,7 +1915,7 @@ class ProxyBaseLLMRequestProcessing:
                             cache_hit=cache_hit,
                         )
 
-                    logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete  # type: ignore[union-attr]
+                    logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete
 
                 if route_type == "allm_passthrough_route":
                     # Check if response is an async generator
@@ -1898,9 +1929,7 @@ class ProxyBaseLLMRequestProcessing:
                             self._has_post_call_guardrails_for_passthrough()
                             and self._passthrough_endpoint_has_stream_guardrail_handler()
                         ):
-                            body_bytes: Final = b"".join(
-                                [chunk async for chunk in generator]  # type: ignore[union-attr]
-                            )
+                            body_bytes: Final = b"".join([chunk async for chunk in generator])
                             modified_bytes: Final = await self._handle_event_stream_allm_passthrough_route(
                                 body_bytes=body_bytes,
                                 proxy_logging_obj=proxy_logging_obj,
@@ -1919,7 +1948,7 @@ class ProxyBaseLLMRequestProcessing:
                         # For passthrough routes, stream directly without error parsing
                         # since we're dealing with raw binary data (e.g., AWS event streams)
                         return StreamingResponse(
-                            content=generator,  # type: ignore[arg-type]
+                            content=generator,
                             status_code=status.HTTP_200_OK,
                             headers=custom_headers,
                         )
@@ -1934,8 +1963,8 @@ class ProxyBaseLLMRequestProcessing:
                         if _early is not None:
                             return _early
                         return StreamingResponse(
-                            content=response.aiter_bytes(),  # type: ignore[union-attr]
-                            status_code=response.status_code,  # type: ignore[union-attr]
+                            content=response.aiter_bytes(),
+                            status_code=response.status_code,
                             headers=custom_headers,
                         )
                 elif route_type == "anthropic_messages":
@@ -1952,7 +1981,10 @@ class ProxyBaseLLMRequestProcessing:
                             request=request,
                         )
                         return await create_response(
-                            generator=selected_data_generator,
+                            generator=wrap_sse_stream_with_keepalive_pings(
+                                stream=selected_data_generator,
+                                ping_interval_seconds=litellm.anthropic_sse_ping_interval_seconds,
+                            ),
                             media_type="text/event-stream",
                             headers=custom_headers,
                             request=request,
@@ -1995,7 +2027,7 @@ class ProxyBaseLLMRequestProcessing:
             # Clear the closure so guardrails run inline as before — this
             # preserves blocking behavior and avoids double invocation.
             if getattr(logging_obj, "_on_deferred_stream_complete", None):
-                logging_obj._on_deferred_stream_complete = None  # type: ignore[union-attr]
+                logging_obj._on_deferred_stream_complete = None
 
             if route_type == "allm_passthrough_route":
                 _non_streaming_custom_headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -2026,7 +2058,7 @@ class ProxyBaseLLMRequestProcessing:
             response = await proxy_logging_obj.post_call_success_hook(
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
-                response=response,  # type: ignore[arg-type]
+                response=response,
             )
         except Exception:
             _exception_raised = True
@@ -2048,7 +2080,7 @@ class ProxyBaseLLMRequestProcessing:
             if _exception_raised:
                 _deferred_fn: Final = getattr(logging_obj, "_on_deferred_stream_complete", None)
                 if _deferred_fn is not None:
-                    logging_obj._on_deferred_stream_complete = None  # type: ignore[union-attr]
+                    logging_obj._on_deferred_stream_complete = None
                     try:
                         asyncio.create_task(
                             logging_obj.dispatch_success_handlers(
@@ -2404,8 +2436,8 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         try:
-            response_status: Final[int] = response.status_code  # type: ignore[union-attr]
-            content_type: Final[str] = response.headers.get("content-type", "")  # type: ignore[union-attr]
+            response_status: Final[int] = response.status_code
+            content_type: Final[str] = response.headers.get("content-type", "")
         except AttributeError:
             return None
 
@@ -2419,7 +2451,7 @@ class ProxyBaseLLMRequestProcessing:
             return None
 
         response_headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
-            headers=response.headers,  # type: ignore[union-attr]
+            headers=response.headers,
             custom_headers=custom_headers,
         )
         callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
@@ -2432,7 +2464,7 @@ class ProxyBaseLLMRequestProcessing:
             response_headers.update(callback_headers)
 
         if is_event_stream:
-            body_bytes = await response.aread()  # type: ignore[union-attr]
+            body_bytes = await response.aread()
             modified_bytes: Final = await self._handle_event_stream_allm_passthrough_route(
                 body_bytes=body_bytes,
                 proxy_logging_obj=proxy_logging_obj,
@@ -2445,7 +2477,7 @@ class ProxyBaseLLMRequestProcessing:
                 headers=response_headers,
             )
 
-        body_bytes = await response.aread()  # type: ignore[union-attr]
+        body_bytes = await response.aread()
         try:
             parsed: Final = _json.loads(body_bytes)
         except (_json.JSONDecodeError, UnicodeDecodeError):
@@ -2522,7 +2554,7 @@ class ProxyBaseLLMRequestProcessing:
         _enqueue_fn: Final = getattr(logging_obj, "_enqueue_deferred_logging", None)
         if _enqueue_fn is None:
             return
-        logging_obj._enqueue_deferred_logging = None  # type: ignore[union-attr]
+        logging_obj._enqueue_deferred_logging = None
         if exception_raised:
             return
         try:
@@ -2690,7 +2722,6 @@ class ProxyBaseLLMRequestProcessing:
                 _response_headers: Final = getattr(_response, "headers", None)
                 if _response_headers:
                     headers = get_response_headers(dict(_response_headers))
-        headers = {k: v for k, v in headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS}
         headers.update(custom_headers)
 
         # Call response headers hook for failure
@@ -2706,16 +2737,15 @@ class ProxyBaseLLMRequestProcessing:
         except Exception:
             pass
 
-        headers = {k: v for k, v in headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS}
+        safe_headers: Final = {k: v for k, v in headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS}
 
-        self._apply_router_cooldown_retry_after(headers, e)
+        self._apply_router_cooldown_retry_after(safe_headers, e)
 
         if isinstance(e, ProxyException):
-            merged_headers = {
-                **e.headers,
-                **{k: v if isinstance(v, str) else str(v) for k, v in headers.items()},
+            e.headers = {
+                **{k: v for k, v in e.headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS},
+                **{k: v if isinstance(v, str) else str(v) for k, v in safe_headers.items()},
             }
-            e.headers = {k: v for k, v in merged_headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS}
             raise e
 
         if isinstance(e, HTTPException):
@@ -2732,7 +2762,7 @@ class ProxyBaseLLMRequestProcessing:
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
                 provider_specific_fields=merged_fields,
-                headers=headers,
+                headers=safe_headers,
             )
         elif isinstance(e, httpx.HTTPStatusError):
             # Handle httpx.HTTPStatusError - extract actual error from response
@@ -2758,7 +2788,7 @@ class ProxyBaseLLMRequestProcessing:
                 type="invalid_request_error",
                 param=None,
                 code=status.HTTP_400_BAD_REQUEST,
-                headers=headers,
+                headers=safe_headers,
             )
         # Extract status_code from the exception if it carries one.
         # Provider exceptions (NotFoundError, BadRequestError, GeminiError,
@@ -2777,7 +2807,7 @@ class ProxyBaseLLMRequestProcessing:
             openai_code=getattr(e, "code", None),
             code=_code,
             provider_specific_fields=getattr(e, "provider_specific_fields", None),
-            headers=headers,
+            headers=safe_headers,
         )
 
     #########################################################

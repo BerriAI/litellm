@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from pydantic import BaseModel
@@ -49,12 +49,12 @@ class BedrockImagePreparedRequest(BaseModel):
     data: dict
 
 
-BedrockImageConfigClass = Union[
-    type[AmazonTitanImageGenerationConfig],
-    type[AmazonNovaCanvasConfig],
-    type[AmazonStability3Config],
-    type[AmazonStabilityConfig],
-]
+BedrockImageConfigClass = (
+    type[AmazonTitanImageGenerationConfig]
+    | type[AmazonNovaCanvasConfig]
+    | type[AmazonStability3Config]
+    | type[AmazonStabilityConfig]
+)
 
 
 class BedrockImageGeneration(BaseAWSLLM):
@@ -115,7 +115,7 @@ class BedrockImageGeneration(BaseAWSLLM):
                 url=prepared_request.endpoint_url,
                 headers=prepared_request.prepped.headers,
                 data=prepared_request.body,
-            )  # type: ignore
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
@@ -158,7 +158,7 @@ class BedrockImageGeneration(BaseAWSLLM):
                 url=prepared_request.endpoint_url,
                 headers=prepared_request.prepped.headers,
                 data=prepared_request.body,
-            )  # type: ignore
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code

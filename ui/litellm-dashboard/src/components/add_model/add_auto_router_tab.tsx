@@ -9,11 +9,13 @@ import { type ModelWriteScope } from "@/utils/modelPermissions";
 import TeamDropdown from "../common_components/team_dropdown";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
+import { autoRouterListKey, fetchAllModelDeployments } from "@/app/(dashboard)/hooks/models/useModels";
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
   ComplexityTiers,
   DEFAULT_ADAPTIVE_WEIGHTS,
   DEFAULT_SESSION_AFFINITY,
+  DEFAULT_DEPLOYMENT_AFFINITY,
   DEFAULT_TIER_DISTANCE_PENALTY,
 } from "./ComplexityRouterConfig";
 import { KeywordTierRule } from "./KeywordTierRules";
@@ -25,6 +27,7 @@ import {
   getKeywordTierRulesError,
   getMissingTiersError,
   getSemanticConfigError,
+  getTierLabelsError,
 } from "./build_complexity_router_config";
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
@@ -37,6 +40,9 @@ import {
   getReferencedModelsError,
   buildEmptyPrefill,
   buildPresetPrefill,
+  buildModelAvailability,
+  deploymentRefsFromModelInfo,
+  ModelAvailability,
   PresetPrefill,
   AutoRouterPreset,
 } from "@/lib/autorouter_presets";
@@ -45,6 +51,7 @@ interface AddAutoRouterTabProps {
   handleOk: () => void;
   accessToken: string;
   userRole: string;
+  userId?: string | null;
   /**
    * How this caller must scope what they create. A team admin has to name a team, because
    * POST /model/new rejects an unscoped create from any non-proxy-admin; without the selector
@@ -54,7 +61,7 @@ interface AddAutoRouterTabProps {
 }
 
 type PresetAvailability =
-  | { kind: "available" }
+  | { kind: "available"; viaDeployments: boolean }
   | { kind: "loading" }
   | { kind: "unverifiable" }
   | { kind: "missing_models"; models: readonly string[] };
@@ -101,10 +108,26 @@ const tierConfigSummary = (tiers: ComplexityTiers): string => {
   return parts.length > 0 ? parts.join(" · ") : "No tiers configured yet";
 };
 
+// Why the submit is unavailable, or null when it is available. The button reads this to disable
+// itself and to say what is missing, so the two can never give different answers. Checks the
+// config actually being built, not which preset (if any) it came from: a preset only ever
+// prefills once (handlePresetChange), and everything after that is edited exactly like Custom.
+const getSubmitBlockedReason = (
+  config: ComplexityRouterConfigValue,
+  keywordTierRules: KeywordTierRule[],
+  referencedModelsParams: Parameters<typeof getReferencedModelsError>[0],
+  availability: ModelAvailability,
+): string | null =>
+  getMissingTiersError(config.tiers) ??
+  getTierLabelsError(config.tier_labels) ??
+  getKeywordTierRulesError(keywordTierRules) ??
+  getReferencedModelsError(referencedModelsParams, availability);
+
 const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   handleOk,
   accessToken,
   userRole,
+  userId,
   createScope = "unscoped-ok",
 }) => {
   const requiresTeamScope = createScope === "team-required";
@@ -147,7 +170,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
   const {
     data,
-    isLoading: modelsLoading,
+    isLoading: groupsLoading,
     isError: modelsError,
     refetch: refetchModels,
   } = useQuery({
@@ -155,6 +178,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     queryFn: () => fetchAvailableModels(accessToken),
     enabled: Boolean(accessToken),
   });
+  const { data: deployments, isLoading: deploymentsLoading } = useQuery({
+    queryKey: autoRouterListKey(userId ?? "", userRole),
+    queryFn: () => fetchAllModelDeployments(accessToken, userId ?? "", userRole),
+    enabled: Boolean(accessToken),
+  });
+  const modelsLoading = groupsLoading || deploymentsLoading;
   const modelInfo = React.useMemo(() => data ?? [], [data]);
   // react-query keeps the last successful list around when a later refetch fails, so isError alone
   // can't tell "never loaded" apart from "loaded, then a background refetch errored" - only the
@@ -163,12 +192,22 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
   const isAdmin = all_admin_roles.includes(userRole);
 
-  const modelGroupOptions = Array.from(new Set(modelInfo.map((option) => option.model_group))).map((model_group) => ({
-    value: model_group,
-    label: model_group,
-  }));
-
-  const availableModelSet = React.useMemo(() => new Set(modelInfo.map((m) => m.model_group)), [modelInfo]);
+  const availability = React.useMemo(
+    () =>
+      buildModelAvailability(
+        modelInfo.map((m) => m.model_group),
+        deploymentRefsFromModelInfo(deployments ?? []),
+      ),
+    [modelInfo, deployments],
+  );
+  const groupsOnlyAvailability = React.useMemo(
+    () =>
+      buildModelAvailability(
+        modelInfo.map((m) => m.model_group),
+        [],
+      ),
+    [modelInfo],
+  );
 
   // A preset's models can only be trusted against a successfully loaded list. Selection and the
   // greyed-out state derive from this one function, so a preset that cannot be selected can never
@@ -179,10 +218,22 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     (preset: AutoRouterPreset): PresetAvailability => {
       if (modelsLoading) return { kind: "loading" };
       if (modelsUnverifiable) return { kind: "unverifiable" };
-      const missing = getMissingModelsInPreset(preset, availableModelSet);
-      return missing.length > 0 ? { kind: "missing_models", models: missing } : { kind: "available" };
+      const missing = getMissingModelsInPreset(preset, availability);
+      if (missing.length > 0) return { kind: "missing_models", models: missing };
+      return {
+        kind: "available",
+        viaDeployments: getMissingModelsInPreset(preset, groupsOnlyAvailability).length > 0,
+      };
     },
-    [modelsLoading, modelsUnverifiable, availableModelSet],
+    [modelsLoading, modelsUnverifiable, availability, groupsOnlyAvailability],
+  );
+
+  const sortedPresetOptions = React.useMemo(
+    () =>
+      presets
+        .map((preset) => ({ preset, availability: presetAvailability(preset) }))
+        .sort((a, b) => Number(b.availability.kind === "available") - Number(a.availability.kind === "available")),
+    [presetAvailability],
   );
 
   const applyPrefill = (prefill: PresetPrefill) => {
@@ -206,11 +257,13 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     const preset = getPresetByKey(presetKey);
     // Refuse to apply a preset whose models are not verified available. The dropdown disables
     // these options, so this is a guard against a stale click resolving after the list changed.
-    if (!preset || presetAvailability(preset).kind !== "available") return;
+    if (!preset) return;
+    const presetState = presetAvailability(preset);
+    if (presetState.kind !== "available") return;
 
     setSelectedPreset(presetKey);
-    applyPrefill(buildPresetPrefill(preset.complexity_router_config, availableModelSet));
-    setDetailsExpanded(false);
+    applyPrefill(buildPresetPrefill(preset.complexity_router_config, availability));
+    setDetailsExpanded(presetState.viaDeployments);
   };
 
   const referencedModelsParams = {
@@ -221,23 +274,24 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     embeddingModel,
   };
 
-  // Why the submit is unavailable, or null when it is available. The button reads this to disable
-  // itself and to say what is missing, so the two can never give different answers. Checks the
-  // config actually being built, not which preset (if any) it came from: a preset only ever
-  // prefills once (handlePresetChange), and everything after that is edited exactly like Custom.
-  const submitBlockedReason =
-    getMissingTiersError(complexityRouterConfig.tiers) ??
-    getKeywordTierRulesError(keywordTierRules) ??
-    getReferencedModelsError(referencedModelsParams, availableModelSet);
+  const submitBlockedReason = getSubmitBlockedReason(
+    complexityRouterConfig,
+    keywordTierRules,
+    referencedModelsParams,
+    groupsOnlyAvailability,
+  );
 
   const complexityRouterConfigParams: BuildComplexityRouterConfigParams = {
     tiers: complexityRouterConfig.tiers,
+    tierLabels: complexityRouterConfig.tier_labels,
     classifierType: complexityRouterConfig.classifier_type,
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
     classifierContextWindowSize: complexityRouterConfig.classifier_context_window_size,
     classifierContextPerTurnChars: complexityRouterConfig.classifier_context_per_turn_chars,
     classifierContextIncludeAssistantTurns: complexityRouterConfig.classifier_context_include_assistant_turns,
+    classifierFallback: complexityRouterConfig.classifier_fallback,
     sessionAffinity: complexityRouterConfig.session_affinity ?? DEFAULT_SESSION_AFFINITY,
+    deploymentAffinity: complexityRouterConfig.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,
     customTechnicalKeywords,
     keywordTierRules,
     semanticMatchingEnabled,
@@ -252,12 +306,19 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   };
 
   const submitRecommendedRouter = (name: string) => {
-    const { tiers, classifierType, classifierLlmConfig } = complexityRouterConfigParams;
+    const { tiers, tierLabels, classifierType, classifierLlmConfig } = complexityRouterConfigParams;
 
     const missingTiersError = getMissingTiersError(tiers);
     if (missingTiersError) {
       setShowValidationErrors(true);
       NotificationManager.fromBackend(missingTiersError);
+      return;
+    }
+
+    const tierLabelsError = getTierLabelsError(tierLabels);
+    if (tierLabelsError) {
+      setShowValidationErrors(true);
+      NotificationManager.fromBackend(tierLabelsError);
       return;
     }
 
@@ -285,7 +346,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     // same handler) fires on Enter regardless of the button's disabled state - without this check,
     // Enter in the name field could still create a router referencing a model that disappeared from
     // availableModelSet after the tiers were filled in.
-    const referencedModelsError = getReferencedModelsError(referencedModelsParams, availableModelSet);
+    const referencedModelsError = getReferencedModelsError(referencedModelsParams, groupsOnlyAvailability);
     if (referencedModelsError) {
       setShowValidationErrors(true);
       NotificationManager.fromBackend(referencedModelsError);
@@ -382,11 +443,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
               optionLabelProp="label"
               data-testid="template-selector"
             >
-              {presets.map((preset) => {
-                const availability = presetAvailability(preset);
-                const disabledHint = presetDisabledHint(availability);
+              {sortedPresetOptions.map(({ preset, availability: presetState }) => {
+                const disabledHint = presetDisabledHint(presetState);
                 const isDisabled = disabledHint !== null;
-                const hintClass = isPresetHintAlarming(availability) ? "text-red-500" : "text-gray-400";
+                const hintClass = isPresetHintAlarming(presetState) ? "text-red-500" : "text-gray-400";
+                const matchedHint =
+                  presetState.kind === "available" && presetState.viaDeployments ? "Matches your deployments" : null;
 
                 return (
                   <AntdSelect.Option
@@ -400,6 +462,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                       <div className="font-medium">{preset.label}</div>
                       <div className="text-xs text-gray-500">{preset.description}</div>
                       {disabledHint && <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>}
+                      {matchedHint && <div className="text-xs mt-1 text-green-600">{matchedHint}</div>}
                     </div>
                   </AntdSelect.Option>
                 );

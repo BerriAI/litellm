@@ -8,7 +8,7 @@ import time
 import traceback
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
-from typing import Any, Final, NoReturn, Union, cast
+from typing import Any, Final, NoReturn, TypeVar, cast
 
 import anyio
 import httpx
@@ -25,10 +25,13 @@ from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
+    CompletionTokensDetailsWrapper,
     Delta,
     LlmProviders,
     ModelResponse,
     ModelResponseStream,
+    PromptTokensDetailsWrapper,
     StreamingChoices,
     Usage,
 )
@@ -96,7 +99,7 @@ class _ProviderChunkEarlyReturn:
     value: Any
 
 
-_ProviderChunkResult = Union[_ProviderChunkParsed, _ProviderChunkEarlyReturn]
+_ProviderChunkResult = _ProviderChunkParsed | _ProviderChunkEarlyReturn
 
 
 class CustomStreamWrapper:
@@ -210,7 +213,75 @@ class CustomStreamWrapper:
     def __aiter__(self) -> AsyncIterator["ModelResponseStream"]:
         return self
 
+    def _restore_consumer_correlation_context(self, *, guarded: bool = False) -> None:
+        """Restore trace_id/session_id in the *consuming* thread/task/context.
+
+        wrapper_async() deliberately skips restoring correlation context when
+        it returns a stream, so log lines emitted while the caller iterates it
+        still carry this call's ids (see request_correlation_in_logs).
+        wrapper() (the sync path) never stamps anything in the first place -
+        see Logging.__init__'s supports_correlation_logging - so this method
+        is an inert no-op for sync-created streams, harmless to call anyway
+        since the class is shared between __next__ and __anext__.
+        But the terminal success/failure handlers this stream dispatches to
+        finish the job run on a *different* Task/thread (asyncio.create_task,
+        threading.Thread, or the shared executor) - restoring there fixes up
+        that detached context, not the one actually running the caller's
+        `for`/`async for` loop. Call this at every point control genuinely
+        returns to that consuming context: natural exhaustion (StopIteration/
+        StopAsyncIteration), a raised failure, or explicit aclose(). Never let
+        this raise - it must not break the caller's actual stream handling.
+
+        guarded=True (only __del__ uses this) skips the restore unless the
+        contextvars still hold the ids this stream's own call set, so a
+        delayed finalizer never overwrites a different, still-active call
+        that has since taken over the same Task/thread's context.
+        """
+        try:
+            logging_obj: Final = getattr(self, "logging_obj", None)
+            if logging_obj is None:
+                return
+            method_name: Final = (
+                "_restore_correlation_context_if_unclaimed" if guarded else "_restore_correlation_context"
+            )
+            restore: Final = getattr(logging_obj, method_name, None)
+            if restore is not None:
+                restore()
+        except Exception as restore_error:  # noqa: BLE001  # best-effort cleanup; must not raise into the caller
+            verbose_logger.debug("could not restore correlation context: %s", restore_error)
+
+    def __del__(self) -> None:
+        """Best-effort correlation-context cleanup for an abandoned async stream.
+
+        Only meaningfully applies to streams created by wrapper_async(): it
+        leaves contextvars "open" across the caller's iteration, so if the
+        caller never fully consumes the stream - stops early, drops the
+        reference, cancels it - none of the exit points
+        _restore_consumer_correlation_context() is called from ever run. For a
+        sync stream (wrapper()), this is a no-op in practice: wrapper() never
+        stamps trace_id/session_id for sync calls in the first place (see
+        Logging.__init__'s supports_correlation_logging), so there is nothing
+        for this to clean up.
+
+        This is a best-effort fallback, not a guarantee: __del__ timing is
+        unpredictable (delayed by cyclic GC, not guaranteed at interpreter
+        shutdown, and may run on a different thread), so this can only reduce
+        how long the leak persists, not eliminate it. That's an acceptable
+        trade specifically because its blast radius is bounded to the one
+        asyncio Task this stream's own call ran in - each async call has its
+        own copy of the contextvars, and Tasks (unlike a thread pool's worker
+        threads) are never recycled across requests, so a delayed or missed
+        cleanup here can never misattribute a *different* request's logs.
+        guarded=True additionally ensures it never clobbers a different,
+        still-active call's context within that same Task if this fires late.
+        """
+        self._restore_consumer_correlation_context(guarded=True)
+
     async def aclose(self):
+        # Restore the consumer's outer context only after the underlying
+        # provider stream's own close (and its diagnostic logging below, if
+        # closing fails) completes - not before - so those log lines still
+        # carry this closing stream's own trace_id/session_id.
         if self.completion_stream is not None:
             stream_to_close: Final = self.completion_stream
             self.completion_stream = None
@@ -230,6 +301,7 @@ class CustomStreamWrapper:
                         "CustomStreamWrapper.aclose: error closing completion_stream: %s",
                         e,
                     )
+        self._restore_consumer_correlation_context()
 
     def check_send_stream_usage(self, stream_options: dict | None):
         return stream_options is not None and stream_options.get("include_usage", False) is True
@@ -253,9 +325,7 @@ class CustomStreamWrapper:
             chunk = chunk.strip()
             self.complete_response = self.complete_response.strip()
 
-            if chunk.startswith(self.complete_response):
-                # Remove last_sent_chunk only if it appears at the start of the new chunk
-                chunk = chunk[len(self.complete_response) :]
+            chunk = chunk.removeprefix(self.complete_response)
 
             self.complete_response += chunk
             return chunk
@@ -893,7 +963,7 @@ class CustomStreamWrapper:
                         for choice in original_chunk.choices:
                             try:
                                 if isinstance(choice, BaseModel):
-                                    choice_json = choice.model_dump()  # type: ignore
+                                    choice_json = choice.model_dump()
                                     choice_json.pop(
                                         "finish_reason", None
                                     )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
@@ -1050,7 +1120,7 @@ class CustomStreamWrapper:
                 # Strip finish_reason from the content chunk so it appears
                 # only on the trailing empty-delta chunk (OpenAI spec).
                 # finish_reason_handler() will emit the proper terminal chunk.
-                chunk.choices[0].finish_reason = None  # type: ignore[assignment]
+                chunk.choices[0].finish_reason = None
             return _ProviderChunkEarlyReturn(chunk)
 
         if (
@@ -1139,19 +1209,17 @@ class CustomStreamWrapper:
                     self.received_finish_reason = "stop"
         elif self.custom_llm_provider == "vertex_ai" and not isinstance(chunk, ModelResponseStream):
             chunk = cast(Any, chunk)
-            import proto  # type: ignore
+            import proto
 
             if hasattr(chunk, "candidates") is True:
                 try:
                     try:
-                        completion_obj["content"] = chunk.text  # type: ignore
+                        completion_obj["content"] = chunk.text
                     except Exception as e:
                         original_exception: Final = e
                         if "Part has no text." in str(e):
                             ## check for function calling
-                            function_call: Final = (
-                                chunk.candidates[0].content.parts[0].function_call  # type: ignore
-                            )
+                            function_call: Final = chunk.candidates[0].content.parts[0].function_call
 
                             args_dict: Final = {}
 
@@ -1159,7 +1227,7 @@ class CustomStreamWrapper:
                             for key, val in function_call.args.items():
                                 if isinstance(
                                     val,
-                                    proto.marshal.collections.repeated.RepeatedComposite,  # type: ignore
+                                    proto.marshal.collections.repeated.RepeatedComposite,
                                 ):
                                     # If so, convert to list
                                     args_dict[key] = [v for v in val]
@@ -1190,15 +1258,12 @@ class CustomStreamWrapper:
                         else:
                             raise original_exception
                     if (
-                        hasattr(chunk.candidates[0], "finish_reason")  # type: ignore
-                        and chunk.candidates[0].finish_reason.name  # type: ignore
-                        != "FINISH_REASON_UNSPECIFIED"
+                        hasattr(chunk.candidates[0], "finish_reason")
+                        and chunk.candidates[0].finish_reason.name != "FINISH_REASON_UNSPECIFIED"
                     ):  # every non-final chunk in vertex ai has this
-                        self.received_finish_reason = map_finish_reason(  # type: ignore
-                            chunk.candidates[0].finish_reason.name
-                        )
+                        self.received_finish_reason = map_finish_reason(chunk.candidates[0].finish_reason.name)
                 except Exception:
-                    if chunk.candidates[0].finish_reason.name == "SAFETY":  # type: ignore
+                    if chunk.candidates[0].finish_reason.name == "SAFETY":
                         raise Exception(f"The response was blocked by VertexAI. {chunk}")
             else:
                 completion_obj["content"] = str(chunk)
@@ -1352,7 +1417,7 @@ class CustomStreamWrapper:
                     )
         return _ProviderChunkParsed(response_obj)
 
-    def chunk_creator(self, chunk: Any):  # type: ignore
+    def chunk_creator(self, chunk: Any):
         if hasattr(chunk, "id"):
             self.response_id = chunk.id
         model_response = self.model_response_creator()
@@ -1460,7 +1525,7 @@ class CustomStreamWrapper:
             ## RETURN ARG
             result: Final = self.return_processed_chunk_logic(
                 completion_obj=completion_obj,
-                model_response=model_response,  # type: ignore
+                model_response=model_response,
                 response_obj=response_obj,
             )
             return result
@@ -1702,7 +1767,7 @@ class CustomStreamWrapper:
                 ):
                     chunk = self.completion_stream
                 else:
-                    chunk = next(self.completion_stream)  # type: ignore[arg-type]
+                    chunk = next(self.completion_stream)
                 if chunk is not None and chunk != b"":
                     print_verbose(
                         f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk.decode('utf-8', errors='replace') if isinstance(chunk, bytes) else chunk}; custom_llm_provider: {self.custom_llm_provider}"
@@ -1843,6 +1908,7 @@ class CustomStreamWrapper:
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
                     return response
+                self._restore_consumer_correlation_context()
                 raise  # Re-raise StopIteration
             else:
                 self.sent_last_chunk = True
@@ -1856,6 +1922,19 @@ class CustomStreamWrapper:
                     processed_chunk,
                     cache_hit,
                 )  # log response
+                # Deliberately do NOT restore context here even though
+                # completion_stream is already exhausted: this chunk is still
+                # real data belonging to this call, and the caller's own
+                # (application-level) log statements processing it run
+                # immediately after this return, in this same synchronous
+                # frame - restoring first would make those lines carry the
+                # wrong ids, which is exactly what leaving context open during
+                # iteration is meant to prevent (see
+                # _restore_consumer_correlation_context's docstring). A caller
+                # that keeps iterating gets cleaned up on its next __next__()
+                # call (immediate StopIteration, handled above); one that
+                # stops right here relies on aclose() or the best-effort
+                # __del__ guard instead.
                 return processed_chunk
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
@@ -1883,8 +1962,12 @@ class CustomStreamWrapper:
         cache_hit = False
         if self.custom_llm_provider is not None and self.custom_llm_provider == "cached_response":
             cache_hit = True
-        self._check_max_streaming_duration()
         try:
+            # Inside the try (not before it) so a raised litellm.Timeout flows
+            # through the same except Exception -> _handle_stream_fallback_error
+            # path as every other failure, restoring the consumer's correlation
+            # context - a check before the try would bypass that entirely.
+            self._check_max_streaming_duration()
             if self.completion_stream is None:
                 await self.fetch_stream()
 
@@ -1951,7 +2034,7 @@ class CustomStreamWrapper:
                     if self.sent_last_chunk is True:
                         processed_chunk = await self._call_post_streaming_deployment_hook(processed_chunk)
                         # Add MCP metadata to final chunk if present (after hooks)
-                        processed_chunk = self._add_mcp_metadata_to_final_chunk(processed_chunk)  # type: ignore[reportArgumentType]
+                        processed_chunk = self._add_mcp_metadata_to_final_chunk(processed_chunk)
 
                     return processed_chunk
                 raise StopAsyncIteration
@@ -1961,7 +2044,7 @@ class CustomStreamWrapper:
                     if isinstance(self.completion_stream, str) or isinstance(self.completion_stream, bytes):
                         chunk = self.completion_stream
                     else:
-                        chunk = await asyncio.to_thread(_next_sync_or_exhausted, self.completion_stream)  # type: ignore[arg-type]
+                        chunk = await asyncio.to_thread(_next_sync_or_exhausted, self.completion_stream)
                         if chunk is _SYNC_ITER_EXHAUSTED:
                             raise StopAsyncIteration
                     if chunk is not None and chunk != b"":
@@ -2069,7 +2152,7 @@ class CustomStreamWrapper:
                 # end-of-stream blocks complete.  Scheduling here via
                 # create_task would race with unified_guardrail's
                 # end-of-stream block for short-stream providers.
-                self.logging_obj._deferred_stream_complete_args = (  # type: ignore[attr-defined]
+                self.logging_obj._deferred_stream_complete_args = (
                     complete_streaming_response,
                     cache_hit,
                 )
@@ -2087,10 +2170,17 @@ class CustomStreamWrapper:
                     )
                 )
 
+            self._restore_consumer_correlation_context()
             raise StopAsyncIteration  # Re-raise StopIteration
         else:
             self.sent_last_chunk = True
             processed_chunk: Final = self.finish_reason_handler()
+            # see sync __next__'s sibling branch: deliberately do NOT restore
+            # here - this chunk is still this call's own data, and restoring
+            # before returning it would corrupt the caller's own log
+            # statements processing it. A caller that keeps iterating gets
+            # cleaned up on the next __anext__() call; one that stops here
+            # relies on aclose() or the best-effort __del__ guard.
             return processed_chunk
 
     def _log_stream_failure_and_raise(self, e: Exception) -> NoReturn:
@@ -2142,7 +2232,12 @@ class CustomStreamWrapper:
         """
         from litellm.exceptions import MidStreamFallbackError
 
-        # Map to OpenAI exception format
+        # Map to OpenAI exception format. Some providers' mappers (e.g.
+        # _map_anthropic_exception, _map_aleph_alpha_exception) synchronously
+        # log a debug diagnostic (the raw status code) as part of mapping -
+        # restore the consumer's outer context only after this completes, so
+        # that diagnostic log line still carries the failing stream's own
+        # trace_id/session_id instead of the consumer's (or an empty one).
         if isinstance(e, OpenAIError):
             mapped_exception: Exception = e
         else:
@@ -2156,6 +2251,7 @@ class CustomStreamWrapper:
                 )
             except Exception as mapping_error:
                 mapped_exception = mapping_error
+        self._restore_consumer_correlation_context()
 
         def _normalize_status_code(exc: Exception) -> int | None:
             """Best-effort status_code extraction."""
@@ -2233,11 +2329,33 @@ class CustomStreamWrapper:
         return chunk
 
 
+_TokenDetails = TypeVar("_TokenDetails", PromptTokensDetailsWrapper, CompletionTokensDetailsWrapper)
+
+
+def _coerce_token_details(
+    usage: dict | BaseModel, field: str, details_type: type[_TokenDetails]
+) -> _TokenDetails | None:
+    raw = usage.get(field) if isinstance(usage, dict) else getattr(usage, field, None)
+    if raw is None:
+        return None
+    if isinstance(raw, details_type):
+        return raw
+    return details_type(**(raw if isinstance(raw, dict) else raw.model_dump()))
+
+
 def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
     """Assume most recent usage chunk has total usage uptil then."""
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
+        attach_cache_creation_token_details,
+        capture_cache_creation_token_details,
+    )
+
     prompt_tokens: int = 0
     completion_tokens: int = 0
     latest_usage_chunk = None
+    prompt_tokens_details: PromptTokensDetailsWrapper | None = None
+    completion_tokens_details: CompletionTokensDetailsWrapper | None = None
+    cache_creation_token_details: CacheCreationTokenDetails | None = None
 
     for chunk in chunks:
         if "usage" in chunk and chunk["usage"] is not None:
@@ -2247,11 +2365,24 @@ def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
                 prompt_tokens = usage.get("prompt_tokens", 0) or 0
             if "completion_tokens" in usage:
                 completion_tokens = usage.get("completion_tokens", 0) or 0
+            incoming_prompt_tokens_details = _coerce_token_details(
+                usage, "prompt_tokens_details", PromptTokensDetailsWrapper
+            )
+            cache_creation_token_details = capture_cache_creation_token_details(
+                incoming_prompt_tokens_details, cache_creation_token_details
+            )
+            prompt_tokens_details = incoming_prompt_tokens_details or prompt_tokens_details
+            completion_tokens_details = (
+                _coerce_token_details(usage, "completion_tokens_details", CompletionTokensDetailsWrapper)
+                or completion_tokens_details
+            )
 
     returned_usage_chunk: Final = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=attach_cache_creation_token_details(prompt_tokens_details, cache_creation_token_details),
+        completion_tokens_details=completion_tokens_details,
     )
 
     if latest_usage_chunk is not None:

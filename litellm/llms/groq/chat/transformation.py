@@ -147,7 +147,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
                 new_message = ChatCompletionAssistantMessage(role="assistant")
                 for k, v in _message.items():
                     if v is not None:
-                        new_message[k] = v  # type: ignore
+                        new_message[k] = v
                 messages[idx] = new_message
 
         if is_async:
@@ -159,7 +159,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
         # groq is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
-        api_base = api_base or get_secret_str("GROQ_API_BASE") or "https://api.groq.com/openai/v1"  # type: ignore
+        api_base = api_base or get_secret_str("GROQ_API_BASE") or "https://api.groq.com/openai/v1"
         dynamic_api_key: Final = api_key or get_secret_str("GROQ_API_KEY")
         return api_base, dynamic_api_key
 

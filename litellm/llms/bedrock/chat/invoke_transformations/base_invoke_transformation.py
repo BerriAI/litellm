@@ -300,7 +300,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         try:
             if provider == "cohere":
                 if "text" in completion_response:
-                    outputText = completion_response["text"]  # type: ignore
+                    outputText = completion_response["text"]
                 elif "generations" in completion_response:
                     outputText = completion_response["generations"][0]["text"]
                     model_response.choices[0].finish_reason = map_finish_reason(
@@ -365,14 +365,12 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 outputText is not None
                 and len(outputText) > 0
                 and hasattr(model_response.choices[0], "message")
-                and getattr(model_response.choices[0].message, "tool_calls", None)  # type: ignore
-                is None
+                and getattr(model_response.choices[0].message, "tool_calls", None) is None
             ):
-                model_response.choices[0].message.content = outputText  # type: ignore
+                model_response.choices[0].message.content = outputText
             elif (
                 hasattr(model_response.choices[0], "message")
-                and getattr(model_response.choices[0].message, "tool_calls", None)  # type: ignore
-                is not None
+                and getattr(model_response.choices[0].message, "tool_calls", None) is not None
             ):
                 pass
             else:
@@ -392,7 +390,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         completion_tokens: Final = int(
             bedrock_output_tokens
             or litellm.token_counter(
-                text=model_response.choices[0].message.content,  # type: ignore
+                text=model_response.choices[0].message.content,
                 count_response_tokens=True,
             )
         )
@@ -610,4 +608,4 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                         prompt += f"{message['content']}"
                 else:
                     prompt += f"{message['content']}"
-        return prompt, chat_history  # type: ignore
+        return prompt, chat_history

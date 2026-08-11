@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     handle_update_object_permission_common,
@@ -89,9 +90,9 @@ async def block_user(data: BlockUsers):
         if prisma_client is not None:
             for id in data.user_ids:
                 record = await EndUserRepository(prisma_client).table.upsert(
-                    where={"user_id": id},  # type: ignore
+                    where={"user_id": id},
                     data={
-                        "create": {"user_id": id, "blocked": True},  # type: ignore
+                        "create": {"user_id": id, "blocked": True},
                         "update": {"blocked": True},
                     },
                 )
@@ -184,6 +185,7 @@ def new_budget_request(data: NewCustomerRequest) -> BudgetNewRequest | None:
 
     if budget_kv_pairs:
         budget_request: Final = BudgetNewRequest(**budget_kv_pairs)
+        validate_budget_duration(budget_request.budget_duration)
         if budget_request.budget_reset_at is None and budget_request.budget_duration is not None:
             budget_request.budget_reset_at = datetime.utcnow() + timedelta(
                 seconds=duration_in_seconds(duration=budget_request.budget_duration)
@@ -351,7 +353,7 @@ async def new_end_user(
                 budget_record: Final = await BudgetRepository(prisma_client).table.create(
                     data={
                         **_new_budget.model_dump(exclude_unset=True),
-                        "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,  # type: ignore
+                        "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                         "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                     }
                 )
@@ -365,7 +367,7 @@ async def new_end_user(
         _user_data: Final = data.dict(exclude_none=True)
 
         for k, v in _user_data.items():
-            if k not in BudgetNewRequest.model_fields.keys():
+            if k not in BudgetNewRequest.model_fields:
                 new_end_user_obj[k] = v
 
         ## Handle Object Permission - MCP Servers, Vector Stores etc.
@@ -385,7 +387,7 @@ async def new_end_user(
 
         ## WRITE TO DB ##
         end_user_record: Final = await EndUserRepository(prisma_client).table.create(
-            data=new_end_user_obj,  # type: ignore
+            data=new_end_user_obj,
             include={"litellm_budget_table": True, "object_permission": True},
         )
 
@@ -573,10 +575,10 @@ async def update_end_user(
             # budget_id is for linking to existing budget, not for creating new budget
             if k == "budget_id":
                 update_end_user_table_data[k] = v
-            elif k in LiteLLM_BudgetTable.model_fields.keys():
+            elif k in LiteLLM_BudgetTable.model_fields:
                 budget_table_data[k] = v
 
-            elif k in LiteLLM_EndUserTable.model_fields.keys():
+            elif k in LiteLLM_EndUserTable.model_fields:
                 update_end_user_table_data[k] = v
 
         ## Handle object permission updates (MCP servers, vector stores, etc.)
@@ -621,12 +623,12 @@ async def update_end_user(
             update_end_user_table_data.pop("object_permission", None)
 
         if data.user_id is not None and len(data.user_id) > 0:
-            update_end_user_table_data["user_id"] = data.user_id  # type: ignore
+            update_end_user_table_data["user_id"] = data.user_id
             verbose_proxy_logger.debug("In update customer, user_id condition block.")
             response: Final = await EndUserRepository(prisma_client).table.update(
                 where={"user_id": data.user_id},
                 data=update_end_user_table_data,
-                include={"litellm_budget_table": True, "object_permission": True},  # type: ignore
+                include={"litellm_budget_table": True, "object_permission": True},
             )
             if response is None:
                 raise ValueError(f"Failed updating customer data. User ID does not exist passed user_id={data.user_id}")

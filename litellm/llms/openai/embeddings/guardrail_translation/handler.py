@@ -120,7 +120,7 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
             return data
 
         # List of strings - apply guardrail
-        inputs: Final = GenericGuardrailAPIInputs(texts=input_data)  # type: ignore
+        inputs: Final = GenericGuardrailAPIInputs(texts=input_data)
         if model := data.get("model"):
             inputs["model"] = model
 

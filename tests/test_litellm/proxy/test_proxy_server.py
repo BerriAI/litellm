@@ -4329,6 +4329,81 @@ class TestPriceDataReloadIntegration:
         mock_prisma.db.litellm_config.update_many.assert_not_called()
         mock_prisma.db.litellm_config.upsert.assert_not_called()
 
+    def test_scheduled_reload_replays_runtime_registrations(self):
+        """The scheduled reload is the trigger a pod hits on its own, so it must
+        both preserve runtime-registered model metadata and run to completion.
+        The swap happens early in the handler, so a failure in the bookkeeping
+        after it is swallowed by the surrounding except and would otherwise
+        leave the metadata correct while the path is quietly broken"""
+        from litellm import utils as litellm_utils
+        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+        frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
+        proxy_config.model_cost_map_loaded_at = frozen_now - timedelta(hours=9)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(
+            return_value=_reload_schedule_row({"interval_hours": 6}, reload_revision=7)
+        )
+        mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
+
+        original_model_cost = litellm.model_cost
+        original_registry = dict(litellm_utils._runtime_registered_model_cost)
+        try:
+            litellm.register_model(
+                model_cost={"custom/deployment-model": {"litellm_provider": "custom", "max_input_tokens": 4321}}
+            )
+
+            with (
+                patch(
+                    "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+                    new=AsyncMock(
+                        return_value=ModelCostMapReloaded(
+                            model_cost_map={"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}}
+                        )
+                    ),
+                ),
+                patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
+                patch("litellm.proxy.proxy_server.verbose_proxy_logger") as mock_logger,
+            ):
+                asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+
+            mock_logger.exception.assert_not_called()
+            assert litellm.model_cost["custom/deployment-model"]["max_input_tokens"] == 4321
+            assert "gpt-4o" in litellm.model_cost
+            assert proxy_config.model_cost_map_applied_revision == 7
+        finally:
+            litellm.model_cost = original_model_cost
+            litellm_utils._runtime_registered_model_cost.clear()
+            litellm_utils._runtime_registered_model_cost.update(original_registry)
+            _invalidate_model_cost_lowercase_map()
+
+    def test_swap_in_model_cost_map_counts_the_fetched_catalog_only(self):
+        """The count the reload endpoints report describes the price data, so it
+        is taken before the runtime registrations are written back into the same
+        dict. Counting after would inflate it by however many deployments and
+        overrides this pod happens to be carrying"""
+        from litellm import utils as litellm_utils
+        from litellm.proxy.proxy_server import _swap_in_model_cost_map
+
+        original_model_cost = litellm.model_cost
+        original_registry = dict(litellm_utils._runtime_registered_model_cost)
+        try:
+            litellm.register_model(
+                model_cost={"custom/deployment-model": {"litellm_provider": "custom", "max_input_tokens": 4321}}
+            )
+
+            models_count = _swap_in_model_cost_map({"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}})
+
+            assert models_count == 1
+            assert litellm.model_cost["custom/deployment-model"]["max_input_tokens"] == 4321
+        finally:
+            litellm.model_cost = original_model_cost
+            litellm_utils._runtime_registered_model_cost.clear()
+            litellm_utils._runtime_registered_model_cost.update(original_registry)
+            _invalidate_model_cost_lowercase_map()
+
     def test_manual_reload_preserves_interval_hours(self):
         """
         Regression: manual reload owns only the run columns, so it never reads or rewrites
@@ -6969,6 +7044,39 @@ async def test_update_general_settings_store_model_in_db_false():
 
 
 @pytest.mark.asyncio
+async def test_update_general_settings_propagates_apply_user_budget_to_team_keys():
+    """The Admin UI toggle writes to the DB config, so the flag has to be in the
+    runtime propagation allowlist. The reverted skip_user_budget_on_team_key was
+    exposed in /config/list but never propagated, so its toggle did nothing."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        await proxy_config._update_general_settings(db_general_settings={"apply_user_budget_to_team_keys": "true"})
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["apply_user_budget_to_team_keys"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_apply_user_budget_to_team_keys_yaml_wins():
+    """A DB value must not silently override an explicit YAML setting on reload."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._yaml_general_settings_keys = {"apply_user_budget_to_team_keys"}
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"apply_user_budget_to_team_keys": True}):
+        await proxy_config._update_general_settings(db_general_settings={"apply_user_budget_to_team_keys": False})
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["apply_user_budget_to_team_keys"] is True
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "db_value,expected",
     [(True, True), (False, False), ("true", True), ("false", False), (None, None)],
@@ -9461,6 +9569,38 @@ def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_get_config_list_includes_apply_user_budget_to_team_keys(monkeypatch):
+    """Related to #12905: the opt-in must be discoverable via /config/list so it
+    renders as a Boolean toggle on the Admin UI General Settings table. This needs
+    both the ConfigGeneralSettings field and the allowed_args entry."""
+    import types
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi.testclient import TestClient
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app
+
+    mock_prisma = MagicMock()
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(return_value=None)
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        client = TestClient(app)
+        resp = client.get("/config/list", params={"config_type": "general_settings"})
+        assert resp.status_code == 200, resp.text
+        fields = {item["field_name"]: item for item in resp.json()}
+        assert "apply_user_budget_to_team_keys" in fields
+        assert fields["apply_user_budget_to_team_keys"]["field_type"] == "Boolean"
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_get_config_list_includes_budget_exceeded_throttle_percentage(monkeypatch):
     """The throttle fraction is a litellm_settings scalar surfaced on the General
     Settings table as a Float field so it sits with the other global limits; it
@@ -11018,3 +11158,188 @@ def test_startup_is_silent_when_mock_testing_params_disabled(caplog):
         ProxyStartupEvent._warn_if_mock_testing_params_enabled(general_settings={})
 
     assert MOCK_TESTING_CONFIG_KEY not in caplog.text
+
+
+def _mock_startup_prisma_client(health_check_error=None, connect_error=None):
+    client = MagicMock()
+    client.connect = AsyncMock(side_effect=connect_error)
+    client.db.start_token_refresh_task = AsyncMock()
+    client.check_view_exists = AsyncMock()
+    client._set_spend_logs_row_count_in_proxy_state = AsyncMock()
+    client.start_db_health_watchdog_task = AsyncMock()
+    client.health_check = AsyncMock(side_effect=health_check_error)
+    return client
+
+
+async def _run_setup_prisma_client(mock_client):
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    with patch.object(proxy_server_module, "PrismaClient", return_value=mock_client):
+        result = await ProxyStartupEvent._setup_prisma_client(
+            database_url="postgresql://litellm:litellm@localhost:5432/litellm",
+            proxy_logging_obj=MagicMock(),
+            user_api_key_cache=DualCache(),
+        )
+    await asyncio.sleep(0.05)
+    return result
+
+
+@pytest.mark.asyncio
+async def test_setup_prisma_client_retains_connected_client_when_startup_health_check_fails(
+    monkeypatch,
+):
+    """A transient failure of the startup ``SELECT 1`` must not discard a client
+    whose ``connect()`` already succeeded.
+
+    Discarding it assigns ``None`` to the module-level ``prisma_client`` for the
+    life of the process, so a database that came back a second later is never
+    used again until the proxy is restarted."""
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "False")
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+
+    mock_client = _mock_startup_prisma_client(
+        health_check_error=httpx.ReadTimeout("startup health check timed out")
+    )
+    result = await _run_setup_prisma_client(mock_client)
+
+    assert mock_client.connect.await_count == 1
+    assert mock_client.health_check.await_count == 1
+    assert result is mock_client
+
+
+@pytest.mark.asyncio
+async def test_setup_prisma_client_arms_health_watchdog_before_startup_health_check(
+    monkeypatch,
+):
+    """The health watchdog is the only thing that reconnects a dropped DB, so it
+    has to be armed before the startup health check can fail.
+
+    Armed after, the single failure it exists to recover from is exactly the one
+    that skips it, and recovery never happens."""
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "False")
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+
+    mock_client = _mock_startup_prisma_client(
+        health_check_error=httpx.ReadTimeout("startup health check timed out")
+    )
+    call_order = MagicMock()
+    call_order.attach_mock(mock_client.start_db_health_watchdog_task, "watchdog")
+    call_order.attach_mock(mock_client.health_check, "health_check")
+
+    await _run_setup_prisma_client(mock_client)
+
+    assert mock_client.start_db_health_watchdog_task.await_count == 1
+    assert [call[0] for call in call_order.mock_calls] == ["watchdog", "health_check"]
+
+
+@pytest.mark.asyncio
+async def test_setup_prisma_client_raises_when_db_unavailable_is_not_allowed(monkeypatch):
+    """Without ``allow_requests_on_db_unavailable`` a failed startup health check
+    must still hard-fail startup. Retaining the client is a fallback for
+    operators who opted into serving traffic without a database, never a way to
+    boot a proxy whose DB never answered."""
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "False")
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": False},
+    )
+
+    mock_client = _mock_startup_prisma_client(
+        health_check_error=httpx.ReadTimeout("startup health check timed out")
+    )
+    with pytest.raises(httpx.ReadTimeout):
+        await _run_setup_prisma_client(mock_client)
+
+
+@pytest.mark.asyncio
+async def test_setup_prisma_client_returns_none_when_connect_itself_fails(monkeypatch):
+    """Retaining only ever applies to a client that connected. If ``connect()``
+    failed there is no usable client and no watchdog to recover it, so the caller
+    must still get ``None``."""
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "False")
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+
+    mock_client = _mock_startup_prisma_client(connect_error=httpx.ConnectError("connection refused"))
+    result = await _run_setup_prisma_client(mock_client)
+
+    assert result is None
+    assert mock_client.start_db_health_watchdog_task.await_count == 0
+    assert mock_client.health_check.await_count == 0
+
+
+async def _run_scheduled_background_jobs():
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=True),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+    import litellm.proxy.proxy_server as ps
+
+    assert ps.scheduler is not None
+    return ps.scheduler
+
+
+@pytest.mark.asyncio
+async def test_ptu_rollup_job_registered_at_startup(monkeypatch):
+    """The PTU rollup cron is registered once an operator opts in; only models with PTU config accrue flat cost (asserted in test_ptu_flat_cost_rollup.py)."""
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
+    from litellm.proxy.spend_tracking.ptu_flat_cost_rollup import (
+        PTU_ROLLUP_JOB_ID,
+    )
+
+    monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
+
+    scheduler = await _run_scheduled_background_jobs()
+
+    assert scheduler.get_job(PTU_ROLLUP_JOB_ID) is not None
+
+
+@pytest.mark.asyncio
+async def test_ptu_rollup_job_not_registered_without_opt_in(monkeypatch):
+    """Without LITELLM_ENABLE_PTU_COST_ATTRIBUTION the rollup never runs, so no sentinel row
+    is ever written. This is the gate that keeps the whole feature inert by default."""
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
+    from litellm.proxy.spend_tracking.ptu_flat_cost_rollup import (
+        PTU_ROLLUP_JOB_ID,
+    )
+
+    monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR, raising=False)
+
+    scheduler = await _run_scheduled_background_jobs()
+
+    assert scheduler.get_job(PTU_ROLLUP_JOB_ID) is None
+    assert len(scheduler.get_jobs()) > 0

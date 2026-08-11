@@ -117,6 +117,17 @@ def test_typing_alias_and_forward_ref_annotations_are_flagged(tmp_path):
     assert "LIT001" in _codes(tmp_path, 'x: "dict[str, int]"\n')
 
 
+def test_literal_string_args_are_values_not_forward_refs(tmp_path):
+    assert "LIT001" not in _codes(tmp_path, 'from typing import Literal\nx: Literal["list"] = "list"\n')
+    assert "LIT001" not in _codes(
+        tmp_path,
+        'from typing import Literal\ndef f(op: Literal["create", "list"] = "create") -> None:\n    return None\n',
+    )
+    assert "LIT001" not in _codes(tmp_path, 'import typing\nx: typing.Literal["dict"] = "dict"\n')
+    assert "LIT001" in _codes(tmp_path, 'from typing import Literal\nx: dict[str, Literal["a"]]\n')
+    assert "LIT001" in _codes(tmp_path, "x: \"Literal['x'] | list[int]\"\n")
+
+
 def test_readonly_annotations_are_clean(tmp_path):
     for ann in ("Mapping[str, int]", "Sequence[int]", "tuple[int, ...]", "frozenset[int]"):
         assert "LIT001" not in _codes(tmp_path, f"from typing import Mapping, Sequence\nx: {ann}\n")
@@ -173,6 +184,13 @@ def test_mutable_nested_inside_frozen_wrapper_still_counts(tmp_path):
 
 def test_unfrozen_literal_still_counts(tmp_path):
     assert "LIT002" in _codes(tmp_path, "from types import MappingProxyType\nd = {'a': 1}\nm = MappingProxyType(d)\n")
+
+
+def test_lit002_fix_message_names_mappingproxytype(tmp_path):
+    f = tmp_path / "snippet.py"
+    f.write_text("x = {'a': 1}\n", encoding="utf-8")
+    messages = [v.message for v in checker.check_file(f) if v.code == "LIT002"]
+    assert "MappingProxyType" in messages[0]
 
 
 def test_mutable_ok_with_reason_suppresses_both_rules(tmp_path):
