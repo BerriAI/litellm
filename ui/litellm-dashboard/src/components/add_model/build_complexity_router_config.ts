@@ -8,7 +8,6 @@ import {
   ClassifierType,
   ComplexityTierLabels,
   ComplexityTiers,
-  DEFAULT_RUBRIC_PRESET,
   TIER_DESCRIPTIONS,
   effectiveTierLabel,
 } from "./ComplexityRouterConfig";
@@ -21,6 +20,11 @@ import {
  * A custom prompt is the classifier's whole system role, so the backend also rejects a rubric preset
  * sent alongside one. Each branch rebuilds the object rather than spreading it, so a preset left on
  * the form state from before the prompt was written cannot reach the wire and fail the save.
+ *
+ * An untouched picker sends no rubric at all rather than a copy of the default it displays. The
+ * backend reads absence as "use the default preset", so omitting it keeps a router the operator never
+ * configured on whatever that default becomes, and keeps routers built here behaving the same as ones
+ * written by hand in config.
  */
 export const normalizeClassifierLlmConfig = ({
   model,
@@ -28,9 +32,7 @@ export const normalizeClassifierLlmConfig = ({
   rubric,
   system_prompt,
 }: ClassifierLLMConfig): ClassifierLLMConfig =>
-  system_prompt?.trim()
-    ? { model, timeout_ms, system_prompt }
-    : { model, timeout_ms, rubric: rubric ?? DEFAULT_RUBRIC_PRESET };
+  system_prompt?.trim() ? { model, timeout_ms, system_prompt } : { model, timeout_ms, ...(rubric && { rubric }) };
 
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;

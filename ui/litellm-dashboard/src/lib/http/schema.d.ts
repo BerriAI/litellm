@@ -23162,11 +23162,8 @@ export interface components {
              * @description Model name (from the router's model_list) to call for classification
              */
             model: string;
-            /**
-             * @description Which calibration examples the built-in rubric carries. 'agentic' (the default) anchors routine installs, builds, multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational traffic. Both share the same tier criteria, so this moves where the boundary sits without changing the taxonomy. Ignored when system_prompt is set, which replaces the rubric outright. Only applies when classifier_type is 'llm'.
-             * @default agentic
-             */
-            rubric: components["schemas"]["RubricPreset"];
+            /** @description Which calibration examples the built-in rubric carries. 'agentic' anchors routine installs, builds, multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational traffic. Both share the same tier criteria, so this moves where the boundary sits without changing the taxonomy. Leave unset for 'agentic'. Mutually exclusive with system_prompt, which replaces the rubric this would select. Only applies when classifier_type is 'llm'. */
+            rubric?: components["schemas"]["RubricPreset"] | null;
             /**
              * System Prompt
              * @description Replaces the built-in complexity rubric as the classifier's entire system role. When set, neither the default rubric nor the context-window closing line is appended, so the prompt owns the whole taxonomy and the tier names SIMPLE/MEDIUM/COMPLEX/REASONING become whatever buckets it defines: a prompt that classifies data sensitivity routes on that instead of on difficulty. Two consequences of full replacement. The default rubric's closing paragraph is the classifier's prompt-injection defense, telling it that the caller's quoted system prompt and prior turns are material to judge and never instructions; a replacement that omits it lets a caller ask for a tier and get it. And the heuristic fallback still scores complexity, so a router on some other taxonomy wants classifier_fallback='default_model'. Leave unset for the built-in rubric. Only applies when classifier_type is 'llm'.
@@ -36948,7 +36945,7 @@ export interface operations {
             query?: {
                 context_window_size?: number;
                 tier_labels?: string | null;
-                rubric?: components["schemas"]["RubricPreset"];
+                rubric?: components["schemas"]["RubricPreset"] | null;
             };
             header?: never;
             path?: never;

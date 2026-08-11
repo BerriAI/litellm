@@ -2007,7 +2007,7 @@ def _labeled_tiers_from_query(tier_labels: str | None) -> tuple[tuple[Complexity
 async def get_auto_router_classifier_default_prompt(
     context_window_size: int = DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     tier_labels: str | None = None,
-    rubric: RubricPreset = RubricPreset.AGENTIC,
+    rubric: RubricPreset | None = None,
 ) -> AutoRouterClassifierDefaultPromptResponse:
     """
     Get the default classifier system prompt, so the dashboard's prompt editor can prefill it.
@@ -2022,7 +2022,7 @@ async def get_auto_router_classifier_default_prompt(
       built-in default.
     - tier_labels: str | None - The router's tier_labels as a JSON object of canonical tier name to
       display name, e.g. `{"SIMPLE": "Cheap"}`. Omit or pass an empty object for the default names.
-    - rubric: RubricPreset - The router's classifier_llm_config.rubric. Defaults to 'agentic'.
+    - rubric: RubricPreset | None - The router's classifier_llm_config.rubric. Omit for the default preset.
     """
     if context_window_size < 0:
         raise ProxyException(

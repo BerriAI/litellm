@@ -80,7 +80,7 @@ describe("buildComplexityRouterConfig", () => {
       classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
     });
     expect(config.classifier_type).toBe("llm");
-    expect(config.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000, rubric: "agentic" });
+    expect(config.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000 });
   });
 
   it("omits classifier_llm_config when classifier_type is heuristic even if config lingers in state", () => {
@@ -421,7 +421,7 @@ describe("classifier prompt and fallback", () => {
       ...llmParams,
       classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400, system_prompt: "   " },
     });
-    expect(config.classifier_llm_config).toEqual({ model: "haiku-classifier", timeout_ms: 400, rubric: "agentic" });
+    expect(config.classifier_llm_config).toEqual({ model: "haiku-classifier", timeout_ms: 400 });
     expect(config.classifier_llm_config).not.toHaveProperty("system_prompt");
   });
 
@@ -455,9 +455,11 @@ describe("classifier prompt and fallback", () => {
     expect(config.classifier_llm_config).toEqual({ model: "haiku-classifier", timeout_ms: 400, rubric: "chat" });
   });
 
-  it("records the default preset explicitly, so a later default change cannot move this router", () => {
+  it("omits the preset when the operator never touched the picker, so the backend default applies", () => {
+    // Sending a copy of the default the dropdown displays would pin this router to today's default
+    // and make UI-built routers behave differently from hand-written config.
     const config = buildComplexityRouterConfig(llmParams);
-    expect(config.classifier_llm_config?.rubric).toBe("agentic");
+    expect(config.classifier_llm_config).not.toHaveProperty("rubric");
   });
 
   it("drops the preset when a custom prompt replaces the rubric, which the backend rejects together", () => {
@@ -483,7 +485,6 @@ describe("classifier prompt and fallback", () => {
     expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, system_prompt: "" })).toEqual({
       model: "m",
       timeout_ms: 1,
-      rubric: "agentic",
     });
   });
 });

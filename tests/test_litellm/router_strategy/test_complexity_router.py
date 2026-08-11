@@ -6621,11 +6621,30 @@ class TestRubricPresets:
         assert classification_system_prompt(5, rubric=preset) == swept
 
     def test_agentic_is_the_default_preset(self):
+        """An unset preset stays None on the model and resolves to agentic on the wire. Storing the
+        default as a value instead would freeze it, so a later change of default could not reach a
+        router that never chose one."""
         assert classification_system_prompt(5) == classification_system_prompt(5, rubric=RubricPreset.AGENTIC)
-        config = ComplexityRouterConfig(
-            classifier_type="llm", classifier_llm_config={"model": "haiku-classifier"}
-        )
-        assert config.classifier_llm_config.rubric is RubricPreset.AGENTIC
+        config = ComplexityRouterConfig(classifier_type="llm", classifier_llm_config={"model": "haiku-classifier"})
+        assert config.classifier_llm_config.rubric is None
+
+    @pytest.mark.parametrize(
+        "classifier_llm_config",
+        [
+            {"model": "haiku-classifier", "system_prompt": "Grade the data sensitivity of the request."},
+            {"model": "haiku-classifier", "rubric": "chat"},
+            {"model": "haiku-classifier"},
+        ],
+        ids=["custom-prompt", "chat-preset", "neither"],
+    )
+    def test_config_survives_a_dump_and_rebuild(self, classifier_llm_config):
+        """/auto_router/test_routing dumps this config and hands the dict straight back to
+        ComplexityRouter, which re-validates it. Anything keyed on which fields were explicitly set
+        rejects on that second pass what it accepted on the first, so previewing a saved router would
+        fail while saving it succeeded."""
+        config = ComplexityRouterConfig(classifier_type="llm", classifier_llm_config=classifier_llm_config)
+        for dumped in (config.model_dump(exclude_none=True), config.model_dump()):
+            assert ComplexityRouterConfig.model_validate(dumped) == config
 
     def test_only_the_agentic_preset_carries_the_engineering_anchors(self):
         """The engineering anchors are what put routine installs, builds, and debugging at MEDIUM. A

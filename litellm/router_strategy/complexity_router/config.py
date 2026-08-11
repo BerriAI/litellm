@@ -29,6 +29,9 @@ class RubricPreset(str, Enum):
     CHAT = "chat"
 
 
+DEFAULT_RUBRIC_PRESET: Final[RubricPreset] = RubricPreset.AGENTIC
+
+
 TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
     ComplexityTier.SIMPLE,
     ComplexityTier.MEDIUM,
@@ -280,16 +283,16 @@ class ClassifierLLMConfig(BaseModel):
         default=3000,
         description="Timeout budget for the classification call, in milliseconds",
     )
-    rubric: RubricPreset = Field(
-        default=RubricPreset.AGENTIC,
+    rubric: RubricPreset | None = Field(
+        default=None,
         description=(
-            "Which calibration examples the built-in rubric carries. 'agentic' (the default) anchors routine "
-            "installs, builds, multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does "
-            "not route to the most expensive tier; it suits agent, terminal, and coding-assistant traffic as "
-            "well as mixed traffic. 'chat' omits those engineering anchors, for a deployment serving only "
-            "conversational traffic. Both share the same tier criteria, so this moves where the boundary sits "
-            "without changing the taxonomy. Mutually exclusive with system_prompt, which replaces the rubric "
-            "this would select. Only applies when classifier_type is 'llm'."
+            "Which calibration examples the built-in rubric carries. 'agentic' anchors routine installs, builds, "
+            "multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the "
+            "most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed "
+            "traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational "
+            "traffic. Both share the same tier criteria, so this moves where the boundary sits without changing "
+            "the taxonomy. Leave unset for 'agentic'. Mutually exclusive with system_prompt, which replaces the "
+            "rubric this would select. Only applies when classifier_type is 'llm'."
         ),
     )
     system_prompt: str | None = Field(
@@ -321,7 +324,11 @@ class ClassifierLLMConfig(BaseModel):
     def _reject_rubric_with_system_prompt(self) -> "ClassifierLLMConfig":
         # A custom prompt is the classifier's whole system role, so a preset set alongside it would never
         # reach the wire. Rejecting it beats honoring one of two settings the operator asked for.
-        if self.system_prompt is not None and "rubric" in self.model_fields_set:
+        #
+        # None, not model_fields_set, is what marks the preset unchosen: this model is dumped and
+        # re-validated in place (see /auto_router/test_routing), and a dump re-states every field, so
+        # keying on fields_set would reject on the second pass what it accepted on the first.
+        if self.system_prompt is not None and self.rubric is not None:
             raise ValueError(
                 "classifier_llm_config.rubric and system_prompt are mutually exclusive: system_prompt replaces "
                 "the built-in rubric the preset would select. Drop one."
