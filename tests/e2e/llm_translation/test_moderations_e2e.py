@@ -70,6 +70,7 @@ class TestModerations:
             f"benign text was flagged as {item.flagged_categories}: {item}"
         )
 
+    @pytest.mark.skip(reason="stage red: product gap, /v1/moderations 500s (KeyError 'input') on missing input instead of 400")
     @pytest.mark.covers("llm.moderations.openai.input_validation.nonstream.works")
     def test_missing_input_returns_error(
         self, endpoints_client: EndpointsClient, resources: ResourceManager

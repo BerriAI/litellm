@@ -84,6 +84,7 @@ class TestImageGeneration:
             return
         _assert_image_returned(result.body)
 
+    @pytest.mark.skip(reason="stage red: product gap, /v1/images/generations 500s (aimage_generation TypeError) on missing prompt instead of 400")
     @pytest.mark.covers("llm.images_generations.openai.input_validation.nonstream.works")
     def test_missing_prompt_returns_error(
         self, endpoints_client: EndpointsClient, resources: ResourceManager

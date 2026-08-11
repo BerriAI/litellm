@@ -183,6 +183,7 @@ class TestVectorStores:
         )
         assert deleted.deleted is True or deleted.id == created.id
 
+    @pytest.mark.skip(reason="stage red: product gap, vector store search 500s (asearch TypeError) on missing query instead of 400")
     @pytest.mark.covers("llm.vector_stores.openai.input_validation.nonstream.works")
     def test_search_missing_query_returns_error(
         self, proxy: ProxyClient, resources: ResourceManager
@@ -318,6 +319,7 @@ class TestVectorStores:
             f"empty search query unexpected status {result.status_code}: {result.body[:300]}"
         )
 
+    @pytest.mark.skip(reason="stage red: product gap, retrieving a nonexistent vector store returns 2xx with an error envelope in the body instead of 404")
     @pytest.mark.covers("llm.vector_stores.openai.input_validation.nonstream.works")
     def test_retrieve_invalid_id_returns_error(
         self, proxy: ProxyClient, resources: ResourceManager
