@@ -174,13 +174,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             chunk.model_copy(update=MappingProxyType({"choices": (content_choice,)})),
         )
 
-    def _queue_reasoning_lifecycle_events(self, chunk: ModelResponseStream) -> None:
+    def _queue_reasoning_lifecycle_events(self, chunk: ModelResponseStream, *, ends_reasoning: bool) -> None:
         if not self._reasoning_active or self._reasoning_done_emitted:
             return
         delta: Final = chunk.choices[0].delta if chunk.choices else None
         if delta and getattr(delta, "reasoning_content", None):
             self._accumulated_reasoning_content_parts.append(delta.reasoning_content)
-        if not self._is_reasoning_end(chunk):
+        if not ends_reasoning:
             return
 
         reasoning_content: Final = "".join(self._accumulated_reasoning_content_parts)
@@ -208,10 +208,22 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._reasoning_done_emitted = True
         self._reasoning_active = False
 
+    def _chunk_ends_reasoning(self, chunk: ModelResponseStream, *, is_split: bool) -> bool:
+        if not chunk.choices:
+            return False
+        # A chunk carrying both reasoning and content only ends reasoning if the turn ends
+        # there too: providers that interleave the two keep emitting reasoning afterwards.
+        if is_split:
+            return chunk.choices[0].finish_reason is not None
+        return bool(self._is_reasoning_end(chunk))
+
     def _queue_events_for_chunk(self, chunk: ModelResponseStream) -> None:
-        for part in self._split_reasoning_and_content(chunk):
+        parts: Final = self._split_reasoning_and_content(chunk)
+        ends_reasoning: Final = self._chunk_ends_reasoning(chunk, is_split=len(parts) > 1)
+        for part in parts:
             self._ensure_output_item_for_chunk(part)
-            self._queue_reasoning_lifecycle_events(part)
+            if part is parts[0]:
+                self._queue_reasoning_lifecycle_events(part, ends_reasoning=ends_reasoning)
             response_api_chunk = self._transform_chat_completion_chunk_to_response_api_chunk(part)
             if response_api_chunk:
                 self._pending_response_events.append(response_api_chunk)

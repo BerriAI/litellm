@@ -375,6 +375,56 @@ def test_combined_reasoning_and_content_chunk_emits_both_deltas_sync():
     assert "".join(text_deltas) == "MARKER_ALPHA begin middle end"
 
 
+def _interleaved_reasoning_and_text_chunks() -> list[ModelResponseStream]:
+    def make(
+        content: str | None = None,
+        reasoning: str | None = None,
+        finish_reason: str | None = None,
+    ) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-interleaved",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=finish_reason,
+                    index=0,
+                    delta=Delta(content=content, role="assistant", reasoning_content=reasoning),
+                )
+            ],
+        )
+
+    return [
+        make(reasoning="think one ", content="answer one "),
+        make(reasoning="think two ", content="answer two "),
+        make(reasoning="think three", content="answer three"),
+        make(finish_reason="stop"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_interleaved_reasoning_stays_open_until_the_turn_ends():
+    """Reasoning that keeps arriving alongside content must not be closed after the first chunk."""
+    iterator = _new_iterator(_interleaved_reasoning_and_text_chunks())
+
+    types = []
+    reasoning_deltas = []
+    summary_done_text = None
+    async for event in iterator:
+        types.append(event.type)
+        if event.type == "response.reasoning_summary_text.delta":
+            reasoning_deltas.append(event.delta)
+        elif event.type == "response.reasoning_summary_text.done":
+            summary_done_text = event.text
+
+    assert "".join(reasoning_deltas) == "think one think two think three"
+    assert summary_done_text == "".join(reasoning_deltas)
+    assert types.count("response.reasoning_summary_text.done") == 1
+    last_reasoning_delta = len(types) - 1 - types[::-1].index("response.reasoning_summary_text.delta")
+    assert last_reasoning_delta < types.index("response.reasoning_summary_text.done")
+
+
 def test_streaming_chunk_id_raw():
     """Test that streaming chunk IDs are raw (not encoded) to match OpenAI format"""
     chunk = ModelResponseStream(
