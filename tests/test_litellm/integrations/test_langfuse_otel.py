@@ -291,6 +291,33 @@ class TestLangfuseOtelIntegration:
                 actual == expect_output
             ), "Mismatch in observation input/output OTEL attributes."
 
+    def test_set_langfuse_specific_attributes_with_rerank_results(self):
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+        from litellm.types.rerank import RerankResponse
+
+        response_obj = RerankResponse(
+            id="rerank-test",
+            results=[
+                {"index": 2, "relevance_score": 0.98},
+                {"index": 0, "relevance_score": 0.41},
+            ],
+        )
+
+        with patch(
+            "litellm.integrations.arize._utils.safe_set_attribute"
+        ) as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(
+                MagicMock(), {}, response_obj
+            )
+
+        output_calls = [
+            call
+            for call in mock_safe_set_attribute.call_args_list
+            if call.args[1] == LangfuseSpanAttributes.OBSERVATION_OUTPUT.value
+        ]
+        assert len(output_calls) == 1
+        assert json.loads(output_calls[0].args[2]) == response_obj.results
+
     def test_set_langfuse_specific_attributes_with_tool_calls(self):
         """Test that _set_langfuse_specific_attributes correctly sets observation.output with tool calls in Langfuse format."""
         from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes

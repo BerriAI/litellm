@@ -169,6 +169,13 @@ class LangfuseOtelLogger(OpenTelemetry):
                         safe_dumps(output_data),
                     )
 
+        results: Final = response_obj.get("results", [])
+        if results:
+            safe_set_attribute(
+                span,
+                LangfuseSpanAttributes.OBSERVATION_OUTPUT.value,
+                safe_dumps(results),
+            )
         output: Final = response_obj.get("output", [])
         if output:
             output_items_data: Final[list[dict]] = []
