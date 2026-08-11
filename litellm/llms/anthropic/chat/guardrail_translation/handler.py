@@ -508,6 +508,43 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
 
     @staticmethod
+    def _is_system(message: object) -> bool:
+        """Whether the row is an in-sequence system message."""
+        return isinstance(message, dict) and str(message.get("role") or "").lower() == "system"
+
+    @staticmethod
+    def _defer_systems_inside_tool_exchanges(
+        structured_messages: list,  # mutable-ok: API message payload
+    ) -> list:
+        """Hold a system row until the tool exchange around it completes so the call/result pair converts together."""
+        from litellm.litellm_core_utils.prompt_templates.factory import group_tool_exchanges
+
+        non_system_positions: Final[list[int]] = [
+            index
+            for index, message in enumerate(structured_messages)
+            if not AnthropicMessagesHandler._is_system(message)
+        ]
+        exchange_end_for_start: Final[dict[int, int]] = {
+            non_system_positions[group[0]]: non_system_positions[group[-1]]
+            for group in group_tool_exchanges([structured_messages[index] for index in non_system_positions])
+            if len(group) > 1
+        }
+        ordered: Final[list] = []  # mutable-ok: API message payload
+        deferred_systems: Final[list] = []  # mutable-ok: API message payload
+        open_exchange_end = -1  # rebind-ok: advances to the enclosing exchange's last index
+        for index, message in enumerate(structured_messages):
+            if AnthropicMessagesHandler._is_system(message) and index < open_exchange_end:
+                deferred_systems.append(message)
+                continue
+            open_exchange_end = exchange_end_for_start.get(index, open_exchange_end)
+            ordered.append(message)
+            if index >= open_exchange_end and deferred_systems:
+                ordered.extend(deferred_systems)
+                deferred_systems.clear()
+        ordered.extend(deferred_systems)
+        return ordered
+
+    @staticmethod
     def _write_back_structured_messages(
         data: dict,  # mutable-ok: API message payload
         structured_messages: list,  # mutable-ok: API message payload
@@ -520,9 +557,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             group_tool_exchanges,
         )
 
-        def _is_system(message: object) -> bool:
-            return isinstance(message, dict) and str(message.get("role") or "").lower() == "system"
-
+        _is_system: Final = AnthropicMessagesHandler._is_system
         model: Final = str(data.get("model") or "")
         converted: Final[list] = []  # mutable-ok: API message payload
 
@@ -536,9 +571,10 @@ class AnthropicMessagesHandler(BaseTranslation):
                     )
                 )
 
+        ordered: Final = AnthropicMessagesHandler._defer_systems_inside_tool_exchanges(structured_messages)
         run: Final[list] = []  # mutable-ok: API message payload
         hoisted_dropped = False  # rebind-ok: flips once the hoisted prompt is dropped
-        for message in structured_messages:
+        for message in ordered:
             if not _is_system(message):
                 run.append(message)
                 continue
