@@ -342,22 +342,11 @@ def _concurrency_router(limit: int) -> "litellm.Router":
     )
 
 
-class _FakeLoggingObj:
-    """
-    Stands in for litellm's real `Logging` object: the same instance is
-    threaded through every hop of one logical request (retries and
-    fallbacks alike), and its `model_call_details` dict is exactly the
-    `kwargs` a logging callback receives -- see
-    `_accumulate_pending_concurrency_keys`'s docstring for why this is the
-    one piece of state that reliably survives across hops.
-    """
-
-    def __init__(self):
-        self.model_call_details: dict = {}
-
-
-def _hop_kwargs(logging_obj: "_FakeLoggingObj", tags: list[str]) -> dict:
-    return {"metadata": {"tags": tags}, "litellm_logging_obj": logging_obj}
+def _hop_kwargs(call_id: str, tags: list[str]) -> dict:
+    """`litellm_call_id` is the one identifier `_extract_call_id` relies on
+    to correlate every hop of one logical request (retries and fallbacks
+    alike) -- see its docstring for why."""
+    return {"metadata": {"tags": tags}, "litellm_call_id": call_id}
 
 
 @pytest.mark.asyncio
@@ -518,9 +507,9 @@ async def test_concurrency_slot_released_on_success_frees_capacity(time_controll
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
 
-    logging_obj = _FakeLoggingObj()
+    call_id = str(uuid.uuid4())
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(logging_obj, ["end_user_id:u1"])
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(call_id, ["end_user_id:u1"])
     )
 
     # At capacity: a second concurrent request is rejected.
@@ -530,13 +519,16 @@ async def test_concurrency_slot_released_on_success_frees_capacity(time_controll
         )
 
     # The first request completes -- its slot is released -- freeing capacity again.
-    logging_obj.model_call_details.update(
-        {
+    await limiter.async_log_success_event(
+        kwargs={
+            "litellm_call_id": call_id,
             "standard_logging_object": {"model_group": "grp", "model_id": "dep-1", "total_tokens": 0, "response_cost": 0},
             "metadata": {"tags": ["end_user_id:u1"]},
-        }
+        },
+        response_obj=None,
+        start_time=0,
+        end_time=0,
     )
-    await limiter.async_log_success_event(kwargs=logging_obj.model_call_details, response_obj=None, start_time=0, end_time=0)
     await asyncio.sleep(0)
 
     result = await limiter.async_filter_deployments(
@@ -552,13 +544,17 @@ async def test_concurrency_slot_released_on_failure_frees_capacity(time_controll
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
 
-    logging_obj = _FakeLoggingObj()
+    call_id = str(uuid.uuid4())
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(logging_obj, ["end_user_id:u1"])
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(call_id, ["end_user_id:u1"])
     )
 
-    logging_obj.model_call_details.update({"standard_logging_object": {"model_group": "grp"}, "metadata": {"tags": ["end_user_id:u1"]}})
-    await limiter.async_log_failure_event(kwargs=logging_obj.model_call_details, response_obj=None, start_time=0, end_time=0)
+    await limiter.async_log_failure_event(
+        kwargs={"litellm_call_id": call_id, "standard_logging_object": {"model_group": "grp"}, "metadata": {"tags": ["end_user_id:u1"]}},
+        response_obj=None,
+        start_time=0,
+        end_time=0,
+    )
 
     result = await limiter.async_filter_deployments(
         model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
@@ -582,30 +578,39 @@ async def test_concurrency_released_for_every_hop_when_only_the_first_failure_fi
     router = _concurrency_router(limit=2)
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
-    logging_obj = _FakeLoggingObj()
+    call_id = str(uuid.uuid4())
 
     # Hop 1 admits and fails; its failure event is the one that fires.
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(logging_obj, ["end_user_id:u1"])
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(call_id, ["end_user_id:u1"])
     )
-    logging_obj.model_call_details.update({"standard_logging_object": {"model_group": "grp"}, "metadata": {"tags": ["end_user_id:u1"]}})
-    await limiter.async_log_failure_event(kwargs=logging_obj.model_call_details, response_obj=None, start_time=0, end_time=0)
+    await limiter.async_log_failure_event(
+        kwargs={"litellm_call_id": call_id, "standard_logging_object": {"model_group": "grp"}, "metadata": {"tags": ["end_user_id:u1"]}},
+        response_obj=None,
+        start_time=0,
+        end_time=0,
+    )
 
     # Hop 2 (a retry or fallback) admits and also fails, but -- per litellm's
     # dedup -- no async_log_failure_event call follows it.
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(logging_obj, ["end_user_id:u1"])
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(call_id, ["end_user_id:u1"])
     )
 
     # Hop 3 admits and succeeds. Its success event must release both hop 2's
     # still-pending reservation and its own.
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(logging_obj, ["end_user_id:u1"])
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(call_id, ["end_user_id:u1"])
     )
-    logging_obj.model_call_details.update(
-        {"standard_logging_object": {"model_group": "grp", "model_id": "dep-1", "total_tokens": 0, "response_cost": 0}}
+    await limiter.async_log_success_event(
+        kwargs={
+            "litellm_call_id": call_id,
+            "standard_logging_object": {"model_group": "grp", "model_id": "dep-1", "total_tokens": 0, "response_cost": 0},
+        },
+        response_obj=None,
+        start_time=0,
+        end_time=0,
     )
-    await limiter.async_log_success_event(kwargs=logging_obj.model_call_details, response_obj=None, start_time=0, end_time=0)
     await asyncio.sleep(0)
 
     # Full capacity (2) is free again -- both hops admit.
@@ -632,23 +637,30 @@ async def test_concurrency_released_by_terminal_hook_when_every_hop_fails(time_c
     router = _concurrency_router(limit=2)
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
-    logging_obj = _FakeLoggingObj()
+    call_id = str(uuid.uuid4())
 
-    # Hop 1 admits and fails; its failure event fires and clears the list.
+    # Hop 1 admits and fails; its failure event fires and clears the registry entry.
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(logging_obj, ["end_user_id:u1"])
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(call_id, ["end_user_id:u1"])
     )
-    logging_obj.model_call_details.update({"standard_logging_object": {"model_group": "grp"}, "metadata": {"tags": ["end_user_id:u1"]}})
-    await limiter.async_log_failure_event(kwargs=logging_obj.model_call_details, response_obj=None, start_time=0, end_time=0)
+    await limiter.async_log_failure_event(
+        kwargs={"litellm_call_id": call_id, "standard_logging_object": {"model_group": "grp"}, "metadata": {"tags": ["end_user_id:u1"]}},
+        response_obj=None,
+        start_time=0,
+        end_time=0,
+    )
 
     # Hop 2 admits and is the terminal failure -- no fallback left. Per
     # litellm's dedup, its own async_log_failure_event never fires either.
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(logging_obj, ["end_user_id:u1"])
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(call_id, ["end_user_id:u1"])
     )
 
+    # request_data deliberately has no litellm_logging_obj: ProxyLogging.post_call_failure_hook
+    # always pops it before dispatching to callbacks in production, so a
+    # correct fix cannot depend on it being present here either.
     await limiter.async_post_call_failure_hook(
-        request_data={"model": "grp", "litellm_logging_obj": logging_obj, "metadata": {"tags": ["end_user_id:u1"]}},
+        request_data={"model": "grp", "litellm_call_id": call_id, "metadata": {"tags": ["end_user_id:u1"]}},
         original_exception=Exception("provider error"),
         user_api_key_dict=UserAPIKeyAuth(),
     )
@@ -681,21 +693,25 @@ async def test_terminal_failure_does_not_double_release_and_steal_another_reques
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
 
-    logging_obj_a = _FakeLoggingObj()
-    logging_obj_b = _FakeLoggingObj()
+    call_id_a = str(uuid.uuid4())
+    call_id_b = str(uuid.uuid4())
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(logging_obj_a, ["end_user_id:u1"])
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(call_id_a, ["end_user_id:u1"])
     )
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(logging_obj_b, ["end_user_id:u1"])
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=_hop_kwargs(call_id_b, ["end_user_id:u1"])
     )
 
     # A fails terminally: both its failure event and the terminal post-call
-    # hook fire for the same single hop, against the same shared state.
-    logging_obj_a.model_call_details.update({"standard_logging_object": {"model_group": "grp"}, "metadata": {"tags": ["end_user_id:u1"]}})
-    await limiter.async_log_failure_event(kwargs=logging_obj_a.model_call_details, response_obj=None, start_time=0, end_time=0)
+    # hook fire for the same single hop, against the same registry entry.
+    await limiter.async_log_failure_event(
+        kwargs={"litellm_call_id": call_id_a, "standard_logging_object": {"model_group": "grp"}, "metadata": {"tags": ["end_user_id:u1"]}},
+        response_obj=None,
+        start_time=0,
+        end_time=0,
+    )
     await limiter.async_post_call_failure_hook(
-        request_data={"model": "grp", "litellm_logging_obj": logging_obj_a, "metadata": {"tags": ["end_user_id:u1"]}},
+        request_data={"model": "grp", "litellm_call_id": call_id_a, "metadata": {"tags": ["end_user_id:u1"]}},
         original_exception=Exception("provider error"),
         user_api_key_dict=UserAPIKeyAuth(),
     )
@@ -1301,7 +1317,7 @@ async def test_concurrency_scope_by_key_hash_gives_independent_reservations_per_
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
 
-    logging_obj_a = _FakeLoggingObj()
+    call_id_a = str(uuid.uuid4())
 
     # keyA occupies its own single slot.
     await limiter.async_filter_deployments(
@@ -1310,7 +1326,7 @@ async def test_concurrency_scope_by_key_hash_gives_independent_reservations_per_
         messages=None,
         request_kwargs={
             "metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyA"},
-            "litellm_logging_obj": logging_obj_a,
+            "litellm_call_id": call_id_a,
         },
     )
 
@@ -1332,8 +1348,9 @@ async def test_concurrency_scope_by_key_hash_gives_independent_reservations_per_
         )
 
     # Release keyA's reservation via the success event, matching its key hash.
-    logging_obj_a.model_call_details.update(
-        {
+    await limiter.async_log_success_event(
+        kwargs={
+            "litellm_call_id": call_id_a,
             "standard_logging_object": {
                 "model_group": "grp",
                 "model_id": "dep-1",
@@ -1342,9 +1359,11 @@ async def test_concurrency_scope_by_key_hash_gives_independent_reservations_per_
                 "metadata": {"user_api_key_hash": "keyA"},
             },
             "metadata": {"tags": ["end_user_id:u1"]},
-        }
+        },
+        response_obj=None,
+        start_time=0,
+        end_time=0,
     )
-    await limiter.async_log_success_event(kwargs=logging_obj_a.model_call_details, response_obj=None, start_time=0, end_time=0)
     await asyncio.sleep(0)
 
     # keyA's capacity is freed -- a fresh keyA request now admits.
