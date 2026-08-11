@@ -853,3 +853,25 @@ def test_get_complete_model_list_omits_literal_wildcard_when_router_has_deployme
     )
     assert "openai/*" not in no_router_result
     assert any(m.startswith("openai/") and m != "openai/*" for m in no_router_result)
+
+
+def test_get_wildcard_models_does_not_mutate_input_and_drops_all_literals():
+    """Regression for #13752: _get_wildcard_models must not mutate the caller's list and
+    must drop every expanded wildcard literal from kept_models, even when the same literal
+    appears more than once, so no literal route leaks back into the listing."""
+    from unittest.mock import MagicMock
+
+    from litellm.proxy.auth.model_checks import _get_wildcard_models
+
+    router = MagicMock()
+    router.get_model_list.return_value = [{"litellm_params": {"model": "openai/*"}}]
+
+    unique_models = ["openai/*", "openai/*"]
+    original = list(unique_models)
+
+    result = _get_wildcard_models(unique_models=unique_models, llm_router=router)
+
+    assert unique_models == original
+    assert "openai/*" not in result.kept_models
+    assert result.expanded_models
+    assert all(m != "openai/*" for m in result.expanded_models)

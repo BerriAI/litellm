@@ -232,14 +232,14 @@ def get_complete_model_list(
                 model_access_groups_to_return.append(model)
         return model_access_groups_to_return
 
-    all_wildcard_models: Final = _get_wildcard_models(
+    wildcard: Final = _get_wildcard_models(
         unique_models=unique_models,
         return_wildcard_routes=return_wildcard_routes,
         llm_router=llm_router,
         team_id=team_id,
     )
 
-    complete_model_list: Final = unique_models + all_wildcard_models
+    complete_model_list: Final = list(wildcard.kept_models + wildcard.expanded_models)
 
     return complete_model_list
 
@@ -407,34 +407,34 @@ def _expand_wildcard_model(model: str, llm_router: Router | None, team_id: str |
     return _WildcardExpansion(concrete_models, True)
 
 
+class _WildcardModels(NamedTuple):
+    kept_models: tuple[str, ...]
+    expanded_models: tuple[str, ...]
+
+
 def _get_wildcard_models(
-    unique_models: list[str],
+    unique_models: Sequence[str],
     return_wildcard_routes: bool | None = False,
     llm_router: Router | None = None,
     team_id: str | None = None,
-) -> list[str]:
+) -> _WildcardModels:
     expansions: Final = {
         model: _expand_wildcard_model(model=model, llm_router=llm_router, team_id=team_id)
         for model in unique_models
         if _check_wildcard_routing(model=model)
     }
 
-    all_wildcard_models: Final = [
+    expanded_models: Final = tuple(
         item
         for model, expansion in expansions.items()
         for item in [*([model] if return_wildcard_routes else []), *expansion.concrete_models]
-    ]
+    )
 
-    # The literal pattern (e.g. "openai/*") is a routing directive, not a callable
-    # model, so drop it from the listing once expanded. It is re-surfaced above only
-    # when return_wildcard_routes is set (#13752).
-    models_to_remove: Final = {
+    literals_to_drop: Final = frozenset(
         model for model, expansion in expansions.items() if expansion.has_router_deployment or expansion.concrete_models
-    }
-    for model in models_to_remove:
-        unique_models.remove(model)
-
-    return all_wildcard_models
+    )
+    kept_models: Final = tuple(model for model in unique_models if model not in literals_to_drop)
+    return _WildcardModels(kept_models=kept_models, expanded_models=expanded_models)
 
 
 def get_all_fallbacks(
