@@ -16,7 +16,7 @@ test.describe("MCP Servers", () => {
 
     // Open the discovery modal, then drop into the custom-server form
     await page.getByRole("button", { name: /Add New MCP Server/i }).click();
-    const discovery = page.locator(".ant-modal:visible").filter({ hasText: "Add MCP Server" });
+    const discovery = page.getByRole("dialog").filter({ hasText: "Add MCP Server" });
     await expect(discovery).toBeVisible({ timeout: 5_000 });
     await discovery.getByRole("button", { name: /Custom Server/i }).click();
 
@@ -36,7 +36,7 @@ test.describe("MCP Servers", () => {
     await formModal.locator('input[id="url"]').fill("https://e2e-fake-mcp.test.local/mcp");
 
     // Authentication: None
-    // The auth_type Form.Item has no label prop (create_mcp_server.tsx:795), so
+    // The auth_type Form.Item has no label prop (CreateMCPServer.tsx), so
     // it can't be anchored by label text. Scope via the enclosing Collapse
     // panel ("Authentication") instead — that anchor is stable even if the
     // placeholder copy changes.

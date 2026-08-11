@@ -24,6 +24,7 @@ import SCIMConfig from "@/components/SCIM";
 import LoggingSettings from "@/components/Settings/AdminSettings/LoggingSettings/LoggingSettings";
 import SSOSettings from "@/components/Settings/AdminSettings/SSOSettings/SSOSettings";
 import UISettings from "@/components/Settings/AdminSettings/UISettings/UISettings";
+import UserBannerSettings from "@/components/Settings/AdminSettings/UserBannerSettings/UserBannerSettings";
 import HashicorpVault from "@/components/Settings/AdminSettings/HashicorpVault/HashicorpVault";
 import PluginSettings from "@/components/Settings/AdminSettings/PluginSettings/PluginSettings";
 import SSOModals from "@/components/SSOModals";
@@ -362,7 +363,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
           </Text>
         </Space>
       ),
-      children: <UISettings />,
+      children: (
+        <div className="flex flex-col gap-4">
+          <UISettings />
+          <UserBannerSettings />
+        </div>
+      ),
     },
     {
       key: "logging-settings",
