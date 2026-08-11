@@ -25,6 +25,7 @@ HTML_COMMENT_PATTERN: Final = re.compile(r"<!--.*?-->", re.DOTALL)
 HEADING_PATTERN: Final = re.compile(r"^#{2,6}\s+(?P<title>.+?)\s*$")
 BULLET_PATTERN: Final = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(?P<text>.*)$")
 LABEL_PATTERN: Final = re.compile(r"^[^-*+].*:\s*$")
+FENCE_PATTERN: Final = re.compile(r"^\s*(?:```|~~~)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,9 +49,21 @@ def strip_html_comments(body: str) -> str:
 
 def split_sections(body: str) -> tuple[Section, ...]:
     lines: Final = tuple(body.split("\n"))
-    headings: Final = tuple(
-        (index, match.group("title")) for index, line in enumerate(lines) if (match := HEADING_PATTERN.match(line))
-    )
+
+    def scan(
+        acc: tuple[bool, tuple[tuple[int, str], ...]],
+        item: tuple[int, str],
+    ) -> tuple[bool, tuple[tuple[int, str], ...]]:
+        in_fence, headings = acc
+        index, line = item
+        if FENCE_PATTERN.match(line):
+            return (not in_fence, headings)
+        if in_fence:
+            return acc
+        match: Final = HEADING_PATTERN.match(line)
+        return (in_fence, (*headings, (index, match.group("title")))) if match else acc
+
+    _, headings = reduce(scan, tuple(enumerate(lines)), (False, ()))
     ends: Final = tuple(index for index, _ in headings[1:]) + (len(lines),)
     return tuple(Section(title=title, lines=lines[start + 1 : end]) for (start, title), end in zip(headings, ends))
 
@@ -92,8 +105,9 @@ def check_bullet_section(section: Section) -> tuple[Violation, ...]:
 
 def is_placeholder_line(line: str) -> bool:
     bullet_match: Final = BULLET_PATTERN.match(line)
-    content: Final = bullet_match.group("text").strip() if bullet_match else line.strip()
-    return content == "..." or any(token in line for token in PLACEHOLDER_TOKENS)
+    if bullet_match and bullet_match.group("text").strip() == "...":
+        return True
+    return any(token in line for token in PLACEHOLDER_TOKENS)
 
 
 def check_placeholders(sections: tuple[Section, ...]) -> tuple[Violation, ...]:

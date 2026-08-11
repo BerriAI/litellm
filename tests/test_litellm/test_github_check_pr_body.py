@@ -109,3 +109,28 @@ def test_multiline_html_comment_spanning_section_is_stripped(checker):
     violations = checker.check_body(body, ("litellm/main.py",))
     assert len(violations) == 1
     assert violations[0].section == "QA runbook"
+
+
+def test_bare_ellipsis_in_proof_output_is_not_a_placeholder(checker):
+    body = (
+        "## Screenshots / Proof of Fix\n\n"
+        "```\n"
+        "$ curl http://localhost:4000/v1/chat/completions ...\n"
+        "{\"id\": \"chatcmpl-abc\",\n"
+        " ...\n"
+        " \"usage\": {\"prompt_tokens\": 5}}\n"
+        "```\n"
+    )
+    assert checker.check_body(body, ()) == ()
+
+
+def test_headings_inside_fenced_block_do_not_open_new_sections(checker):
+    body = (
+        "## Screenshots / Proof of Fix\n\n"
+        "Quoted template excerpt:\n\n"
+        "```markdown\n"
+        "## Caveats (if any)\n\n"
+        "Some prose paragraph that is not a bullet at all\n"
+        "```\n"
+    )
+    assert checker.check_body(body, ()) == ()
