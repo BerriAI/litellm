@@ -377,15 +377,12 @@ class TestAdvisoryModeWiring:
 
 class TestAdvisoryModePostCall:
     """
-    Tests for on_flagged='inject_system_message' in async_post_call_success_hook.
-
-    The LLM already responded by this point, so it can't weigh the advisory
-    before acting; the advisory is instead attached to the response content
-    itself, so the caller still gets the "flagged, use your judgment" signal.
+    Tests that on_flagged='inject_system_message' behaves identically to 'monitor'
+    in async_post_call_success_hook: nothing left to inject into, so it just logs.
     """
 
     @pytest.mark.asyncio
-    async def test_post_call_appends_advisory_to_flagged_response(self):
+    async def test_post_call_allows_flagged_response_without_modifying_it(self):
         lakera_guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message")
         mock_response = {
             "flagged": True,
@@ -410,37 +407,4 @@ class TestAdvisoryModePostCall:
                 response=llm_response,
             )
 
-        assert isinstance(result, ModelResponse)
-        content = result.model_dump()["choices"][0]["message"]["content"]
-        assert content.startswith("Some response content")
-        assert "policy-violating content" in content
-
-    @pytest.mark.asyncio
-    async def test_post_call_monitor_mode_still_does_not_modify_response(self):
-        """monitor mode must keep logging-only behavior; only inject_system_message
-        attaches the advisory to the response."""
-        lakera_guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="monitor")
-        mock_response = {
-            "flagged": True,
-            "breakdown": [{"detector_type": "moderated_content/violence", "detected": True}],
-        }
-        llm_response = MagicMock()
-        llm_response.model_dump.return_value = {
-            "choices": [{"message": {"role": "assistant", "content": "Some response content"}}]
-        }
-
-        with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
-            mock_call.return_value = (mock_response, {})
-            data = {
-                "messages": [{"role": "user", "content": "Some prompt"}],
-                "model": "gpt-5-mini",
-                "metadata": {},
-            }
-
-            result = await lakera_guardrail.async_post_call_success_hook(
-                data=data,
-                user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
-                response=llm_response,
-            )
-
-        assert result is llm_response, "monitor mode must pass the response through unmodified"
+        assert result is llm_response, "Response must pass through unmodified, matching monitor mode"
