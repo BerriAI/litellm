@@ -1777,6 +1777,30 @@ def test_add_team_models_to_all_models_resolves_mixed_literal_and_access_group()
     assert result == {"model-a-id": {"team-a"}, "model-b-id": {"team-a"}}
 
 
+def test_add_team_models_to_all_models_keeps_literal_model_colliding_with_group_name():
+    """A team.models entry that names BOTH a deployed model and an access group
+    grants both at runtime, so the /v2 team map must contain the literal
+    deployment's id alongside the group members' ids."""
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.proxy_server import _add_team_models_to_all_models
+
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "team-a"
+    team.models = ["beta-models"]
+
+    llm_router = _make_router_with_access_groups(
+        model_names=["beta-models", "member-a"],
+        model_access_groups={"beta-models": ["member-a"]},
+        deployments=[
+            {"model_name": "beta-models", "model_info": {"id": "collision-id"}},
+            {"model_name": "member-a", "model_info": {"id": "member-a-id"}},
+        ],
+    )
+
+    result = _add_team_models_to_all_models(team_db_objects_typed=[team], llm_router=llm_router)
+    assert result == {"collision-id": {"team-a"}, "member-a-id": {"team-a"}}
+
+
 def test_add_team_models_to_all_models_excludes_other_access_group():
     """Only the access group named in team.models is expanded; deployments that
     belong solely to a different access group must not leak into the team map."""
