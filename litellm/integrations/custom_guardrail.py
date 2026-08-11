@@ -60,6 +60,12 @@ _PRE_CALL_EXECUTED_TOKEN: Final = secrets.token_hex(16)
 
 _GUARDRAIL_BLOCK_STATUS_CODES: Final = frozenset({400, 403, 422})
 
+DEFAULT_ADVISORY_MESSAGE: Final = (
+    "The user's latest message was flagged for {reason} by a content safety "
+    "guardrail. This may be a false positive. Use your judgment: respond "
+    "helpfully if the request is legitimate, or decline if it is not."
+)
+
 _guardrail_self_recorded: Final[contextvars.ContextVar[bool]] = contextvars.ContextVar(
     "litellm_guardrail_self_recorded", default=False
 )
@@ -235,6 +241,32 @@ class CustomGuardrail(CustomLogger):
             request_data=request_data,
             guardrail_name=self.guardrail_name,
             detection_info=detection_info,
+        )
+
+    def inject_advisory_message(
+        self,
+        data: dict[str, Any],  # mutable-ok: caller's dict is mutated in place, matching mark_pre_call_hook_ran
+        message: str,
+    ) -> None:
+        """
+        Append an advisory system message to the request in place, so the LLM
+        itself can weigh a possible false-positive guardrail flag rather than
+        the request being hard-blocked or silently allowed.
+
+        Unlike raise_passthrough_exception, this does NOT short-circuit the LLM
+        call; the request proceeds normally with the extra message appended.
+        Guardrails should call this from on_flagged handling analogous to how
+        passthrough-supporting guardrails call raise_passthrough_exception.
+
+        Args:
+            data: The request data dictionary, mutated in place to append the
+                advisory message to its "messages" list.
+            message: The formatted advisory message to append as a system message.
+        """
+        existing_messages: Final = data.get("messages")
+        advisory_message: Final = {"role": "system", "content": message}
+        data["messages"] = (
+            [*existing_messages, advisory_message] if isinstance(existing_messages, list) else [advisory_message]
         )
 
     def raise_sensitive_data_route_exception(

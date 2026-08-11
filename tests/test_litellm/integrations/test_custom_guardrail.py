@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from litellm.integrations.custom_guardrail import (
+    DEFAULT_ADVISORY_MESSAGE,
     CustomGuardrail,
     log_guardrail_information,
 )
@@ -1156,6 +1157,56 @@ class TestCustomGuardrailPassthroughSupport:
         # This should return True (it's a valid response type or TypeError is caught)
         result = custom_guardrail._is_valid_response_type(response)
         assert result is True
+
+
+class TestInjectAdvisoryMessage:
+    """
+    Tests for CustomGuardrail.inject_advisory_message: the shared, guardrail-agnostic
+    "advisory" flagged-content strategy (append a note, let the LLM decide) that sits
+    alongside raise_passthrough_exception (short-circuit with a canned message).
+    """
+
+    def test_appends_to_empty_messages_list(self):
+        guardrail = CustomGuardrail()
+        data = {"model": "gpt-5-mini"}
+
+        guardrail.inject_advisory_message(data, "This looks suspicious.")
+
+        assert data["messages"] == [{"role": "system", "content": "This looks suspicious."}]
+
+    def test_appends_to_existing_messages_list(self):
+        guardrail = CustomGuardrail()
+        original_messages = [{"role": "user", "content": "Hello"}]
+        data = {"model": "gpt-5-mini", "messages": list(original_messages)}
+
+        guardrail.inject_advisory_message(data, "This looks suspicious.")
+
+        assert data["messages"] == original_messages + [{"role": "system", "content": "This looks suspicious."}]
+
+    def test_does_not_mutate_other_data_keys(self):
+        guardrail = CustomGuardrail()
+        data = {"model": "gpt-5-mini", "metadata": {"user_id": "abc"}, "temperature": 0.5}
+
+        guardrail.inject_advisory_message(data, "Advisory note.")
+
+        assert data["model"] == "gpt-5-mini"
+        assert data["metadata"] == {"user_id": "abc"}
+        assert data["temperature"] == 0.5
+
+    def test_works_on_bare_customguardrail_not_just_lakera(self):
+        """Proves genericity: this is a CustomGuardrail method, not Lakera-specific."""
+
+        class SomeOtherGuardrail(CustomGuardrail):
+            pass
+
+        guardrail = SomeOtherGuardrail(guardrail_name="some_other_guardrail")
+        data = {"messages": [{"role": "user", "content": "hi"}]}
+
+        guardrail.inject_advisory_message(data, DEFAULT_ADVISORY_MESSAGE.format(reason="a content safety concern"))
+
+        assert len(data["messages"]) == 2
+        assert data["messages"][-1]["role"] == "system"
+        assert "a content safety concern" in data["messages"][-1]["content"]
 
 
 class TestEventTypeLogging:
