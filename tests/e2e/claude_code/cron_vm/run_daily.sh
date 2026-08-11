@@ -113,13 +113,25 @@ for cmd in git uv gh jq curl claude; do
 done
 
 # Publishing pushes the branch straight to BerriAI/litellm-docs and opens
-# the PR as mateo-berri, who has write access on the docs repo. The same
-# ${GITHUB_TOKEN} is reused for release-listing above, so require it up
-# front -- failing 30 minutes into a run because the env file is missing
-# one line is a waste of CI quota.
+# the PR as mateo-berri, who has write access on the docs repo. Under
+# systemd the PAT arrives as a file via LoadCredential=, NOT via the
+# EnvironmentFile: several suite cells let the model-driven claude CLI
+# read arbitrary files as this user, and /proc/<pid>/environ of the
+# script, pytest, and the proxy would hand an env-borne token to any
+# same-UID reader. Kept as an unexported shell variable and passed per
+# invocation (GH_TOKEN=... / curl header / push URL), it never enters a
+# child's environment. Manual runs may export GITHUB_TOKEN instead.
+# Require it up front -- failing 30 minutes into a run is a waste of CI
+# quota.
+if [[ -z "${GITHUB_TOKEN:-}" && -n "${CREDENTIALS_DIRECTORY:-}" && -f "${CREDENTIALS_DIRECTORY}/github-token" ]]; then
+  GITHUB_TOKEN="$(<"${CREDENTIALS_DIRECTORY}/github-token")"
+  log "publish token source: systemd credential store"
+elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
+  log "publish token source: process environment"
+fi
 if [[ "${SKIP_PUBLISH}" != "1" ]]; then
   [[ -n "${GITHUB_TOKEN:-}" ]] \
-    || die "GITHUB_TOKEN (mateo-berri, write access to ${DOCS_REPO}) required to push the branch and open the PR (or set SKIP_PUBLISH=1)"
+    || die "publish token required: /etc/litellm-compat-matrix-github-token via LoadCredential under systemd, or an exported GITHUB_TOKEN for manual runs (or set SKIP_PUBLISH=1)"
 fi
 
 # ---------------------------------------------------------------------------

@@ -28,7 +28,10 @@
 #   * have `gh` already authenticated against an account with
 #     `pull-requests: write` on `BerriAI/litellm-docs`;
 #   * have provider credentials exported in `/etc/litellm-compat-matrix.env`
-#     (see `litellm-compat-matrix.env.example` in this directory).
+#     (see `litellm-compat-matrix.env.example` in this directory);
+#   * have the mateo-berri publish PAT at
+#     `/etc/litellm-compat-matrix-github-token` (chmod 0600, single
+#     line), delivered via `LoadCredential=` below.
 
 [Unit]
 Description=Claude Code compatibility-matrix populator (oneshot)
@@ -44,6 +47,15 @@ Group=mateo
 # Provider credentials + any gh/PROXY_PORT overrides live here. Format
 # is the standard `KEY=value` one line per env var.
 EnvironmentFile=-/etc/litellm-compat-matrix.env
+
+# The mateo-berri publish PAT is mapped in via the credential store, NOT
+# the EnvironmentFile, so it never lands in the process environment that
+# pytest, the proxy, and the model-driven claude CLI inherit (any
+# same-UID process can read /proc/<pid>/environ). run_daily.sh reads
+# ${CREDENTIALS_DIRECTORY}/github-token and hands it to gh per call.
+# Unlike EnvironmentFile= above, this is deliberately NOT optional: a
+# missing token file fails the unit at start instead of 30 minutes in.
+LoadCredential=github-token:/etc/litellm-compat-matrix-github-token
 
 # systemd starts with a minimal PATH (~/usr/local/bin:/usr/bin:/bin).
 # `uv` and `claude` are installed under the runtime user's `~/.local/bin`
