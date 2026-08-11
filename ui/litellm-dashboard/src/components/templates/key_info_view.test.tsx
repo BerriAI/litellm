@@ -175,14 +175,14 @@ describe("KeyInfoView", () => {
     };
 
     it("should show when the key was last configured, not when it last recorded spend", async () => {
-      renderWithTimestamps({ config_updated_at: "2022-06-15T12:00:00Z" });
+      renderWithTimestamps({ settings_updated_at: "2022-06-15T12:00:00Z" });
 
       expect(await findLastUpdatedText()).toMatch(/Jun \d+, 2022/);
       expect(screen.queryByText(/Jun \d+, 2023/)).not.toBeInTheDocument();
     });
 
     it("should fall back to creation time for a key that was never reconfigured", async () => {
-      renderWithTimestamps({ config_updated_at: null });
+      renderWithTimestamps({ settings_updated_at: null });
 
       expect(await findLastUpdatedText()).toMatch(/Jun \d+, 2021/);
       expect(screen.queryByText(/Jun \d+, 2023/)).not.toBeInTheDocument();

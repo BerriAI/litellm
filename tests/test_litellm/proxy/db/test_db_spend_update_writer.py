@@ -2158,8 +2158,8 @@ async def test_daily_transaction_compression_saved_tokens_zero_when_absent():
 
 
 @pytest.mark.asyncio
-async def test_commit_spend_updates_to_db_does_not_stamp_key_config_updated_at():
-    """Spend flushes must leave config_updated_at alone, or it decays into
+async def test_commit_spend_updates_to_db_does_not_stamp_key_settings_updated_at():
+    """Spend flushes must leave settings_updated_at alone, or it decays into
     another `updated_at` and stops being an audit signal."""
     db_writer = DBSpendUpdateWriter()
 

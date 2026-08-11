@@ -88,7 +88,7 @@ from litellm.proxy.management_endpoints.common_utils import (
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
 )
-from litellm.proxy.management_helpers.key_config_audit import with_config_updated_at
+from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     attach_object_permission_to_dict,
@@ -4694,7 +4694,7 @@ async def _execute_virtual_key_regeneration(
 
     updated_token: Final = await VerificationTokenRepository(prisma_client).table.update(
         where={"token": hashed_api_key},
-        data=with_config_updated_at(jsonified_update_data),
+        data=with_settings_updated_at(jsonified_update_data),
     )
     updated_token_dict: Final[dict[str, object]] = dict(updated_token) if updated_token is not None else {}
     updated_token_dict["key"] = new_token
@@ -6204,7 +6204,7 @@ async def block_key(
 
     record: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).update(
         where={"token": hashed_token},
-        data=with_config_updated_at({"blocked": True}),
+        data=with_settings_updated_at({"blocked": True}),
     )
 
     ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB
@@ -6317,7 +6317,7 @@ async def unblock_key(
 
     record: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).update(
         where={"token": hashed_token},
-        data=with_config_updated_at({"blocked": False}),
+        data=with_settings_updated_at({"blocked": False}),
     )
 
     ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB

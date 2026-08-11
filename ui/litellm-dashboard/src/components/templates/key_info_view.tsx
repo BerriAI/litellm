@@ -444,7 +444,7 @@ export default function KeyInfoView({
     );
   };
 
-  const lastConfiguredAt = currentKeyData.config_updated_at || currentKeyData.created_at;
+  const lastConfiguredAt = currentKeyData.settings_updated_at || currentKeyData.created_at;
 
   const parentTeam = currentKeyData.team_id ? teamsData?.find((team) => team.team_id === currentKeyData.team_id) : null;
 

@@ -4735,7 +4735,7 @@ def test_transform_verification_tokens_to_deleted_records():
         model_spend={},
         soft_budget_cooldown=False,
         allowed_routes=[],
-        config_updated_at=config_stamp,
+        settings_updated_at=config_stamp,
     )
 
     key2 = LiteLLM_VerificationToken(
@@ -4778,7 +4778,7 @@ def test_transform_verification_tokens_to_deleted_records():
     assert record1["token"] == "hashed-token-1"
     assert record1["user_id"] == "user-123"
     assert record1["team_id"] == "team-456"
-    assert record1["config_updated_at"] == config_stamp
+    assert record1["settings_updated_at"] == config_stamp
     assert isinstance(record1["aliases"], str)
     assert isinstance(record1["config"], str)
     assert isinstance(record1["permissions"], str)
@@ -15824,8 +15824,8 @@ async def test_regenerate_key_output_token_estimate_lowered_rejected_for_non_adm
 
 
 @pytest.mark.asyncio
-async def test_execute_virtual_key_regeneration_stamps_config_updated_at():
-    """Regenerate rewrites the key's config, so it must move config_updated_at."""
+async def test_execute_virtual_key_regeneration_stamps_settings_updated_at():
+    """Regenerate rewrites the key's config, so it must move settings_updated_at."""
     from datetime import datetime, timezone
 
     from litellm.proxy._types import RegenerateKeyRequest
@@ -15852,11 +15852,11 @@ async def test_execute_virtual_key_regeneration_stamps_config_updated_at():
 
     sent = mock_prisma_client.db.litellm_verificationtoken.update.call_args.kwargs["data"]
     assert sent["max_budget"] == 42.0
-    assert before <= sent["config_updated_at"] <= after
+    assert before <= sent["settings_updated_at"] <= after
 
 
 @pytest.mark.asyncio
-async def test_block_key_stamps_config_updated_at(monkeypatch):
+async def test_block_key_stamps_settings_updated_at(monkeypatch):
     """Blocking a key is a config change, not spend activity."""
     from datetime import datetime, timezone
 
@@ -15880,11 +15880,11 @@ async def test_block_key_stamps_config_updated_at(monkeypatch):
 
     sent = mock_prisma_client.db.litellm_verificationtoken.update.call_args.kwargs["data"]
     assert sent["blocked"] is True
-    assert before <= sent["config_updated_at"] <= after
+    assert before <= sent["settings_updated_at"] <= after
 
 
 @pytest.mark.asyncio
-async def test_unblock_key_stamps_config_updated_at(monkeypatch):
+async def test_unblock_key_stamps_settings_updated_at(monkeypatch):
     """Unblocking a key is a config change, not spend activity."""
     from datetime import datetime, timezone
 
@@ -15908,4 +15908,4 @@ async def test_unblock_key_stamps_config_updated_at(monkeypatch):
 
     sent = mock_prisma_client.db.litellm_verificationtoken.update.call_args.kwargs["data"]
     assert sent["blocked"] is False
-    assert before <= sent["config_updated_at"] <= after
+    assert before <= sent["settings_updated_at"] <= after

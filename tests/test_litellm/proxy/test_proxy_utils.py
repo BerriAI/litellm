@@ -1172,7 +1172,7 @@ async def test_prisma_health_check_failure_redacts_database_credentials(caplog):
 
 
 @pytest.mark.asyncio
-async def test_update_data_key_branch_stamps_config_updated_at():
+async def test_update_data_key_branch_stamps_settings_updated_at():
     """`updated_at` carries Prisma's @updatedAt and is rewritten by every spend
     flush, so key config edits need their own audit column."""
     from datetime import datetime, timezone
@@ -1190,4 +1190,4 @@ async def test_update_data_key_branch_stamps_config_updated_at():
 
     sent = client.db.litellm_verificationtoken.update.call_args.kwargs["data"]
     assert sent["models"] == ["gpt-4"]
-    assert before <= sent["config_updated_at"] <= after
+    assert before <= sent["settings_updated_at"] <= after
