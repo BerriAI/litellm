@@ -1,6 +1,29 @@
 import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const localization = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  const t = (key: string, values?: Record<string, unknown>) => {
+    const copy = key.split(".").reduce<unknown>((value, segment) => {
+      if (typeof value !== "object" || value === null) return undefined;
+      return (value as Record<string, unknown>)[segment];
+    }, resources[localization.language].gateway);
+    if (typeof copy !== "string") return key;
+    return Object.entries(values ?? {}).reduce(
+      (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+      copy,
+    );
+  };
+  return {
+    useTranslation: () => ({
+      t,
+      i18n: { language: localization.language, resolvedLanguage: localization.language },
+    }),
+  };
+});
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import { UserEditView } from "./user_edit_view";
 
@@ -148,6 +171,7 @@ describe("UserEditView", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localization.language = "en";
   });
 
   afterEach(() => {
@@ -160,6 +184,15 @@ describe("UserEditView", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
     });
+  });
+
+  it("shows the edit form in Russian when Russian is selected", async () => {
+    localization.language = "ru";
+    renderWithProviders(<UserEditView {...defaultProps} />);
+
+    expect(await screen.findByLabelText("ID пользователя")).toBeInTheDocument();
+    expect(screen.getByText("Персональные модели")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Сохранить изменения" })).toBeInTheDocument();
   });
 
   it("should display user ID field when not in bulk edit mode", async () => {

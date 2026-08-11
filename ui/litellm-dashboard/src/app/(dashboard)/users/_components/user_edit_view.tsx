@@ -2,6 +2,7 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, SelectItem, TextInput, Textarea } from "@tremor/react";
 import { Checkbox, Form, Input, Select, Tooltip } from "antd";
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { all_admin_roles } from "@/utils/roles";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
@@ -46,6 +47,7 @@ export function UserEditView({
   isBulkEdit = false,
   objectPermission,
 }: UserEditViewProps) {
+  const { t } = useTranslation("gateway");
   const [form] = Form.useForm();
   const [unlimitedBudget, setUnlimitedBudget] = useState(false);
   const canEditMcpPermissions = !isBulkEdit && all_admin_roles.includes(userRole || "");
@@ -98,26 +100,26 @@ export function UserEditView({
   return (
     <Form form={form} onFinish={handleSubmit} layout="vertical">
       {!isBulkEdit && (
-        <Form.Item label="User ID" name="user_id">
+        <Form.Item label={t("users.fields.userId")} name="user_id">
           <TextInput disabled />
         </Form.Item>
       )}
 
       {!isBulkEdit && (
-        <Form.Item label="Email" name="user_email">
+        <Form.Item label={t("users.fields.email")} name="user_email">
           <TextInput />
         </Form.Item>
       )}
 
-      <Form.Item label="User Alias" name="user_alias">
+      <Form.Item label={t("users.fields.alias")} name="user_alias">
         <TextInput />
       </Form.Item>
 
       <Form.Item
         label={
           <span>
-            Global Proxy Role{" "}
-            <Tooltip title="This is the role that the user will globally on the proxy. This role is independent of any team/org specific roles.">
+            {t("users.fields.globalRole")}{" "}
+            <Tooltip title={t("users.edit.globalRoleHint")}>
               <InfoCircleOutlined />
             </Tooltip>
           </span>
@@ -142,8 +144,8 @@ export function UserEditView({
       <Form.Item
         label={
           <span>
-            Personal Models{" "}
-            <Tooltip title="Select which models this user can access outside of team-scope. Choose 'All Proxy Models' to grant access to all models available on the proxy.">
+            {t("users.edit.personalModels")}{" "}
+            <Tooltip title={t("users.edit.personalModelsHint")}>
               <InfoCircleOutlined style={{ marginLeft: "4px" }} />
             </Tooltip>
           </span>
@@ -152,15 +154,15 @@ export function UserEditView({
       >
         <Select
           mode="multiple"
-          placeholder="Select models"
+          placeholder={t("users.invite.selectModels")}
           style={{ width: "100%" }}
           disabled={!all_admin_roles.includes(userRole || "")}
         >
           <Select.Option key="all-proxy-models" value="all-proxy-models">
-            All Proxy Models
+            {t("users.invite.allProxyModels")}
           </Select.Option>
           <Select.Option key="no-default-models" value="no-default-models">
-            No Default Models
+            {t("users.invite.noDefaultModels")}
           </Select.Option>
           {userModels.map((model) => (
             <Select.Option key={model} value={model}>
@@ -173,9 +175,9 @@ export function UserEditView({
       <Form.Item
         label={
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-            <span>Max Budget (USD)</span>
+            <span>{t("users.edit.maxBudget")}</span>
             <Checkbox checked={unlimitedBudget} onChange={handleUnlimitedBudgetChange}>
-              Unlimited Budget
+              {t("users.edit.unlimitedBudget")}
             </Checkbox>
           </div>
         }
@@ -184,7 +186,7 @@ export function UserEditView({
           {
             validator: (_, value) => {
               if (!unlimitedBudget && (value === "" || value === null || value === undefined)) {
-                return Promise.reject(new Error("Please enter a budget or select Unlimited Budget"));
+                return Promise.reject(new Error(t("users.edit.budgetRequired")));
               }
               return Promise.resolve();
             },
@@ -194,12 +196,12 @@ export function UserEditView({
         <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} disabled={unlimitedBudget} />
       </Form.Item>
 
-      <Form.Item label="Reset Budget" name="budget_duration">
+      <Form.Item label={t("users.edit.resetBudget")} name="budget_duration">
         <BudgetDurationDropdown />
       </Form.Item>
 
-      <Form.Item label="Metadata" name="metadata">
-        <Textarea rows={4} placeholder="Enter metadata as JSON" />
+      <Form.Item label={t("users.fields.metadata")} name="metadata">
+        <Textarea rows={4} placeholder={t("users.edit.metadataPlaceholder")} />
       </Form.Item>
 
       {canEditMcpPermissions && (
@@ -207,8 +209,8 @@ export function UserEditView({
           <Form.Item
             label={
               <span>
-                MCP Servers / Access Groups{" "}
-                <Tooltip title="Caps which MCP servers, access groups, and tools this user may reach. Every key the user holds is limited to this set.">
+                {t("users.edit.mcpPermissions")}{" "}
+                <Tooltip title={t("users.edit.mcpPermissionsHint")}>
                   <InfoCircleOutlined />
                 </Tooltip>
               </span>
@@ -219,7 +221,7 @@ export function UserEditView({
               onChange={(val) => form.setFieldValue("mcp_servers_and_groups", val)}
               value={form.getFieldValue("mcp_servers_and_groups")}
               accessToken={accessToken || ""}
-              placeholder="Select MCP servers or access groups (optional)"
+              placeholder={t("users.edit.selectMcp")}
             />
           </Form.Item>
 
@@ -250,9 +252,9 @@ export function UserEditView({
 
       <div className="flex justify-end space-x-2">
         <Button variant="secondary" type="button" onClick={onCancel}>
-          Cancel
+          {t("users.edit.cancel")}
         </Button>
-        <Button type="submit">Save Changes</Button>
+        <Button type="submit">{t("users.edit.saveChanges")}</Button>
       </div>
     </Form>
   );
