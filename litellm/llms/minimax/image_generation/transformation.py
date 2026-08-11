@@ -24,7 +24,7 @@ Response format:
 Reference: https://platform.minimax.io/docs/api-reference/image-generation-t2i
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import httpx
 
@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
-    LiteLLMLoggingObj = Any
+    LiteLLMLoggingObj = object
 
 DEFAULT_API_BASE = "https://api.minimax.io"
 IMAGE_GENERATION_ENDPOINT = "/v1/image_generation"
@@ -122,7 +122,7 @@ class MinimaxImageGenerationConfig(BaseImageGenerationConfig):
         base_url: str = api_base or get_secret_str("MINIMAX_API_BASE") or DEFAULT_API_BASE
         base_url = base_url.rstrip("/")
         if base_url.endswith(IMAGE_GENERATION_ENDPOINT):
-            base_url = base_url[: -len(IMAGE_GENERATION_ENDPOINT)]
+            base_url = base_url.removesuffix(IMAGE_GENERATION_ENDPOINT)
         if not base_url.endswith("/v1"):
             base_url = f"{base_url}/v1"
         return f"{base_url}/image_generation"
@@ -187,7 +187,7 @@ class MinimaxImageGenerationConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: object,
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -199,7 +199,7 @@ class MinimaxImageGenerationConfig(BaseImageGenerationConfig):
         """
         try:
             response_data = raw_response.json()
-        except Exception as e:
+        except ValueError as e:
             raise self.get_error_class(
                 error_message=f"Failed to parse MiniMax image generation response: {e}",
                 status_code=raw_response.status_code,
@@ -239,7 +239,7 @@ class MinimaxImageGenerationConfig(BaseImageGenerationConfig):
         )
 
     @staticmethod
-    def _parse_size(size: Any) -> tuple[int | None, int | None]:
+    def _parse_size(size: object) -> tuple[int | None, int | None]:
         """
         Parse an OpenAI `WxH` size string into width/height integers.
 

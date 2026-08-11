@@ -949,6 +949,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/realtime/transcription_sessions",
                             "/v1/images/variations",
                             "/v1/images/edits",
+                            "/v1/image_generation",
                             "/v1/batch",
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
