@@ -11,6 +11,10 @@ const CAPABILITY_ROLES = {
   viewOrganizationUsage: all_admin_roles,
   viewAgentUsage: all_admin_roles,
   viewGlobalSpend: proxyAdminOnlyRoles,
+  viewWorkflowRuns: proxyAdminOnlyRoles,
+  viewMemory: proxyAdminOnlyRoles,
+  viewGuardrailUsage: proxyAdminOnlyRoles,
+  viewProxyWideCostData: proxyAdminOnlyRoles,
 } as const satisfies Record<string, readonly string[]>;
 
 export type Capability = keyof typeof CAPABILITY_ROLES;

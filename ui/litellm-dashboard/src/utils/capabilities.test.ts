@@ -26,6 +26,13 @@ const ADMIN_ONLY_CAPABILITIES: Capability[] = [
   "viewAgentUsage",
 ];
 
+const PROXY_ADMIN_ONLY_PAGE_CAPABILITIES: Capability[] = [
+  "viewWorkflowRuns",
+  "viewMemory",
+  "viewGuardrailUsage",
+  "viewProxyWideCostData",
+];
+
 describe("hasCapability", () => {
   describe.each(ADMIN_ONLY_CAPABILITIES)("%s", (capability) => {
     it.each(ADMIN_ROLES)("should grant it to %s", (role) => {
@@ -63,6 +70,30 @@ describe("hasCapability - viewGlobalSpend", () => {
     ["internal_user_viewer", false],
   ] as const)("should match the backend for a %s session", (rawRole, expected) => {
     expect(hasCapability(effectiveSessionRole(rawRole), "viewGlobalSpend")).toBe(expected);
+  });
+});
+
+// The four sidebar pages behind these capabilities call routes the proxy serves
+// to proxy_admin and proxy_admin_viewer only. An org admin is denied there too,
+// because `_user_is_org_admin` needs an organization_id that a page-load GET
+// never carries, so `org_admin` must not grant them either.
+describe.each(PROXY_ADMIN_ONLY_PAGE_CAPABILITIES)("hasCapability - %s", (capability) => {
+  it.each(ADMIN_ROLES)("should grant it to %s", (role) => {
+    expect(hasCapability(role, capability)).toBe(true);
+  });
+
+  it.each([...NON_ADMIN_ROLES, "internal_user_viewer", "org_admin"])("should deny it to %s", (role) => {
+    expect(hasCapability(role, capability)).toBe(false);
+  });
+
+  it.each([
+    ["proxy_admin", true],
+    ["proxy_admin_viewer", true],
+    ["org_admin", false],
+    ["internal_user", false],
+    ["internal_user_viewer", false],
+  ] as const)("should match the backend for a %s session", (rawRole, expected) => {
+    expect(hasCapability(effectiveSessionRole(rawRole), capability)).toBe(expected);
   });
 });
 
