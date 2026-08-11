@@ -40,7 +40,7 @@ jobs:
             exit 0
           fi
           files="$(git diff --name-only "$base" HEAD)"
-          if grep -Eq '^(litellm/|openapi\.json$|scripts/dump_openapi\.py$|\.github/workflows/check-openapi-breaking-changes\.yml$)' <<< "$files"; then
+          if grep -Eq '^(litellm/|openapi\.json$|scripts/(dump_openapi|diff_openapi_descriptions)\.py$|\.github/workflows/check-openapi-breaking-changes\.yml$)' <<< "$files"; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "No backend or spec changes in this pull request, nothing to verify."
@@ -99,6 +99,17 @@ jobs:
             exit 1
           fi
           echo "openapi.json is in sync with the proxy's routes."
+
+      - name: Flag description changes for human review (non-blocking)
+        if: steps.changes.outputs.relevant == 'true'
+        run: |
+          set -euo pipefail
+          if ! git cat-file -e "HEAD^1:openapi.json" 2>/dev/null; then
+            echo "The base branch has no openapi.json yet, nothing to flag."
+            exit 0
+          fi
+          git show "HEAD^1:openapi.json" > "${RUNNER_TEMP}/base_openapi.json"
+          uv run --no-sync python scripts/diff_openapi_descriptions.py "${RUNNER_TEMP}/base_openapi.json" openapi.json
 
       - name: Install oasdiff
         if: steps.changes.outputs.relevant == 'true'
