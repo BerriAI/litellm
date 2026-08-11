@@ -106,19 +106,23 @@ Before creating a release:
 
 4. **Land the changes in BerriAI/litellm**
 
-   Open a PR to `BerriAI/litellm` updating `terraform/provider/CHANGELOG.md` (and any source changes) and merge it. Note the merge commit SHA; the release workflow takes it as `git_ref`
+   Open a PR to `BerriAI/litellm` updating `terraform/provider/CHANGELOG.md` (and any source changes) and merge it
 
 ### 2. Mirror and Tag via project-releaser
 
 The provider source lives at `terraform/provider/` in `BerriAI/litellm`; `BerriAI/terraform-provider-litellm` is a thin release mirror. Do not commit or tag the mirror directly
+
+Normally there is nothing to do here. `BerriAI/project-releaser`'s release pipeline runs the same check on every release except `adhoc`, nightly included: it reads the topmost released heading in `terraform/provider/CHANGELOG.md`, probes the mirror for `v<version>`, and dispatches `Publish Terraform provider` only when the changelog has moved ahead of what the mirror carries. Cutting the version heading in step 1 is therefore what releases the provider, and the next release picks it up, so the wait is a day rather than a week
+
+Dispatch by hand only for an out-of-band release, or to recover a run that failed:
 
 1. Go to `BerriAI/project-releaser` > **Actions** > `Publish Terraform provider`
 2. Click **Run workflow**:
    - `git_ref`: full 40-char commit SHA from `BerriAI/litellm` to release from
    - `provider_version`: the new version without the `v` prefix (e.g. `0.3.0`)
    - `dry_run`: optional; validates without pushing
-3. The workflow rsyncs `terraform/provider/` into the mirror repo, commits, and pushes tag `v<provider_version>`
-4. The tag push triggers the mirror's `Release` workflow (goreleaser), which is gated by the `production-release` environment approval
+
+Automatic or manual, the run waits on the `production-release` approval in `project-releaser`, then rsyncs `terraform/provider/` into the mirror repo, commits, and pushes tag `v<provider_version>`. That approval is the only one in the flow. The tag push triggers the mirror's `Release` workflow (goreleaser), which runs unattended
 
 **Important**:
 - Tags must follow the format: `v<MAJOR>.<MINOR>.<PATCH>` (e.g., `v0.1.2`, `v1.0.0`)

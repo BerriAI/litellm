@@ -17,13 +17,14 @@ LIT002  Mutable-collection *construction*: a list/dict/set literal or comprehens
         a call to a mutable constructor (list/dict/set/deque/defaultdict/Counter/...).
         Catches the unannotated seed-then-mutate pattern LIT001 cannot see (`acc = []`).
         Build the value in one shot and freeze it: a `tuple`/`frozenset` wrapping a
-        generator (`tuple(f(x) for x in xs)`), a tuple literal, or a frozen dataclass /
-        NamedTuple / ReadOnly TypedDict. Generator expressions and `tuple`/`frozenset`
-        calls are not construction and pass. Annotation-internal lists (`Callable[[int],
-        str]`) are exempt, as is a value passed directly to a freezing wrapper
-        (`tuple(...)`, `frozenset(...)`, `MappingProxyType(...)`): it is frozen before
-        it can escape, though anything mutable nested inside it still counts.
-        Suppress with `# mutable-ok: <reason>`.
+        generator (`tuple(f(x) for x in xs)`), a tuple literal, a frozen dataclass /
+        NamedTuple / ReadOnly TypedDict, or (if it really must be dynamic) a
+        MappingProxyType wrapping a dict literal or comprehension. Generator expressions
+        and freezing-wrapper calls (`tuple(...)`, `frozenset(...)`,
+        `MappingProxyType(...)`) are not construction and pass, as does the value passed
+        directly to a wrapper: it is frozen before it can escape, though anything
+        mutable nested inside it still counts. Annotation-internal lists
+        (`Callable[[int], str]`) are exempt. Suppress with `# mutable-ok: <reason>`.
 LIT003  noqa suppression without rule codes or without a reason.
         Required shape: `# noqa: TID251  # <reason>`
 LIT004  pyright/mypy ignore without bracketed codes or without a reason.
@@ -251,26 +252,40 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
 # --------------------------------------------------------------------------- #
  
  
-def mutable_names_in(annotation: ast.expr) -> Iterator[str]:
+def _is_literal_subscript(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Subscript):
+        return False
+    base: Final = node.value
+    return (isinstance(base, ast.Name) and base.id == "Literal") or (
+        isinstance(base, ast.Attribute) and base.attr == "Literal"
+    )
+
+
+def mutable_names_in(annotation: ast.AST) -> Iterator[str]:
     """Yield mutable-collection names anywhere inside an annotation expression.
 
     Matches bare names (`dict`, `MutableMapping`) and dotted access (`typing.Dict`,
     `collections.deque`, `collections.abc.MutableMapping`), descends through nesting
     (`Mapping[str, list[int]]`, `tuple[set[int], ...]`) and string forward references.
+    Skips `Literal[...]` subtrees: their string arguments are values, not forward
+    references, so `Literal["list"]` is not the `list` type.
     """
-    for node in ast.walk(annotation):
-        if isinstance(node, ast.Name) and node.id in MUTABLE_COLLECTIONS:
-            yield node.id
-        elif isinstance(node, ast.Attribute) and node.attr in MUTABLE_COLLECTIONS:
-            yield node.attr
-        elif isinstance(node, ast.Constant):
-            value: object = node.value  # forward references arrive as string constants
-            if isinstance(value, str):
-                try:
-                    inner = ast.parse(value, mode="eval").body
-                except SyntaxError:
-                    continue
-                yield from mutable_names_in(inner)
+    if _is_literal_subscript(annotation):
+        return
+    if isinstance(annotation, ast.Name) and annotation.id in MUTABLE_COLLECTIONS:
+        yield annotation.id
+    elif isinstance(annotation, ast.Attribute) and annotation.attr in MUTABLE_COLLECTIONS:
+        yield annotation.attr
+    elif isinstance(annotation, ast.Constant):
+        value: object = annotation.value  # forward references arrive as string constants
+        if isinstance(value, str):
+            try:
+                inner = ast.parse(value, mode="eval").body
+            except SyntaxError:
+                return
+            yield from mutable_names_in(inner)
+    for child in ast.iter_child_nodes(annotation):
+        yield from mutable_names_in(child)
  
  
 def _mutable_ann(path: Path, line: int, name: str, where: str) -> Violation:
@@ -488,8 +503,9 @@ def iter_construction_violations(path: Path, tree: ast.AST, comments: Comments) 
             path, node.lineno, "LIT002",
             f"mutable {kind}: this builds a collection that can be grown or rewritten. "
             f"Build it in one shot and freeze it -- a tuple/frozenset wrapping a generator "
-            f"(`tuple(f(x) for x in xs)`), a tuple literal, or a frozen dataclass / NamedTuple "
-            f"/ ReadOnly TypedDict (suppress: `# mutable-ok: <reason>`)",
+            f"(`tuple(f(x) for x in xs)`), a tuple literal, a frozen dataclass / NamedTuple "
+            f"/ ReadOnly TypedDict, or (if it really must be dynamic) a MappingProxyType "
+            f"wrapping a dict literal or comprehension (suppress: `# mutable-ok: <reason>`)",
         )
  
  

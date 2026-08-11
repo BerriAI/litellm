@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     handle_update_object_permission_common,
@@ -184,6 +185,7 @@ def new_budget_request(data: NewCustomerRequest) -> BudgetNewRequest | None:
 
     if budget_kv_pairs:
         budget_request: Final = BudgetNewRequest(**budget_kv_pairs)
+        validate_budget_duration(budget_request.budget_duration)
         if budget_request.budget_reset_at is None and budget_request.budget_duration is not None:
             budget_request.budget_reset_at = datetime.utcnow() + timedelta(
                 seconds=duration_in_seconds(duration=budget_request.budget_duration)
