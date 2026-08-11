@@ -43,9 +43,10 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          MERGE_BASE=$(gh api "repos/${{ github.repository }}/compare/${BASE_SHA}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
+          retry() { "$@" || { sleep 15; "$@"; } || { sleep 30; "$@"; }; }
+          MERGE_BASE=$(retry gh api "repos/${{ github.repository }}/compare/${BASE_SHA}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
           test -n "$MERGE_BASE"
-          git fetch --no-tags --depth=1 origin "$MERGE_BASE"
+          retry git fetch --no-tags --depth=1 origin "$MERGE_BASE"
           echo "GATE_BASE_SHA=$MERGE_BASE" >> "$GITHUB_ENV"
 
       - name: Set up Python
@@ -161,7 +162,8 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          retry() { "$@" || { sleep 15; "$@"; } || { sleep 30; "$@"; }; }
+          retry git fetch --no-tags --depth=1 origin "$BASE_SHA"
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -205,7 +207,8 @@ jobs:
           GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
         run: |
           if [ -n "$GITGUARDIAN_API_KEY" ]; then
-            git fetch --no-tags --unshallow origin
+            retry() { "$@" || { sleep 15; "$@"; } || { sleep 30; "$@"; }; }
+            retry git fetch --no-tags --unshallow origin
             uv tool run --from 'ggshield==1.48.0' ggshield secret scan repo .
           else
             echo "GITGUARDIAN_API_KEY not set, skipping ggshield scan"
