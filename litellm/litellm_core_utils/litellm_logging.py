@@ -4725,31 +4725,6 @@ class StandardLoggingPayloadSetup:
         return None
 
     @staticmethod
-    def append_system_prompt_messages(kwargs: dict | None = None, messages: Any | None = None):
-        """
-        Append system prompt messages to the messages
-        """
-        if kwargs is not None:
-            if kwargs.get("system") is not None and isinstance(kwargs.get("system"), str):
-                if messages is None:
-                    return [{"role": "system", "content": kwargs.get("system")}]
-                elif isinstance(messages, list):
-                    if len(messages) == 0:
-                        return [{"role": "system", "content": kwargs.get("system")}]
-                    # check for duplicates
-                    if messages[0].get("role") == "system" and messages[0].get("content") == kwargs.get("system"):
-                        return messages
-                    messages = [{"role": "system", "content": kwargs.get("system")}] + messages
-                elif isinstance(messages, str):
-                    messages = [
-                        {"role": "system", "content": kwargs.get("system")},
-                        {"role": "user", "content": messages},
-                    ]
-                return messages
-
-        return messages
-
-    @staticmethod
     def merge_litellm_metadata(litellm_params: dict) -> dict:
         """
         Merge both litellm_metadata and metadata from litellm_params.
@@ -5644,11 +5619,7 @@ def get_standard_logging_object_payload(
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             user_agent=clean_metadata.get("user_agent", None),
-            messages=truncate_base64_in_messages(
-                StandardLoggingPayloadSetup.append_system_prompt_messages(
-                    kwargs=kwargs, messages=kwargs.get("messages")
-                )
-            ),
+            messages=truncate_base64_in_messages(kwargs.get("messages")),
             system_prompt=StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(kwargs=kwargs),
             response=final_response_obj,
             model_parameters=ModelParamHelper.get_standard_logging_model_parameters(
