@@ -77,7 +77,7 @@ def _template_uses_reason_placeholder(template: str) -> bool:
 
 
 def _event_hook_includes_during_call(
-    event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | str | list[str] | None,
+    event_hook: GuardrailEventHooks | Sequence[GuardrailEventHooks] | Mode | str | Sequence[str] | None,
 ) -> bool:
     """True if ``event_hook`` could ever resolve to during_call, covering a plain
     value, a list of values, or a tag-based Mode (checked across every tag value
@@ -522,13 +522,20 @@ class LakeraAIGuardrail(CustomGuardrail):
                 add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
                 return ModelResponse(**response_dict)
 
-            # inject_system_message has nothing left to inject into once a response
-            # already exists, so it is treated the same as monitor: log and allow.
-            if self.on_flagged in ("monitor", "inject_system_message"):
-                verbose_proxy_logger.warning(
-                    "Lakera Guardrail: Post-call violation detected (on_flagged=%s) - allowing response",
-                    self.on_flagged,
-                )
+            if self.on_flagged == "inject_system_message":
+                # The LLM already responded, so it can't weigh the advisory before
+                # acting; attach it to the response instead, so the caller still sees
+                # the same "flagged, use your judgment" signal after the fact.
+                advisory_message: Final = self._build_advisory_message(lakera_guardrail_response)
+                for choice_idx in choice_indices:
+                    existing_content = response_dict["choices"][choice_idx]["message"].get("content") or ""
+                    response_dict["choices"][choice_idx]["message"]["content"] = (
+                        f"{existing_content}\n\n{advisory_message}"
+                    )
+                add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+                return ModelResponse(**response_dict)
+            elif self.on_flagged == "monitor":
+                verbose_proxy_logger.warning("Lakera Guardrail: Post-call violation detected but allowing response")
             elif self.on_flagged == "block":
                 raise self._get_http_exception_for_blocked_guardrail(lakera_guardrail_response)
 
