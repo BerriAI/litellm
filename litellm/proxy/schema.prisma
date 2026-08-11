@@ -1450,6 +1450,50 @@ model LiteLLM_AutoRouterSession {
   @@index([last_turn_at], map: "idx_autorouter_session_last_turn")
 }
 
+// Shadow Eval: pre-adoption evaluation of an auto-router against a key's live traffic.
+// A sampled slice of requests is duplicated through the router in a detached task and
+// an LLM judge compares real vs shadow responses blind; verdicts stratify by tier.
+model LiteLLM_ShadowEvalJob {
+  id                  String   @id @default(cuid())
+  api_key_id          String   // the hashed virtual key whose traffic is shadowed
+  router_name         String   // the auto-router config to shadow through
+  shadow_percentage   Float
+  judge_model         String
+
+  status              String   @default("pending") // pending | running | completed
+
+  request_count       Int      @default(0) // requests seen on the key while active
+  completed_count     Int      @default(0) // verdicts written
+  failed_count        Int      @default(0) // shadow or judge calls that errored
+  last_error          String?
+
+  cost_estimate       Float?   // upfront judge-spend estimate shown at start
+  cost_actual         Float    @default(0) // running judge-call spend
+
+  created_at          DateTime @default(now())
+  created_by          String?
+  ends_at             DateTime?
+  completed_at        DateTime?
+
+  @@index([api_key_id, status])
+  @@index([status])
+  @@index([created_at])
+}
+
+model LiteLLM_ShadowEvalVerdict {
+  id                   String   @id @default(cuid())
+  job_id               String
+  request_id           String   // the judged real request
+  tier_classification  String?  // the router's tier for the prompt, when classified
+  real_model           String   // model that actually served the request
+  shadow_model         String   // model the router picked
+  judge_preference     String   // real | shadow | tie
+  judge_confidence     Float?
+  created_at           DateTime @default(now())
+
+  @@index([job_id])
+}
+
 // ---------------------------------------------------------------------------
 // Workflow Run Tracking
 //

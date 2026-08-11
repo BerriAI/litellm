@@ -3,9 +3,10 @@ Types for auto-router management endpoints
 """
 
 from collections.abc import Mapping
-from typing import Final
+from datetime import datetime
+from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
 from litellm.types.utils import StandardLoggingRoutingDecision
@@ -141,3 +142,106 @@ class AutoRouterBenchmarksResponse(BaseModel):
     routers_in_scope: int
     totals: AutoRouterBenchmarkTotals
     groups: tuple[AutoRouterBenchmarkGroup, ...]
+
+
+ShadowEvalStatus: TypeAlias = Literal["pending", "running", "completed"]
+
+DEFAULT_SHADOW_EVAL_JUDGE_MODEL: Final[str] = "anthropic/claude-sonnet-5"
+
+
+class StartShadowEvalRequest(BaseModel):
+    """Start shadowing a key's traffic through an auto-router for blind comparison."""
+
+    api_key_id: str = Field(
+        description=(
+            "The hashed virtual key whose traffic will be shadowed. Shadow evaluation runs ONLY on this "
+            "key's traffic; requests made with any other key are not sampled."
+        )
+    )
+    router_name: str = Field(description="The auto-router config to shadow requests through")
+    shadow_percentage: float = Field(
+        ge=0.1,
+        le=100.0,
+        description="Percentage of the key's requests to duplicate through the router",
+    )
+    judge_model: str = Field(
+        default=DEFAULT_SHADOW_EVAL_JUDGE_MODEL,
+        description=(
+            "Model used to blindly judge real vs. shadow responses. The judge only compares two answers, so a "
+            "mid-tier model (Claude Sonnet or GPT-4o class) is the sweet spot: small/nano-class models produce "
+            "unreliable or malformed verdicts, while frontier reasoning models add cost without changing outcomes."
+        ),
+    )
+    duration_days: int = Field(
+        default=7,
+        ge=1,
+        le=30,
+        description="How many days the job samples traffic before stopping itself",
+    )
+
+    @field_validator("shadow_percentage")
+    @classmethod
+    def _round_percentage(cls, value: float) -> float:
+        return round(value, 2)
+
+
+class StartShadowEvalResponse(BaseModel):
+    """Acknowledgement that a shadow-eval job was created, with an upfront cost estimate."""
+
+    job_id: str
+    status: ShadowEvalStatus
+    estimated_request_count: int = Field(
+        description="Requests expected to be shadowed, based on the key's recent request volume"
+    )
+    estimated_cost: float = Field(description="Estimated dollar cost of the judge calls this job will make")
+
+
+class ShadowEvalSlice(BaseModel):
+    """Judge outcomes for one slice of a job's verdicts (a router tier, or one of the
+    models the shadowed key currently uses)."""
+
+    group: str
+    turn_count: int
+    real_win_rate_pct: float = Field(description="Share of judged turns where the real (control) model won")
+    shadow_win_rate_pct: float = Field(description="Share of judged turns where the shadowed router's pick won")
+    tie_rate_pct: float
+    avg_judge_confidence: float
+
+
+class ShadowEvalResult(BaseModel):
+    """Stratified results of a shadow-eval job's verdicts so far."""
+
+    by_tier: tuple[ShadowEvalSlice, ...]
+    by_current_model: tuple[ShadowEvalSlice, ...]
+    overall_shadow_win_rate_pct: float
+    overall_tie_rate_pct: float
+
+
+class GetShadowEvalJobResponse(BaseModel):
+    """Status and, once available, results of a shadow-eval job.
+
+    Validates directly from the prisma job record (job_id reads the row's id), so the
+    endpoint needs no hand-written row-to-response mapping.
+    """
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    job_id: str = Field(validation_alias=AliasChoices("id", "job_id"))
+    status: ShadowEvalStatus
+    router_name: str
+    api_key_id: str = Field(description="The hashed virtual key whose traffic this job evaluates, and only that key's")
+    shadow_percentage: float
+    request_count: int = Field(description="Total requests observed on the shadowed key since the job started")
+    completed_count: int = Field(description="Verdicts written so far")
+    failed_count: int = Field(description="Shadow or judge calls that errored and were skipped")
+    last_error: str | None = Field(
+        default=None, description="The most recent shadow or judge failure, so a growing failed_count is diagnosable"
+    )
+    results: ShadowEvalResult | None = Field(
+        default=None, description="Present once at least one verdict has been recorded"
+    )
+    cost_estimate: float | None = None
+    cost_actual: float = Field(default=0.0, description="Running total of judge-call spend for this job")
+    created_at: datetime
+    ends_at: datetime | None = Field(default=None, description="When the job stops sampling on its own")
+    completed_at: datetime | None = None

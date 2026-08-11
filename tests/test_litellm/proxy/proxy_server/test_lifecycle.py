@@ -480,8 +480,9 @@ def test_load_from_azure_key_vault_missing_uri_failure_is_swallowed(monkeypatch)
 # ---------------------------------------------------------------------------
 
 
-def test_cost_tracking_adds_two_callbacks_when_prisma_set(monkeypatch):
+def test_cost_tracking_adds_db_and_shadow_eval_callbacks_when_prisma_set(monkeypatch):
     import litellm
+    from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
     fake_prisma = MagicMock()
     monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
@@ -496,13 +497,51 @@ def test_cost_tracking_adds_two_callbacks_when_prisma_set(monkeypatch):
     observed = {
         "added_to_callbacks": len(litellm.callbacks) - before_callbacks,
         "added_to_async_success": len(litellm._async_success_callback) - before_async,
+        "shadow_eval_loggers": sum(isinstance(cb, ShadowEvalLogger) for cb in litellm.callbacks),
         "prisma_was_set": True,
     }
     assert normalize(observed) == {
-        "added_to_callbacks": 1,
+        "added_to_callbacks": 2,
         "added_to_async_success": 1,
+        "shadow_eval_loggers": 1,
         "prisma_was_set": True,
     }
+
+
+def test_cost_tracking_twice_registers_one_shadow_eval_logger(monkeypatch):
+    import litellm
+    from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
+
+    monkeypatch.setattr(ps, "prisma_client", MagicMock(), raising=False)
+    monkeypatch.setattr(litellm, "callbacks", [], raising=False)
+    monkeypatch.setattr(litellm, "_async_success_callback", [], raising=False)
+
+    cost_tracking()
+    cost_tracking()
+
+    assert sum(isinstance(cb, ShadowEvalLogger) for cb in litellm.callbacks) == 1
+
+
+@pytest.mark.asyncio
+async def test_registration_starts_the_lifecycle_loop_on_the_registered_instance(monkeypatch):
+    """The loop must run on the instance that is actually registered; a loop on a
+    discarded duplicate would poll the DB while never seeing request traffic."""
+    import litellm
+    from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
+
+    monkeypatch.setattr(ps, "prisma_client", MagicMock(), raising=False)
+    monkeypatch.setattr(litellm, "callbacks", [], raising=False)
+    monkeypatch.setattr(litellm, "_async_success_callback", [], raising=False)
+
+    cost_tracking()
+    registered = [cb for cb in litellm.callbacks if isinstance(cb, ShadowEvalLogger)]
+    assert len(registered) == 1
+    task = registered[0]._lifecycle_task
+    assert task is not None and not task.done()
+
+    cost_tracking()
+    assert registered[0]._lifecycle_task is task
+    task.cancel()
 
 
 def test_cost_tracking_no_op_when_prisma_missing(monkeypatch):

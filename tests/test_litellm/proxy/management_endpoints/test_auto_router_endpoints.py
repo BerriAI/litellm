@@ -466,3 +466,251 @@ class TestAutoRouterBenchmarks:
             end_date="2026-08-01",
         )
         assert response.groups[0].tier_turns == expected
+
+
+# ---------------------------------------------------------------------------
+# Shadow eval endpoints
+# ---------------------------------------------------------------------------
+
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock
+
+from fastapi import HTTPException
+
+from litellm.proxy.management_endpoints.auto_router_endpoints import (
+    _estimate_judge_cost_per_call,
+    _FALLBACK_JUDGE_COST_PER_CALL,
+    get_shadow_eval_job,
+    list_shadow_eval_jobs,
+    start_shadow_eval,
+    stop_shadow_eval_job,
+)
+from litellm.types.management_endpoints.auto_router_endpoints import StartShadowEvalRequest
+
+VIEWER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, api_key="sk-view", user_id="viewer")
+NON_ADMIN = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-user", user_id="user")
+
+
+def _shadow_router() -> MagicMock:
+    router = MagicMock()
+    router.auto_routers = {}
+    router.complexity_routers = {"my-router": [MagicMock()]}
+    router.adaptive_routers = {}
+    router.quality_routers = {}
+    router.model_group_alias = {}
+    router.get_model_list = MagicMock(return_value=None)
+    return router
+
+
+def _job_record(**overrides: object) -> MagicMock:
+    record = MagicMock()
+    defaults = {
+        "id": "job-1",
+        "status": "running",
+        "router_name": "my-router",
+        "api_key_id": "key-hash",
+        "shadow_percentage": 10.0,
+        "request_count": 40,
+        "completed_count": 3,
+        "failed_count": 1,
+        "last_error": "judge call failed: boom",
+        "cost_estimate": 2.5,
+        "cost_actual": 0.03,
+        "created_at": datetime(2026, 8, 11, tzinfo=timezone.utc),
+        "ends_at": None,
+        "completed_at": None,
+    }
+    for key, value in {**defaults, **overrides}.items():
+        setattr(record, key, value)
+    return record
+
+
+def _shadow_prisma(existing_job=None, volume_rows=None, agg_rows=None) -> MagicMock:
+    prisma = MagicMock()
+    prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=MagicMock())
+    prisma.db.litellm_shadowevaljob.find_first = AsyncMock(return_value=existing_job)
+    prisma.db.litellm_shadowevaljob.find_unique = AsyncMock(return_value=None)
+    prisma.db.litellm_shadowevaljob.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_shadowevaljob.create = AsyncMock(return_value=_job_record(status="pending"))
+    prisma.db.litellm_shadowevaljob.update = AsyncMock(return_value=_job_record(status="completed"))
+
+    async def query_raw(sql: str, *params: object):
+        if "LiteLLM_DailyUserSpend" in sql:
+            return volume_rows if volume_rows is not None else [{"request_count": 0}]
+        return agg_rows if agg_rows is not None else []
+
+    prisma.db.query_raw = AsyncMock(side_effect=query_raw)
+    return prisma
+
+
+def _start_request(**overrides: object) -> StartShadowEvalRequest:
+    payload = {
+        "api_key_id": "key-hash",
+        "router_name": "my-router",
+        "shadow_percentage": 10.0,
+        "judge_model": "anthropic/claude-sonnet-5",
+        "duration_days": 7,
+    }
+    payload.update(overrides)
+    return StartShadowEvalRequest.model_validate(payload)
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_creates_job_with_volume_scaled_estimate(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(volume_rows=[{"request_count": 7000}])
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    response = await start_shadow_eval(_start_request(), ADMIN)
+
+    assert response.status == "pending"
+    assert response.estimated_request_count == 700
+    per_call = _estimate_judge_cost_per_call(None, "anthropic/claude-sonnet-5")
+    assert response.estimated_cost == round(700 * per_call, 2)
+    create_data = prisma.db.litellm_shadowevaljob.create.call_args.kwargs["data"]
+    assert create_data["api_key_id"] == "key-hash"
+    assert create_data["created_by"] == "admin"
+    assert create_data["ends_at"] is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "caller,request_overrides,existing,expected_status",
+    [
+        (NON_ADMIN, {}, None, 403),
+        (VIEWER, {}, None, 403),
+        (ADMIN, {"router_name": "not-a-router"}, None, 400),
+        (ADMIN, {"judge_model": "not/a real model!"}, None, 400),
+        (ADMIN, {"judge_model": "my-router"}, None, 400),
+        (ADMIN, {}, "existing", 409),
+    ],
+    ids=["non-admin", "view-only", "unknown-router", "unresolvable-judge", "router-as-judge", "already-active"],
+)
+async def test_start_shadow_eval_rejections(
+    monkeypatch: pytest.MonkeyPatch, caller, request_overrides, existing, expected_status
+):
+    import litellm.proxy.proxy_server as proxy_server
+
+    existing_job = _job_record() if existing else None
+    monkeypatch.setattr(proxy_server, "prisma_client", _shadow_prisma(existing_job=existing_job))
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(_start_request(**request_overrides), caller)
+    assert exc.value.status_code == expected_status
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_rejects_a_key_this_proxy_does_not_know(monkeypatch: pytest.MonkeyPatch):
+    """A typo'd api_key_id would otherwise create a job no traffic can ever match."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma()
+    prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(_start_request(), ADMIN)
+    assert exc.value.status_code == 400
+    assert "not a key on this proxy" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_concurrent_unique_violation_is_a_409(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
+    from prisma.errors import UniqueViolationError
+
+    prisma = _shadow_prisma()
+    prisma.db.litellm_shadowevaljob.create = AsyncMock(
+        side_effect=UniqueViolationError(MagicMock(message="unique constraint"))
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(_start_request(), ADMIN)
+    assert exc.value.status_code == 409
+
+
+def test_estimate_falls_back_for_unpriced_judge_model():
+    assert _estimate_judge_cost_per_call(None, "unknown/never-priced-model") == _FALLBACK_JUDGE_COST_PER_CALL
+
+
+@pytest.mark.asyncio
+async def test_get_shadow_eval_job_stratifies_by_tier_and_model(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    tier_rows = [
+        {"grp": "SIMPLE", "turn_count": 8, "real_wins": 2, "shadow_wins": 4, "ties": 2, "avg_confidence": 0.8},
+        {"grp": "REASONING", "turn_count": 2, "real_wins": 2, "shadow_wins": 0, "ties": 0, "avg_confidence": 0.9},
+    ]
+    prisma = _shadow_prisma(agg_rows=tier_rows)
+    prisma.db.litellm_shadowevaljob.find_unique = AsyncMock(return_value=_job_record())
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    response = await get_shadow_eval_job("job-1", VIEWER)
+
+    assert response.job_id == "job-1"
+    assert response.last_error == "judge call failed: boom"
+    assert response.results is not None
+    assert [s.group for s in response.results.by_tier] == ["SIMPLE", "REASONING"]
+    assert response.results.by_tier[0].shadow_win_rate_pct == 50.0
+    assert response.results.overall_shadow_win_rate_pct == 40.0
+    assert response.results.overall_tie_rate_pct == 20.0
+
+
+@pytest.mark.asyncio
+async def test_get_shadow_eval_job_404s_and_gates_on_role(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", _shadow_prisma())
+
+    with pytest.raises(HTTPException) as missing:
+        await get_shadow_eval_job("nope", VIEWER)
+    assert missing.value.status_code == 404
+
+    with pytest.raises(HTTPException) as forbidden:
+        await get_shadow_eval_job("job-1", NON_ADMIN)
+    assert forbidden.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_list_shadow_eval_jobs_omits_results(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma()
+    prisma.db.litellm_shadowevaljob.find_many = AsyncMock(return_value=[_job_record()])
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    jobs = await list_shadow_eval_jobs(VIEWER, api_key_id=None, limit=50)
+
+    assert len(jobs) == 1
+    assert jobs[0].results is None
+    find_kwargs = prisma.db.litellm_shadowevaljob.find_many.call_args.kwargs
+    assert find_kwargs["take"] == 50
+
+
+@pytest.mark.asyncio
+async def test_stop_shadow_eval_completes_active_job_and_rejects_finished(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma()
+    prisma.db.litellm_shadowevaljob.find_unique = AsyncMock(return_value=_job_record(status="running"))
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    stopped = await stop_shadow_eval_job("job-1", ADMIN)
+    assert stopped.status == "completed"
+    update_kwargs = prisma.db.litellm_shadowevaljob.update.call_args.kwargs
+    assert update_kwargs["data"]["status"] == "completed"
+
+    prisma.db.litellm_shadowevaljob.find_unique = AsyncMock(return_value=_job_record(status="completed"))
+    with pytest.raises(HTTPException) as exc:
+        await stop_shadow_eval_job("job-1", ADMIN)
+    assert exc.value.status_code == 400
+
+    with pytest.raises(HTTPException) as forbidden:
+        await stop_shadow_eval_job("job-1", VIEWER)
+    assert forbidden.value.status_code == 403
