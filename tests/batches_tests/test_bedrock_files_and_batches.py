@@ -519,3 +519,40 @@ def test_bedrock_deployment_credentials_block_caller_profile_override(monkeypatc
 
     assert "aws_profile_name" not in captured["optional_params"]
     assert captured["optional_params"]["aws_access_key_id"] == "deployment-access-key"
+
+
+def test_bedrock_file_upload_s3_region_survives_deployment_region_merge(monkeypatch):
+    from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+    config = BedrockFilesConfig()
+    captured = {}
+
+    def capture_signing(**kwargs):
+        captured.update(kwargs)
+        return {}, ""
+
+    monkeypatch.setattr(config, "_sign_s3_request", capture_signing)
+
+    result = config.transform_create_file_request(
+        model="",
+        create_file_data={
+            "file": (
+                "batch.jsonl",
+                b'{"custom_id":"req-1","body":{"model":"bedrock/model"}}\n',
+                "application/jsonl",
+            ),
+            "purpose": "batch",
+        },
+        optional_params={},
+        litellm_params={
+            "s3_bucket_name": "deployment-bucket",
+            "s3_region_name": "eu-central-1",
+            "aws_access_key_id": "deployment-access-key",
+            "aws_secret_access_key": "deployment-secret",
+            "aws_region_name": "us-east-1",
+        },
+    )
+
+    assert "s3.eu-central-1.amazonaws.com" in result["url"]
+    assert captured["optional_params"]["aws_region_name"] == "eu-central-1"
+    assert captured["optional_params"]["aws_access_key_id"] == "deployment-access-key"
