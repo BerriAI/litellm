@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { Modal, Form, Button, Select as AntdSelect, Tooltip } from "antd";
-import { Text, TextInput } from "@tremor/react";
+import { Form, Button, Select as AntdSelect, Tooltip } from "antd";
+import { TextInput } from "@tremor/react";
 import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
@@ -21,9 +21,18 @@ import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
   DEFAULT_ADAPTIVE_WEIGHTS,
   DEFAULT_SESSION_AFFINITY,
+  DEFAULT_DEPLOYMENT_AFFINITY,
   DEFAULT_TIER_DISTANCE_PENALTY,
 } from "../add_model/ComplexityRouterConfig";
 import NotificationsManager from "../molecules/notifications_manager";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface EditAutoRouterModalProps {
   isVisible: boolean;
@@ -47,6 +56,7 @@ const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "classifier_context_include_assistant_turns",
   "classifier_fallback",
   "session_affinity",
+  "deployment_affinity",
   "adaptive",
   "adaptive_weights",
   "tier_distance_penalty",
@@ -119,6 +129,7 @@ export const buildUpdatedComplexityRouterConfig = (
         classifier_context_include_assistant_turns: value.classifier_context_include_assistant_turns,
       }),
     session_affinity: value.session_affinity ?? DEFAULT_SESSION_AFFINITY,
+    deployment_affinity: value.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,
     ...(customTechnicalKeywords &&
       customTechnicalKeywords.length > 0 && {
         custom_technical_keywords: customTechnicalKeywords,
@@ -255,6 +266,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             typeof parsedConfig.session_affinity === "boolean"
               ? parsedConfig.session_affinity
               : DEFAULT_SESSION_AFFINITY,
+          deployment_affinity:
+            typeof parsedConfig.deployment_affinity === "boolean"
+              ? parsedConfig.deployment_affinity
+              : DEFAULT_DEPLOYMENT_AFFINITY,
           adaptive: parsedConfig.adaptive || false,
           adaptive_weights: parsedConfig.adaptive_weights,
           tier_distance_penalty: parsedConfig.tier_distance_penalty,
@@ -432,27 +447,14 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   }));
 
   return (
-    <Modal
-      title="Edit Auto Router Configuration"
-      open={isVisible}
-      onCancel={onCancel}
-      footer={[
-        <Button key="cancel" onClick={onCancel}>
-          Cancel
-        </Button>,
-        <Tooltip key="submit" title={submitBlockedReason}>
-          <Button loading={loading} disabled={submitBlockedReason !== null} onClick={handleSubmit}>
-            Save Changes
-          </Button>
-        </Tooltip>,
-      ]}
-      width={1000}
-      destroyOnHidden
-    >
-      <div className="space-y-6">
-        <Text className="text-gray-600">
-          Edit the auto router configuration including routing logic, default models, and access settings.
-        </Text>
+    <Dialog open={isVisible} onOpenChange={(open) => !open && onCancel()}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
+        <DialogHeader>
+          <DialogTitle>Edit Auto Router Configuration</DialogTitle>
+          <DialogDescription>
+            Edit the auto router configuration including routing logic, default models, and access settings.
+          </DialogDescription>
+        </DialogHeader>
 
         <Form form={form} layout="vertical" className="space-y-4">
           {/* Auto Router Name */}
@@ -552,8 +554,17 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             </Form.Item>
           )}
         </Form>
-      </div>
-    </Modal>
+
+        <DialogFooter>
+          <Button onClick={onCancel}>Cancel</Button>
+          <Tooltip title={submitBlockedReason}>
+            <Button loading={loading} disabled={submitBlockedReason !== null} onClick={handleSubmit}>
+              Save Changes
+            </Button>
+          </Tooltip>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 

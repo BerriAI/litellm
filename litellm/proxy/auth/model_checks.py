@@ -1,6 +1,7 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
 import copy
+from collections.abc import Sequence
 from typing import Any, Final
 
 import litellm
@@ -178,8 +179,8 @@ def get_team_models(
 
 
 def get_complete_model_list(
-    key_models: list[str],
-    team_models: list[str],
+    key_models: Sequence[str],
+    team_models: Sequence[str],
     proxy_model_list: list[str],
     user_model: str | None,
     infer_model_from_keys: bool | None,
@@ -203,7 +204,7 @@ def get_complete_model_list(
 
     def append_unique(models):
         for model in models:
-            if model not in unique_models:
+            if model not in unique_models and model != SpecialModelNames.no_default_models.value:
                 unique_models.append(model)
 
     if key_models:

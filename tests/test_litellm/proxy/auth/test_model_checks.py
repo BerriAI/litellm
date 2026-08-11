@@ -735,3 +735,28 @@ def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
         litellm.vertex_language_models.discard(fake_model)
         litellm.add_known_models(model_cost_map={})
     assert fake_model not in litellm.models_by_provider["vertex_ai"]
+
+def test_get_complete_model_list_drops_no_default_models_sentinel():
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    result = get_complete_model_list(
+        key_models=["no-default-models", "model-a"],
+        team_models=[],
+        proxy_model_list=["model-a", "model-b"],
+        user_model=None,
+        infer_model_from_keys=False,
+    )
+    assert result == ["model-a"]
+
+
+def test_get_complete_model_list_sentinel_only_grants_nothing():
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    result = get_complete_model_list(
+        key_models=["no-default-models"],
+        team_models=["no-default-models"],
+        proxy_model_list=["model-a", "model-b"],
+        user_model=None,
+        infer_model_from_keys=False,
+    )
+    assert result == []

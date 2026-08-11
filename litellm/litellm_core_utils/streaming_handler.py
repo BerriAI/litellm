@@ -6,13 +6,14 @@ import logging
 import threading
 import time
 import traceback
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Final, NoReturn, TypeVar, cast
+from typing import Any, Final, NoReturn, Protocol, TypeVar, cast
 
 import anyio
 import httpx
 from pydantic import BaseModel
+from typing_extensions import NotRequired, TypedDict
 
 import litellm
 from litellm import verbose_logger
@@ -54,7 +55,7 @@ _SYNC_ITER_EXHAUSTED: Final = object()
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 
 
-def _next_sync_or_exhausted(it: Any) -> Any:
+def _next_sync_or_exhausted(it: Any) -> object:
     """
     Call next(it) from a thread and return _SYNC_ITER_EXHAUSTED on StopIteration.
 
@@ -68,7 +69,7 @@ def _next_sync_or_exhausted(it: Any) -> Any:
         return _SYNC_ITER_EXHAUSTED
 
 
-def is_async_iterable(obj: Any) -> bool:
+def is_async_iterable(obj: object) -> bool:
     """
     Check if an object is an async iterable (can be used with 'async for').
 
@@ -81,7 +82,7 @@ def is_async_iterable(obj: Any) -> bool:
     return isinstance(obj, collections.abc.AsyncIterable)
 
 
-def print_verbose(print_statement):
+def print_verbose(print_statement: object):
     try:
         if litellm.set_verbose:
             print(print_statement)  # noqa: T201
@@ -96,10 +97,62 @@ class _ProviderChunkParsed:
 
 @dataclass(frozen=True, slots=True)
 class _ProviderChunkEarlyReturn:
-    value: Any
+    value: "ModelResponseStream | None"
 
 
 _ProviderChunkResult = _ProviderChunkParsed | _ProviderChunkEarlyReturn
+
+
+class _PredibaseStreamData(TypedDict):
+    token: NotRequired[Mapping[str, str]]
+    details: Mapping[str, str]
+    generated_text: str | None
+    error: str | None
+
+
+class _Ai21StreamData(TypedDict):
+    completions: Sequence[Mapping[str, Mapping[str, str]]]
+
+
+class _MaritalkStreamData(TypedDict):
+    answer: str
+
+
+class _NlpCloudStreamData(TypedDict):
+    generated_text: str
+
+
+class _AlephAlphaStreamData(TypedDict):
+    completions: Sequence[Mapping[str, str]]
+
+
+class _AzureStreamChoice(TypedDict):
+    delta: Mapping[str, str] | None
+    finish_reason: str | None
+
+
+class _AzureStreamData(TypedDict):
+    choices: Sequence[_AzureStreamChoice]
+
+
+class _BasetenModelOutput(TypedDict):
+    data: NotRequired[Sequence[str]]
+
+
+class _BasetenStreamData(TypedDict):
+    token: NotRequired[Mapping[str, str]]
+    model_output: NotRequired["_BasetenModelOutput | str"]
+    completion: NotRequired[object]
+
+
+class _DeltaDumpDict(TypedDict):
+    role: NotRequired[str | None]
+    tool_calls: NotRequired[Sequence[Mapping[str, object]]]
+
+
+class _TextCompletionChoiceLike(Protocol):
+    text: str
+    finish_reason: str | None
 
 
 class CustomStreamWrapper:
@@ -107,7 +160,7 @@ class CustomStreamWrapper:
         self,
         completion_stream,
         model,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObject,
         custom_llm_provider: str | None = None,
         stream_options=None,
         make_call: Callable | None = None,
@@ -186,7 +239,7 @@ class CustomStreamWrapper:
         # Snapshot assumes self._hidden_params is populated from litellm_params
         # at init and never mutated during the stream. If that ever changes,
         # this cache must be removed.
-        self._base_hidden_params: dict[str, Any] = {
+        self._base_hidden_params: dict[str, object] = {
             **self._hidden_params,
             "response_cost": None,
         }
@@ -213,7 +266,75 @@ class CustomStreamWrapper:
     def __aiter__(self) -> AsyncIterator["ModelResponseStream"]:
         return self
 
+    def _restore_consumer_correlation_context(self, *, guarded: bool = False) -> None:
+        """Restore trace_id/session_id in the *consuming* thread/task/context.
+
+        wrapper_async() deliberately skips restoring correlation context when
+        it returns a stream, so log lines emitted while the caller iterates it
+        still carry this call's ids (see request_correlation_in_logs).
+        wrapper() (the sync path) never stamps anything in the first place -
+        see Logging.__init__'s supports_correlation_logging - so this method
+        is an inert no-op for sync-created streams, harmless to call anyway
+        since the class is shared between __next__ and __anext__.
+        But the terminal success/failure handlers this stream dispatches to
+        finish the job run on a *different* Task/thread (asyncio.create_task,
+        threading.Thread, or the shared executor) - restoring there fixes up
+        that detached context, not the one actually running the caller's
+        `for`/`async for` loop. Call this at every point control genuinely
+        returns to that consuming context: natural exhaustion (StopIteration/
+        StopAsyncIteration), a raised failure, or explicit aclose(). Never let
+        this raise - it must not break the caller's actual stream handling.
+
+        guarded=True (only __del__ uses this) skips the restore unless the
+        contextvars still hold the ids this stream's own call set, so a
+        delayed finalizer never overwrites a different, still-active call
+        that has since taken over the same Task/thread's context.
+        """
+        try:
+            logging_obj: Final = getattr(self, "logging_obj", None)
+            if logging_obj is None:
+                return
+            method_name: Final = (
+                "_restore_correlation_context_if_unclaimed" if guarded else "_restore_correlation_context"
+            )
+            restore: Final = getattr(logging_obj, method_name, None)
+            if restore is not None:
+                restore()
+        except Exception as restore_error:  # noqa: BLE001  # best-effort cleanup; must not raise into the caller
+            verbose_logger.debug("could not restore correlation context: %s", restore_error)
+
+    def __del__(self) -> None:
+        """Best-effort correlation-context cleanup for an abandoned async stream.
+
+        Only meaningfully applies to streams created by wrapper_async(): it
+        leaves contextvars "open" across the caller's iteration, so if the
+        caller never fully consumes the stream - stops early, drops the
+        reference, cancels it - none of the exit points
+        _restore_consumer_correlation_context() is called from ever run. For a
+        sync stream (wrapper()), this is a no-op in practice: wrapper() never
+        stamps trace_id/session_id for sync calls in the first place (see
+        Logging.__init__'s supports_correlation_logging), so there is nothing
+        for this to clean up.
+
+        This is a best-effort fallback, not a guarantee: __del__ timing is
+        unpredictable (delayed by cyclic GC, not guaranteed at interpreter
+        shutdown, and may run on a different thread), so this can only reduce
+        how long the leak persists, not eliminate it. That's an acceptable
+        trade specifically because its blast radius is bounded to the one
+        asyncio Task this stream's own call ran in - each async call has its
+        own copy of the contextvars, and Tasks (unlike a thread pool's worker
+        threads) are never recycled across requests, so a delayed or missed
+        cleanup here can never misattribute a *different* request's logs.
+        guarded=True additionally ensures it never clobbers a different,
+        still-active call's context within that same Task if this fires late.
+        """
+        self._restore_consumer_correlation_context(guarded=True)
+
     async def aclose(self):
+        # Restore the consumer's outer context only after the underlying
+        # provider stream's own close (and its diagnostic logging below, if
+        # closing fails) completes - not before - so those log lines still
+        # carry this closing stream's own trace_id/session_id.
         if self.completion_stream is not None:
             stream_to_close: Final = self.completion_stream
             self.completion_stream = None
@@ -233,6 +354,7 @@ class CustomStreamWrapper:
                         "CustomStreamWrapper.aclose: error closing completion_stream: %s",
                         e,
                     )
+        self._restore_consumer_correlation_context()
 
     def check_send_stream_usage(self, stream_options: dict | None):
         return stream_options is not None and stream_options.get("include_usage", False) is True
@@ -347,7 +469,7 @@ class CustomStreamWrapper:
             finish_reason = ""
             print_verbose(f"chunk: {chunk}")
             if chunk.startswith("data:"):
-                data_json: Final = json.loads(chunk[5:])
+                data_json: Final[_PredibaseStreamData] = json.loads(chunk[5:])
                 print_verbose(f"data json: {data_json}")
                 if "token" in data_json and "text" in data_json["token"]:
                     text = data_json["token"]["text"]
@@ -377,7 +499,7 @@ class CustomStreamWrapper:
 
     def handle_ai21_chunk(self, chunk):  # fake streaming
         chunk = chunk.decode("utf-8")
-        data_json: Final = json.loads(chunk)
+        data_json: Final[_Ai21StreamData] = json.loads(chunk)
         try:
             text: Final = data_json["completions"][0]["data"]["text"]
             is_finished: Final = True
@@ -392,7 +514,7 @@ class CustomStreamWrapper:
 
     def handle_maritalk_chunk(self, chunk):  # fake streaming
         chunk = chunk.decode("utf-8")
-        data_json: Final = json.loads(chunk)
+        data_json: Final[_MaritalkStreamData] = json.loads(chunk)
         try:
             text: Final = data_json["answer"]
             is_finished: Final = True
@@ -413,7 +535,7 @@ class CustomStreamWrapper:
             if self.model and "dolphin" in self.model:
                 chunk = self.process_chunk(chunk=chunk)
             else:
-                data_json: Final = json.loads(chunk)
+                data_json: Final[_NlpCloudStreamData] = json.loads(chunk)
                 chunk = data_json["generated_text"]
             text = chunk
             if "[DONE]" in text:
@@ -430,7 +552,7 @@ class CustomStreamWrapper:
 
     def handle_aleph_alpha_chunk(self, chunk):
         chunk = chunk.decode("utf-8")
-        data_json: Final = json.loads(chunk)
+        data_json: Final[_AlephAlphaStreamData] = json.loads(chunk)
         try:
             text: Final = data_json["completions"][0]["completion"]
             is_finished: Final = True
@@ -458,7 +580,7 @@ class CustomStreamWrapper:
                 "finish_reason": finish_reason,
             }
         elif chunk.startswith("data:"):
-            data_json: Final = json.loads(chunk[5:])  # chunk.startswith("data:"):
+            data_json: Final[_AzureStreamData] = json.loads(chunk[5:])  # chunk.startswith("data:"):
             try:
                 if len(data_json["choices"]) > 0:
                     delta: Final = data_json["choices"][0]["delta"]
@@ -547,7 +669,7 @@ class CustomStreamWrapper:
             text = ""
             is_finished = False
             finish_reason = None
-            choices: Final = getattr(chunk, "choices", [])
+            choices: Final[Sequence[_TextCompletionChoiceLike]] = getattr(chunk, "choices", [])
             if len(choices) > 0:
                 text = choices[0].text
                 if choices[0].finish_reason is not None:
@@ -568,7 +690,7 @@ class CustomStreamWrapper:
             is_finished = False
             finish_reason = None
             usage = None
-            choices: Final = getattr(chunk, "choices", [])
+            choices: Final[Sequence[_TextCompletionChoiceLike]] = getattr(chunk, "choices", [])
             if len(choices) > 0:
                 text = choices[0].text
                 if choices[0].finish_reason is not None:
@@ -585,12 +707,12 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def handle_baseten_chunk(self, chunk):
+    def handle_baseten_chunk(self, chunk) -> str:
         try:
             chunk = chunk.decode("utf-8")
             if len(chunk) > 0:
                 if chunk.startswith("data:"):
-                    data_json = json.loads(chunk[5:])
+                    data_json: _BasetenStreamData = json.loads(chunk[5:])
                     if "token" in data_json and "text" in data_json["token"]:
                         return data_json["token"]["text"]
                     else:
@@ -1256,13 +1378,14 @@ class CustomStreamWrapper:
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
             if "usage" in response_obj is not None:
+                _codestral_usage: Final[Usage] = response_obj["usage"]
                 setattr(
                     model_response,
                     "usage",
                     litellm.Usage(
-                        prompt_tokens=response_obj["usage"].prompt_tokens,
-                        completion_tokens=response_obj["usage"].completion_tokens,
-                        total_tokens=response_obj["usage"].total_tokens,
+                        prompt_tokens=_codestral_usage.prompt_tokens,
+                        completion_tokens=_codestral_usage.completion_tokens,
+                        total_tokens=_codestral_usage.total_tokens,
                     ),
                 )
         elif self.custom_llm_provider == "azure_text":
@@ -1405,7 +1528,7 @@ class CustomStreamWrapper:
                                                 is None
                                             ):
                                                 t.function.arguments = ""
-                            _json_delta: Final = delta.model_dump()
+                            _json_delta: Final[_DeltaDumpDict] = delta.model_dump()
                             if "role" not in _json_delta or _json_delta["role"] is None:
                                 _json_delta["role"] = "assistant"  # mistral's api returns role as None
                             if "tool_calls" in _json_delta and isinstance(_json_delta["tool_calls"], list):
@@ -1675,7 +1798,7 @@ class CustomStreamWrapper:
         usage.cost, copy it into _hidden_params so litellm's cost
         calculator uses it instead of a token-based estimate.
         """
-        _usage: Final = getattr(response, "usage", None)
+        _usage: Final[Usage | None] = getattr(response, "usage", None)
         if _usage is not None and hasattr(_usage, "cost") and _usage.cost is not None:
             if "additional_headers" not in response._hidden_params:
                 response._hidden_params["additional_headers"] = {}
@@ -1839,6 +1962,7 @@ class CustomStreamWrapper:
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
                     return response
+                self._restore_consumer_correlation_context()
                 raise  # Re-raise StopIteration
             else:
                 self.sent_last_chunk = True
@@ -1852,6 +1976,19 @@ class CustomStreamWrapper:
                     processed_chunk,
                     cache_hit,
                 )  # log response
+                # Deliberately do NOT restore context here even though
+                # completion_stream is already exhausted: this chunk is still
+                # real data belonging to this call, and the caller's own
+                # (application-level) log statements processing it run
+                # immediately after this return, in this same synchronous
+                # frame - restoring first would make those lines carry the
+                # wrong ids, which is exactly what leaving context open during
+                # iteration is meant to prevent (see
+                # _restore_consumer_correlation_context's docstring). A caller
+                # that keeps iterating gets cleaned up on its next __next__()
+                # call (immediate StopIteration, handled above); one that
+                # stops right here relies on aclose() or the best-effort
+                # __del__ guard instead.
                 return processed_chunk
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
@@ -1879,8 +2016,12 @@ class CustomStreamWrapper:
         cache_hit = False
         if self.custom_llm_provider is not None and self.custom_llm_provider == "cached_response":
             cache_hit = True
-        self._check_max_streaming_duration()
         try:
+            # Inside the try (not before it) so a raised litellm.Timeout flows
+            # through the same except Exception -> _handle_stream_fallback_error
+            # path as every other failure, restoring the consumer's correlation
+            # context - a check before the try would bypass that entirely.
+            self._check_max_streaming_duration()
             if self.completion_stream is None:
                 await self.fetch_stream()
 
@@ -2083,10 +2224,17 @@ class CustomStreamWrapper:
                     )
                 )
 
+            self._restore_consumer_correlation_context()
             raise StopAsyncIteration  # Re-raise StopIteration
         else:
             self.sent_last_chunk = True
             processed_chunk: Final = self.finish_reason_handler()
+            # see sync __next__'s sibling branch: deliberately do NOT restore
+            # here - this chunk is still this call's own data, and restoring
+            # before returning it would corrupt the caller's own log
+            # statements processing it. A caller that keeps iterating gets
+            # cleaned up on the next __anext__() call; one that stops here
+            # relies on aclose() or the best-effort __del__ guard.
             return processed_chunk
 
     def _log_stream_failure_and_raise(self, e: Exception) -> NoReturn:
@@ -2138,7 +2286,12 @@ class CustomStreamWrapper:
         """
         from litellm.exceptions import MidStreamFallbackError
 
-        # Map to OpenAI exception format
+        # Map to OpenAI exception format. Some providers' mappers (e.g.
+        # _map_anthropic_exception, _map_aleph_alpha_exception) synchronously
+        # log a debug diagnostic (the raw status code) as part of mapping -
+        # restore the consumer's outer context only after this completes, so
+        # that diagnostic log line still carries the failing stream's own
+        # trace_id/session_id instead of the consumer's (or an empty one).
         if isinstance(e, OpenAIError):
             mapped_exception: Exception = e
         else:
@@ -2152,6 +2305,7 @@ class CustomStreamWrapper:
                 )
             except Exception as mapping_error:
                 mapped_exception = mapping_error
+        self._restore_consumer_correlation_context()
 
         def _normalize_status_code(exc: Exception) -> int | None:
             """Best-effort status_code extraction."""

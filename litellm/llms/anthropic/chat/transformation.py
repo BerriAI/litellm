@@ -592,7 +592,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # Anthropic requires additionalProperties=false for object schemas
         # See: https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs
-        if result.get("type") == "object" and "additionalProperties" not in result:
+        if result.get("type") == "object":
             result["additionalProperties"] = False
 
         return result
