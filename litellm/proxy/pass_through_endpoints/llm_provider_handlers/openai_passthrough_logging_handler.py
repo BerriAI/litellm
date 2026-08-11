@@ -115,7 +115,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         if not url_route:
             return False
         parsed_url: Final = urlparse(url_route)
-        return _is_openai_compatible_host(parsed_url.hostname) and "/v1/chat/completions" in parsed_url.path
+        if parsed_url.hostname and not _is_openai_compatible_host(parsed_url.hostname):
+            return False
+        return "/v1/chat/completions" in parsed_url.path or "/chat/completions" in parsed_url.path
 
     @staticmethod
     def is_openai_image_generation_route(url_route: str) -> bool:
@@ -123,7 +125,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         if not url_route:
             return False
         parsed_url: Final = urlparse(url_route)
-        return _is_openai_compatible_host(parsed_url.hostname) and "/v1/images/generations" in parsed_url.path
+        if parsed_url.hostname and not _is_openai_compatible_host(parsed_url.hostname):
+            return False
+        return "/v1/images/generations" in parsed_url.path or "/images/generations" in parsed_url.path
 
     @staticmethod
     def is_openai_image_editing_route(url_route: str) -> bool:
@@ -131,7 +135,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         if not url_route:
             return False
         parsed_url: Final = urlparse(url_route)
-        return _is_openai_compatible_host(parsed_url.hostname) and "/v1/images/edits" in parsed_url.path
+        if parsed_url.hostname and not _is_openai_compatible_host(parsed_url.hostname):
+            return False
+        return "/v1/images/edits" in parsed_url.path or "/images/edits" in parsed_url.path
 
     @staticmethod
     def is_openai_responses_route(url_route: str) -> bool:
@@ -139,7 +145,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         if not url_route:
             return False
         parsed_url: Final = urlparse(url_route)
-        return _is_openai_compatible_host(parsed_url.hostname) and (
+        if parsed_url.hostname and not _is_openai_compatible_host(parsed_url.hostname):
+            return False
+        return (
             "/v1/responses" in parsed_url.path or "/responses" in parsed_url.path
         )
 
@@ -467,7 +475,8 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         all_chunks: list,
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
-    ) -> ModelResponse | TextCompletionResponse | None:
+        is_responses: bool = False,
+    ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | None:
         """
         Builds complete response from raw chunks for OpenAI streaming responses.
 
@@ -476,6 +485,44 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         - Builds complete response from litellm chunks
         """
         try:
+            from litellm.llms.base_llm.base_model_iterator import (
+                BaseModelResponseIterator,
+            )
+
+            if is_responses:
+                for chunk_str in all_chunks:
+                    try:
+                        stripped_json_chunk = BaseModelResponseIterator._string_to_dict_parser(str_line=chunk_str)
+                        if isinstance(stripped_json_chunk, dict):
+                            response_data = None
+                            if (
+                                stripped_json_chunk.get("type") in ("response.completed", "response.done")
+                                and "response" in stripped_json_chunk
+                            ):
+                                response_data = stripped_json_chunk["response"]
+                            elif (
+                                stripped_json_chunk.get("object") == "response"
+                                and "usage" in stripped_json_chunk
+                            ):
+                                response_data = stripped_json_chunk
+                            elif (
+                                "response" in stripped_json_chunk
+                                and isinstance(stripped_json_chunk["response"], dict)
+                                and "usage" in stripped_json_chunk["response"]
+                            ):
+                                response_data = stripped_json_chunk["response"]
+
+                            if response_data and isinstance(response_data, dict):
+                                resp_dict = dict(response_data)
+                                resp_dict.setdefault("model", model)
+                                resp_dict.setdefault("created_at", int(datetime.now().timestamp()))
+                                resp_dict.setdefault("output", [])
+                                resp_dict.setdefault("object", "response")
+                                return ResponsesAPIResponse.model_validate(resp_dict)
+                    except Exception as e:
+                        verbose_proxy_logger.debug("Error parsing responses streaming chunk: %s", e)
+                        continue
+
             # OpenAI's response iterator to parse chunks
             from litellm.llms.openai.openai import OpenAIChatCompletionResponseIterator
 
@@ -487,11 +534,6 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             all_openai_chunks: Final = []
             for chunk_str in all_chunks:
                 try:
-                    # Parse the string chunk using the base iterator's string parser
-                    from litellm.llms.base_llm.base_model_iterator import (
-                        BaseModelResponseIterator,
-                    )
-
                     # Convert string chunk to dict
                     stripped_json_chunk = BaseModelResponseIterator._string_to_dict_parser(str_line=chunk_str)
 
@@ -536,6 +578,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             # Extract model from request body
             model: Final = request_body.get("model", "gpt-4o")
 
+            # Check if this is a responses API route
+            is_responses: Final = OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
+
             # Build complete response from chunks using our streaming handler
             handler: Final = OpenAIPassthroughLoggingHandler()
             handler_instance: Final = handler
@@ -543,6 +588,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 all_chunks=all_chunks,
                 litellm_logging_obj=litellm_logging_obj,
                 model=model,
+                is_responses=is_responses,
             )
 
             if complete_response is None:
@@ -553,11 +599,13 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 }
 
             custom_llm_provider: Final = litellm_logging_obj.model_call_details.get("custom_llm_provider", "openai")
+            call_type: Final = "responses" if is_responses else None
             # Calculate cost using LiteLLM's cost calculator
             response_cost: Final = litellm.completion_cost(
                 completion_response=complete_response,
                 model=model,
                 custom_llm_provider=custom_llm_provider,
+                call_type=call_type,
             )
 
             # Preserve existing litellm_params to maintain metadata tags
@@ -570,6 +618,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 "custom_llm_provider": custom_llm_provider,
                 "litellm_params": existing_litellm_params.copy(),
             }
+            if is_responses:
+                kwargs["call_type"] = "responses"
+                litellm_logging_obj.model_call_details["call_type"] = "responses"
 
             # Extract user information for tracking
             passthrough_logging_payload: Final[PassthroughStandardLoggingPayload | None] = (
