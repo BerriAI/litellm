@@ -4,9 +4,11 @@ import React from "react";
 import { PiggyBank } from "lucide-react";
 import { Alert, Tabs } from "antd";
 
+import useCan from "@/app/(dashboard)/hooks/useCan";
 import UsageTab from "./UsageTab";
 import PromptCompressionTab from "./PromptCompressionTab";
 import PromptCachingTab from "./PromptCachingTab";
+import AutoRouterBenchmarksTab from "./AutoRouterBenchmarksTab";
 import { useDailyActivityRange } from "./useDailyActivityRange";
 
 interface CostOptimizationViewProps {
@@ -17,23 +19,33 @@ interface CostOptimizationViewProps {
 
 const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken, userId, userRole }) => {
   const activity = useDailyActivityRange(accessToken, userId, userRole);
+  const canViewProxyWideCostData = useCan("viewProxyWideCostData");
 
   const items = [
     {
       key: "usage",
-      label: "Usage",
+      label: "Overall",
       children: <UsageTab accessToken={accessToken} activity={activity} />,
     },
-    {
-      key: "compression",
-      label: "Prompt Compression",
-      children: <PromptCompressionTab accessToken={accessToken} />,
-    },
-    {
-      key: "caching",
-      label: "Prompt Caching",
-      children: <PromptCachingTab accessToken={accessToken} activity={activity} />,
-    },
+    ...(canViewProxyWideCostData
+      ? [
+          {
+            key: "compression",
+            label: "Prompt Compression",
+            children: <PromptCompressionTab accessToken={accessToken} />,
+          },
+          {
+            key: "caching",
+            label: "Prompt Caching",
+            children: <PromptCachingTab accessToken={accessToken} activity={activity} />,
+          },
+          {
+            key: "autorouter-usage",
+            label: "Auto-Router",
+            children: <AutoRouterBenchmarksTab accessToken={accessToken} />,
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -57,7 +69,7 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
           <span>
             Have feedback? Join the discussion{" "}
             <a
-              href="https://github.com/BerriAI/litellm/discussions/32172"
+              href="https://github.com/BerriAI/litellm/discussions/32168"
               target="_blank"
               rel="noopener noreferrer"
               className="text-blue-600 underline"

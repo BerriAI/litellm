@@ -4,7 +4,7 @@ Calls Parallel AI's /v1/search endpoint to search the web.
 Parallel AI API Reference: https://docs.parallel.ai/api-reference/search/search
 """
 
-from typing import Dict, List, Optional, TypedDict, Union
+from typing import Final, TypedDict
 
 import httpx
 
@@ -18,8 +18,8 @@ from litellm.secret_managers.main import get_secret_str
 
 
 class _ParallelAISourcePolicy(TypedDict, total=False):
-    include_domains: List[str]
-    exclude_domains: List[str]
+    include_domains: list[str]
+    exclude_domains: list[str]
     after_date: str
 
 
@@ -30,7 +30,7 @@ class _ParallelAIExcerptSettings(TypedDict, total=False):
 class _ParallelAIAdvancedSettings(TypedDict, total=False):
     source_policy: _ParallelAISourcePolicy
     excerpt_settings: _ParallelAIExcerptSettings
-    fetch_policy: Dict
+    fetch_policy: dict
     location: str
     max_results: int
 
@@ -41,7 +41,7 @@ class ParallelAISearchRequest(TypedDict, total=False):
     Based on: https://docs.parallel.ai/api-reference/search/search
     """
 
-    search_queries: List[str]  # Required - at least one keyword search query
+    search_queries: list[str]  # Required - at least one keyword search query
     objective: str  # Optional - natural-language description of search goal
     mode: str  # Optional - 'turbo', 'basic', or 'advanced' (default 'advanced')
     max_chars_total: int  # Optional - upper bound on total excerpt characters
@@ -50,7 +50,7 @@ class ParallelAISearchRequest(TypedDict, total=False):
     advanced_settings: _ParallelAIAdvancedSettings
 
 
-LEGACY_PROCESSOR_TO_MODE = {"base": "basic", "pro": "advanced"}
+LEGACY_PROCESSOR_TO_MODE: Final = {"base": "basic", "pro": "advanced"}
 
 
 class ParallelAISearchConfig(BaseSearchConfig):
@@ -62,11 +62,11 @@ class ParallelAISearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         api_key = self.resolve_server_api_key(
             caller_api_key=api_key,
             caller_api_base=api_base,
@@ -82,9 +82,9 @@ class ParallelAISearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         api_base = api_base or get_secret_str("PARALLEL_AI_API_BASE") or self.PARALLEL_AI_API_BASE
@@ -97,10 +97,10 @@ class ParallelAISearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform Search request to Parallel AI v1 API format.
 
@@ -121,9 +121,9 @@ class ParallelAISearchConfig(BaseSearchConfig):
         Returns:
             Dict with request data following the v1 search request spec
         """
-        params = dict(optional_params)
+        params: Final = dict(optional_params)
 
-        request_data: ParallelAISearchRequest = {}
+        request_data: Final[ParallelAISearchRequest] = {}
 
         if isinstance(query, list):
             request_data["search_queries"] = query
@@ -132,7 +132,7 @@ class ParallelAISearchConfig(BaseSearchConfig):
             request_data["objective"] = query
 
         mode = params.pop("mode", None)
-        processor = params.pop("processor", None)
+        processor: Final = params.pop("processor", None)
         if mode is None and processor is not None:
             mode = LEGACY_PROCESSOR_TO_MODE.get(processor, processor)
         # the v1 API defaults to 'advanced' when mode is omitted; default to 'basic'
@@ -140,7 +140,7 @@ class ParallelAISearchConfig(BaseSearchConfig):
         # $0.004/query cost map entry for `parallel_ai/search` accurate
         request_data["mode"] = mode or "basic"
 
-        advanced_settings: _ParallelAIAdvancedSettings = {}
+        advanced_settings: Final[_ParallelAIAdvancedSettings] = {}
 
         if "max_results" in params:
             advanced_settings["max_results"] = params.pop("max_results")
@@ -151,7 +151,7 @@ class ParallelAISearchConfig(BaseSearchConfig):
         if "max_chars_per_result" in params:
             advanced_settings["excerpt_settings"] = {"max_chars_per_result": params.pop("max_chars_per_result")}
 
-        source_policy: _ParallelAISourcePolicy = {}
+        source_policy: Final[_ParallelAISourcePolicy] = {}
 
         if "search_domain_filter" in params:
             source_policy["include_domains"] = params.pop("search_domain_filter")
@@ -170,7 +170,7 @@ class ParallelAISearchConfig(BaseSearchConfig):
         # unified-spec param with no v1 equivalent
         params.pop("max_tokens_per_page", None)
 
-        result_data: Dict = dict(request_data)
+        result_data: Final[dict] = dict(request_data)
         result_data.update(params)
         return result_data
 
@@ -189,9 +189,9 @@ class ParallelAISearchConfig(BaseSearchConfig):
         - results[].excerpts (array) -> SearchResult.snippet (joined string)
         - results[].publish_date -> SearchResult.date
         """
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
-        results = []
+        results: Final = []
         for result in response_json.get("results", []):
             excerpts = result.get("excerpts") or []
             snippet = " ... ".join(excerpts) if excerpts else ""

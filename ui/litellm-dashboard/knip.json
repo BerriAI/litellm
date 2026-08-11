@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
-  "entry": ["scripts/**/*.{ts,mjs}", "src/components/ui/**/*.{ts,tsx}"],
+  "entry": ["scripts/**/*.{ts,mjs}", "src/components/ui/**/*.{ts,tsx}", "src/**/*.test-d.{ts,tsx}"],
   "project": ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}", "scripts/**/*.{ts,mjs}"],
   "ignore": ["src/lib/http/schema.d.ts"],
   "ignoreDependencies": [

@@ -13,9 +13,9 @@ import datetime
 
 import pytest
 
-from litellm.integrations.prometheus import (
+from litellm.integrations.prometheus import PrometheusLogger
+from litellm.litellm_core_utils.service_tier_utils import (
     KNOWN_REQUEST_SERVICE_TIERS,
-    PrometheusLogger,
     get_service_tier_from_standard_logging_payload,
 )
 from litellm.types.integrations.prometheus import (
@@ -230,3 +230,12 @@ async def test_success_event_emits_service_tier_on_latency_and_spend_metrics():
             )
     finally:
         _clear_prometheus_registry()
+
+
+def test_allowlist_covers_every_modeled_service_tier():
+    """A tier modeled for cost calculation is real traffic, so it must resolve
+    rather than being dropped as an unknown caller value."""
+    from litellm.types.utils import ServiceTier
+
+    missing = {tier.value for tier in ServiceTier} - KNOWN_REQUEST_SERVICE_TIERS
+    assert not missing, f"ServiceTier values missing from the allowlist: {sorted(missing)}"
