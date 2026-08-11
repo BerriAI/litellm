@@ -122,6 +122,14 @@ class LakeraAIGuardrail(CustomGuardrail):
         self.dev_info: bool | None = dev_info
         self.on_flagged = on_flagged or "block"
         self.advisory_system_message = advisory_system_message
+        if self.advisory_system_message is not None:
+            try:
+                self.advisory_system_message.format(reason="placeholder")
+            except (KeyError, IndexError, ValueError) as e:
+                raise ValueError(
+                    f"Invalid advisory_system_message template: {e}. The template must be a valid "
+                    "str.format() string using only the {reason} placeholder."
+                ) from e
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(**kwargs)
 
@@ -395,9 +403,17 @@ class LakeraAIGuardrail(CustomGuardrail):
         #########################################################
         if lakera_guardrail_response.get("flagged") is True:
             if self.on_flagged == "inject_system_message":
-                self.inject_advisory_message(data, self._build_advisory_message(lakera_guardrail_response))
+                # during_call runs concurrently with the LLM dispatch (see
+                # ProxyLogging.during_call_hook / common_request_processing.py),
+                # with no pre-call barrier -- mutating data["messages"] here races
+                # against the outgoing request already being built from the same
+                # dict, so the advisory message can silently fail to reach the
+                # LLM. Degrade to monitor-equivalent (log only) instead, matching
+                # how post_call also can't reliably influence a request that's
+                # already been dispatched.
                 verbose_proxy_logger.warning(
-                    "Lakera Guardrail: Advisory mode - violation detected, appended advisory system message"
+                    "Lakera Guardrail: Advisory mode has no effect during during_call; "
+                    "violation detected but allowing request"
                 )
             elif self._is_only_pii_violation(lakera_guardrail_response) and not is_multimodal_input:
                 redacted_messages: Final = self._mask_pii_in_messages(
