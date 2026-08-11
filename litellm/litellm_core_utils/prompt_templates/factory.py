@@ -3969,6 +3969,36 @@ def _rename_duplicate_bedrock_document_names(
     return contents
 
 
+BEDROCK_DOCUMENT_PLACEHOLDER_TEXT: Final = "."
+
+
+def _with_text_when_document_only(message: BedrockMessageBlock) -> BedrockMessageBlock:
+    blocks: Final = message["content"]
+    needs_text: Final = (
+        message["role"] == "user"
+        and any("document" in block for block in blocks)
+        and all("text" not in block for block in blocks)
+    )
+    if not needs_text:
+        return message
+    placeholder: Final = BedrockContentBlock(text=BEDROCK_DOCUMENT_PLACEHOLDER_TEXT)
+    cut: Final = len(blocks) - 1 if "cachePoint" in blocks[-1] else len(blocks)
+    return BedrockMessageBlock(role="user", content=[*blocks[:cut], placeholder, *blocks[cut:]])
+
+
+def _ensure_document_messages_have_text(
+    contents: list[BedrockMessageBlock],
+) -> list[BedrockMessageBlock]:
+    """
+    Bedrock Converse rejects any user message that carries a document block
+    without a sibling text block ("A text block must be included when using
+    documents"), e.g. Claude Code sends the PDF as a document-only user turn.
+    Inject a placeholder text block, kept ahead of a trailing cachePoint so
+    the caller's cache boundary stays the final block.
+    """
+    return [_with_text_when_document_only(message) for message in contents]
+
+
 def _sort_bedrock_assistant_content_blocks(
     blocks: list[BedrockContentBlock],
 ) -> list[BedrockContentBlock]:
@@ -4537,7 +4567,7 @@ class BedrockConverseMessagesProcessor:
                     llm_provider=llm_provider,
                 )
 
-        return _rename_duplicate_bedrock_document_names(contents)
+        return _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
 
     @staticmethod
     def translate_thinking_blocks_to_reasoning_content_blocks(
@@ -4913,7 +4943,7 @@ def _bedrock_converse_messages_pt(
                 llm_provider=llm_provider,
             )
 
-    return _rename_duplicate_bedrock_document_names(contents)
+    return _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
 
 
 def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
