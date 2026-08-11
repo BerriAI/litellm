@@ -497,7 +497,10 @@ async def cursor_chat_completions(
     from litellm.completion_extras.litellm_responses_transformation.handler import (
         responses_api_bridge,
     )
-    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.litellm_core_utils.streaming_handler import (
+        CustomStreamWrapper,
+        validated_stream_logging_obj,
+    )
     from litellm.proxy.proxy_server import (
         async_data_generator,
         chat_completion,
@@ -545,7 +548,7 @@ async def cursor_chat_completions(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
 
-    def cursor_data_generator(response, user_api_key_dict, request_data, request=None):
+    def cursor_data_generator(response, user_api_key_dict, request_data: dict[str, object], request=None):
         """
         Custom generator that transforms Responses API streaming chunks to chat completion chunks.
 
@@ -579,7 +582,7 @@ async def cursor_chat_completions(
                 completion_stream=completion_stream,
                 model=request_data.get("model", ""),
                 custom_llm_provider=None,
-                logging_obj=logging_obj,
+                logging_obj=validated_stream_logging_obj(logging_obj),
             )
             # Use async_data_generator to format as SSE
             return async_data_generator(

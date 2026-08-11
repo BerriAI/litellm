@@ -89,7 +89,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         model_response: ModelResponse,
         timeout: float | httpx.Timeout | None,
         encoding,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObject,
         stream,
         optional_params: dict,
         litellm_params: dict,
