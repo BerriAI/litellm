@@ -12,6 +12,9 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
+)
 
 from .auth_checks_organization import _user_is_org_admin
 
@@ -249,7 +252,9 @@ class RouteChecks:
         ):
             RouteChecks._require_auth_pass_through_access(route=route, valid_token=valid_token)
         elif RouteChecks.is_llm_api_route(route=route) or RouteChecks.is_public_pass_through_route(
-            route=route, method=RouteChecks._get_request_method(request=request)
+            route=route,
+            method=RouteChecks._get_request_method(request=request),
+            request=request,
         ):
             pass
         elif RouteChecks.is_info_route(route=route):
@@ -632,14 +637,25 @@ class RouteChecks:
         return route_info.get("auth") is True
 
     @staticmethod
-    def is_public_pass_through_route(route: str, method: str | None = None) -> bool:
+    def is_public_pass_through_route(
+        route: str,
+        method: str | None = None,
+        request: Request | None = None,
+    ) -> bool:
+        if request is None:
+            return False
+        scope: Final = getattr(request, "scope", None)
+        if not isinstance(scope, dict):
+            return False
+        endpoint: Final = scope.get("endpoint")
+        if getattr(endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False) is not True:
+            return False
+
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
             InitPassThroughEndpointHelpers,
         )
 
-        route_info: Final = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
-            route=route, method=method
-        )
+        route_info: Final = InitPassThroughEndpointHelpers.get_registered_pass_through_route(route=route, method=method)
         if route_info is None:
             return False
         return route_info.get("auth") is False

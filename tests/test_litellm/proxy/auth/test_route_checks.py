@@ -1200,9 +1200,22 @@ def test_non_proxy_admin_allows_non_auth_pass_through_with_llm_api_routes(
         user_role=LitellmUserRoles.INTERNAL_USER.value,
         allowed_routes=["llm_api_routes"],
     )
-    request = MagicMock(spec=Request)
-    request.method = "GET"
-    request.query_params = {}
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
+    )
+
+    def pass_through_endpoint(): ...
+
+    setattr(pass_through_endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+    request = Request(
+        scope={
+            "type": "http",
+            "headers": [],
+            "method": "GET",
+            "query_string": b"",
+            "endpoint": pass_through_endpoint,
+        }
+    )
 
     with (
         patch(
@@ -1230,6 +1243,72 @@ def test_non_proxy_admin_allows_non_auth_pass_through_with_llm_api_routes(
             valid_token=valid_token,
             request_data={},
         )
+
+
+@pytest.mark.parametrize(
+    "registered_path,registered_type",
+    [
+        ("/config/update", "exact"),
+        ("/config", "subpath"),
+    ],
+)
+def test_public_pass_through_registration_does_not_bypass_builtin_route_auth(
+    registered_path, registered_type
+):
+    mock_registered_routes = {
+        f"test-uuid-1:{registered_type}:{registered_path}:GET": {
+            "endpoint_id": "test-uuid-1",
+            "path": registered_path,
+            "type": registered_type,
+            "methods": ["GET"],
+            "auth": False,
+        },
+    }
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        allowed_routes=["llm_api_routes"],
+    )
+
+    def builtin_config_update(): ...
+
+    request = Request(
+        scope={
+            "type": "http",
+            "headers": [],
+            "method": "GET",
+            "query_string": b"",
+            "endpoint": builtin_config_update,
+        }
+    )
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            mock_registered_routes,
+        ),
+        patch(
+            "litellm.proxy.utils.get_server_root_path",
+            return_value="/",
+        ),
+    ):
+        assert (
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/config/update",
+                valid_token=valid_token,
+                request=request,
+            )
+            is True
+        )
+        with pytest.raises(Exception, match="Only proxy admin"):
+            RouteChecks.non_proxy_admin_allowed_routes_check(
+                user_obj=None,
+                _user_role=LitellmUserRoles.INTERNAL_USER.value,
+                route="/config/update",
+                request=request,
+                valid_token=valid_token,
+                request_data={},
+            )
 
 
 def test_virtual_key_without_llm_api_routes_cannot_access_pass_through():
