@@ -4,6 +4,7 @@ import { Button, Col, Row, Spin, Tabs } from "antd";
 import React, { useMemo, useState } from "react";
 import { getGuardrailsUsageDetail, getGuardrailsUsageLogs } from "@/components/networking";
 import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
+import { toUtcInstantRange } from "@/components/GuardrailsMonitor/guardrailLogsWindow";
 import { LogViewer } from "@/components/GuardrailsMonitor/LogViewer";
 import { MetricCard } from "@/components/GuardrailsMonitor/MetricCard";
 import type { LogEntry } from "@/components/GuardrailsMonitor/mockData";
@@ -37,15 +38,16 @@ export function GuardrailDetail({ guardrailId, onBack, accessToken = null, start
     queryFn: () => getGuardrailsUsageDetail(accessToken!, guardrailId, startDate, endDate),
     enabled: !!accessToken && !!guardrailId,
   });
+  const logsWindow = useMemo(() => toUtcInstantRange(startDate, endDate), [startDate, endDate]);
   const { data: logsData, isLoading: logsLoading } = useQuery({
-    queryKey: ["guardrails-usage-logs", guardrailId, logsPage, logsPageSize],
+    queryKey: ["guardrails-usage-logs", guardrailId, logsPage, logsPageSize, logsWindow.start, logsWindow.end],
     queryFn: () =>
       getGuardrailsUsageLogs(accessToken!, {
         guardrailId,
         page: logsPage,
         pageSize: logsPageSize,
-        startDate,
-        endDate,
+        startDate: logsWindow.start,
+        endDate: logsWindow.end,
       }),
     enabled: !!accessToken && !!guardrailId,
   });

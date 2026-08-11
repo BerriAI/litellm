@@ -10,7 +10,7 @@ orphans), and logs missed their logical-name alias.
 
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -237,3 +237,48 @@ async def test_logs_resolves_config_guardrail_logical_name():
         )
     where = prisma.db.litellm_spendlogguardrailindex.find_many.call_args.kwargs["where"]
     assert where["guardrail_id"] == {"in": ["yaml-uuid", "yaml-pii"]}
+
+
+# ---- date window ------------------------------------------------------------
+
+
+async def _logs_where(*, start_date: str, end_date: str) -> dict:
+    """Run the logs handler and hand back the Prisma filter it built."""
+    prisma = _prisma(find_unique=None)
+    handler = _config_handler(_yaml_guardrail(guardrail_id="yaml-uuid", name="yaml-pii"))
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2:
+        await guardrails_usage_logs(
+            guardrail_id="yaml-uuid",
+            policy_id=None,
+            page=1,
+            page_size=50,
+            action=None,
+            start_date=start_date,
+            end_date=end_date,
+            user_api_key_dict=ADMIN,
+        )
+    return prisma.db.litellm_spendlogguardrailindex.find_many.call_args.kwargs["where"]
+
+
+@pytest.mark.asyncio
+async def test_logs_honors_an_explicit_instant():
+    """
+    Regression (#36515): the dashboard resolves the viewer's local day to instants,
+    because a bare date is padded to UTC midnight and lands the window offset-hours
+    away from the range that was picked. Dropping this branch silently reinstates
+    that bug in the UI, so the exact instant must survive to the filter.
+    """
+    where = await _logs_where(start_date="2026-08-09T18:30:00Z", end_date="2026-08-10T18:29:59Z")
+
+    assert where["start_time"]["gte"] == datetime(2026, 8, 9, 18, 30, tzinfo=timezone.utc)
+    assert where["start_time"]["lte"] == datetime(2026, 8, 10, 18, 29, 59, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_logs_pads_a_bare_date_to_the_utc_day():
+    """A bare date keeps its documented whole-UTC-day meaning for existing callers."""
+    where = await _logs_where(start_date="2026-08-10", end_date="2026-08-10")
+
+    assert where["start_time"]["gte"] == datetime(2026, 8, 10, 0, 0, tzinfo=timezone.utc)
+    assert where["start_time"]["lte"] == datetime(2026, 8, 10, 23, 59, 59, tzinfo=timezone.utc)
