@@ -1,6 +1,10 @@
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
+  default: () => true,
+}));
+
 const mockUserDailyActivityCall = vi.fn();
 
 vi.mock("@/components/networking", () => ({
