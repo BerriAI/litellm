@@ -11437,7 +11437,7 @@ async def test_regenerate_rejects_route_transition_before_recording_deletion():
             execute_mock,
         ),
     ):
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ProxyException) as exc_info:
             await regenerate_key_fn(
                 key="sk-old",
                 data=RegenerateKeyRequest(key_type=LiteLLMKeyType.LLM_API),
@@ -11447,8 +11447,8 @@ async def test_regenerate_rejects_route_transition_before_recording_deletion():
                 ),
             )
 
-    assert exc_info.value.status_code == 403
-    assert "allowed_routes" in str(exc_info.value.detail)
+    assert exc_info.value.code == "403"
+    assert "allowed_routes" in str(exc_info.value.message)
     persist_deleted_mock.assert_not_awaited()
     execute_mock.assert_not_awaited()
 
@@ -12145,7 +12145,30 @@ class TestAllowedRoutesCallerPermission:
         assert "allowed_routes" not in update_data
 
     @pytest.mark.asyncio
-    async def test_update_key_default_type_clears_existing_preset_routes(self):
+    @pytest.mark.parametrize(
+        "data",
+        [
+            pytest.param(
+                UpdateKeyRequest(
+                    key="sk-test",
+                    key_type=LiteLLMKeyType.DEFAULT,
+                    allowed_routes=None,
+                ),
+                id="explicit-null",
+            ),
+            pytest.param(
+                UpdateKeyRequest(
+                    key="sk-test",
+                    key_type=LiteLLMKeyType.DEFAULT,
+                ),
+                id="omitted",
+            ),
+        ],
+    )
+    async def test_update_key_default_type_clears_existing_preset_routes(
+        self,
+        data: UpdateKeyRequest,
+    ):
         """An explicit default preset must remove the stored route restriction."""
         from types import SimpleNamespace
 
@@ -12154,10 +12177,7 @@ class TestAllowedRoutesCallerPermission:
         )
 
         update_data = await prepare_key_update_data(
-            data=UpdateKeyRequest(
-                key="sk-test",
-                key_type=LiteLLMKeyType.DEFAULT,
-            ),
+            data=data,
             existing_key_row=SimpleNamespace(
                 metadata={},
                 team_id=None,

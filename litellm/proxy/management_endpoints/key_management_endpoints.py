@@ -2067,7 +2067,7 @@ async def prepare_key_update_data(
     data_json: Final[dict] = data.model_dump(exclude_unset=True)
     if "key_type" in data.model_fields_set:
         handle_key_type(data, data_json)
-        if data.key_type == LiteLLMKeyType.DEFAULT and "allowed_routes" not in data.model_fields_set:
+        if data.key_type == LiteLLMKeyType.DEFAULT and data_json.get("allowed_routes") is None:
             data_json["allowed_routes"] = []
     data_json.pop("key", None)
     data_json.pop("new_key", None)
@@ -4813,6 +4813,11 @@ async def _execute_virtual_key_regeneration(
 
     # Mirror the /key/update ownership rebind guard. See helper docstring.
     _validate_caller_can_change_key_ownership(
+        data=data,
+        existing_key_row=key_in_db,
+        user_api_key_dict=user_api_key_dict,
+    )
+    _check_key_type_transition_against_existing_routes(
         data=data,
         existing_key_row=key_in_db,
         user_api_key_dict=user_api_key_dict,
