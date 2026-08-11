@@ -172,7 +172,7 @@ class TagRateLimitEntry(BaseModel):
 
 
 class TagRateLimitGroup(BaseModel):
-    limits: list[TagRateLimitEntry] = Field(default_factory=list)
+    limits: tuple[TagRateLimitEntry, ...] = ()
 
 
 class TagRateLimits(BaseModel):
