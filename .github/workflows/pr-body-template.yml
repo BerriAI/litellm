@@ -1,0 +1,47 @@
+name: PR Body Template
+
+# The imperative rules in .github/pull_request_template.md live inside HTML
+# comments, which are invisible in the rendered PR and get stripped from the
+# template copies that agent harnesses inject into context, so authors (human
+# and AI) routinely miss them. This workflow turns the machine-checkable
+# subset into a real gate: TLDR and Caveats must be short bullets, no template
+# placeholders may remain, and the QA runbook section must be deleted unless
+# the PR edits tests/e2e.
+#
+# Skip with the ignore-pr-body-template label (mirrors conventional-commits).
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint-pr-body:
+    name: Validate PR body
+    if: ${{ !endsWith(github.event.pull_request.user.login, '[bot]') && !contains(github.event.pull_request.labels.*.name, 'ignore-pr-body-template') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout lint script
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: List changed files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename' > changed_files.txt
+
+      - name: Check body against template comment rules
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: python3 .github/scripts/check_pr_body.py --changed-files changed_files.txt
