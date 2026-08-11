@@ -98,8 +98,7 @@ end
                         return True
                     else:
                         verbose_proxy_logger.info(
-                            "Spend tracking - pod %s could not acquire lock for cronjob_id=%s, "
-                            "held by pod %s. Spend updates in Redis will wait for the leader pod to commit.",
+                            "Pod %s could not acquire lock for cronjob_id=%s, held by pod %s.",
                             self.pod_id,
                             cronjob_id,
                             current_value,

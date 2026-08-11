@@ -9046,19 +9046,32 @@ class ProxyStartupEvent:
             if spend_report_frequency[-1].lower() != "d":
                 raise ValueError("spend_report_frequency must be specified in days, e.g., '1d', '7d'")
 
+            pod_lock_manager: Final = proxy_logging_obj.db_spend_update_writer.pod_lock_manager
+
+            async def _scheduled_weekly_spend_report() -> None:
+                # TTL spans the whole reporting window: each pod's interval anchor is its own
+                # boot time + jitter, so a shorter lock would let a later pod re-send the report
+                if await pod_lock_manager.acquire_lock(cronjob_id="weekly_spend_report_job", ttl=days * 86400) is False:
+                    return
+                await proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report(spend_report_frequency)
+
+            async def _scheduled_monthly_spend_report() -> None:
+                if await pod_lock_manager.acquire_lock(cronjob_id="monthly_spend_report_job", ttl=3600) is False:
+                    return
+                await proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report()
+
             scheduler.add_job(
-                proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report,
+                _scheduled_weekly_spend_report,
                 "interval",
                 days=days,
                 next_run_time=datetime.now() + timedelta(seconds=10 + random.randint(0, 300)),
-                args=[spend_report_frequency],
                 id="weekly_spend_report_job",
                 replace_existing=True,
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
 
             scheduler.add_job(
-                proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report,
+                _scheduled_monthly_spend_report,
                 "cron",
                 day=1,
                 id="monthly_spend_report_job",
@@ -9068,8 +9081,16 @@ class ProxyStartupEvent:
             if os.getenv("PROMETHEUS_URL"):
                 from zoneinfo import ZoneInfo
 
+                async def _scheduled_fallback_stats() -> None:
+                    if (
+                        await pod_lock_manager.acquire_lock(cronjob_id="prometheus_fallback_stats_job", ttl=3600)
+                        is False
+                    ):
+                        return
+                    await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
+
                 scheduler.add_job(
-                    proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus,
+                    _scheduled_fallback_stats,
                     "cron",
                     hour=PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
                     minute=0,

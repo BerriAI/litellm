@@ -467,7 +467,10 @@ class ProxyLogging:
             and not self.daily_report_started
         ):
             asyncio.create_task(
-                self.slack_alerting_instance._run_scheduled_daily_report(llm_router=llm_router)
+                self.slack_alerting_instance._run_scheduled_daily_report(
+                    llm_router=llm_router,
+                    pod_lock_manager=self.db_spend_update_writer.pod_lock_manager,
+                )
             )  # RUN DAILY REPORT (if scheduled)
             self.daily_report_started = True
 
