@@ -2130,6 +2130,23 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             ephemeral_1h_input_tokens=sum(int(c.get("ephemeral_1h_input_tokens") or 0) for c in breakdowns),
         )
 
+    @staticmethod
+    def _resolve_cache_creation_token_details(usage: Mapping[str, Any]) -> CacheCreationTokenDetails | None:
+        iterations: Final = usage.get("iterations")
+        if iterations:
+            aggregated: Final = AnthropicConfig._aggregate_cache_creation_token_details(
+                it.get("cache_creation") for it in iterations
+            )
+            if aggregated is not None:
+                return aggregated
+        cache_creation: Final = usage.get("cache_creation")
+        if not isinstance(cache_creation, Mapping):
+            return None
+        return CacheCreationTokenDetails(
+            ephemeral_5m_input_tokens=cache_creation.get("ephemeral_5m_input_tokens"),
+            ephemeral_1h_input_tokens=cache_creation.get("ephemeral_1h_input_tokens"),
+        )
+
     def calculate_usage(
         self,
         usage_object: dict,
@@ -2145,7 +2162,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _usage: Final = usage_object
         cache_creation_input_tokens: int = 0
         cache_read_input_tokens: int = 0
-        cache_creation_token_details: CacheCreationTokenDetails | None = None
+        cache_creation_token_details: Final = self._resolve_cache_creation_token_details(_usage)
         web_search_requests: int | None = None
         tool_search_requests: int | None = None
         inference_geo: str | None = None
@@ -2163,9 +2180,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             cache_creation_input_tokens = sum(it.get("cache_creation_input_tokens", 0) or 0 for it in iterations)
             cache_read_input_tokens = sum(it.get("cache_read_input_tokens", 0) or 0 for it in iterations)
             prompt_tokens += cache_creation_input_tokens + cache_read_input_tokens
-            cache_creation_token_details = self._aggregate_cache_creation_token_details(
-                it.get("cache_creation") for it in iterations
-            )
 
         if not iterations:
             if "cache_creation_input_tokens" in _usage and _usage["cache_creation_input_tokens"] is not None:
@@ -2197,12 +2211,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         tool_search_count += 1
             if tool_search_count > 0:
                 tool_search_requests = tool_search_count
-
-        if cache_creation_token_details is None and "cache_creation" in _usage and _usage["cache_creation"] is not None:
-            cache_creation_token_details = CacheCreationTokenDetails(
-                ephemeral_5m_input_tokens=_usage["cache_creation"].get("ephemeral_5m_input_tokens"),
-                ephemeral_1h_input_tokens=_usage["cache_creation"].get("ephemeral_1h_input_tokens"),
-            )
 
         raw_input_tokens: Final = prompt_tokens - cache_read_input_tokens - cache_creation_input_tokens
         prompt_tokens_details: Final = PromptTokensDetailsWrapper(
