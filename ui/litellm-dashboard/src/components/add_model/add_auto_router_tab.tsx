@@ -493,7 +493,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
               labelCol={{ span: 10 }}
               labelAlign="left"
             >
-              <TeamDropdown />
+              <TeamDropdown adminOnly />
             </Form.Item>
           )}
 

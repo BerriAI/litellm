@@ -3,7 +3,9 @@ import { Select, Typography } from "antd";
 import { LoadingOutlined } from "@ant-design/icons";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
 import { useInfiniteTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
+import { isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { Team } from "../key_team_helpers/key_list";
 
 const { Text } = Typography;
@@ -17,6 +19,8 @@ interface TeamDropdownProps {
   /** Filter teams by organization. */
   organizationId?: string | null;
   pageSize?: number;
+  /** Only list teams the current user administers, e.g. for team-scoped model creation. */
+  adminOnly?: boolean;
 }
 
 const SCROLL_THRESHOLD = 0.8;
@@ -28,7 +32,9 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
   disabled,
   organizationId,
   pageSize = 20,
+  adminOnly = false,
 }) => {
+  const { userId } = useAuthorized();
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useDebouncedState("", {
     wait: DEBOUNCE_WAIT_MS,
@@ -47,12 +53,13 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
     for (const page of data.pages) {
       for (const team of page.teams) {
         if (seen.has(team.team_id)) continue;
+        if (adminOnly && !isUserTeamAdminForSingleTeam(team.members_with_roles, userId ?? "")) continue;
         seen.add(team.team_id);
         result.push(team);
       }
     }
     return result;
-  }, [data]);
+  }, [data, adminOnly, userId]);
 
   const handlePopupScroll = (e: UIEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
