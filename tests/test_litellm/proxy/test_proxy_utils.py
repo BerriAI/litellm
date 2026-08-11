@@ -1085,3 +1085,87 @@ async def test_post_mcp_call_hook_propagates_guardrail_block(restore_callbacks):
             request_data={"mcp_tool_name": "echo"},
             user_api_key_dict=None,
         )
+
+
+@pytest.mark.asyncio
+async def test_prisma_health_check_failure_names_itself_at_operator_visible_level(caplog):
+    """A failing DB health check has to name the check that failed, at a level
+    operators actually run at.
+
+    Reporting it as ``disconnect()`` sends anyone grepping the logs to the wrong
+    function and reads as "the check never ran", and reporting it only at debug
+    level hides a database fault behind a flag nobody enables in production."""
+    import logging
+    from functools import partial
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.utils import PrismaClient
+
+    client = MagicMock()
+    client.db.query_raw = AsyncMock(side_effect=Exception("connection refused"))
+    client.proxy_logging_obj.failure_handler = AsyncMock()
+    client._probe_target_wrapper = MagicMock(return_value=client.db)
+    client._run_health_probe = partial(PrismaClient._run_health_probe, client)
+    client._report_health_check_failure = AsyncMock()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        with pytest.raises(Exception, match="connection refused"):
+            await PrismaClient.health_check(client)
+
+    assert "health_check()" in caplog.text
+    assert "disconnect()" not in caplog.text
+    assert "connection refused" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_prisma_connect_failure_is_reported_at_operator_visible_level(caplog):
+    """The sibling connect failure is labelled correctly but was equally
+    invisible. A database the proxy could not connect to at startup must not be
+    a debug-only record."""
+    import logging
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.utils import PrismaClient
+
+    client = MagicMock()
+    client.db.is_connected = MagicMock(return_value=False)
+    client.db.connect = AsyncMock(side_effect=Exception("could not reach database"))
+    client.proxy_logging_obj.failure_handler = AsyncMock()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        with pytest.raises(Exception, match="could not reach database"):
+            await PrismaClient.connect(client)
+
+    assert "connect()" in caplog.text
+    assert "could not reach database" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_prisma_health_check_failure_redacts_database_credentials(caplog):
+    """Raising the level must not widen what reaches the logs. The exception
+    text can carry a full connection string, so the credential has to be gone
+    from the emitted record."""
+    import logging
+    from functools import partial
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.utils import PrismaClient
+
+    client = MagicMock()
+    client.db.query_raw = AsyncMock(
+        side_effect=Exception("could not connect to postgresql://admin:hunter2@db.internal:5432/litellm")
+    )
+    client.proxy_logging_obj.failure_handler = AsyncMock()
+    client._probe_target_wrapper = MagicMock(return_value=client.db)
+    client._run_health_probe = partial(PrismaClient._run_health_probe, client)
+    client._report_health_check_failure = AsyncMock()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        with pytest.raises(Exception):
+            await PrismaClient.health_check(client)
+
+    emitted = [record.getMessage() for record in caplog.records if record.name == "LiteLLM Proxy"]
+
+    assert emitted
+    assert all("hunter2" not in message for message in emitted)
+    assert any("postgresql://REDACTED@db.internal" in message for message in emitted)

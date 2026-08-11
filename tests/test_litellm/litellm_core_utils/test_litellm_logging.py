@@ -11,6 +11,9 @@ sys.path.insert(
 
 import time
 
+import httpx
+from openai._legacy_response import HttpxBinaryResponseContent
+
 import litellm
 from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 from litellm.integrations.custom_logger import CustomLogger
@@ -522,6 +525,26 @@ class TestUpdateFromKwargs:
             litellm_params={"litellm_call_id": "call-empty"},
         )
         assert logging_obj.litellm_params["litellm_call_id"] == "call-empty"
+
+    @pytest.mark.parametrize("caller_metadata", [None, "not-a-dict", 42])
+    def test_non_dict_caller_metadata_does_not_break_the_merge(self, logging_obj, caller_metadata):
+        logging_obj.update_from_kwargs(
+            kwargs={"metadata": caller_metadata, "litellm_metadata": {"user_api_key_hash": "hashed"}},
+            litellm_params={"metadata": {"user_api_key_hash": "hashed", "litellm_api_version": "1.0"}},
+        )
+
+        assert logging_obj.litellm_params["metadata"]["user_api_key_hash"] == "hashed"
+
+    def test_does_not_mutate_caller_metadata_dict(self, logging_obj):
+        caller_metadata: dict = {}
+
+        logging_obj.update_from_kwargs(
+            kwargs={"metadata": caller_metadata, "litellm_metadata": {"user_api_key_hash": "hashed"}},
+            litellm_params={"metadata": {"user_api_key_hash": "hashed", "litellm_api_version": "1.0"}},
+        )
+
+        assert caller_metadata == {}
+        assert logging_obj.litellm_params["metadata"]["user_api_key_hash"] == "hashed"
 
 
 def test_logging_prevent_double_logging(logging_obj):
@@ -1769,6 +1792,60 @@ def test_response_cost_calculator_does_not_transform_non_generate_content_dict()
         result={"usageMetadata": {"promptTokenCount": 1000, "candidatesTokenCount": 500}}
     )
     assert not cost
+
+
+def _file_content_logging_obj(call_type: str) -> LitellmLogging:
+    logging_obj = LitellmLogging(
+        model="gemini-3-flash-preview",
+        messages="default-message-value",
+        stream=False,
+        call_type=call_type,
+        start_time=time.time(),
+        litellm_call_id=f"file-content-{call_type}",
+        function_id=f"file-content-{call_type}",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "vertex_ai"
+    logging_obj.model_call_details["input"] = "default-message-value"
+    logging_obj.optional_params = {}
+    return logging_obj
+
+
+@pytest.mark.parametrize("call_type", ["afile_content", "file_content"])
+def test_file_content_call_is_not_billed(call_type):
+    """
+    Regression for #35130: file content retrieval has no token usage, but ``function_setup``
+    stores the ``"default-message-value"`` placeholder as the logged input, which the cost
+    calculator then token-priced, billing every call at exactly 3 * input_cost_per_token.
+    """
+    result = HttpxBinaryResponseContent(httpx.Response(status_code=200, content=b"file contents"))
+
+    cost = _file_content_logging_obj(call_type)._response_cost_calculator(result=result)
+
+    assert cost == 0.0
+
+
+@pytest.mark.parametrize("call_type", ["aspeech", "speech"])
+def test_speech_call_is_still_priced_from_input_characters(call_type):
+    """tts bills per input character, so speech call types must keep passing the input along."""
+    logging_obj = LitellmLogging(
+        model="tts-1",
+        messages="the quick brown fox jumped over the lazy dogs",
+        stream=False,
+        call_type=call_type,
+        start_time=time.time(),
+        litellm_call_id=f"speech-{call_type}",
+        function_id=f"speech-{call_type}",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+    logging_obj.model_call_details["input"] = "the quick brown fox jumped over the lazy dogs"
+    logging_obj.optional_params = {}
+
+    result = HttpxBinaryResponseContent(httpx.Response(status_code=200, content=b"audio bytes"))
+
+    cost = logging_obj._response_cost_calculator(result=result)
+
+    assert cost is not None
+    assert cost > 0
 
 
 def test_sentry_event_scrubber_initialization(monkeypatch):
