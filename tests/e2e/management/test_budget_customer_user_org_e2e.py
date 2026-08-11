@@ -55,15 +55,20 @@ class BudgetNewResponse(BaseModel):
     budget_id: str
 
 
-class ModelBudgetEntry(BaseModel):
+class ModelBudgetRequest(BaseModel):
     budget_limit: float
     time_period: str
+
+
+class StoredModelBudget(BaseModel):
+    max_budget: float
+    budget_duration: str
 
 
 class BudgetUpdateBody(BaseModel):
     budget_id: str
     max_budget: float | None = None
-    model_max_budget: dict[str, ModelBudgetEntry] | None = None
+    model_max_budget: dict[str, ModelBudgetRequest] | None = None
 
 
 class BudgetInfoBody(BaseModel):
@@ -74,7 +79,7 @@ class BudgetRow(BaseModel):
     budget_id: str | None = None
     max_budget: float | None = None
     soft_budget: float | None = None
-    model_max_budget: dict[str, ModelBudgetEntry] | None = None
+    model_max_budget: dict[str, StoredModelBudget] | None = None
 
 
 class BudgetInfoResponse(RootModel[list[BudgetRow]]):
@@ -125,15 +130,15 @@ def _budget_rows(client: ManagementClient, budget_id: str) -> tuple[BudgetRow, .
     )
 
 
-def _find_model_budget(
+def _stored_model_budget(
     client: ManagementClient, budget_id: str, model_name: str
-) -> BudgetRow | None:
+) -> StoredModelBudget | None:
     row = next(
         (r for r in _budget_rows(client, budget_id) if r.budget_id == budget_id), None
     )
-    if row is None or not row.model_max_budget or model_name not in row.model_max_budget:
+    if row is None or row.model_max_budget is None:
         return None
-    return row
+    return row.model_max_budget.get(model_name)
 
 
 def _budget_list_ids(client: ManagementClient) -> tuple[str, ...]:
@@ -168,7 +173,12 @@ class TestBudgetManagement:
             f"/budget/list never included the created budget {budget_id}",
         )
 
-    @pytest.mark.skip(reason="stage red: product gap, /budget/update 500s on any model_max_budget (prisma Json arg + unquoted GraphQL interpolation)")
+    @pytest.mark.skip(
+        reason=(
+            "stage red: product gap, /budget/update 500s on any model_max_budget "
+            "(prisma Json arg + unquoted GraphQL interpolation)"
+        )
+    )
     @pytest.mark.covers("mgmt.budget.update.accepts_model_max_budget")
     def test_update_accepts_per_model_budgets_including_punctuated_names(
         self, client: ManagementClient, resources: ResourceManager
@@ -190,6 +200,7 @@ class TestBudgetManagement:
         budget_id = _create_budget(
             client, resources, BudgetNewBody(max_budget=_INITIAL_MAX_BUDGET)
         )
+        expected = StoredModelBudget(max_budget=5.0, budget_duration="1d")
 
         result = client.proxy.transport.post(
             "/budget/update",
@@ -197,7 +208,10 @@ class TestBudgetManagement:
             json=BudgetUpdateBody(
                 budget_id=budget_id,
                 model_max_budget={
-                    model_name: ModelBudgetEntry(budget_limit=5.0, time_period="1d")
+                    model_name: ModelBudgetRequest(
+                        budget_limit=expected.max_budget,
+                        time_period=expected.budget_duration,
+                    )
                 },
             ),
             response_type=NoBody,
@@ -208,11 +222,15 @@ class TestBudgetManagement:
             f"a customer cannot cap spend per model on an existing budget"
         )
 
+        def persisted() -> StoredModelBudget | None:
+            stored = _stored_model_budget(client, budget_id, model_name)
+            return stored if stored == expected else None
+
         _ = _poll(
             client,
-            lambda: _find_model_budget(client, budget_id, model_name),
-            f"/budget/info never reported a model_max_budget entry for {model_name!r} "
-            f"on budget {budget_id}",
+            persisted,
+            f"/budget/info never reported {expected.model_dump()} for "
+            f"model_max_budget[{model_name!r}] on budget {budget_id}",
         )
 
     @pytest.mark.covers("mgmt.budget.update.persists")

@@ -87,19 +87,21 @@ def test_end_user_model_max_budget_enforces_per_model_rpm(
     key = client.generate_key()
     resources.defer(lambda: client.delete_key(key))
 
-    statuses = tuple(
-        client.chat(
-            key, FREE_MODEL, f"hi {unique_marker()}", max_tokens=8, user=customer
-        ).status_code
-        for _ in range(3)
+    first = client.chat(
+        key, FREE_MODEL, f"hi {unique_marker()}", max_tokens=8, user=customer
     )
+    require_successful_call(first)
 
-    assert statuses[0] == 200, (
-        f"the first call under an rpm_limit of 1 should succeed, got {statuses[0]}"
+    blocked = client.chat(
+        key, FREE_MODEL, f"hi {unique_marker()}", max_tokens=8, user=customer
     )
-    assert 429 in statuses[1:], (
-        f"an end-user budget with model_max_budget rpm_limit=1 did not throttle: "
-        f"three calls returned {statuses}. The limit is accepted and stored by "
-        f"/budget/new but never enforced for end-user budgets, so a customer "
-        f"cannot rate-limit an individual end user on a shared key"
+    assert blocked.status_code == 429, (
+        "the second call under an end-user model rpm_limit of 1 must be blocked; "
+        f"got {blocked.status_code}: {blocked.body[:300]}"
+    )
+    assert "Rate limit exceeded" in blocked.body, (
+        f"the 429 must come from the gateway rate limiter: {blocked.body[:300]}"
+    )
+    assert "Limit type: requests" in blocked.body, (
+        f"the rate-limit block must identify the RPM dimension: {blocked.body[:300]}"
     )
