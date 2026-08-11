@@ -4,9 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const mockUserDailyActivityCall = vi.fn();
-const { useAuthorizedMock } = vi.hoisted(() => ({ useAuthorizedMock: vi.fn() }));
-
-const mockToolSpendResponse = { by_tool: [], daily: [], start_date: null, end_date: null };
+const { useAuthorizedMock, mockToolSpendResponse } = vi.hoisted(() => ({
+  useAuthorizedMock: vi.fn(),
+  mockToolSpendResponse: { by_tool: [], daily: [], start_date: null, end_date: null },
+}));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: useAuthorizedMock,
