@@ -69,17 +69,17 @@ impl AudioTranscriptionLifecycleHooks {
             .await
             .map_err(guardrail_error_to_core_error)?;
 
-        let Value::Object(mut data) = guardrail_request.data else {
+        let Value::Object(data) = guardrail_request.data else {
             return Err(CoreError::InvalidRequest(
                 "audio transcription pre_call guardrail must return an object".to_string(),
             ));
         };
 
-        let audio = data.remove("audio").ok_or_else(|| {
+        let audio = data.get("audio").cloned().ok_or_else(|| {
             CoreError::InvalidRequest("audio transcription guardrail removed audio".to_string())
         })?;
 
-        let optional_params = match data.remove("optional_params") {
+        let optional_params = match data.get("optional_params").cloned() {
             Some(Value::Object(value)) => value,
             Some(_) => {
                 return Err(CoreError::InvalidRequest(
@@ -100,7 +100,7 @@ impl AudioTranscriptionLifecycleHooks {
         &self,
         request: PreparedAudioTranscriptionRequest,
     ) -> CoreResult<CorePreparedAudioTranscriptionRequest> {
-        let mut provider_request =
+        let provider_request =
             prepare_audio_transcription_request(CoreAudioTranscriptionRequest {
                 model: &request.model,
                 audio: request.audio,
@@ -135,19 +135,17 @@ impl AudioTranscriptionLifecycleHooks {
             .await
             .map_err(guardrail_error_to_core_error)?;
 
-        let Value::Object(mut data) = guardrail_request.data else {
+        let Value::Object(data) = guardrail_request.data else {
             return Err(CoreError::InvalidRequest(
                 "audio transcription during_call guardrail must return an object".to_string(),
             ));
         };
 
-        let body = data.remove("body").ok_or_else(|| {
+        let body = data.get("body").cloned().ok_or_else(|| {
             CoreError::InvalidRequest("audio transcription guardrail removed body".to_string())
         })?;
 
-        provider_request.replace_body(body);
-
-        Ok(provider_request)
+        Ok(provider_request.with_body(body))
     }
 
     fn logging_payload(

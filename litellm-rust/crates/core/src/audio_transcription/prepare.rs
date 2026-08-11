@@ -22,7 +22,7 @@ pub(super) fn prepare_audio_transcription_call(
 
     let env_lookup = environment_lookup;
 
-    let mut headers = string_headers(request.extra_headers)?;
+    let headers = string_headers(request.extra_headers)?;
 
     let url = config.complete_url(
         request.api_base,
@@ -38,12 +38,20 @@ pub(super) fn prepare_audio_transcription_call(
 
     let auth = config.auth_strategy(&model, &request.optional_params, &env_lookup)?;
 
-    if matches!(auth, AudioTranscriptionAuth::Bearer)
+    let headers = if matches!(auth, AudioTranscriptionAuth::Bearer)
         && !has_header(&headers, "authorization")
         && let Some(api_key) = request.api_key
     {
-        headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
-    }
+        headers
+            .into_iter()
+            .chain(std::iter::once((
+                "Authorization".to_string(),
+                format!("Bearer {api_key}"),
+            )))
+            .collect()
+    } else {
+        headers
+    };
 
     Ok(PreparedAudioTranscriptionRequest {
         model,

@@ -2,11 +2,12 @@ use crate::CoreResult;
 use crate::error::CoreError;
 
 #[cfg(feature = "bedrock-auth")]
+use std::collections::BTreeMap;
+#[cfg(feature = "bedrock-auth")]
 use std::time::SystemTime;
 
 #[cfg(feature = "bedrock-auth")]
 use crate::providers::bedrock::audio_transcription::aws_auth_config;
-
 #[cfg(feature = "bedrock-auth")]
 use crate::providers::bedrock::aws_base::{resolve_credentials, sign_bedrock_post};
 
@@ -17,23 +18,23 @@ use super::transformation::AudioTranscriptionAuth;
 use super::types::{AudioTranscriptionResponseData, PreparedAudioTranscriptionRequest};
 
 pub(super) async fn execute_audio_transcription_provider_call(
-    mut request: PreparedAudioTranscriptionRequest,
+    request: PreparedAudioTranscriptionRequest,
 ) -> CoreResult<AudioTranscriptionResponseData> {
-    sign_request(&mut request).await?;
-
     let body = serde_json::to_vec(&request.body).map_err(|error| {
         CoreError::InvalidRequest(format!("invalid audio request body: {error}"))
     })?;
 
-    let mut request_builder = http_client().post(&request.url).body(body);
+    let headers = authenticated_headers(&request, &body).await?;
 
-    for (key, value) in &request.upstream_headers {
-        request_builder = request_builder.header(key, value);
-    }
+    let request_builder = headers.into_iter().fold(
+        http_client().post(&request.url).body(body),
+        |builder, (key, value)| builder.header(key, value),
+    );
 
-    if let Some(timeout) = request.timeout {
-        request_builder = request_builder.timeout(timeout);
-    }
+    let request_builder = match request.timeout {
+        Some(timeout) => request_builder.timeout(timeout),
+        None => request_builder,
+    };
 
     let response = request_builder
         .send()
@@ -65,7 +66,10 @@ pub(super) async fn execute_audio_transcription_provider_call(
         .transform_transcription_response(&request.model, response_json)
 }
 
-async fn sign_request(request: &mut PreparedAudioTranscriptionRequest) -> CoreResult<()> {
+async fn authenticated_headers(
+    request: &PreparedAudioTranscriptionRequest,
+    body: &[u8],
+) -> CoreResult<Vec<(String, String)>> {
     let env_lookup = environment_lookup;
 
     let auth =
@@ -74,45 +78,42 @@ async fn sign_request(request: &mut PreparedAudioTranscriptionRequest) -> CoreRe
             .auth_strategy(&request.model, &request.optional_params, &env_lookup)?;
 
     match auth {
-        AudioTranscriptionAuth::Bearer => {
-            ensure_content_type(request);
-            Ok(())
-        }
-
+        AudioTranscriptionAuth::Bearer => Ok(with_content_type(&request.upstream_headers)),
         AudioTranscriptionAuth::AwsSigV4 { region, .. } => {
-            sign_aws_sigv4_request(request, &region).await
+            aws_sigv4_headers(request, body, &region).await
         }
     }
 }
 
-fn ensure_content_type(request: &mut PreparedAudioTranscriptionRequest) {
-    if !request
-        .upstream_headers
+fn with_content_type(headers: &[(String, String)]) -> Vec<(String, String)> {
+    if headers
         .iter()
         .any(|(key, _)| key.eq_ignore_ascii_case("content-type"))
     {
-        request
-            .upstream_headers
-            .push(("Content-Type".to_string(), "application/json".to_string()));
+        headers.to_vec()
+    } else {
+        headers
+            .iter()
+            .cloned()
+            .chain(std::iter::once((
+                "Content-Type".to_string(),
+                "application/json".to_string(),
+            )))
+            .collect()
     }
 }
 
 #[cfg(feature = "bedrock-auth")]
-async fn sign_aws_sigv4_request(
-    request: &mut PreparedAudioTranscriptionRequest,
+async fn aws_sigv4_headers(
+    request: &PreparedAudioTranscriptionRequest,
+    body: &[u8],
     region: &str,
-) -> CoreResult<()> {
+) -> CoreResult<Vec<(String, String)>> {
     let env_lookup = environment_lookup;
 
-    let body = serde_json::to_vec(&request.body).map_err(|error| {
-        CoreError::InvalidRequest(format!("invalid audio request body: {error}"))
-    })?;
-
-    let mut headers = std::collections::BTreeMap::new();
-
-    headers.insert("Content-Type".to_string(), "application/json".to_string());
-
-    headers.extend(request.upstream_headers.iter().cloned());
+    let headers = std::iter::once(("Content-Type".to_string(), "application/json".to_string()))
+        .chain(request.upstream_headers.iter().cloned())
+        .collect::<BTreeMap<_, _>>();
 
     let credentials = resolve_credentials(
         aws_auth_config(&request.optional_params, &env_lookup),
@@ -120,25 +121,29 @@ async fn sign_aws_sigv4_request(
     )
     .await?;
 
-    headers.extend(sign_bedrock_post(
+    let signed_headers = sign_bedrock_post(
         &request.url,
-        &body,
+        body,
         &headers,
         region,
         &credentials,
         SystemTime::now(),
-    )?);
+    )?;
 
-    request.upstream_headers = headers.into_iter().collect();
-
-    Ok(())
+    Ok(headers
+        .into_iter()
+        .chain(signed_headers.into_iter())
+        .collect::<BTreeMap<_, _>>()
+        .into_iter()
+        .collect())
 }
 
 #[cfg(not(feature = "bedrock-auth"))]
-async fn sign_aws_sigv4_request(
-    _request: &mut PreparedAudioTranscriptionRequest,
+async fn aws_sigv4_headers(
+    _request: &PreparedAudioTranscriptionRequest,
+    _body: &[u8],
     _region: &str,
-) -> CoreResult<()> {
+) -> CoreResult<Vec<(String, String)>> {
     Err(CoreError::InvalidProvider(
         "AWS SigV4 authentication requires the `bedrock-auth` feature".to_string(),
     ))

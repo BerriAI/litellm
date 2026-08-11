@@ -54,13 +54,8 @@ impl PreparedAudioTranscriptionRequest {
         &self.body
     }
 
-    /// Replace the provider-transformed request body.
-    ///
-    /// This exists for host lifecycle integrations such as during-call
-    /// guardrails. Authentication is intentionally performed after this step
-    /// so signatures always cover the final body sent upstream.
-    pub fn replace_body(&mut self, body: Value) {
-        self.body = body;
+    pub fn with_body(self, body: Value) -> Self {
+        Self { body, ..self }
     }
 }
 
