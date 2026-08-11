@@ -3117,8 +3117,15 @@ class Router:
         self._merge_tools_from_deployment(deployment=deployment, kwargs=kwargs)
 
         model_info = deployment.get("model_info", {}).copy()
-        deployment_litellm_model_name = deployment["litellm_params"]["model"]
-        deployment_api_base = deployment["litellm_params"].get("api_base")
+        dep_litellm_params = deployment.get("litellm_params", {})
+        if not isinstance(dep_litellm_params, dict):
+            dep_litellm_params = dep_litellm_params.model_dump(exclude_none=True)
+        for field in CustomPricingLiteLLMParams.model_fields:
+            val = dep_litellm_params.get(field)
+            if val is not None:
+                model_info[field] = val
+        deployment_litellm_model_name = dep_litellm_params["model"]
+        deployment_api_base = dep_litellm_params.get("api_base")
         deployment_model_name: Final = deployment["model_name"]
         if is_clientside_credential(request_kwargs=kwargs):
             deployment_pydantic_obj: Final = self._handle_clientside_credential(

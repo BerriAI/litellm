@@ -405,6 +405,49 @@ def test_update_kwargs_with_deployment(model_list):
     assert all(field in kwargs["metadata"] for field in set_fields)
 
 
+def test_update_kwargs_with_deployment_folds_custom_pricing():
+    """Custom pricing fields from litellm_params should be folded into model_info
+    so that use_custom_pricing_for_model() detects them downstream.
+
+    Regression test for azure_ai + anthropic_messages $0 spend bug (#23309, #24204).
+    """
+    from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+
+    model_list = [
+        {
+            "model_name": "claude-sonnet-4",
+            "litellm_params": {
+                "model": "azure_ai/claude-sonnet-4-20250514",
+                "api_key": "fake-key",
+                "api_base": "https://example.ai.azure.com/v1",
+                "input_cost_per_token": 0.000003,
+                "output_cost_per_token": 0.000015,
+                "cache_read_input_token_cost": 0.0000003,
+                "cache_creation_input_token_cost": 0.00000375,
+            },
+        },
+    ]
+    router = Router(model_list=model_list)
+    kwargs: dict = {"metadata": {}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="claude-sonnet-4"
+    )
+    router._update_kwargs_with_deployment(
+        deployment=deployment,
+        kwargs=kwargs,
+    )
+
+    model_info = kwargs["metadata"]["model_info"]
+    model_info_dict = model_info if isinstance(model_info, dict) else model_info.model_dump()
+    assert model_info_dict.get("input_cost_per_token") == 0.000003
+    assert model_info_dict.get("output_cost_per_token") == 0.000015
+    assert model_info_dict.get("cache_read_input_token_cost") == 0.0000003
+    assert model_info_dict.get("cache_creation_input_token_cost") == 0.00000375
+
+    litellm_params_with_metadata = {"metadata": {"model_info": model_info_dict}}
+    assert use_custom_pricing_for_model(litellm_params_with_metadata) is True
+
+
 def test_update_kwargs_with_default_litellm_params(model_list):
     """Test if the '_update_kwargs_with_default_litellm_params' function is working correctly"""
     router = Router(
