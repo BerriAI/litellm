@@ -514,6 +514,7 @@ class AmazonConverseConfig(BaseConfig):
             supported_params.append("tool_choice")
             supported_params.append("thinking")
             supported_params.append("reasoning_effort")
+            supported_params.append("output_config")
             # For nova imported models, also add web_search_options
             if "nova" in model.lower():
                 supported_params.append("web_search_options")
@@ -564,6 +565,7 @@ class AmazonConverseConfig(BaseConfig):
         ):
             supported_params.append("thinking")
             supported_params.append("reasoning_effort")
+            supported_params.append("output_config")
 
         if base_model.startswith("anthropic"):
             supported_params.append("context_management")
@@ -919,6 +921,10 @@ class AmazonConverseConfig(BaseConfig):
                 self._handle_reasoning_effort_parameter(
                     model=model, reasoning_effort=value, optional_params=optional_params
                 )
+            elif param == "output_config" and isinstance(value, dict):
+                mapped_output_config = dict(value)
+                normalize_bedrock_opus_output_config_effort(model=model, output_config=mapped_output_config)
+                optional_params["output_config"] = mapped_output_config  # rebind-ok: out-param store like siblings
             elif param == "context_management" and isinstance(value, (dict, list)):
                 self._map_context_management_param(value, optional_params)
             if param == "requestMetadata":
