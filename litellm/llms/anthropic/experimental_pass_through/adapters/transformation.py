@@ -74,12 +74,12 @@ from litellm.llms.anthropic.experimental_pass_through.context_management import 
 )
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
+    AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
-    AnthopicMessagesAssistantMessageParam,
     AnthropicFinishReason,
     AnthropicMessagesRequest,
+    AnthropicMessagesSystemMessageParam,
     AnthropicMessagesToolChoice,
-    AnthropicMessagesUserMessageParam,
     AnthropicResponseContentBlockRedactedThinking,
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockThinking,
@@ -343,7 +343,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     def translate_anthropic_messages_to_openai(
         self,
-        messages: list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam],
+        messages: list[AllAnthropicPassThroughMessageValues],
         model: str | None = None,
     ) -> list:
         new_messages: Final[list[AllMessageValues]] = []
@@ -351,6 +351,11 @@ class LiteLLMAnthropicMessagesAdapter:
             user_message: ChatCompletionUserMessage | None = None
             tool_message_list: list[ChatCompletionToolMessage] = []
             new_user_content_list: list[ChatCompletionTextObject | ChatCompletionImageObject] = []
+            if m["role"] == "system":
+                system_message = self._translate_midturn_system_message_to_openai(m, model)
+                if system_message is not None:
+                    new_messages.append(system_message)
+                continue
             ## USER MESSAGE ##
             if m["role"] == "user":
                 ## translate user message
@@ -848,6 +853,29 @@ class LiteLLMAnthropicMessagesAdapter:
                 for def_schema in schema[key].values():
                     LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(def_schema)
 
+    def _translate_midturn_system_message_to_openai(
+        self,
+        message: AnthropicMessagesSystemMessageParam,
+        model: str | None,
+    ) -> ChatCompletionSystemMessage | None:
+        """Translate an in-sequence system entry without changing its role or position."""
+        content: Final = message.get("content")
+        if isinstance(content, str):
+            return ChatCompletionSystemMessage(role="system", content=content) if content else None
+        if not isinstance(content, list):
+            return None
+        text_parts: Final[list[ChatCompletionTextObject]] = []  # mutable-ok: API message payload
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "text":  # pyright: ignore[reportUnnecessaryIsInstance]  # untrusted client payload
+                continue
+            text = block.get("text")
+            if not text:
+                continue
+            text_obj = ChatCompletionTextObject(type="text", text=text)
+            self._add_cache_control_if_applicable(block, text_obj, model)
+            text_parts.append(text_obj)
+        return ChatCompletionSystemMessage(role="system", content=text_parts) if text_parts else None
+
     def _add_system_message_to_messages(
         self,
         new_messages: list[AllMessageValues],
@@ -1049,8 +1077,8 @@ class LiteLLMAnthropicMessagesAdapter:
         tool_name_mapping: dict[str, str] = {}
 
         ## CONVERT ANTHROPIC MESSAGES TO OPENAI
-        messages_list: Final[list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam]] = cast(
-            list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam],
+        messages_list: Final[list[AllAnthropicPassThroughMessageValues]] = cast(
+            list[AllAnthropicPassThroughMessageValues],
             anthropic_message_request["messages"],
         )
         new_messages = self.translate_anthropic_messages_to_openai(
