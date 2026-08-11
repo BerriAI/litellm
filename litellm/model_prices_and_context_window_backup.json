@@ -19464,7 +19464,6 @@
     },
     "gemini/gemini-2.5-flash": {
         "cache_read_input_token_cost": 3e-08,
-        "deprecation_date": "2026-10-16",
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "gemini",
@@ -19776,7 +19775,6 @@
     },
     "gemini/gemini-2.5-flash-lite": {
         "cache_read_input_token_cost": 1e-08,
-        "deprecation_date": "2026-10-16",
         "input_cost_per_audio_token": 3e-07,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "gemini",
@@ -20073,7 +20071,6 @@
     "gemini/gemini-2.5-pro": {
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
-        "deprecation_date": "2026-10-16",
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
         "input_cost_per_token_priority": 1.25e-06,
