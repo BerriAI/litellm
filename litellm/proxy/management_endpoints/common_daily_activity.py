@@ -864,8 +864,7 @@ def _aggregate_grouping_sets_records_sync(
     records: Sequence[_GroupingSetsRow],
     api_key_metadata: Mapping[str, _KeyMetadataDict],
     entity_breakdown: bool = False,
-    entity_metadata_field: Mapping[str, dict[str, object]]
-    | None = None,  # mutable-ok: matches every entity_metadata_field signature in this file
+    entity_metadata_field: Mapping[str, dict[str, object]] | None = None,  # mutable-ok: shared field shape
 ) -> _AggregatedSpendData:
     """Build the response from rollup rows produced by the GROUPING SETS query.
 
@@ -905,7 +904,10 @@ def _aggregate_grouping_sets_records_sync(
             metrics=metrics, metadata=_key_metadata(api_key_metadata, api_key)
         )
 
-    def ensure_entity(entities: dict[str, MetricWithMetadata], entity_id: str) -> MetricWithMetadata:
+    def ensure_entity(
+        entities: dict[str, MetricWithMetadata],  # mutable-ok: writes into breakdown.entities
+        entity_id: str,
+    ) -> MetricWithMetadata:
         existing: MetricWithMetadata | None = entities.get(entity_id)
         if existing is not None:
             return existing
@@ -1020,8 +1022,7 @@ async def _aggregate_grouping_sets_records(
     prisma_client: PrismaClient,
     records: Sequence[_GroupingSetsRow],
     entity_breakdown: bool = False,
-    entity_metadata_field: Mapping[str, dict[str, object]]
-    | None = None,  # mutable-ok: matches every entity_metadata_field signature in this file
+    entity_metadata_field: Mapping[str, dict[str, object]] | None = None,  # mutable-ok: shared field shape
 ) -> _AggregatedSpendData:
     """Async wrapper: fetch api_key_metadata, then dispatch on a worker thread."""
     api_keys: Final[set[str]] = {r.api_key for r in records if r.api_key and r.api_key != PTU_SENTINEL_API_KEY}

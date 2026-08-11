@@ -5540,9 +5540,7 @@ async def _append_permissions_to_all_teams(prisma_client: PrismaClient, permissi
 class _TeamDailyActivityScope(NamedTuple):
     team_ids: list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
     exclude_team_ids: list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
-    team_alias_metadata: dict[
-        str, dict[str, object]
-    ]  # mutable-ok: entity_metadata_field contract is Mapping[str, dict]
+    team_alias_metadata: dict[str, dict[str, object]]  # mutable-ok: entity_metadata_field shape
     api_key_filter: str | list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
 
 
