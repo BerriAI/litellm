@@ -7779,6 +7779,7 @@ export interface paths {
          *     Parameters:
          *     - key: Optional[str] - The key to update. Either key or key_alias must be provided.
          *     - key_alias: Optional[str] - User-friendly key alias. If key is omitted, also identifies the key to update (must match exactly one key, same as /key/delete's key_aliases)
+         *     - key_type: Optional[LiteLLMKeyType] - Access preset to apply to the key.
          *     - user_id: Optional[str] - User ID associated with key
          *     - team_id: Optional[str] - Team ID associated with key
          *     - agent_id: Optional[str] - The agent id associated with the key.
@@ -36311,6 +36312,7 @@ export interface components {
             key?: string | null;
             /** Key Alias */
             key_alias?: string | null;
+            key_type?: components["schemas"]["LiteLLMKeyType"] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */

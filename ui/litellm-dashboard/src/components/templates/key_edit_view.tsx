@@ -27,7 +27,9 @@ import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_c
 import { routerSettingsEditorValue, routerSettingsUpdate } from "../common_components/routerSettingsPayload";
 import { estimateTooltips, withNormalizedEstimates } from "./estimatedOutputTokens";
 import {
+  canonicalBudgetDuration,
   currentValuePlaceholder,
+  exactKeyTypePresetFromRoutes,
   keyTypeFromRoutes,
   modelSentinelOptions,
   parseAllowedRoutes,
@@ -236,6 +238,16 @@ export function KeyEditView({
         [...submittedRoutesSet].every((r) => originalRoutesSet.has(r));
       if (allowedRoutesUnchanged) {
         delete values.allowed_routes;
+      } else {
+        const exactKeyTypePreset = exactKeyTypePresetFromRoutes(values.allowed_routes);
+        if (exactKeyTypePreset) {
+          values.key_type = exactKeyTypePreset;
+          // The backend derives allowed_routes from key_type. Omitting the
+          // derived routes also lets authorized non-admins use safe presets.
+          delete values.allowed_routes;
+        } else {
+          delete values.key_type;
+        }
       }
 
       if (neverExpire) {

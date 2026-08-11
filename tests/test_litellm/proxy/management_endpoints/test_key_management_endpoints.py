@@ -13,8 +13,8 @@ import inspect
 
 from litellm.proxy._types import (
     GenerateKeyRequest,
-    NewUserRequest,
     LiteLLM_BudgetTable,
+    LiteLLMKeyType,
     LiteLLM_OrganizationTable,
     LiteLLM_ProjectTableCachedObj,
     LiteLLM_TeamTableCachedObj,
@@ -22,6 +22,7 @@ from litellm.proxy._types import (
     LiteLLM_VerificationToken,
     LitellmUserRoles,
     Member,
+    NewUserRequest,
     ProxyException,
     ResetSpendRequest,
     UpdateKeyRequest,
@@ -11350,6 +11351,49 @@ def _make_regenerate_existing_key():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_type",
+    [
+        LiteLLMKeyType.DEFAULT,
+        LiteLLMKeyType.LLM_API,
+        LiteLLMKeyType.READ_ONLY,
+    ],
+)
+async def test_execute_virtual_key_regeneration_rejects_preset_over_custom_routes(
+    key_type,
+):
+    """A non-admin regeneration preset must preserve a custom route allowlist."""
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _execute_virtual_key_regeneration,
+    )
+
+    existing_key = _make_regenerate_existing_key()
+    existing_key.allowed_routes = ["/custom/admin-defined-route"]
+    mock_prisma_client = _make_regenerate_mock_prisma()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=existing_key,
+            hashed_api_key="abc123",
+            key="abc123",
+            data=RegenerateKeyRequest(key_type=key_type),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                user_id="user-1",
+            ),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "allowed_routes" in str(exc_info.value.detail)
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
+
+
+@pytest.mark.asyncio
 async def test_execute_virtual_key_regeneration_rejects_over_limit_duration(monkeypatch):
     """Regenerate must reject durations exceeding upperbound_key_generate_params.duration."""
     from litellm.proxy._types import RegenerateKeyRequest
@@ -11836,6 +11880,278 @@ class TestAllowedRoutesCallerPermission:
                 )
         assert str(exc_info.value.code) == "403"
         assert "allowed_routes" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("key_type", "expected_routes"),
+        [
+            (LiteLLMKeyType.DEFAULT, []),
+            (LiteLLMKeyType.LLM_API, ["llm_api_routes"]),
+            (LiteLLMKeyType.READ_ONLY, ["info_routes"]),
+        ],
+    )
+    async def test_non_admin_update_key_accepts_empty_routes_with_safe_key_type(
+        self,
+        key_type: LiteLLMKeyType,
+        expected_routes: list[str],
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_update_key_data,
+            prepare_key_update_data,
+        )
+
+        data = UpdateKeyRequest(
+            key="sk-test",
+            allowed_routes=[],
+            key_type=key_type,
+        )
+        existing_key = SimpleNamespace(
+            created_by="internal-user-123",
+            key_alias=None,
+            max_budget=None,
+            metadata={},
+            organization_id=None,
+            project_id=None,
+            team_id=None,
+            token="hashed-key",
+            user_id="internal-user-123",
+        )
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="internal-user-123",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        await _validate_update_key_data(
+            data=data,
+            existing_key_row=existing_key,
+            user_api_key_dict=user_api_key_dict,
+            llm_router=None,
+            premium_user=True,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+        )
+
+        update_data = await prepare_key_update_data(
+            data=data,
+            existing_key_row=existing_key,
+        )
+        assert update_data["key_type"] == key_type.value
+        assert update_data["allowed_routes"] == expected_routes
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("key_type", "existing_routes"),
+        [
+            (LiteLLMKeyType.DEFAULT, ["llm_api_routes"]),
+            (LiteLLMKeyType.LLM_API, ["info_routes"]),
+            (LiteLLMKeyType.READ_ONLY, ["llm_api_routes"]),
+        ],
+    )
+    async def test_non_admin_update_key_accepts_key_type_only_over_safe_preset(
+        self,
+        key_type: LiteLLMKeyType,
+        existing_routes: list[str],
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_update_key_data,
+        )
+
+        res = await _validate_update_key_data(
+            data=UpdateKeyRequest(key="sk-test", key_type=key_type),
+            existing_key_row=SimpleNamespace(
+                allowed_routes=existing_routes,
+                max_budget=None,
+                team_id=None,
+                user_id="internal-user-123",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="internal-user-123",
+                user_role=LitellmUserRoles.INTERNAL_USER,
+            ),
+            llm_router=None,
+            premium_user=True,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+        )
+        assert res is None
+
+    @pytest.mark.asyncio
+    async def test_non_admin_update_key_rejects_empty_routes_with_management_key_type(
+        self,
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_update_key_data,
+        )
+
+        data = UpdateKeyRequest(
+            key="sk-test",
+            allowed_routes=[],
+            key_type=LiteLLMKeyType.MANAGEMENT,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _validate_update_key_data(
+                data=data,
+                existing_key_row=SimpleNamespace(
+                    max_budget=None,
+                    user_id="internal-user-123",
+                ),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id="internal-user-123",
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                ),
+                llm_router=None,
+                premium_user=True,
+                prisma_client=None,
+                user_api_key_cache=MagicMock(),
+            )
+        assert exc_info.value.status_code == 403
+        assert "allowed_routes" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "key_type",
+        [
+            LiteLLMKeyType.DEFAULT,
+            LiteLLMKeyType.LLM_API,
+            LiteLLMKeyType.READ_ONLY,
+        ],
+    )
+    async def test_non_admin_update_key_rejects_preset_over_custom_routes(
+        self, key_type
+    ):
+        """A preset must not replace an admin-defined route allowlist."""
+        from types import SimpleNamespace
+
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_update_key_data,
+        )
+
+        data = UpdateKeyRequest(
+            key="sk-test",
+            allowed_routes=[],
+            key_type=key_type,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _validate_update_key_data(
+                data=data,
+                existing_key_row=SimpleNamespace(
+                    allowed_routes=["/custom/admin-defined-route"],
+                    max_budget=None,
+                    user_id="internal-user-123",
+                ),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id="internal-user-123",
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                ),
+                llm_router=None,
+                premium_user=True,
+                prisma_client=None,
+                user_api_key_cache=MagicMock(),
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "allowed_routes" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_regenerate_key_omitting_key_type_preserves_classification(self):
+        """Regeneration must not materialize the request model's default key type."""
+        from types import SimpleNamespace
+
+        from litellm.proxy._types import RegenerateKeyRequest
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            prepare_key_update_data,
+        )
+
+        data = RegenerateKeyRequest(key="sk-test")
+        assert "key_type" not in data.model_fields_set
+
+        update_data = await prepare_key_update_data(
+            data=data,
+            existing_key_row=SimpleNamespace(
+                metadata={},
+                team_id=None,
+            ),
+        )
+
+        assert "key_type" not in update_data
+        assert "allowed_routes" not in update_data
+
+    @pytest.mark.asyncio
+    async def test_update_key_default_type_clears_existing_preset_routes(self):
+        """An explicit default preset must remove the stored route restriction."""
+        from types import SimpleNamespace
+
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            prepare_key_update_data,
+        )
+
+        update_data = await prepare_key_update_data(
+            data=UpdateKeyRequest(
+                key="sk-test",
+                key_type=LiteLLMKeyType.DEFAULT,
+            ),
+            existing_key_row=SimpleNamespace(
+                metadata={},
+                team_id=None,
+            ),
+        )
+
+        assert update_data["key_type"] == "default"
+        assert update_data["allowed_routes"] == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "key_type",
+        [
+            LiteLLMKeyType.DEFAULT,
+            LiteLLMKeyType.LLM_API,
+            LiteLLMKeyType.READ_ONLY,
+        ],
+    )
+    async def test_non_admin_update_key_rejects_preset_over_custom_routes_without_allowed_routes(
+        self,
+        key_type,
+    ):
+        """The key_type-only payload cannot clear an admin-defined allowlist."""
+        from types import SimpleNamespace
+
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_update_key_data,
+        )
+
+        data = UpdateKeyRequest(
+            key="sk-test",
+            key_type=key_type,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _validate_update_key_data(
+                data=data,
+                existing_key_row=SimpleNamespace(
+                    allowed_routes=["/custom/admin-defined-route"],
+                    max_budget=None,
+                    user_id="internal-user-123",
+                ),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id="internal-user-123",
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                ),
+                llm_router=None,
+                premium_user=True,
+                prisma_client=None,
+                user_api_key_cache=MagicMock(),
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "allowed_routes" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
     async def test_non_admin_regenerate_key_explicit_empty_allowed_routes_rejected(self):
