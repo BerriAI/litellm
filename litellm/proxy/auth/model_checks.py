@@ -52,7 +52,7 @@ def _get_models_from_access_groups(
     model_access_groups: dict[str, list[str]],
     all_models: list[str],
     include_model_access_groups: bool | None = False,
-    proxy_model_list: list[str] | None = None,
+    proxy_model_list: Sequence[str] | None = None,
 ) -> list[str]:
     # a grant naming both a deployed model and an access group means both at runtime
     # (_check_model_access_helper unions them), so listings must keep the literal too
