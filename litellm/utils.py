@@ -3119,12 +3119,19 @@ def register_model(
                 existing_model.pop(_cost_field, None)
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
-        litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
+        # An empty payload for a model with no built-in entry carries no
+        # information — do not materialize a bare key for it. Key existence is
+        # what cost lookup treats as "mapped", so an empty entry flips
+        # ``completion_cost`` for an unmapped model from a loud "model isn't
+        # mapped" error to a silent $0.0 (``Router.__init__`` registers every
+        # deployment's backend key this way when no pricing is configured).
+        if updated_dictionary:
+            litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
 
-        # Invalidate case-insensitive lookup map since model_cost was modified
-        _invalidate_model_cost_lowercase_map()
+            # Invalidate case-insensitive lookup map since model_cost was modified
+            _invalidate_model_cost_lowercase_map()
 
-        verbose_logger.debug("added/updated model=%s in litellm.model_cost: %s", model_cost_key, model_cost_key)
+            verbose_logger.debug("added/updated model=%s in litellm.model_cost: %s", model_cost_key, model_cost_key)
         # add new model names to provider lists
         if value.get("litellm_provider") == "openai":
             if key not in litellm.open_ai_chat_completion_models:

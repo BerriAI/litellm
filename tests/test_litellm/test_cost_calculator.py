@@ -1,6 +1,9 @@
 
 import json
+import os
+import sys
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -1072,10 +1075,11 @@ def test_tiered_pricing_only_deployment_selects_router_model_id():
     entry = litellm.model_cost[router_model_id]
     assert entry.get("input_cost_per_token") is None
     assert entry.get("tiered_pricing") is not None
-    # The stripped shared alias must not carry tiered pricing.
-    assert (
-        litellm.model_cost["dashscope/qwen-tier-only-test"].get("tiered_pricing") is None
-    )
+    # The stripped shared alias must not carry tiered pricing. After
+    # stripping, this deployment contributes nothing to the shared key, so
+    # ``register_model`` may not have materialized it at all.
+    shared_alias_entry: Final = litellm.model_cost.get("dashscope/qwen-tier-only-test")
+    assert shared_alias_entry is None or shared_alias_entry.get("tiered_pricing") is None
 
     selected = _select_model_name_for_cost_calc(
         model="dashscope/qwen-tier-only-test",
