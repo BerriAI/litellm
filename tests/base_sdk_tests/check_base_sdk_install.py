@@ -87,13 +87,18 @@ def check_token_counter() -> str:
 
 
 def check_bedrock_credential_resolution() -> str:
+    import os
+    from unittest import mock
+
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
-    credentials = BaseAWSLLM().get_credentials(
-        aws_access_key_id="AKIA-fake-base-sdk-check",
-        aws_secret_access_key="fake-secret",
-        aws_region_name="us-east-1",
-    )
+    non_aws_environ = {k: v for k, v in os.environ.items() if not k.startswith("AWS_")}
+    with mock.patch.dict(os.environ, non_aws_environ, clear=True):
+        credentials = BaseAWSLLM().get_credentials(
+            aws_access_key_id="AKIA-fake-base-sdk-check",
+            aws_secret_access_key="fake-secret",
+            aws_region_name="us-east-1",
+        )
     _require(
         credentials.access_key == "AKIA-fake-base-sdk-check",
         f"get_credentials returned access_key={credentials.access_key!r}",
