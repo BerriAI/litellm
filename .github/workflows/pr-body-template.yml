@@ -34,6 +34,18 @@ jobs:
           sparse-checkout: .github/scripts
           persist-credentials: false
 
+      # The judging copy of the script comes from the base branch so a PR
+      # cannot weaken the checker that judges it. The merge-ref copy above is
+      # only the fallback for the PR that first introduces the script, when
+      # the base branch does not have it yet.
+      - name: Checkout the base branch's lint script
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+          path: base-ref
+
       - name: List changed files
         env:
           GH_TOKEN: ${{ github.token }}
@@ -44,4 +56,7 @@ jobs:
       - name: Check body against template comment rules
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
-        run: python3 .github/scripts/check_pr_body.py --changed-files changed_files.txt
+        run: |
+          SCRIPT=base-ref/.github/scripts/check_pr_body.py
+          [ -f "$SCRIPT" ] || SCRIPT=.github/scripts/check_pr_body.py
+          python3 "$SCRIPT" --changed-files changed_files.txt
