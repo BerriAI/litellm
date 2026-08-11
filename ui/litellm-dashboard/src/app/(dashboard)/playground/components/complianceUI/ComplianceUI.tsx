@@ -6,6 +6,7 @@ import {
   type ComplianceFramework,
   type CompliancePrompt,
 } from "@/data/compliancePrompts";
+import useCan from "@/app/(dashboard)/hooks/useCan";
 import { getGuardrailsList, testPoliciesAndGuardrails } from "@/components/networking";
 import PolicySelector, { getPolicyOptionEntries } from "@/components/policies/PolicySelector";
 import { Policy } from "@/components/policies/types";
@@ -123,6 +124,7 @@ export default function ComplianceUI({
   fixedModel,
   proxySettings,
 }: ComplianceUIProps) {
+  const canViewPolicies = useCan("viewPolicies");
   const frameworks = getFrameworks();
 
   const [policyValueToLabel, setPolicyValueToLabel] = useState<Map<string, string>>(new Map());
@@ -701,29 +703,37 @@ export default function ComplianceUI({
         <div className="shrink-0 border-b border-gray-200 px-6 py-4">
           <div className="mb-3">
             <h3 className="text-sm font-semibold text-gray-900">Test Configuration</h3>
-            <p className="text-xs text-gray-500 mt-0.5">Select policies, guardrails, or both to test against.</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {canViewPolicies
+                ? "Select policies, guardrails, or both to test against."
+                : "Select guardrails to test against."}
+            </p>
           </div>
 
           <div className="flex items-start gap-3 flex-wrap">
-            <div className="flex-1 min-w-[200px]">
-              <label className="text-[11px] font-medium text-gray-500 uppercase tracking-wide mb-1.5 block">
-                Policies
-              </label>
-              {accessToken && (
-                <PolicySelector
-                  value={selectedPolicies}
-                  onChange={setSelectedPolicies}
-                  accessToken={accessToken}
-                  onPoliciesLoaded={handlePoliciesLoaded}
-                />
-              )}
-            </div>
+            {canViewPolicies && (
+              <>
+                <div className="flex-1 min-w-[200px]">
+                  <label className="text-[11px] font-medium text-gray-500 uppercase tracking-wide mb-1.5 block">
+                    Policies
+                  </label>
+                  {accessToken && (
+                    <PolicySelector
+                      value={selectedPolicies}
+                      onChange={setSelectedPolicies}
+                      accessToken={accessToken}
+                      onPoliciesLoaded={handlePoliciesLoaded}
+                    />
+                  )}
+                </div>
 
-            <div className="flex flex-col items-center pt-6 shrink-0">
-              <div className="w-px h-4 bg-gray-200" />
-              <span className="text-[10px] font-medium text-gray-400 my-1">or</span>
-              <div className="w-px h-4 bg-gray-200" />
-            </div>
+                <div className="flex flex-col items-center pt-6 shrink-0">
+                  <div className="w-px h-4 bg-gray-200" />
+                  <span className="text-[10px] font-medium text-gray-400 my-1">or</span>
+                  <div className="w-px h-4 bg-gray-200" />
+                </div>
+              </>
+            )}
 
             <div className="flex-1 min-w-[200px]">
               <label className="text-[11px] font-medium text-gray-500 uppercase tracking-wide mb-1.5 block">
