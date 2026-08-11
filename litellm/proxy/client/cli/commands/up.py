@@ -145,7 +145,8 @@ def resolve_api_key_helper(base_url: str) -> str:
     Code would otherwise use) makes `print-token` enforce that the cached
     token was actually issued for this proxy -- without it, a token minted
     for a different, previously-logged-into proxy would be handed to
-    whichever server `up` currently points at.
+    whichever server `up` currently points at. `--base-url` is an option on
+    the `lite` group itself, so it has to precede the subcommand.
     """
     lite_path: Final = shutil.which("lite")
     if lite_path is None:
@@ -153,7 +154,7 @@ def resolve_api_key_helper(base_url: str) -> str:
             "Could not find `lite` on your PATH. Claude Code's apiKeyHelper needs "
             "an absolute path to it, so `lite up` cannot continue."
         )
-    return f"{shlex.quote(lite_path)} auth print-token --base-url {shlex.quote(base_url)}"
+    return f"{shlex.quote(lite_path)} --base-url {shlex.quote(base_url)} auth print-token"
 
 
 def _ensure_fresh_login(ctx: click.Context) -> None:
