@@ -28,6 +28,12 @@ vi.mock("@/app/(dashboard)/router-settings/_components/general_settings", () => 
 
 vi.mock("./PromptCompressionTab", () => ({ __esModule: true, default: () => <div /> }));
 
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({ accessToken: "test-token", userId: "u1", userRole: "proxy_admin" }),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/useIsOrgAdmin", () => ({ default: () => false }));
+
 import CostOptimizationView from "./CostOptimizationView";
 
 const singlePage = {
