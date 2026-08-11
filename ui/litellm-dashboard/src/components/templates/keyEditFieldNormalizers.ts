@@ -22,9 +22,8 @@ export const exactKeyTypePresetFromRoutes = (allowedRoutes: string[] | null | un
   return KEY_TYPE_BY_PRESET_ROUTE[allowedRoutes[0]];
 };
 
-// Determine the key_type display value from allowed_routes
-export const keyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): string =>
-  exactKeyTypePresetFromRoutes(allowedRoutes) ?? "default";
+export const keyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): string | undefined =>
+  exactKeyTypePresetFromRoutes(allowedRoutes);
 
 export const parseAllowedRoutes = (value: unknown): string[] =>
   typeof value === "string" && value.trim() !== ""
@@ -51,4 +50,3 @@ export const currentValuePlaceholder = (
   if (!premiumUser) return premiumHint;
   return Array.isArray(current) && current.length > 0 ? `Current: ${current.join(", ")}` : emptyHint;
 };
-

@@ -11,6 +11,7 @@ import {
   modelAvailableCall,
   vectorStoreListCall,
 } from "../networking";
+import { keyTypeFromRoutes } from "./keyEditFieldNormalizers";
 import { KeyEditView } from "./key_edit_view";
 
 const can = vi.fn();
@@ -134,6 +135,12 @@ vi.mock("../agent_management/AgentSelector", () => ({
     </button>
   ),
 }));
+
+describe("keyTypeFromRoutes", () => {
+  it("does not label a mixed allowlist as Full Access", () => {
+    expect(keyTypeFromRoutes(["llm_api_routes", "/custom"])).toBeUndefined();
+  });
+});
 
 vi.mock("../common_components/AccessGroupSelector", () => ({
   default: ({ value = [], onChange }: { value?: string[]; onChange?: (v: string[]) => void }) => (
