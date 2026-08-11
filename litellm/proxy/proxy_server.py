@@ -259,7 +259,6 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
     mask_sensitive_keys,
 )
-from litellm.litellm_core_utils.streaming_handler import validated_stream_logging_obj
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._lazy_features import attach_lazy_features
@@ -9749,7 +9748,7 @@ async def chat_completion(
                 completion_stream=_iterator,
                 model=e.model,
                 custom_llm_provider="cached_response",
-                logging_obj=validated_stream_logging_obj(_logging_obj),
+                logging_obj=_logging_obj,
             )
             selected_data_generator = select_data_generator(
                 response=_streaming_response,
@@ -9766,7 +9765,6 @@ async def chat_completion(
         return _chat_response
     except RejectedRequestError as e:
         _data = e.request_data
-        _rejected_request_data: Final[dict[str, object]] = e.request_data
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -9781,7 +9779,7 @@ async def chat_completion(
                 completion_stream=_iterator,
                 model=data.get("model", ""),
                 custom_llm_provider="cached_response",
-                logging_obj=validated_stream_logging_obj(_rejected_request_data.get("litellm_logging_obj")),
+                logging_obj=_data.get("litellm_logging_obj", None),
             )
             selected_data_generator = select_data_generator(
                 response=_streaming_response,
