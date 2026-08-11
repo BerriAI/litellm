@@ -5716,6 +5716,37 @@ async def get_team_daily_activity(
     )
 
 
+_MAX_AGGREGATED_RANGE_DAYS: Final = 400
+
+
+def _validate_aggregated_date_range(start_date: str | None, end_date: str | None) -> None:
+    """The aggregated endpoint has no pagination to bound its work, so reject
+    malformed dates and ranges wider than the UI ever requests before querying."""
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Please provide start_date and end_date"},
+        )
+    try:
+        parsed_start: Final = datetime.strptime(start_date, "%Y-%m-%d")
+        parsed_end: Final = datetime.strptime(end_date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "start_date and end_date must be valid YYYY-MM-DD dates"},
+        )
+    if parsed_end < parsed_start:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "end_date must be on or after start_date"},
+        )
+    if (parsed_end - parsed_start).days > _MAX_AGGREGATED_RANGE_DAYS:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"Date range must be at most {_MAX_AGGREGATED_RANGE_DAYS} days"},
+        )
+
+
 @router.get(
     "/team/daily/activity/aggregated",
     response_model=SpendAnalyticsPaginatedResponse,
@@ -5760,6 +5791,8 @@ async def get_team_daily_activity_aggregated(
             status_code=500,
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
+
+    _validate_aggregated_date_range(start_date, end_date)
 
     scope: Final = await _resolve_team_daily_activity_scope(
         team_ids=team_ids,

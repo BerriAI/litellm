@@ -576,11 +576,6 @@ def _build_aggregated_sql_query(
     The entity_id column is intentionally omitted from GROUP BY to collapse
     rows across entities — this is where the biggest row reduction comes from.
 
-    When entity_breakdown_field is set (e.g. "team_id"), two extra rollup
-    levels are added — (date, entity) and (date, entity, api_key) — and the
-    entity column joins the GROUPING() call as the most-significant bit, so
-    every pre-existing rollup keeps its bitmask value plus that bit set.
-
     Returns:
         Tuple of (sql_query, params_list) ready for prisma_client.db.query_raw().
     """
@@ -820,12 +815,9 @@ _GROUP_DATE_MCP_API_KEY: Final = 29  # 0b0011101
 _GROUP_DATE_ENDPOINT: Final = 62  # 0b0111110
 _GROUP_DATE_ENDPOINT_API_KEY: Final = 30  # 0b0011110
 
-# When entity breakdown is on, the entity column is prepended to the GROUPING()
-# arguments as the most-significant bit. Every pre-existing rollup then carries
-# this bit (entity rolled up) on top of its value above, while the two new
-# entity rollup sets keep the bit clear: (date, entity) -> _GROUP_DATE and
-# (date, entity, api_key) -> _GROUP_DATE_API_KEY.
-_ENTITY_ROLLED_BIT: Final = 128  # 0b10000000
+# 0b10000000 — set when the entity column (leftmost GROUPING argument in
+# entity-breakdown mode) is rolled up; clear only on the (date, entity[, api_key]) sets
+_ENTITY_ROLLED_BIT: Final = 128
 
 
 def _record_to_spend_metrics(record: _GroupingSetsRow) -> SpendMetrics:
@@ -1184,10 +1176,8 @@ async def get_daily_activity_aggregated(
     all individual rows into Python. This collapses rows across entities
     (users/teams/orgs), reducing ~150k rows to ~2-3k grouped rows.
 
-    include_entity_breakdown adds per-entity rollup levels to the GROUPING SETS
-    so `breakdown.entities` is populated (with entity_metadata_field metadata),
-    as entity-scoped views like Team Usage need — still one SQL pass, without
-    reverting to the per-leaf-row explosion that plain GROUP BY entity causes.
+    include_entity_breakdown adds per-entity rollup levels so
+    `breakdown.entities` is populated, as entity-scoped views like Team Usage need.
 
     Matches the response model of the paginated endpoint so the UI does not need to transform.
     """

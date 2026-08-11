@@ -11350,3 +11350,46 @@ async def test_get_team_daily_activity_aggregated_scopes_and_flags(mock_db_clien
             assert call_kwargs["include_entity_breakdown"] is True
             assert call_kwargs["timezone_offset_minutes"] == 480
             assert call_kwargs["table_name"] == "litellm_dailyteamspend"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "start_date,end_date,expected_error",
+    [
+        ("2020-01-01", "2026-12-31", "at most 400 days"),
+        ("0000-01-01", "9999-12-31", "valid YYYY-MM-DD"),
+        ("2024-06-01", "2024-01-01", "on or after"),
+        ("not-a-date", "2024-01-31", "valid YYYY-MM-DD"),
+        (None, "2024-01-31", "start_date and end_date"),
+    ],
+)
+async def test_get_team_daily_activity_aggregated_rejects_bad_ranges(
+    mock_db_client, start_date, end_date, expected_error
+):
+    """The aggregated endpoint has no pagination bounding its work, so an
+    unbounded or malformed range must 400 before any query runs."""
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        get_team_daily_activity_aggregated,
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity_aggregated",
+        new_callable=AsyncMock,
+    ) as mock_aggregated:
+        with pytest.raises(HTTPException) as exc_info:
+            await get_team_daily_activity_aggregated(
+                team_ids=None,
+                start_date=start_date,
+                end_date=end_date,
+                model=None,
+                api_key=None,
+                exclude_team_ids=None,
+                timezone=None,
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+                ),
+            )
+
+        assert exc_info.value.status_code == 400
+        assert expected_error in str(exc_info.value.detail)
+        mock_aggregated.assert_not_called()
