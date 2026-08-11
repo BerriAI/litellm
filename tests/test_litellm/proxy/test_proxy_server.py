@@ -9847,6 +9847,24 @@ def test_prompt_caching_settings_propagate_on_config_reload(monkeypatch, field_n
     assert getattr(litellm, field_name) == db_value
 
 
+@pytest.mark.parametrize(
+    "db_value, expected_value",
+    [(10.0, 10.0), ("10.0", 10.0), (None, 0.00001)],
+)
+def test_max_budget_propagates_on_config_reload(monkeypatch, db_value, expected_value):
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(litellm, "max_budget", 0.00001)
+
+    ps.ProxyConfig()._update_config_fields(
+        current_config={"litellm_settings": {"max_budget": 0.00001}},
+        param_name="litellm_settings",
+        db_param_value={"max_budget": db_value},
+    )
+
+    assert litellm.max_budget == expected_value
+
+
 def test_get_config_list_marks_untouched_prompt_caching_flag_as_not_set(monkeypatch):
     """The flag defaults to False rather than None, so a plain 'is not None' check would
     report the default as 'In Config' and imply an admin had set it."""

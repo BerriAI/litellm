@@ -6241,8 +6241,8 @@ class ProxyConfig:
             return current_config
         elif param_name == "litellm_settings" and isinstance(db_param_value, dict):
             for key, value in db_param_value.items():
-                if key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:  # params that are safe to override with db values
-                    setattr(litellm, key, value)
+                if key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES and (key != "max_budget" or value is not None):
+                    setattr(litellm, key, float(value) if key == "max_budget" else value)
 
         # If param doesn't exist in config, add it
         if param_name not in current_config:
