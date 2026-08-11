@@ -104,7 +104,7 @@ const VALIDATION_MATCH = [
   "invalid file type",
   "invalid field",
   "invalid date format",
-  "must be set when",
+  "'enforce_rpm_tpm_on_model_add' is enabled",
 ];
 
 const NOT_FOUND_MATCH = [
