@@ -15,7 +15,7 @@ import threading
 import time
 import traceback
 import warnings
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, UnionType
 from typing import (
@@ -23,6 +23,7 @@ from typing import (
     Any,
     Final,
     Literal,
+    NamedTuple,
     Optional,
     TypedDict,
     Union,
@@ -536,6 +537,7 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
     set_files_config,
 )
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+    openai_passthrough_router,
     passthrough_endpoint_router,
     vertex_ai_live_websocket_passthrough,
 )
@@ -611,7 +613,7 @@ from litellm.secret_managers.main import (
     normalize_nonempty_secret_str,
     str_to_bool,
 )
-from litellm.types.integrations.slack_alerting import SlackAlertingArgs
+from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
     AnthropicResponse,
@@ -6872,9 +6874,19 @@ class ProxyConfig:
                 guardrail_id = guardrail.get("guardrail_id")
                 if guardrail_id:
                     db_guardrail_ids.add(guardrail_id)
-                IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
-                    guardrail=cast(Guardrail, guardrail),
-                )
+                try:
+                    IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
+                        guardrail=cast(Guardrail, guardrail),
+                    )
+                except Exception as e:  # noqa: BLE001  # one unloadable row must not stop the remaining guardrails
+                    verbose_proxy_logger.error(
+                        "litellm.proxy.proxy_server.py::ProxyConfig:_init_guardrails_in_db - "
+                        "skipping guardrail '%s' (ID: %s): %s: %s",
+                        guardrail.get("guardrail_name"),
+                        guardrail_id,
+                        type(e).__name__,
+                        e,
+                    )
 
             # Drop in-memory DB-backed entries whose row was deleted on another
             # pod. Config-loaded entries are never touched.
@@ -7645,6 +7657,200 @@ def _pop_complete_sse_frame(buffer: str) -> tuple[str | None, str]:
     return buffer[:frame_end], buffer[frame_end:]
 
 
+_STREAM_KEEPALIVE: Final = object()
+
+_KEEPALIVE_MIN_SECONDS: Final = 1.0
+_KEEPALIVE_MAX_SECONDS: Final = 300.0
+_EMPTY_MAPPING: Final[Mapping[str, Any]] = MappingProxyType({})
+
+
+async def _iter_with_keepalive(
+    aiter: AsyncIterator[Any],
+    resolve_keepalive_seconds: Callable[[object], float],
+    keepalive_seconds: float,
+) -> AsyncGenerator[Any, None]:
+    """Wrap `aiter` with idle-gap heartbeats, re-resolving the interval after each
+    real chunk via `resolve_keepalive_seconds`. A mid-stream router fallback can
+    swap in a deployment with a different keepalive policy, including one that
+    newly enables or newly disables heartbeats, partway through the same stream;
+    re-resolving against each chunk's own identity (rather than trusting the
+    interval picked before iteration started, or picked the last time it went
+    inactive) keeps the heartbeat behavior in sync with whichever deployment
+    actually produced it, in both directions. While the interval is <= 0, no
+    task is created and no timeout is awaited: a chunk is forwarded the moment
+    it arrives, at the same cost as a bare `async for`."""
+    pending: asyncio.Task[Any] | None = None  # rebind-ok: rebound each loop iteration
+    current_keepalive_seconds = keepalive_seconds  # rebind-ok: re-resolved after each chunk
+    try:
+        while True:
+            if current_keepalive_seconds <= 0:
+                try:
+                    item = await aiter.__anext__()
+                except StopAsyncIteration:
+                    break
+                yield item
+                current_keepalive_seconds = resolve_keepalive_seconds(item)
+                continue
+
+            if pending is None:
+                pending = asyncio.create_task(aiter.__anext__())
+            done, _ = await asyncio.wait((pending,), timeout=current_keepalive_seconds)
+            if not done:
+                yield _STREAM_KEEPALIVE
+                continue
+            try:
+                item = pending.result()
+            except StopAsyncIteration:
+                break
+            finally:
+                pending = None
+            yield item
+            current_keepalive_seconds = resolve_keepalive_seconds(item)
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+            try:
+                await pending
+            except asyncio.CancelledError:
+                pass
+
+
+class _DeploymentKeepaliveConfig(NamedTuple):
+    keepalive_seconds: Any
+    allow_client_override: bool
+
+
+def _keepalive_from_deployment_config(
+    request_data: Mapping[str, Any], response: object
+) -> _DeploymentKeepaliveConfig | None:
+    if llm_router is None:
+        return None
+
+    hidden: Final = get_hidden_params_dict(response)
+    model_id: Final = hidden.get("model_id")
+    if isinstance(model_id, str) and model_id:
+        deployment: Final = llm_router.get_deployment(model_id=model_id)
+        # A populated model_id names the specific deployment that served this
+        # stream. If it no longer resolves (e.g. removed by a config reload
+        # mid-stream), that's a stale identity, not an absent one: don't fall
+        # through to guessing via model_name below, since a currently-live
+        # sibling deployment's config was never what actually served this
+        # stream.
+        if deployment is None:
+            return None
+        return _DeploymentKeepaliveConfig(
+            keepalive_seconds=getattr(deployment.litellm_params, "keepalive_seconds", None),
+            allow_client_override=bool(getattr(deployment.litellm_params, "allow_client_keepalive_override", False)),
+        )
+
+    # No model_id at all to pin down which deployment actually served this
+    # stream: only trust the fallback when every deployment under this
+    # model_name agrees on both keepalive_seconds and
+    # allow_client_keepalive_override (including deployments that leave either
+    # field unset), so a stream never inherits a sibling deployment's policy.
+    configs: Final = frozenset(
+        (
+            (deployment_dict.get("litellm_params") or _EMPTY_MAPPING).get("keepalive_seconds"),
+            bool(
+                (deployment_dict.get("litellm_params") or _EMPTY_MAPPING).get("allow_client_keepalive_override", False)
+            ),
+        )
+        for deployment_dict in llm_router.get_model_list(model_name=request_data.get("model")) or ()
+    )
+    if len(configs) == 1:
+        keepalive_seconds, allow_client_override = next(iter(configs))
+        return _DeploymentKeepaliveConfig(
+            keepalive_seconds=keepalive_seconds, allow_client_override=allow_client_override
+        )
+    return None
+
+
+def _is_explicit_keepalive_disable(raw: object) -> bool:
+    if not isinstance(raw, (int, float, str)):
+        return False
+    try:
+        return float(raw) <= 0
+    except ValueError:
+        return False
+
+
+def _resolve_keepalive_seconds(request_data: Mapping[str, Any], response: object = None) -> float:
+    deployment_config: Final = _keepalive_from_deployment_config(request_data, response)
+    deployment_raw: Final = deployment_config.keepalive_seconds if deployment_config is not None else None
+    allow_client_override: Final = deployment_config.allow_client_override if deployment_config is not None else False
+
+    # An operator setting keepalive_seconds: 0 on a deployment is an explicit hard
+    # disable: an authenticated client must not be able to re-enable heartbeats
+    # (and the idle-timeout evasion that comes with them) for a deployment the
+    # operator opted out of, regardless of what the request body asks for.
+    if _is_explicit_keepalive_disable(deployment_raw):
+        return 0.0
+
+    # keepalive_seconds is operator-only unless the deployment explicitly opts in:
+    # a client can't unilaterally enable heartbeats (and the LB-idle-timeout
+    # evasion that comes with them) for a deployment that never configured this.
+    client_supplied: Final = request_data.get("keepalive_seconds") if allow_client_override else None
+    raw: Final = client_supplied if client_supplied is not None else deployment_raw
+    try:
+        value: Final = float(raw) if isinstance(raw, (int, float, str)) else 0.0
+    except ValueError:
+        return 0.0
+    if value <= 0:
+        return 0.0
+    clamped: Final = max(_KEEPALIVE_MIN_SECONDS, min(value, _KEEPALIVE_MAX_SECONDS))
+    if clamped != value:
+        verbose_proxy_logger.info(
+            "keepalive_seconds=%s clamped to %s [min=%s, max=%s]",
+            value,
+            clamped,
+            _KEEPALIVE_MIN_SECONDS,
+            _KEEPALIVE_MAX_SECONDS,
+        )
+    return clamped
+
+
+_KEEPALIVE_CACHE_TTL_SECONDS: Final = 5.0
+
+
+def _make_keepalive_resolver(request_data: Mapping[str, Any]) -> Callable[[object], float]:
+    """Wrap `_resolve_keepalive_seconds` with a memo keyed on the serving
+    deployment's model_id. The steady-state case (no mid-stream fallback, the
+    overwhelming majority of streams) sees the same model_id on every chunk, so
+    this turns the per-chunk cost from a full `llm_router.get_deployment()`
+    Pydantic rebuild into a cheap hidden-params read once per
+    `_KEEPALIVE_CACHE_TTL_SECONDS` for that model_id. The cache expires on its
+    own rather than living for the life of the stream, so an operator's live
+    config change (disabling keepalive, revoking client override, or removing
+    the deployment) is observed within a bounded window instead of being able
+    to be evaded by an already-in-flight stream indefinitely. A missing/empty
+    model_id can't be trusted as a cache key (see
+    `_keepalive_from_deployment_config`'s model_name fallback, which reflects
+    current router state rather than one deployment's fixed identity), so
+    those chunks always resolve fresh, matching prior behavior exactly.
+    """
+    last_model_id: str | None = None  # rebind-ok: memoized identity of the last-resolved chunk
+    last_value: float = 0.0  # rebind-ok: cached resolution for last_model_id
+    last_resolved_at: float = float("-inf")  # rebind-ok: monotonic timestamp of the last real resolution
+
+    def _resolve(item: object) -> float:
+        nonlocal last_model_id, last_value, last_resolved_at
+        model_id = get_hidden_params_dict(item).get("model_id")
+        now: Final = time.monotonic()
+        if (
+            isinstance(model_id, str)
+            and model_id
+            and model_id == last_model_id
+            and now - last_resolved_at < _KEEPALIVE_CACHE_TTL_SECONDS
+        ):
+            return last_value
+        value: Final = _resolve_keepalive_seconds(request_data, item)
+        if isinstance(model_id, str) and model_id:
+            last_model_id, last_value, last_resolved_at = model_id, value, now
+        return value
+
+    return _resolve
+
+
 async def async_data_generator(
     response,
     user_api_key_dict: UserAPIKeyAuth,
@@ -7693,7 +7899,28 @@ async def async_data_generator(
         else:
             stream_iterator = response
 
-        async for chunk in stream_iterator:
+        # A stream can start on a deployment with keepalive off and fall back
+        # mid-stream to one that enables it: only skip wrapping altogether when
+        # there's no router to ever fall back through in the first place (in
+        # which case _resolve_keepalive_seconds can never return non-zero for
+        # any chunk of this stream), not merely because the first chunk's
+        # deployment happens to start with it off.
+        resolve_keepalive_seconds: Final = _make_keepalive_resolver(request_data)
+        stream_source: Final = (
+            _iter_with_keepalive(
+                stream_iterator.__aiter__(),
+                resolve_keepalive_seconds,
+                resolve_keepalive_seconds(response),
+            )
+            if llm_router is not None
+            else stream_iterator
+        )
+
+        async for item in stream_source:
+            if item is _STREAM_KEEPALIVE:
+                yield ": ping\n\n"
+                continue
+            chunk = cast(Any, item)  # cast-ok: sentinel already handled above, item is a real chunk here
             if needs_per_chunk_hook:
                 ### CALL HOOKS ### - modify outgoing data
                 chunk, _str_so_far = await _apply_streaming_chunk_hooks(
@@ -8481,6 +8708,47 @@ class ProxyStartupEvent:
         )
 
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
+
+        ### PTU DAILY ROLLUP ###
+        from litellm.proxy.spend_tracking.ptu_feature_flag import (
+            is_ptu_cost_attribution_enabled,
+        )
+
+        if is_ptu_cost_attribution_enabled():
+            from litellm.proxy.spend_tracking.ptu_flat_cost_rollup import (
+                PTU_ROLLUP_JOB_ID,
+                run_scheduled_ptu_rollup,
+            )
+
+            async def _alert_ptu_rollup_failure(message: str) -> None:
+                await proxy_logging_obj.alerting_handler(
+                    message=message,
+                    level="High",
+                    alert_type=AlertType.failed_tracking_spend,
+                )
+
+            async def _scheduled_ptu_rollup() -> None:
+                # Reuse the PodLockManager from db_spend_update_writer so only one pod
+                # reconciles a day; a multi-pod race could prune another pod's fresh rows
+                await run_scheduled_ptu_rollup(
+                    prisma_client,
+                    pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
+                    alert=_alert_ptu_rollup_failure,
+                )
+
+            scheduler.add_job(
+                _scheduled_ptu_rollup,
+                "cron",
+                hour=0,
+                minute=15,
+                timezone="UTC",
+                id=PTU_ROLLUP_JOB_ID,
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            )
+            verbose_proxy_logger.info(
+                "PTU rollup job scheduled at 00:15 UTC daily (only models with PTU config accrue flat cost)"
+            )
 
         ### SPEND LOG CLEANUP ###
         if (
@@ -16620,6 +16888,7 @@ app.include_router(search_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(credential_router)
+app.include_router(openai_passthrough_router)
 app.include_router(batches_router)
 app.include_router(openai_files_router)
 app.include_router(llm_passthrough_router)

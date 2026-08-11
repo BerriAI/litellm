@@ -5,6 +5,7 @@ import re
 import time
 from collections import OrderedDict
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import HTTPException, Request
@@ -65,6 +66,32 @@ _EXPLICIT_SESSION_HEADERS: Final = frozenset({"x-litellm-trace-id", "x-litellm-s
 _SESSION_ID_VALUE_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 
 _SHA256_HEX_RE: Final = re.compile(r"^[0-9a-f]{64}$")
+
+# W3C Trace Context traceparent header: https://www.w3.org/TR/trace-context/
+# e.g. "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+_TRACEPARENT_RE: Final = re.compile(r"^[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$", re.IGNORECASE)
+
+
+def _trace_id_from_traceparent(traceparent: str) -> str | None:
+    """Extract the trace-id from a W3C Trace Context traceparent header, e.g.
+    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" -> the 32-hex
+    trace-id in the middle. An all-zero trace-id is invalid per spec and is
+    rejected, matching how the OpenTelemetry SDK itself treats it."""
+    match: Final = _TRACEPARENT_RE.match(traceparent.strip())
+    if not match:
+        return None
+    trace_id: Final = match.group(1).lower()
+    return trace_id if trace_id != "0" * 32 else None
+
+
+def _session_id_from_baggage(baggage: str) -> str | None:
+    """Extract a session.id entry from a W3C Baggage header
+    (https://www.w3.org/TR/baggage/), e.g. "session.id=abc-123,user.id=42"."""
+    for pair in baggage.split(","):
+        key, _, value = pair.strip().partition("=")
+        if key.strip() == "session.id" and value.strip():
+            return value.strip()
+    return None
 
 
 def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
@@ -210,6 +237,11 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "_code_interpreter_interception_sandbox_key",
     "_code_interpreter_interception_session_scoped",
     "max_agentic_loops",
+    # Recomputed below from the actual caller-controlled timeout sources (headers and
+    # body fields); a client-forged value here would let a request either dodge cooldown
+    # protection on a real deployment failure or force a false "not caller-controlled"
+    # reading that lets its own bad timeout cool down deployments other tenants rely on.
+    "client_side_timeout",
 )
 
 _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
@@ -851,6 +883,19 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
+    def _get_keepalive_seconds_from_request(headers: Mapping[str, str]) -> float | None:
+        """
+        Get `keepalive_seconds` from the request headers, for clients (e.g. the
+        Vercel AI SDK) that can set custom headers more easily than extra body
+        fields. Subject to the same deployment-level allow_client_keepalive_override
+        gate as the request body field: see _resolve_keepalive_seconds.
+        """
+        keepalive_seconds_header: Final = headers.get("x-litellm-keepalive-seconds", None)
+        if keepalive_seconds_header is not None:
+            return float(keepalive_seconds_header)
+        return None
+
+    @staticmethod
     def _get_num_retries_from_request(headers: dict) -> int | None:
         """
         Workaround for client request from Vercel's AI SDK.
@@ -1035,6 +1080,7 @@ class LiteLLMProxyRequestSetup:
     def add_litellm_data_for_backend_llm_call(
         *,
         headers: dict,
+        request_data: Mapping[str, Any],
         user_api_key_dict: UserAPIKeyAuth,
         general_settings: dict[str, Any] | None = None,
     ) -> LitellmDataForBackendLLMCall:
@@ -1053,17 +1099,37 @@ class LiteLLMProxyRequestSetup:
         if _organization is not None:
             data["organization"] = _organization
 
-        timeout: Final = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
-        if timeout is not None:
-            data["timeout"] = timeout
+        header_timeout: Final = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
+        if header_timeout is not None:
+            data["timeout"] = header_timeout
 
-        stream_timeout: Final = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers)
-        if stream_timeout is not None:
-            data["stream_timeout"] = stream_timeout
+        header_stream_timeout: Final = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers)
+        if header_stream_timeout is not None:
+            data["stream_timeout"] = header_stream_timeout
+
+        # Router._get_timeout resolves the effective per-attempt timeout from any of
+        # kwargs["timeout"], kwargs["request_timeout"], or kwargs["stream_timeout"], and a
+        # caller can supply any of those via the request body as well as the headers above.
+        # A deliberately tiny value can force a 408 on every deployment in a fallback chain,
+        # so this marker (never trusted verbatim from the client; stripped above) must cover
+        # every source cooldown_handlers._trigger_cooldown_for_failed_deployment needs to
+        # distinguish from a real deployment health signal.
+        if (
+            header_timeout is not None
+            or header_stream_timeout is not None
+            or request_data.get("timeout") is not None
+            or request_data.get("request_timeout") is not None
+            or request_data.get("stream_timeout") is not None
+        ):
+            data["client_side_timeout"] = True
 
         num_retries: Final = LiteLLMProxyRequestSetup._get_num_retries_from_request(headers)
         if num_retries is not None:
             data["num_retries"] = num_retries
+
+        keepalive_seconds: Final = LiteLLMProxyRequestSetup._get_keepalive_seconds_from_request(headers)
+        if keepalive_seconds is not None:
+            data["keepalive_seconds"] = keepalive_seconds
 
         return data
 
@@ -1112,6 +1178,33 @@ class LiteLLMProxyRequestSetup:
                 if isinstance(body_metadata, dict) and isinstance(body_metadata.get("user_id"), dict):
                     body_metadata["user_id"] = session_id
                 verbose_proxy_logger.debug("Extracted session_id from Anthropic metadata.user_id")
+
+        # Last-resort fallback: the W3C standards for trace/session propagation
+        # (https://www.w3.org/TR/trace-context/, https://www.w3.org/TR/baggage/).
+        # Lower priority than everything above - only fires when neither the
+        # explicit litellm headers nor the Anthropic-metadata path found
+        # anything - but lets a caller's existing traceparent/baggage headers
+        # (from real OTel instrumentation) correlate with litellm's own logs
+        # instead of generating an unrelated trace_id.
+        normalized_headers: Final = MappingProxyType({k.lower(): v for k, v in headers.items() if isinstance(k, str)})
+        if "litellm_trace_id" not in data:
+            traceparent: Final = normalized_headers.get("traceparent")
+            if isinstance(traceparent, str):
+                trace_id_from_traceparent: Final = _trace_id_from_traceparent(traceparent)
+                if trace_id_from_traceparent:
+                    metadata_from_headers["trace_id"] = trace_id_from_traceparent
+                    data["litellm_trace_id"] = trace_id_from_traceparent  # rebind-ok: data is an out-param
+                    verbose_proxy_logger.debug(
+                        "Extracted trace_id from W3C traceparent header: %s", trace_id_from_traceparent
+                    )
+        if "litellm_session_id" not in data:
+            baggage: Final = normalized_headers.get("baggage")
+            if isinstance(baggage, str):
+                session_id_from_baggage: Final = _session_id_from_baggage(baggage)
+                if session_id_from_baggage:
+                    metadata_from_headers["session_id"] = session_id_from_baggage
+                    data["litellm_session_id"] = session_id_from_baggage  # rebind-ok: data is an out-param
+                    verbose_proxy_logger.debug("Extracted session_id from W3C baggage header")
 
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(metadata_from_headers)
@@ -1545,6 +1638,7 @@ async def add_litellm_data_to_request(
     data.update(
         LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
             headers=_headers,
+            request_data=data,
             user_api_key_dict=user_api_key_dict,
             general_settings=general_settings,
         )
