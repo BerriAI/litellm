@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderWithProviders as render } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ChatUI from "./ChatUI";
 import * as fetchModelsModule from "@/components/llm_calls/fetch_models";

@@ -3,8 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
 
-vi.mock("../utils/roles", () => {
+vi.mock("../utils/roles", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../utils/roles")>();
   return {
+    ...actual,
     all_admin_roles: ["admin", "admin_viewer"],
     old_admin_roles: ["admin", "admin_viewer"],
     internalUserRoles: ["internal"],
@@ -92,6 +94,11 @@ describe("Sidebar (leftnav)", () => {
     collapsed: false,
   };
 
+  afterEach(() => {
+    mockUseAuthorized.mockReset();
+    mockUseOrganizations.mockReset();
+  });
+
   it("should link the logo to the UI home route rather than the proxy origin", () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
 
@@ -175,19 +182,19 @@ describe("Sidebar (leftnav)", () => {
     };
 
     it("hides Playground from Admin Viewer (cost-incurring action)", () => {
-      mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
+      mockUseAuthorized.mockReturnValue(adminViewerAuth);
       renderWithProviders(<Sidebar {...defaultProps} />);
       expect(screen.queryByText("Playground")).not.toBeInTheDocument();
     });
 
     it("shows Models + Endpoints to Admin Viewer (read-only)", () => {
-      mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
+      mockUseAuthorized.mockReturnValue(adminViewerAuth);
       renderWithProviders(<Sidebar {...defaultProps} />);
       expect(screen.getByText("Models + Endpoints")).toBeInTheDocument();
     });
 
     it("shows Agents (under Agentic) to Admin Viewer (read-only)", async () => {
-      mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
+      mockUseAuthorized.mockReturnValue(adminViewerAuth);
       renderWithProviders(<Sidebar {...defaultProps} />);
       // Agents is now nested under the "Agentic" submenu — expand parent
       // first to render the children, then assert Agents is visible.
@@ -200,7 +207,7 @@ describe("Sidebar (leftnav)", () => {
     });
 
     it("shows Logs to Admin Viewer", () => {
-      mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
+      mockUseAuthorized.mockReturnValue(adminViewerAuth);
       renderWithProviders(<Sidebar {...defaultProps} />);
       expect(screen.getByText("Logs")).toBeInTheDocument();
     });
@@ -384,10 +391,11 @@ describe("Sidebar (leftnav)", () => {
   });
 
   it("should show Organizations tab for organization admins", () => {
-    mockUseAuthorized.mockReturnValueOnce({
+    mockUseAuthorized.mockReturnValue({
       userId: "org-admin-user-id",
       accessToken: "test-access-token",
       userRole: "viewer",
+      isViewOnly: false,
       token: "test-token",
       userEmail: "orgadmin@example.com",
       premiumUser: false,
@@ -395,7 +403,7 @@ describe("Sidebar (leftnav)", () => {
       showSSOBanner: false,
     });
 
-    mockUseOrganizations.mockReturnValueOnce({
+    mockUseOrganizations.mockReturnValue({
       data: [
         {
           organization_id: "org-1",
