@@ -149,7 +149,7 @@ def test_build_group_limits_per_deployment_when_only_some_declare_it():
 
 def test_build_group_limits_empty_when_no_deployment_configures_unit():
     deployments = [_deployment("grp", "dep-1", {}), _deployment("grp", "dep-2", {})]
-    assert _build_group_limits(deployments, "tokens") == []
+    assert _build_group_limits(deployments, "tokens") == ()
 
 
 # ---------------------------------------------------------------------------
@@ -1403,7 +1403,7 @@ def test_concurrency_divergent_config_is_dropped_not_scoped_per_deployment():
         ),
     ]
     configured = _build_group_limits(deployments, "concurrency")
-    assert configured == []
+    assert configured == ()
 
 
 def test_concurrency_partial_declaration_is_dropped_not_scoped_per_deployment():
@@ -1414,7 +1414,7 @@ def test_concurrency_partial_declaration_is_dropped_not_scoped_per_deployment():
         _deployment("grp", "dep-2", {}),
     ]
     configured = _build_group_limits(deployments, "concurrency")
-    assert configured == []
+    assert configured == ()
 
 
 def test_concurrency_identical_across_all_deployments_is_still_chain_wide():
@@ -1468,7 +1468,7 @@ async def test_release_in_a_forked_task_is_visible_to_the_parent_context():
         return _PROXY_TagRateLimiter._pop_pending_concurrency_keys()
 
     released = await asyncio.create_task(detached_release())
-    assert released == ["key1"]
+    assert released == ("key1",)
 
     # The parent's own binding must see the same, now-empty holder --
     # not a stale copy still holding "key1".
@@ -1488,7 +1488,7 @@ async def test_release_does_not_sweep_up_a_key_appended_after_its_snapshot():
         return released
 
     released = await asyncio.create_task(detached_release_then_sibling_admits())
-    assert released == ["key1"]
+    assert released == ("key1",)
     # key2 must still be pending for its own hop's eventual release.
     assert _pending_concurrency_holder().keys == ["key2"]
 
@@ -1499,8 +1499,8 @@ async def test_release_is_not_repeated_for_the_same_snapshot():
     _pending_concurrency_holder().keys.append("key1")
     first = _PROXY_TagRateLimiter._pop_pending_concurrency_keys()
     second = _PROXY_TagRateLimiter._pop_pending_concurrency_keys()
-    assert first == ["key1"]
-    assert second == []
+    assert first == ("key1",)
+    assert second == ()
 
 
 # ---------------------------------------------------------------------------

@@ -4570,7 +4570,7 @@ def _init_custom_logger_compatible_class(
             if internal_usage_cache is None:
                 raise Exception(f"Internal Error: Cache cannot be empty - internal_usage_cache={internal_usage_cache}")
 
-            tag_rate_limiter_obj = _PROXY_TagRateLimiter(internal_usage_cache=internal_usage_cache)
+            tag_rate_limiter_obj: Final = _PROXY_TagRateLimiter(internal_usage_cache=internal_usage_cache)
 
             if llm_router is not None and isinstance(llm_router, litellm.Router):
                 tag_rate_limiter_obj.update_variables(llm_router=llm_router)
