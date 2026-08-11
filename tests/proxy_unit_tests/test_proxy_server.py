@@ -3116,4 +3116,4 @@ def test_get_litellm_model_info(data):
         new=get_info_mock,
     ):
         get_litellm_model_info(model=model)
-        get_info_mock.assert_called_once_with(data["expected"])
+        get_info_mock.assert_called_once_with(model=data["expected"], api_base=None, api_key=None)

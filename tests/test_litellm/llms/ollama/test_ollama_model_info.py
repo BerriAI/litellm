@@ -24,7 +24,15 @@ if "httpx" not in sys.modules:
 import httpx
 import litellm
 
-from litellm.llms.ollama.common_utils import OllamaModelInfo
+from litellm.llms.ollama.common_utils import OllamaModelInfo, _cached_ollama_show
+
+
+@pytest.fixture(autouse=True)
+def _clear_ollama_show_cache():
+    """Clear the lru_cache on _cached_ollama_show before each test."""
+    _cached_ollama_show.cache_clear()
+    yield
+    _cached_ollama_show.cache_clear()
 
 
 class DummyResponse:
@@ -517,6 +525,7 @@ class TestOllamaGetModelInfo:
         )
         assert captured_json[0]["name"] == "my-custom-model"
 
+        _cached_ollama_show.cache_clear()
         config.get_model_info(
             "ollama_chat/my-custom-model", api_base="http://localhost:11434"
         )
@@ -579,6 +588,103 @@ class TestOllamaGetModelInfo:
         assert model_info["key"] == "ollama/llama2"
         assert model_info["litellm_provider"] == "ollama"
 
+
+class TestOllamaModelInfoCapabilities:
+    """Tests for capability detection from Ollama /api/show response."""
+
+    def test_get_runtime_model_info_reports_vision_capability(self, monkeypatch):
+        """supports_vision should be True when capabilities includes 'vision'."""
+        from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+        def mock_post(url, json, headers=None):
+            return DummyResponse(
+                {
+                    "template": "{{ .System }} tools {{ .Prompt }}",
+                    "capabilities": ["completion", "tools", "vision"],
+                    "model_info": {"llama.context_length": 131072},
+                },
+                status_code=200,
+            )
+
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+
+        config = OllamaConfig()
+        result = config.get_model_info("my-vision-model", api_base="http://localhost:11434")
+
+        assert result["supports_vision"] is True
+        assert result["supports_function_calling"] is True
+        assert result["max_input_tokens"] == 131072
+
+    def test_get_runtime_model_info_no_vision_capability(self, monkeypatch):
+        """supports_vision should be False when capabilities lacks 'vision'."""
+        from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+        def mock_post(url, json, headers=None):
+            return DummyResponse(
+                {
+                    "template": "{{ .System }} {{ .Prompt }}",
+                    "capabilities": ["completion"],
+                    "model_info": {"llama.context_length": 8192},
+                },
+                status_code=200,
+            )
+
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+
+        config = OllamaConfig()
+        result = config.get_model_info("my-text-model", api_base="http://localhost:11434")
+
+        assert result["supports_vision"] is False
+
+    def test_get_runtime_model_info_no_capabilities_field(self, monkeypatch):
+        """supports_vision should be False when capabilities field is absent."""
+        from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+        def mock_post(url, json, headers=None):
+            return DummyResponse(
+                {
+                    "template": "{{ .System }} {{ .Prompt }}",
+                    "model_info": {"llama.context_length": 8192},
+                },
+                status_code=200,
+            )
+
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+
+        config = OllamaConfig()
+        result = config.get_model_info("my-text-model", api_base="http://localhost:11434")
+
+        assert result["supports_vision"] is False
+
+    def test_litellm_get_model_info_threads_api_base_to_ollama(self, monkeypatch):
+        """litellm.get_model_info should pass api_base through to the Ollama provider hook."""
+        captured_urls = []
+
+        def mock_post(url, json, headers=None):
+            captured_urls.append(url)
+            return DummyResponse(
+                {
+                    "template": "{{ .System }} tools {{ .Prompt }}",
+                    "capabilities": ["completion", "tools", "vision"],
+                    "model_info": {"llama.context_length": 32768},
+                },
+                status_code=200,
+            )
+
+        litellm.get_model_info.cache_clear()
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+        try:
+            model_info = litellm.get_model_info(
+                "ollama_chat/llama3.2-vision:11b",
+                api_base="http://remote-ollama:11434",
+            )
+        finally:
+            litellm.get_model_info.cache_clear()
+
+        assert captured_urls[0] == "http://remote-ollama:11434/api/show"
+        assert model_info["supports_vision"] is True
+        assert model_info["supports_function_calling"] is True
+        assert model_info["max_input_tokens"] == 32768
 
 class TestOllamaAuthHeaders:
     """Tests for Ollama authentication header handling in completion calls."""

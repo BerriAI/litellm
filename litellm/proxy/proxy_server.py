@@ -8443,18 +8443,42 @@ def select_data_generator(
     )
 
 
-def get_litellm_model_info(model: dict = {}):
-    model_info: Final = model.get("model_info", {})
-    model_to_lookup = model.get("litellm_params", {}).get("model", None)
-    try:
-        if "azure" in model_to_lookup or model_info.get("base_model"):
-            model_to_lookup = model_info.get("base_model", None)
-        litellm_model_info: Final = litellm.get_model_info(model_to_lookup)
-        return litellm_model_info
-    except Exception:
-        # this should not block returning on /model/info
-        # if litellm does not have info on the model it should return {}
-        return {}
+def get_litellm_model_info(model: dict) -> dict:
+    litellm_params: Final = model.get("litellm_params", {})
+    config_model_info: Final = model.get("model_info", {})
+    api_base: Final = litellm_params.get("api_base")
+    api_key: Final = litellm_params.get("api_key")
+    model_to_lookup: Final = litellm_params.get("model")
+    base_model: Final = config_model_info.get("base_model")
+
+    candidates: Final = tuple(m for m in (base_model, model_to_lookup) if m)
+
+    for candidate in candidates:
+        try:
+            result = litellm.get_model_info(
+                model=candidate,
+                api_base=api_base,
+                api_key=api_key,
+            )
+            if result:
+                return result
+        except Exception:
+            continue
+
+    if model_to_lookup:
+        split_model: Final = model_to_lookup.split("/")
+        if len(split_model) > 1:
+            try:
+                return litellm.get_model_info(
+                    model=split_model[-1],
+                    custom_llm_provider=split_model[0],
+                    api_base=api_base,
+                    api_key=api_key,
+                )
+            except Exception:
+                pass
+
+    return {}
 
 
 def on_backoff(details):
@@ -12467,28 +12491,6 @@ def _enrich_model_info_with_litellm_data(
     # input_cost_per_token, output_cost_per_token, max_tokens
     litellm_model_info = get_litellm_model_info(model=model)
 
-    # 2nd pass on the model, try seeing if we can find model in litellm model_cost map
-    if litellm_model_info == {}:
-        # use litellm_param model_name to get model_info
-        litellm_params = model.get("litellm_params", {})
-        litellm_model = litellm_params.get("model", None)
-        try:
-            litellm_model_info = litellm.get_model_info(model=litellm_model)
-        except Exception:
-            litellm_model_info = {}
-    # 3rd pass on the model, try seeing if we can find model but without the "/" in model cost map
-    if litellm_model_info == {}:
-        # use litellm_param model_name to get model_info
-        litellm_params = model.get("litellm_params", {})
-        litellm_model = litellm_params.get("model", None)
-        if litellm_model:
-            split_model: Final = litellm_model.split("/")
-            if len(split_model) > 0:
-                litellm_model = split_model[-1]
-            try:
-                litellm_model_info = litellm.get_model_info(model=litellm_model, custom_llm_provider=split_model[0])
-            except Exception:
-                litellm_model_info = {}
     for k, v in litellm_model_info.items():
         if k not in model_info:
             model_info[k] = v
@@ -13890,27 +13892,6 @@ def _get_proxy_model_info(model: dict) -> dict:
     # input_cost_per_token, output_cost_per_token, max_tokens
     litellm_model_info = get_litellm_model_info(model=model)
 
-    # 2nd pass on the model, try seeing if we can find model in litellm model_cost map
-    if litellm_model_info == {}:
-        # use litellm_param model_name to get model_info
-        litellm_params = model.get("litellm_params", {})
-        litellm_model = litellm_params.get("model", None)
-        try:
-            litellm_model_info = litellm.get_model_info(model=litellm_model)
-        except Exception:
-            litellm_model_info = {}
-    # 3rd pass on the model, try seeing if we can find model but without the "/" in model cost map
-    if litellm_model_info == {}:
-        # use litellm_param model_name to get model_info
-        litellm_params = model.get("litellm_params", {})
-        litellm_model = litellm_params.get("model", None)
-        split_model: Final = litellm_model.split("/")
-        if len(split_model) > 0:
-            litellm_model = split_model[-1]
-        try:
-            litellm_model_info = litellm.get_model_info(model=litellm_model, custom_llm_provider=split_model[0])
-        except Exception:
-            litellm_model_info = {}
     for k, v in litellm_model_info.items():
         if k not in model_info:
             model_info[k] = v
