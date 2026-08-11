@@ -632,6 +632,117 @@ class TestBedrockMantleCodexAdditionalTools:
         assert "additional_tools" in str(mock_debug.call_args)
 
 
+class TestBedrockMantleCodexAgentMessages:
+    _USER_MESSAGE = {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "Continue the task."}],
+    }
+
+    def _transform(self, input):
+        cfg = BedrockMantleResponsesAPIConfig()
+        return cfg.transform_responses_api_request(
+            model="openai.gpt-5.6-terra",
+            input=input,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    def test_plain_agent_message_is_normalized_to_assistant_message(self):
+        body = self._transform(
+            input=[
+                self._USER_MESSAGE,
+                {
+                    "type": "agent_message",
+                    "id": "amsg_123",
+                    "author": "worker",
+                    "recipient": "parent",
+                    "content": [{"type": "input_text", "text": "The subtask is complete."}],
+                },
+            ]
+        )
+
+        assert body["input"] == [
+            self._USER_MESSAGE,
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "input_text", "text": "The subtask is complete."}],
+            },
+        ]
+
+    def test_encrypted_agent_message_keeps_readable_text_only(self):
+        body = self._transform(
+            input=[
+                {
+                    "type": "agent_message",
+                    "author": "worker",
+                    "recipient": "parent",
+                    "content": [
+                        {"type": "input_text", "text": "Message Type: MESSAGE\nSender: worker\nPayload:\n"},
+                        {"type": "encrypted_content", "encrypted_content": "opaque-payload"},
+                    ],
+                }
+            ]
+        )
+
+        assert body["input"] == [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {"type": "input_text", "text": "Message Type: MESSAGE\nSender: worker\nPayload:\n"}
+                ],
+            }
+        ]
+
+    def test_agent_message_without_readable_text_is_removed(self):
+        body = self._transform(
+            input=[
+                self._USER_MESSAGE,
+                {
+                    "type": "agent_message",
+                    "author": "worker",
+                    "recipient": "parent",
+                    "content": [{"type": "encrypted_content", "encrypted_content": "opaque-payload"}],
+                },
+            ]
+        )
+
+        assert body["input"] == [self._USER_MESSAGE]
+
+    def test_agent_message_normalization_is_logged_at_warning_level(self):
+        from unittest.mock import patch
+
+        with patch(
+            "litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.warning"
+        ) as mock_warning:
+            self._transform(
+                input=[
+                    {
+                        "type": "agent_message",
+                        "content": [{"type": "input_text", "text": "Done."}],
+                    }
+                ]
+            )
+
+        assert mock_warning.call_count == 1
+        assert "agent_message" in str(mock_warning.call_args)
+
+    def test_non_agent_items_remain_unchanged(self):
+        input_items = [
+            self._USER_MESSAGE,
+            {"type": "reasoning", "summary": [], "encrypted_content": "gAAAA=="},
+            {"type": "function_call", "name": "wait", "arguments": "{}", "call_id": "call_1"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "done"},
+        ]
+
+        body = self._transform(input=input_items)
+
+        assert body["input"] == input_items
+
+
 class TestBedrockMantleResponsesRegistry:
     def test_registry_returns_config_for_gpt_5_5(self, local_cost_map):
         # gpt-5.x advertises /v1/responses in supported_endpoints (capability)

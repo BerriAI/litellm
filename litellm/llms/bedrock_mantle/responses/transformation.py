@@ -49,6 +49,9 @@ _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES = frozenset({"function", "mcp", "c
 _BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS: Final = frozenset({"auto", "default"})
 
 _CODEX_ADDITIONAL_TOOLS_INPUT_ITEM_TYPE: Final = "additional_tools"
+_CODEX_AGENT_MESSAGE_INPUT_ITEM_TYPE: Final = "agent_message"
+_CODEX_AGENT_MESSAGE_INPUT_TEXT_CONTENT_TYPE: Final = "input_text"
+_CODEX_AGENT_MESSAGE_ENCRYPTED_CONTENT_TYPE: Final = "encrypted_content"
 
 
 class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPIConfig):
@@ -155,6 +158,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         headers: dict,
     ) -> dict:
         remaining_input, hoisted_tools = self._hoist_codex_additional_tools(input)
+        normalized_input: Final = self._normalize_codex_agent_messages(remaining_input)
         request_params: Final = (
             {
                 **response_api_optional_request_params,
@@ -168,7 +172,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         )
         return super().transform_responses_api_request(
             model=model,
-            input=remaining_input,
+            input=normalized_input,
             response_api_optional_request_params=request_params,
             litellm_params=litellm_params,
             headers=headers,
@@ -209,6 +213,74 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             len(additional_tools_items),
         )
         return remaining_input, cls._filter_unsupported_tools(hoisted_tools)
+
+    @staticmethod
+    def _is_codex_agent_message_item(item: object) -> bool:
+        return isinstance(item, dict) and item.get("type") == _CODEX_AGENT_MESSAGE_INPUT_ITEM_TYPE
+
+    @staticmethod
+    def _encrypted_content_block_count(item: "dict[str, Any]") -> int:
+        content: Final = item.get("content")
+        if not isinstance(content, list):
+            return 0
+        return sum(
+            isinstance(block, dict) and block.get("type") == _CODEX_AGENT_MESSAGE_ENCRYPTED_CONTENT_TYPE
+            for block in content
+        )
+
+    @staticmethod
+    def _normalize_codex_agent_message_item(item: "dict[str, Any]") -> "dict[str, Any] | None":
+        content: Final = item.get("content")
+        if not isinstance(content, list):
+            return None
+        text_parts: Final = [
+            block["text"]
+            for block in content
+            if isinstance(block, dict)
+            and block.get("type") == _CODEX_AGENT_MESSAGE_INPUT_TEXT_CONTENT_TYPE
+            and isinstance(block.get("text"), str)
+        ]
+        if not text_parts:
+            return None
+        return {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": _CODEX_AGENT_MESSAGE_INPUT_TEXT_CONTENT_TYPE, "text": "\n".join(text_parts)}],
+        }
+
+    @classmethod
+    def _normalize_codex_agent_messages(
+        cls,
+        input: "str | ResponseInputParam",
+    ) -> "str | ResponseInputParam":
+        if not isinstance(input, list):
+            return input
+
+        agent_message_items: Final = [item for item in input if cls._is_codex_agent_message_item(item)]
+        if not agent_message_items:
+            return input
+
+        normalized_items: Final = tuple(
+            cls._normalize_codex_agent_message_item(item) if cls._is_codex_agent_message_item(item) else item
+            for item in input
+        )
+        normalized_agent_message_items: Final = tuple(
+            cls._normalize_codex_agent_message_item(item) for item in agent_message_items
+        )
+        normalized_input: Final = [item for item in normalized_items if item is not None]
+        dropped_item_count: Final = sum(item is None for item in normalized_agent_message_items)
+        encrypted_content_block_count: Final = sum(
+            cls._encrypted_content_block_count(item) for item in agent_message_items
+        )
+        verbose_logger.warning(
+            "Bedrock Mantle Responses API: converted %d unsupported Codex 'agent_message' item(s) to "
+            "'message'; dropped %d item(s) without readable text and %d encrypted_content block(s) Mantle "
+            "cannot process.",
+            len(agent_message_items) - dropped_item_count,
+            dropped_item_count,
+            encrypted_content_block_count,
+        )
+        return normalized_input
 
     def map_openai_params(
         self,
