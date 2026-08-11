@@ -535,6 +535,47 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert data["system"] == "trusted top-level system prompt"
 
     @pytest.mark.asyncio
+    async def test_midturn_system_inside_tool_exchange_keeps_the_pair_intact(self):
+        """A system row between an assistant tool call and its result must not split the
+        exchange into orphaned halves; it is emitted right after the exchange instead."""
+        handler = AnthropicMessagesHandler()
+        guardrail = MockCompactingGuardrail(
+            replacement_messages=[
+                {"role": "user", "content": "run the tool"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {"role": "system", "content": "use the corrected result"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+            ]
+        )
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [
+                {"role": "user", "content": "run the tool"},
+                {"role": "system", "content": "use the corrected result"},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [m["role"] for m in data["messages"]] == ["user", "assistant", "user", "system"]
+        assistant_blocks = data["messages"][1]["content"]
+        assert any(block.get("type") == "tool_use" and block.get("id") == "call_1" for block in assistant_blocks)
+        result_blocks = data["messages"][2]["content"]
+        assert [block["type"] for block in result_blocks] == ["tool_result"]
+        assert result_blocks[0]["tool_use_id"] == "call_1"
+        assert data["messages"][3]["content"] == "use the corrected result"
+
+    @pytest.mark.asyncio
     async def test_compaction_rewrite_does_not_duplicate_hoisted_top_level_system(self):
         handler = AnthropicMessagesHandler()
         guardrail = MockCompactingGuardrail(
