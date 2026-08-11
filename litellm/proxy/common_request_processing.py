@@ -3107,8 +3107,7 @@ class ProxyBaseLLMRequestProcessing:
                         obj = json.loads(json_part)
                         maybe_modified = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(obj, model_name)
                         if maybe_modified is not None:
-                            # Replace just this line with updated JSON using safe_dumps
-                            lines[idx] = f"data: {safe_dumps(maybe_modified)}"
+                            lines[idx] = "data: " + safe_dumps(maybe_modified) + ("\r" if ln.endswith("\r") else "")
                             return "\n".join(lines)
             return None
         except Exception:

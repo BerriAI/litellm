@@ -454,6 +454,9 @@ async def test_chunk_processor_streams_crlf_delimited_frames_live_and_injects_co
 
     assert len(received) == len(chunks)
     assert received[0] == chunks[0]
+    injected_usage_frame = received[2]
+    assert injected_usage_frame.endswith(b"\r\n\r\n")
+    assert b"\n" not in injected_usage_frame.replace(b"\r\n", b"")
     reassembled = b"".join(received).decode("utf-8")
     usage_lines = [ln for ln in reassembled.replace("\r\n", "\n").split("\n") if '"total_tokens"' in ln]
     assert len(usage_lines) == 1
