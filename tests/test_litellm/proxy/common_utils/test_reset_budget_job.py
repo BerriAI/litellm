@@ -14,6 +14,11 @@ sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to 
 
 from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.proxy.common_utils import reset_budget_job as reset_budget_job_module
+from litellm.constants import (
+    PROXY_BUDGET_RESCHEDULER_MIN_TIME,
+    RESET_BUDGET_JOB_LOCK_TTL_SECONDS,
+    RESET_BUDGET_JOB_NAME,
+)
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 
@@ -1904,10 +1909,7 @@ def test_key_reset_keeps_paging_when_some_rows_in_a_chunk_fail(monkeypatch):
     assert client.fetches_by_table["key"] == 2
     assert [w["where"]["token"] for w in _batch_writes(client, "key", op="update")] == ["k1", "k2"]
     assert [call["call_type"] for call in logging_obj.service_logging_obj.failure_calls] == ["reset_budget_keys"]
-    assert set(logging_obj.service_logging_obj.failure_calls[0]["event_metadata"]) == {
-        "num_keys_found",
-        "keys_found",
-    }
+    assert set(logging_obj.service_logging_obj.failure_calls[0]["event_metadata"]) == {"num_keys_found"}
     assert [call["call_type"] for call in logging_obj.service_logging_obj.success_calls] == ["reset_budget_keys"]
 
 
@@ -1932,3 +1934,349 @@ def test_user_and_team_chunks_report_progress_despite_a_failed_row(
     assert client.fetches_by_table[table_name] == 2
     assert len(_batch_writes(client, table_name, op="update")) == 2
     assert [call["call_type"] for call in logging_obj.service_logging_obj.failure_calls] == [call_type]
+
+
+class FakePodLockManager:
+    """Stands in for the redis-backed PodLockManager.
+
+    Lets a test pick which of the three states a pod lands in: it wins the
+    lease, another pod already holds it, or redis cannot answer at all.
+    """
+
+    def __init__(self, *, acquired: bool, held_by_other: bool = False, has_redis: bool = True):
+        self.redis_cache = MagicMock() if has_redis else None
+        if self.redis_cache is not None:
+            self.redis_cache.async_get_cache = AsyncMock(return_value="another-pod" if held_by_other else None)
+        self._acquired = acquired
+        self.acquire_calls: List[Dict[str, Any]] = []
+        self.release_calls: List[str] = []
+
+    @staticmethod
+    def get_redis_lock_key(cronjob_id: str) -> str:
+        return f"cronjob_lock:{cronjob_id}"
+
+    async def acquire_lock(self, cronjob_id: str, ttl: Any = None) -> bool:
+        self.acquire_calls.append({"cronjob_id": cronjob_id, "ttl": ttl})
+        return self._acquired
+
+    async def release_lock(self, cronjob_id: str) -> None:
+        self.release_calls.append(cronjob_id)
+
+
+def _make_leader_election_job(monkeypatch, pod_lock_manager):
+    """A ResetBudgetJob wired to one lock manager, with every read observable.
+
+    `prisma_client.get_data_calls` plus `prisma_client.db.query_raw` together
+    cover every read the sweep makes, so a pod that skipped the tick leaves
+    both untouched.
+    """
+    prisma_client = MockPrismaClient()
+    prisma_client.db.query_raw = AsyncMock(return_value=[])
+
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.redis_cache = None
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.spend_counter_cache = spend_counter_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+
+    job = ResetBudgetJob(
+        proxy_logging_obj=MockProxyLogging(),
+        prisma_client=prisma_client,
+        pod_lock_manager=pod_lock_manager,
+    )
+    return job, prisma_client
+
+
+def _swept(prisma_client) -> bool:
+    return bool(prisma_client.get_data_calls) or prisma_client.db.query_raw.await_count > 0
+
+
+def test_reset_budget_sweeps_and_releases_when_it_wins_the_lease(monkeypatch):
+    """The elected pod does the work and hands the lease back, so the next tick
+    can elect any pod rather than waiting out the TTL."""
+    lock = FakePodLockManager(acquired=True)
+    job, prisma_client = _make_leader_election_job(monkeypatch, lock)
+
+    asyncio.run(job.reset_budget())
+
+    assert _swept(prisma_client)
+    assert [call["cronjob_id"] for call in lock.acquire_calls] == [RESET_BUDGET_JOB_NAME]
+    assert lock.release_calls == [RESET_BUDGET_JOB_NAME]
+
+
+def test_reset_budget_does_nothing_when_another_pod_holds_the_lease(monkeypatch):
+    """The whole point of the lease: a fleet must not multiply one sweep by its
+    replica count. A pod that loses the election issues no query at all, and
+    must not release a lease it never took."""
+    lock = FakePodLockManager(acquired=False, held_by_other=True)
+    job, prisma_client = _make_leader_election_job(monkeypatch, lock)
+
+    asyncio.run(job.reset_budget())
+
+    assert not _swept(prisma_client)
+    assert lock.release_calls == []
+
+
+def test_reset_budget_sweeps_unguarded_when_redis_cannot_answer(monkeypatch):
+    """acquire_lock reports contention and an unreachable redis identically, so
+    reading a failed acquire as contention would strand every expired budget at
+    its cap on every pod for as long as redis is down. No holder means sweep."""
+    lock = FakePodLockManager(acquired=False, held_by_other=False)
+    job, prisma_client = _make_leader_election_job(monkeypatch, lock)
+
+    asyncio.run(job.reset_budget())
+
+    assert _swept(prisma_client)
+    assert lock.release_calls == []
+
+
+def test_reset_budget_sweeps_when_the_deployment_has_no_redis(monkeypatch):
+    """A single-pod or redis-less deployment keeps its pre-election behavior."""
+    lock = FakePodLockManager(acquired=False, has_redis=False)
+    job, prisma_client = _make_leader_election_job(monkeypatch, lock)
+
+    asyncio.run(job.reset_budget())
+
+    assert _swept(prisma_client)
+    assert lock.acquire_calls == []
+    assert lock.release_calls == []
+
+
+def test_reset_budget_sweeps_when_no_lock_manager_is_injected(monkeypatch):
+    """Callers that construct the job without a lock manager still sweep."""
+    job, prisma_client = _make_leader_election_job(monkeypatch, None)
+
+    asyncio.run(job.reset_budget())
+
+    assert _swept(prisma_client)
+
+
+def test_reset_budget_releases_the_lease_when_a_phase_raises(monkeypatch):
+    """A crash mid-sweep must not hold the lease for its whole TTL, which would
+    stop every pod resetting budgets until it expired."""
+    lock = FakePodLockManager(acquired=True)
+    job, _ = _make_leader_election_job(monkeypatch, lock)
+
+    async def boom() -> None:
+        raise RuntimeError("phase exploded")
+
+    monkeypatch.setattr(job, "reset_budget_for_litellm_keys", boom)
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(job.reset_budget())
+
+    assert lock.release_calls == [RESET_BUDGET_JOB_NAME]
+
+
+def test_reset_budget_lease_outlives_one_scheduler_tick(monkeypatch):
+    """A lease shorter than the gap between ticks expires mid-sweep and lets a
+    second pod start sweeping, which is the amplification the lease removes."""
+    lock = FakePodLockManager(acquired=True)
+    job, _ = _make_leader_election_job(monkeypatch, lock)
+
+    asyncio.run(job.reset_budget())
+
+    assert lock.acquire_calls[0]["ttl"] == RESET_BUDGET_JOB_LOCK_TTL_SECONDS
+    assert RESET_BUDGET_JOB_LOCK_TTL_SECONDS > PROXY_BUDGET_RESCHEDULER_MIN_TIME
+
+
+def _window_row(source_id_column: str, row_id: str, reset_at: datetime) -> Dict[str, Any]:
+    return {
+        source_id_column: row_id,
+        "budget_limits": [{"budget_duration": "1h", "reset_at": reset_at.isoformat(), "max_budget": 10}],
+    }
+
+
+def _paginating_window_job(monkeypatch, pages_by_table: Dict[str, List[List[Dict[str, Any]]]]):
+    """Serve each table a canned sequence of pages and record every query.
+
+    Returns (job, calls) where calls is a list of (sql, cursor, limit).
+    """
+    prisma_client = MagicMock()
+    remaining = {table: list(pages) for table, pages in pages_by_table.items()}
+    calls: List[Dict[str, Any]] = []
+
+    async def fake_query_raw(query: str, *args, **kwargs):
+        table = "key" if '"LiteLLM_VerificationToken"' in query else "team"
+        calls.append({"table": table, "sql": query, "cursor": args[0], "limit": args[1]})
+        pages = remaining[table]
+        return pages.pop(0) if pages else []
+
+    prisma_client.db.query_raw = AsyncMock(side_effect=fake_query_raw)
+    prisma_client.db.litellm_verificationtoken.update = AsyncMock(return_value=None)
+    prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=None)
+
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.redis_cache = None
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.spend_counter_cache = spend_counter_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    return job, calls
+
+
+def test_reset_budget_windows_pages_by_cursor_instead_of_reading_the_table(monkeypatch):
+    """The window scan used to read every row carrying budget_limits in one
+    statement, so its memory and its statement cost grew with the deployment's
+    key count. It now walks pages, and each page resumes past the last row.
+    """
+    monkeypatch.setattr(reset_budget_job_module, "RESET_BUDGET_JOB_BATCH_SIZE", 2)
+    past = datetime.utcnow() - timedelta(hours=2)
+    job, calls = _paginating_window_job(
+        monkeypatch,
+        {
+            "key": [
+                [_window_row("token", "k1", past), _window_row("token", "k2", past)],
+                [_window_row("token", "k3", past)],
+            ],
+            "team": [[]],
+        },
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    key_calls = [call for call in calls if call["table"] == "key"]
+    assert [call["cursor"] for call in key_calls] == ["", "k2"], "second page must resume past the last row read"
+    assert {call["limit"] for call in key_calls} == {2}
+    assert all("LIMIT $2" in call["sql"] for call in key_calls)
+    # the short second page ends the scan; a third query would re-read forever
+    assert len(key_calls) == 2
+
+
+def test_reset_budget_windows_pages_to_the_end_of_a_large_table(monkeypatch):
+    """The scan must reach the last row within one tick.
+
+    Capping the pages per run would need a resume position, and that position
+    cannot live in the process: the lease is released after every sweep, so a
+    later tick can elect a pod whose position is unset, restart at the first
+    row, and leave the tail pinned at its cap forever. Paging alone bounds the
+    memory, so the walk runs to completion instead.
+    """
+    monkeypatch.setattr(reset_budget_job_module, "RESET_BUDGET_JOB_BATCH_SIZE", 1)
+    # the table needs far more pages than any per-run cap would allow, so a
+    # capped walk stops short and only an uncapped one reaches the last row
+    monkeypatch.setattr(reset_budget_job_module, "RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN", 3)
+    past = datetime.utcnow() - timedelta(hours=2)
+    rows = [_window_row("token", f"k{i:03d}", past) for i in range(1, 26)]
+    job, visited = _cursor_paginating_window_job(monkeypatch, rows)
+
+    asyncio.run(job.reset_budget_windows())
+
+    assert visited == [f"k{i:03d}" for i in range(1, 26)], visited
+
+
+def test_reset_budget_windows_survives_one_table_failing(monkeypatch):
+    """A broken key scan must not cost the team scan its sweep."""
+    prisma_client = MagicMock()
+
+    async def fake_query_raw(query: str, *args, **kwargs):
+        if '"LiteLLM_VerificationToken"' in query:
+            raise RuntimeError("key scan exploded")
+        return []
+
+    prisma_client.db.query_raw = AsyncMock(side_effect=fake_query_raw)
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.redis_cache = None
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.spend_counter_cache = spend_counter_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+
+    asyncio.run(job.reset_budget_windows())
+
+    queried = [call.args[0] for call in prisma_client.db.query_raw.await_args_list]
+    assert any('"LiteLLM_TeamTable"' in sql for sql in queried)
+
+
+def test_row_payloads_stay_out_of_reset_job_event_metadata(monkeypatch):
+    """Every found and updated row used to be JSON-serialized into the service
+    hook's metadata on every chunk, on the event loop, whether or not any
+    consumer read it. Only the counts are reported now."""
+    client = ChunkedPrismaClient({"key": [[_key_row("k1"), _key_row("k2")]]})
+    logging_obj = RecordingProxyLogging()
+    job = ResetBudgetJob(proxy_logging_obj=logging_obj, prisma_client=client)
+
+    _run_and_drain_hooks(job.reset_budget_for_litellm_keys)
+
+    metadata = logging_obj.service_logging_obj.success_calls[0]["event_metadata"]
+    assert metadata["num_keys_found"] == 2
+    assert metadata["num_keys_updated"] == 2
+    assert {"keys_found", "keys_updated", "keys_failed"}.isdisjoint(metadata)
+    assert all(isinstance(value, int) for value in metadata.values()), metadata
+
+
+def test_debug_row_dump_is_deferred_until_a_record_is_emitted():
+    """`logger.debug("%s", json.dumps(rows))` serializes before the logger drops
+    the record, so the sweep paid for a full dump of every chunk at any log
+    level. The wrapper defers the work to the formatter."""
+    serialized = []
+
+    class Tracked:
+        def __repr__(self) -> str:
+            serialized.append("serialized")
+            return "tracked"
+
+    lazy = reset_budget_job_module._LazyJson([Tracked()])
+    assert serialized == [], "constructing the wrapper must not serialize"
+
+    assert "tracked" in str(lazy)
+    assert serialized == ["serialized"]
+
+
+def _cursor_paginating_window_job(monkeypatch, key_rows: List[Dict[str, Any]]):
+    """Serve real keyset pages out of one ordered table, honouring the cursor.
+
+    Unlike the canned-page helper above, this models the database: a page is
+    whatever rows sort after the cursor, so a scan that forgets its cursor
+    genuinely re-reads the same prefix.
+    """
+    prisma_client = MagicMock()
+    ordered = sorted(key_rows, key=lambda r: r["token"])
+    visited: List[str] = []
+
+    async def fake_query_raw(query: str, *args, **kwargs):
+        if '"LiteLLM_TeamTable"' in query:
+            return []
+        cursor, limit = args[0], args[1]
+        page = [row for row in ordered if row["token"] > cursor][:limit]
+        visited.extend(row["token"] for row in page)
+        return page
+
+    prisma_client.db.query_raw = AsyncMock(side_effect=fake_query_raw)
+    prisma_client.db.litellm_verificationtoken.update = AsyncMock(return_value=None)
+    prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=None)
+
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.redis_cache = None
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.spend_counter_cache = spend_counter_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    return job, visited
+
+
+def test_every_tick_sweeps_the_whole_window_table_whichever_pod_won(monkeypatch):
+    """Coverage must not depend on which pod was elected.
+
+    The lease is released after each sweep, so consecutive ticks routinely run
+    on different pods. A scan carrying a resume position in process memory would
+    have a fresh pod start over at the first row, so rows past one run's reach
+    would never be swept by anyone. Two independent job instances, standing in
+    for two pods, must each cover the table end to end.
+    """
+    monkeypatch.setattr(reset_budget_job_module, "RESET_BUDGET_JOB_BATCH_SIZE", 2)
+    monkeypatch.setattr(reset_budget_job_module, "RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN", 2)
+    past = datetime.utcnow() - timedelta(hours=2)
+    rows = [_window_row("token", f"k{i:03d}", past) for i in range(1, 12)]
+    expected = [f"k{i:03d}" for i in range(1, 12)]
+
+    pod_a, visited_a = _cursor_paginating_window_job(monkeypatch, rows)
+    pod_b, visited_b = _cursor_paginating_window_job(monkeypatch, rows)
+
+    asyncio.run(pod_a.reset_budget_windows())
+    asyncio.run(pod_b.reset_budget_windows())
+
+    assert visited_a == expected, visited_a
+    assert visited_b == expected, visited_b
