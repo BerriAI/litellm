@@ -3,6 +3,24 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import GuardrailTestPlayground from "./GuardrailTestPlayground";
 
+const localization = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  const t = (key: string, values?: Record<string, unknown>) => {
+    const copy = key.split(".").reduce<unknown>((value, segment) => {
+      if (typeof value !== "object" || value === null) return undefined;
+      return (value as Record<string, unknown>)[segment];
+    }, resources[localization.language].gateway);
+    if (typeof copy !== "string") return key;
+    return Object.entries(values ?? {}).reduce(
+      (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+      copy,
+    );
+  };
+  return { useTranslation: () => ({ t }) };
+});
+
 vi.mock("@/components/networking");
 
 Object.defineProperty(window, "matchMedia", {
@@ -35,6 +53,7 @@ describe("GuardrailTestPlayground", () => {
   ];
 
   beforeEach(() => {
+    localization.language = "en";
     vi.clearAllMocks();
   });
 
@@ -69,5 +88,24 @@ describe("GuardrailTestPlayground", () => {
 
     // Verify the selected count
     expect(screen.getByText("1 of 1 selected")).toBeInTheDocument();
+  });
+
+  it("renders the testing playground in Russian", async () => {
+    localization.language = "ru";
+    const user = userEvent.setup();
+    render(
+      <GuardrailTestPlayground
+        guardrailsList={mockGuardrails}
+        isLoading={false}
+        accessToken={mockAccessToken}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Тестовая площадка ограничителей")).toBeInTheDocument();
+    expect(screen.getByText("Выберите ограничители для проверки")).toBeInTheDocument();
+    await user.click(screen.getByText("test-guardrail"));
+    expect(await screen.findByPlaceholderText("Введите текст для проверки ограничителями...")).toBeInTheDocument();
+    expect(screen.getByText("Выбрано: 1 из 1")).toBeInTheDocument();
   });
 });

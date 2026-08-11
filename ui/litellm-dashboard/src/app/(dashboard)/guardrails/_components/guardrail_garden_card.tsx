@@ -1,9 +1,11 @@
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { CheckCircleFilled } from "@ant-design/icons";
 import { GuardrailCardInfo } from "./guardrail_garden_data";
 import { Logo } from "@/components/molecules/logo/Logo";
 
 const GuardrailCard: React.FC<{ card: GuardrailCardInfo; onClick: () => void }> = ({ card, onClick }) => {
+  const { t } = useTranslation("gateway");
   const [hovered, setHovered] = useState(false);
 
   return (
@@ -40,7 +42,7 @@ const GuardrailCard: React.FC<{ card: GuardrailCardInfo; onClick: () => void }> 
         <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 4 }}>
           <CheckCircleFilled style={{ color: "#16a34a", fontSize: 12 }} />
           <span style={{ fontSize: 11, color: "#16a34a", fontWeight: 500 }}>
-            F1: {card.eval.f1}% &middot; {card.eval.testCases} test cases
+            F1: {card.eval.f1}% &middot; {t("guardrailsPage.garden.testCases", { count: card.eval.testCases })}
           </span>
         </div>
       )}

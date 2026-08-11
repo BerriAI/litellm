@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Input } from "antd";
 import { SearchOutlined, ArrowRightOutlined } from "@ant-design/icons";
 import { GuardrailCardInfo, ALL_CARDS } from "./guardrail_garden_data";
@@ -11,13 +12,46 @@ interface GuardrailGardenProps {
 }
 
 const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardrailCreated }) => {
+  const { t } = useTranslation("gateway");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCard, setSelectedCard] = useState<GuardrailCardInfo | null>(null);
   const [showAllLitellm, setShowAllLitellm] = useState(false);
   const CARDS_PER_ROW = 5;
   const VISIBLE_ROWS = 2;
 
-  const filteredCards = ALL_CARDS.filter((card) => {
+  const localizedCards = useMemo(
+    () =>
+      ALL_CARDS.map((card) => ({
+        ...card,
+        name: String(
+          t(`guardrailsPage.garden.cards.${card.id}.name`, {
+            defaultValue: card.name,
+          }),
+        ),
+        description: String(
+          t(`guardrailsPage.garden.cards.${card.id}.description`, {
+            defaultValue: card.description,
+          }),
+        ),
+        subcategory: card.subcategory
+          ? String(
+              t(`guardrailsPage.garden.labels.${card.subcategory}`, {
+                defaultValue: card.subcategory,
+              }),
+            )
+          : undefined,
+        tags: card.tags.map((tag) =>
+          String(
+            t(`guardrailsPage.garden.labels.${tag}`, {
+              defaultValue: tag,
+            }),
+          ),
+        ),
+      })),
+    [t],
+  );
+
+  const filteredCards = localizedCards.filter((card) => {
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
     return (
@@ -47,7 +81,7 @@ const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardr
       <div style={{ marginBottom: 24 }}>
         <Input
           size="large"
-          placeholder="Search guardrails"
+          placeholder={t("guardrailsPage.garden.searchPlaceholder")}
           prefix={<SearchOutlined style={{ color: "#9ca3af" }} />}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
@@ -58,7 +92,9 @@ const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardr
       {/* LiteLLM Content Filter Section */}
       <div style={{ marginBottom: 40 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-          <h2 style={{ fontSize: 20, fontWeight: 600, color: "#111827", margin: 0 }}>LiteLLM Content Filter</h2>
+          <h2 style={{ fontSize: 20, fontWeight: 600, color: "#111827", margin: 0 }}>
+            {t("guardrailsPage.garden.litellmTitle")}
+          </h2>
           <span
             style={{
               display: "inline-flex",
@@ -71,17 +107,17 @@ const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardr
             onClick={() => setShowAllLitellm(!showAllLitellm)}
           >
             {showAllLitellm ? (
-              <>Show less</>
+              <>{t("guardrailsPage.garden.showLess")}</>
             ) : (
               <>
                 <ArrowRightOutlined style={{ fontSize: 12 }} />
-                {`Show all (${litellmCards.length})`}
+                {t("guardrailsPage.garden.showAll", { count: litellmCards.length })}
               </>
             )}
           </span>
         </div>
         <p style={{ fontSize: 13, color: "#6b7280", margin: "4px 0 20px 0" }}>
-          Built-in guardrails powered by LiteLLM. Zero latency, no external dependencies, no additional cost.
+          {t("guardrailsPage.garden.litellmDescription")}
         </p>
         <div
           style={{
@@ -98,9 +134,11 @@ const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardr
 
       {/* Partner Guardrails Section */}
       <div style={{ marginBottom: 40 }}>
-        <h2 style={{ fontSize: 20, fontWeight: 600, color: "#111827", margin: "0 0 4px 0" }}>Partner Guardrails</h2>
+        <h2 style={{ fontSize: 20, fontWeight: 600, color: "#111827", margin: "0 0 4px 0" }}>
+          {t("guardrailsPage.garden.partnerTitle")}
+        </h2>
         <p style={{ fontSize: 13, color: "#6b7280", margin: "4px 0 20px 0" }}>
-          Third-party guardrail integrations from leading AI security providers.
+          {t("guardrailsPage.garden.partnerDescription")}
         </p>
         <div
           style={{

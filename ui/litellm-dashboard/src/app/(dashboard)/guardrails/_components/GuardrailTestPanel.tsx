@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@tremor/react";
 import { Input, Typography, Tooltip } from "antd";
 import { CopyOutlined, InfoCircleOutlined } from "@ant-design/icons";
@@ -25,6 +26,7 @@ export function GuardrailTestPanel({
   errors,
   onClose,
 }: GuardrailTestPanelProps) {
+  const { t } = useTranslation("gateway");
   const [inputText, setInputText] = useState("");
   const [metadataText, setMetadataText] = useState("");
   const [metadataError, setMetadataError] = useState<string | null>(null);
@@ -36,24 +38,24 @@ export function GuardrailTestPanel({
     try {
       const parsed = JSON.parse(raw);
       if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return { metadata: null, error: "Metadata must be a JSON object" };
+        return { metadata: null, error: t("guardrailsPage.playground.panel.metadataObject") };
       }
       return { metadata: parsed, error: null };
     } catch {
-      return { metadata: null, error: "Invalid JSON" };
+      return { metadata: null, error: t("guardrailsPage.playground.panel.invalidJson") };
     }
   };
 
   const handleSubmit = () => {
     if (!inputText.trim()) {
-      NotificationsManager.fromBackend("Please enter text to test");
+      NotificationsManager.fromBackend(t("guardrailsPage.playground.panel.enterText"));
       return;
     }
 
     const { metadata, error } = parseMetadata(metadataText);
     if (error) {
       setMetadataError(error);
-      NotificationsManager.fromBackend(`Metadata: ${error}`);
+      NotificationsManager.fromBackend(t("guardrailsPage.playground.panel.metadataError", { error }));
       return;
     }
     setMetadataError(null);
@@ -99,9 +101,9 @@ export function GuardrailTestPanel({
   const handleCopyInput = async () => {
     const success = await copyToClipboard(inputText);
     if (success) {
-      NotificationsManager.success("Input copied to clipboard");
+      NotificationsManager.success(t("guardrailsPage.playground.panel.inputCopied"));
     } else {
-      NotificationsManager.fromBackend("Failed to copy input");
+      NotificationsManager.fromBackend(t("guardrailsPage.playground.panel.copyInputFailed"));
     }
   };
 
@@ -112,7 +114,9 @@ export function GuardrailTestPanel({
         <div className="flex items-center space-x-3">
           <div className="flex-1 min-w-0">
             <div className="flex items-center space-x-2 mb-1">
-              <h2 className="text-lg font-semibold text-gray-900">Test Guardrails:</h2>
+              <h2 className="text-lg font-semibold text-gray-900">
+                {t("guardrailsPage.playground.panel.testGuardrails")}:
+              </h2>
               <div className="flex flex-wrap gap-2">
                 {guardrailNames.map((name) => (
                   <div
@@ -125,7 +129,7 @@ export function GuardrailTestPanel({
               </div>
             </div>
             <p className="text-sm text-gray-500">
-              Test {guardrailNames.length > 1 ? "guardrails" : "guardrail"} and compare results
+              {t("guardrailsPage.playground.panel.compare", { count: guardrailNames.length })}
             </p>
           </div>
         </div>
@@ -137,14 +141,16 @@ export function GuardrailTestPanel({
           <div>
             <div className="flex justify-between items-center mb-2">
               <div className="flex items-center gap-2">
-                <label className="text-sm font-medium text-gray-700">Input Text</label>
-                <Tooltip title="Press Enter to submit. Use Shift+Enter for new line.">
+                <label className="text-sm font-medium text-gray-700">
+                  {t("guardrailsPage.playground.panel.inputText")}
+                </label>
+                <Tooltip title={t("guardrailsPage.playground.panel.keyboardHelp")}>
                   <InfoCircleOutlined className="text-gray-400 cursor-help" />
                 </Tooltip>
               </div>
               {inputText && (
                 <Button size="xs" variant="secondary" icon={CopyOutlined} onClick={handleCopyInput}>
-                  Copy Input
+                  {t("guardrailsPage.playground.panel.copyInput")}
                 </Button>
               )}
             </div>
@@ -152,25 +158,30 @@ export function GuardrailTestPanel({
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Enter text to test with guardrails..."
+              placeholder={t("guardrailsPage.playground.panel.inputPlaceholder")}
               rows={8}
               className="font-mono text-sm"
             />
             <div className="flex justify-between items-center mt-1">
               <Text className="text-xs text-gray-500">
-                Press <kbd className="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded-sm text-xs">Enter</kbd> to
-                submit •{" "}
-                <kbd className="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded-sm text-xs">Shift+Enter</kbd> for
-                new line
+                {t("guardrailsPage.playground.panel.press")}{" "}
+                <kbd className="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded-sm text-xs">Enter</kbd>{" "}
+                {t("guardrailsPage.playground.panel.toSubmit")} •{" "}
+                <kbd className="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded-sm text-xs">Shift+Enter</kbd>{" "}
+                {t("guardrailsPage.playground.panel.forNewLine")}
               </Text>
-              <Text className="text-xs text-gray-500">Characters: {inputText.length}</Text>
+              <Text className="text-xs text-gray-500">
+                {t("guardrailsPage.playground.panel.characters")}: {inputText.length}
+              </Text>
             </div>
           </div>
 
           <div>
             <div className="flex items-center gap-2 mb-2">
-              <label className="text-sm font-medium text-gray-700">Metadata (optional)</label>
-              <Tooltip title="JSON object forwarded to the guardrail as request_data['metadata']. Custom guardrails can read per-request configuration from it.">
+              <label className="text-sm font-medium text-gray-700">
+                {t("guardrailsPage.playground.panel.metadata")}
+              </label>
+              <Tooltip title={t("guardrailsPage.playground.panel.metadataHelp")}>
                 <InfoCircleOutlined className="text-gray-400 cursor-help" />
               </Tooltip>
             </div>
@@ -197,8 +208,8 @@ export function GuardrailTestPanel({
           <div className="pt-2">
             <Button onClick={handleSubmit} loading={isLoading} disabled={!inputText.trim()} className="w-full">
               {isLoading
-                ? `Testing ${guardrailNames.length} guardrail${guardrailNames.length > 1 ? "s" : ""}...`
-                : `Test ${guardrailNames.length} guardrail${guardrailNames.length > 1 ? "s" : ""}`}
+                ? t("guardrailsPage.playground.panel.testing", { count: guardrailNames.length })
+                : t("guardrailsPage.playground.panel.test", { count: guardrailNames.length })}
             </Button>
           </div>
         </div>
