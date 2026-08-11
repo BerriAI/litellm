@@ -670,7 +670,29 @@ class _PROXY_TagRateLimiter(CustomLogger):
         Recomputing the release key independently per hop, with no shared
         registry at all, closes that vulnerability by construction: nothing
         here is ever keyed by anything a caller supplies.
+
+        `Router.async_callback_filter_deployments` fires this same event for
+        an exception raised from *inside* `async_filter_deployments` itself
+        (its own except block re-raises after calling
+        `logging_obj.async_failure_handler`), not only for an actual
+        provider-call failure -- including a rejection this hook raises for
+        being over its own limit, before ever reserving anything for this
+        hop. `_atomic_check_and_increment` already refunds any of its own
+        earlier admissions synchronously, inside that same call, whenever it
+        rejects, so there is nothing left for this event to release for that
+        specific rejection; releasing anyway would decrement a live,
+        unrelated reservation actually held by some other in-flight request
+        sharing the same tag, letting a caller free up capacity simply by
+        retrying against an already-full bucket. `ProxyRateLimitError.detail`
+        carries `{"error": "tag_rate_limit_exceeded", ...}`, a string unique
+        to this module (no other rate-limit hook raises it), so this can be
+        distinguished reliably from a genuine provider failure.
         """
+        if isinstance(kwargs.get("exception"), ProxyRateLimitError):
+            detail = kwargs["exception"].detail if isinstance(kwargs["exception"].detail, dict) else {}
+            if detail.get("error") == "tag_rate_limit_exceeded":
+                return
+
         if self.llm_router is None:
             return
 

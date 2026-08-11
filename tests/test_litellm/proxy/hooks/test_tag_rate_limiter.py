@@ -692,6 +692,60 @@ async def test_concurrent_requests_sharing_a_caller_chosen_call_id_do_not_merge_
         )
 
 
+@pytest.mark.asyncio
+async def test_own_rejection_does_not_release_a_live_reservation(time_controller):
+    """
+    Security regression test: Router.async_callback_filter_deployments fires
+    async_log_failure_event for an exception raised from inside
+    async_filter_deployments itself (its own except block calls
+    logging_obj.async_failure_handler before re-raising) -- not only for an
+    actual provider-call failure. A rejection this hook raises for being
+    over its own limit never reserved anything for that specific attempt
+    (_atomic_check_and_increment already refunds any of its own earlier
+    admissions synchronously whenever it rejects), so releasing anyway would
+    decrement a live reservation belonging to a different, genuinely
+    in-flight request sharing the same tag -- letting a caller free up
+    capacity simply by retrying against an already-full bucket, no
+    coordination with another request required.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=1)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    # One legitimate request holds the only slot.
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+    )
+
+    # A second attempt is rejected -- capture the real exception this hook raises.
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        )
+
+    # Router's own exception handling fires async_log_failure_event for that
+    # rejection, exactly as Router.async_callback_filter_deployments does.
+    await limiter.async_log_failure_event(
+        kwargs={
+            "exception": exc_info.value,
+            "standard_logging_object": {"model_group": "grp"},
+            "metadata": {"tags": ["end_user_id:u1"]},
+        },
+        response_obj=None,
+        start_time=0,
+        end_time=0,
+    )
+
+    # The first request's reservation must still be held: a third attempt is
+    # still rejected. If the rejection's failure event had wrongly released
+    # it, this would wrongly admit instead.
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        )
+
+
 # ---------------------------------------------------------------------------
 # tokens / dollars -- read-then-account-on-success rejection path
 # ---------------------------------------------------------------------------
