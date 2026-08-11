@@ -4,6 +4,26 @@ import { screen, fireEvent } from "@testing-library/react";
 import { TeamGuardrailsTab } from "./TeamGuardrailsTab";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
+const localization = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  const t = (key: string, values?: Record<string, unknown>) => {
+    const copy = key.split(".").reduce<unknown>((value, segment) => {
+      if (typeof value !== "object" || value === null) return undefined;
+      return (value as Record<string, unknown>)[segment];
+    }, resources[localization.language].gateway);
+    if (typeof copy !== "string") return key;
+    return Object.entries(values ?? {}).reduce(
+      (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+      copy,
+    );
+  };
+  return {
+    useTranslation: () => ({ t }),
+  };
+});
+
 vi.mock("@/components/networking", () => ({
   listGuardrailSubmissions: vi.fn(),
   approveGuardrailSubmission: vi.fn(),
@@ -59,6 +79,7 @@ describe("TeamGuardrailsTab — approve/reject role gate", () => {
   const mockUseAuthorized = vi.mocked(useAuthorized);
 
   beforeEach(() => {
+    localization.language = "en";
     vi.clearAllMocks();
     vi.mocked(listGuardrailSubmissions).mockResolvedValue({
       submissions: [pendingSubmission],
@@ -94,6 +115,18 @@ describe("TeamGuardrailsTab — approve/reject role gate", () => {
 
     expect(screen.getByRole("button", { name: /approve/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /reject/i })).toBeInTheDocument();
+  });
+
+  it("renders submitted guardrails in Russian", async () => {
+    localization.language = "ru";
+    mockUseAuthorized.mockReturnValue({ ...baseAuth, userRole: "Admin" });
+    renderWithProviders(<TeamGuardrailsTab accessToken="test-token" />);
+
+    await screen.findByText("test-pending-guardrail");
+    expect(screen.getByText("Всего предложено")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Поиск ограничителей...")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Одобрить" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Предложить ограничитель" })).toBeInTheDocument();
   });
 
   it("hides Approve and Reject buttons when userRole is undefined (defaults to non-admin)", async () => {
