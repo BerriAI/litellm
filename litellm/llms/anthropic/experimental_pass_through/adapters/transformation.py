@@ -455,6 +455,14 @@ class LiteLLMAnthropicMessagesAdapter:
                                             )
                                             self._add_cache_control_if_applicable(content, tool_result, model)
                                             tool_message_list.append(tool_result)
+                                        elif c.get("type") == "tool_reference":
+                                            tool_result = ChatCompletionToolMessage(
+                                                role="tool",
+                                                tool_call_id=content.get("tool_use_id", ""),
+                                                content=f"[Loaded tool: {c.get('tool_name', '')}]",
+                                            )
+                                            self._add_cache_control_if_applicable(content, tool_result, model)
+                                            tool_message_list.append(tool_result)
                                         elif c.get("type") in ("image", "document"):
                                             image_part = self._tool_result_image_part(c.get("source"))
                                             tool_result = ChatCompletionToolMessage(
@@ -481,6 +489,13 @@ class LiteLLMAnthropicMessagesAdapter:
                                                     ChatCompletionTextObject(
                                                         type="text",
                                                         text=c.get("text", ""),
+                                                    )
+                                                )
+                                            elif c.get("type") == "tool_reference":
+                                                combined_content_parts.append(
+                                                    ChatCompletionTextObject(
+                                                        type="text",
+                                                        text=f"[Loaded tool: {c.get('tool_name', '')}]",
                                                     )
                                                 )
                                             elif c.get("type") in ("image", "document"):

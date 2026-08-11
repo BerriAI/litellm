@@ -1610,6 +1610,70 @@ def test_translate_anthropic_messages_to_openai_tool_result_single_item_backward
     assert tool_message["content"] == "72°F and sunny"
 
 
+@pytest.mark.parametrize(
+    ("tool_references", "expected_content"),
+    [
+        (
+            [{"type": "tool_reference", "tool_name": "get_weather"}],
+            "[Loaded tool: get_weather]",
+        ),
+        (
+            [
+                {"type": "tool_reference", "tool_name": "get_weather"},
+                {"type": "tool_reference", "tool_name": "search_docs"},
+            ],
+            [
+                {"type": "text", "text": "[Loaded tool: get_weather]"},
+                {"type": "text", "text": "[Loaded tool: search_docs]"},
+            ],
+        ),
+    ],
+)
+def test_translate_anthropic_messages_to_openai_tool_reference_results(
+    tool_references: list[dict[str, str]], expected_content: Any
+):
+    anthropic_messages = [
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "toolu_tool_search",
+                    "name": "ToolSearch",
+                    "input": {"query": "weather"},
+                }
+            ],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_tool_search",
+                    "content": tool_references,
+                }
+            ],
+        ),
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=anthropic_messages
+    )
+
+    tool_messages = [
+        message
+        for message in result
+        if isinstance(message, dict) and message.get("role") == "tool"
+    ]
+    assert tool_messages == [
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_tool_search",
+            "content": expected_content,
+        }
+    ]
+
+
 def test_streaming_chunk_with_both_text_and_tool_calls_issue_18238():
     """
     When a streaming choice contains both text content and tool_calls,
