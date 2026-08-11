@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 import jwt
 from pydantic import BaseModel, ConfigDict, SecretStr, TypeAdapter, ValidationError
@@ -28,9 +28,9 @@ from litellm._logging import verbose_proxy_logger
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
-_ASSERTION_DECRYPT_LOG_KEY = "sso_identity_assertion"
-_STR_ADAPTER: TypeAdapter[str] = TypeAdapter(str)
-_MAYBE_STR_ADAPTER: TypeAdapter[str | None] = TypeAdapter(str | None)
+_ASSERTION_DECRYPT_LOG_KEY: Final = "sso_identity_assertion"
+_STR_ADAPTER: Final[TypeAdapter[str]] = TypeAdapter(str)
+_MAYBE_STR_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 
 
 class SSOIdentityAssertion(BaseModel):
@@ -64,13 +64,13 @@ def assertion_from_sso_login(id_token: object, refresh_token: object) -> SSOIden
     token response; this is the one boundary that validates them. The token arrived over TLS
     from the IdP's own token endpoint, so claims are read without signature verification,
     matching how the SSO callback already decodes it for identity."""
-    raw_id_token = id_token if isinstance(id_token, str) and id_token else None
+    raw_id_token: Final = id_token if isinstance(id_token, str) and id_token else None
     if raw_id_token is None:
         return None
-    raw_refresh_token = refresh_token if isinstance(refresh_token, str) and refresh_token else None
+    raw_refresh_token: Final = refresh_token if isinstance(refresh_token, str) and refresh_token else None
     try:
-        claims = _IdTokenClaims.model_validate(jwt.decode(raw_id_token, options={"verify_signature": False}))
-        expires_at = datetime.fromtimestamp(claims.exp, tz=timezone.utc) if claims.exp is not None else None
+        claims: Final = _IdTokenClaims.model_validate(jwt.decode(raw_id_token, options={"verify_signature": False}))
+        expires_at: Final = datetime.fromtimestamp(claims.exp, tz=timezone.utc) if claims.exp is not None else None
     except Exception:  # noqa: BLE001  # decode failure = not retainable; never raise into login
         verbose_proxy_logger.warning(
             "SSO id_token could not be decoded or its claims were unusable; not retaining it for EMA egress."
@@ -98,7 +98,7 @@ async def ema_assertion_retention_enabled() -> bool:
     from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # runtime global
     from litellm.types.mcp import MCPAuth  # noqa: PLC0415  # runtime global
 
-    config_servers = global_mcp_server_manager.config_mcp_servers.values()
+    config_servers: Final = global_mcp_server_manager.config_mcp_servers.values()
     if any(server.auth_type == MCPAuth.oauth2_id_jag for server in config_servers):
         return True
     if prisma_client is None:
@@ -113,13 +113,13 @@ async def persist_sso_identity_assertion(user_id: str, assertion: SSOIdentityAss
 
     if prisma_client is None:
         return
-    payload: dict[str, str] = {
+    payload: Final[dict[str, str]] = {
         "id_token": assertion.id_token.get_secret_value(),
         **({"refresh_token": assertion.refresh_token.get_secret_value()} if assertion.refresh_token else {}),
         **({"issuer": assertion.issuer} if assertion.issuer else {}),
         **({"expires_at": assertion.expires_at.isoformat()} if assertion.expires_at else {}),
     }
-    encoded = _STR_ADAPTER.validate_python(encrypt_value_helper(json.dumps(payload)))
+    encoded: Final = _STR_ADAPTER.validate_python(encrypt_value_helper(json.dumps(payload)))
     await prisma_client.db.litellm_ssoidentityassertion.upsert(
         where={"user_id": user_id},
         data={
@@ -137,16 +137,16 @@ async def fetch_sso_identity_assertion(user_id: str) -> SSOIdentityAssertion | N
 
     if prisma_client is None:
         return None
-    row = await prisma_client.db.litellm_ssoidentityassertion.find_unique(where={"user_id": user_id})
+    row: Final = await prisma_client.db.litellm_ssoidentityassertion.find_unique(where={"user_id": user_id})
     if row is None:
         return None
-    raw = _MAYBE_STR_ADAPTER.validate_python(
+    raw: Final = _MAYBE_STR_ADAPTER.validate_python(
         decrypt_value_helper(row.assertion_b64, _ASSERTION_DECRYPT_LOG_KEY, exception_type="debug")
     )
     if raw is None:
         return None
     try:
-        payload = _StoredAssertionPayload.model_validate_json(raw)
+        payload: Final = _StoredAssertionPayload.model_validate_json(raw)
     except ValidationError:
         verbose_proxy_logger.warning(
             "Stored SSO identity assertion for user_id=%s could not be parsed; treating as absent.", user_id
@@ -209,7 +209,7 @@ async def rotate_sso_identity_assertions_master_key(prisma_client: PrismaClient,
     )
 
     async def _rotate_row(row: AssertionRow) -> bool:
-        plaintext = _MAYBE_STR_ADAPTER.validate_python(
+        plaintext: Final = _MAYBE_STR_ADAPTER.validate_python(
             decrypt_value_helper(row.assertion_b64, _ASSERTION_DECRYPT_LOG_KEY, exception_type="debug")
         )
         if plaintext is None:
@@ -225,8 +225,8 @@ async def rotate_sso_identity_assertions_master_key(prisma_client: PrismaClient,
         )
         return True
 
-    rows = await prisma_client.db.litellm_ssoidentityassertion.find_many()
-    outcomes = [await _rotate_row(row) for row in rows]
+    rows: Final = await prisma_client.db.litellm_ssoidentityassertion.find_many()
+    outcomes: Final = [await _rotate_row(row) for row in rows]
     verbose_proxy_logger.info(
         "rotate_sso_identity_assertions_master_key: rotated %d row(s), skipped %d",
         sum(outcomes),

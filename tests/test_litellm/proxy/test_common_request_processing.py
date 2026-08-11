@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import datetime
+from types import SimpleNamespace
 from typing import AsyncGenerator, Callable, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -28,11 +29,14 @@ from litellm.proxy.common_request_processing import (
     _is_azure_model_router_request,
     _override_openai_response_model,
     _parse_event_data_for_error,
+    _resolve_per_request_model_group_alias,
     _should_return_raw_model_name,
     _UpstreamClosingStreamingResponse,
     create_response,
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
+from litellm.proxy._types import ProxyException
+from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 
 
@@ -828,6 +832,63 @@ class TestProxyBaseLLMRequestProcessing:
         # Verify margin headers are not present
         assert "x-litellm-response-cost-margin-amount" not in headers
         assert "x-litellm-response-cost-margin-percent" not in headers
+
+    @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+    def test_get_custom_headers_classifier_cost_from_routing_decision(self, metadata_key):
+        """The auto-router's LLM classifier cost must surface as its own header.
+
+        x-litellm-response-cost stays the final routed call's cost (it feeds the
+        margin/discount family and chargeback); the classifier's cost is read from the
+        routing_decision the pre-routing hook recorded in the request metadata. The
+        bucket is metadata on chat-style routes and litellm_metadata on messages-style
+        routes, so both must work.
+        """
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            response_cost=0.00023,
+            request_data={
+                metadata_key: {
+                    "routing_decision": {"cause": "llm_classifier", "classifier_cost": 8.1e-05},
+                }
+            },
+        )
+
+        assert headers["x-litellm-classifier-cost"] == "8.1e-05"
+        assert float(headers["x-litellm-response-cost"]) == 0.00023
+
+    @pytest.mark.parametrize(
+        "request_data",
+        [
+            None,
+            {},
+            {"metadata": {}},
+            {"metadata": {"routing_decision": {"cause": "heuristic_scorer"}}},
+            {"metadata": {"routing_decision": {"cause": "llm_classifier", "classifier_cost": "bogus"}}},
+            {"metadata": {"routing_decision": {"cause": "llm_classifier", "classifier_cost": True}}},
+        ],
+    )
+    def test_get_custom_headers_omits_classifier_cost_without_a_priced_decision(self, request_data):
+        """No routing decision, a decision without a classifier call, or a malformed cost
+        must all omit the header entirely rather than emit 0 or a junk value."""
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            response_cost=0.00023,
+            request_data=request_data,
+        )
+
+        assert "x-litellm-classifier-cost" not in headers
 
     def test_get_cost_breakdown_from_logging_obj_helper(self):
         """
@@ -2421,14 +2482,14 @@ class TestHandleLLMApiExceptionDictDetail:
     through ProxyException instead of being str()-mangled into a Python repr.
     """
 
-    async def _invoke(self, exc: Exception):
+    async def _invoke(self, exc: Exception, callback_headers: Optional[dict] = None):
         from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 
         processor = ProxyBaseLLMRequestProcessing(data={})
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
-        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=callback_headers or {})
 
         try:
             await processor._handle_llm_api_exception(
@@ -2946,6 +3007,112 @@ class TestHandleLLMApiExceptionRetryAfter:
         )
         assert proxy_exc.headers["retry-after"] == "43"
         assert proxy_exc.headers["x-custom"] == "1"
+
+
+class TestHandleLLMApiExceptionFramingHeaders:
+    """HTTP-framing headers on the provider exception must be stripped before the
+    proxy builds its own response, or they conflict with the framing the proxy
+    itself sets. Non-framing headers must survive unchanged."""
+
+    async def _invoke(self, exc: Exception, callback_headers: Optional[dict] = None):
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        processor = ProxyBaseLLMRequestProcessing(data={})
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=callback_headers or {})
+
+        try:
+            await processor._handle_llm_api_exception(
+                e=exc,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except ProxyException as raised:
+            return raised
+        raise AssertionError("ProxyException was not raised")
+
+    async def test_strips_framing_headers_preserves_others(self):
+        exc = litellm.RateLimitError(
+            message="Resource exhausted",
+            llm_provider="vertex_ai",
+            model="gemini-2.0-flash",
+        )
+        exc.headers = {
+            "content-length": "42",
+            "transfer-encoding": "chunked",
+            "content-encoding": "gzip",
+            "content-type": "application/json",
+            "x-request-id": "abc-123",
+        }
+        proxy_exc = await self._invoke(exc)
+        assert "content-length" not in proxy_exc.headers
+        assert "transfer-encoding" not in proxy_exc.headers
+        assert "content-encoding" not in proxy_exc.headers
+        assert "content-type" not in proxy_exc.headers
+        assert proxy_exc.headers["x-request-id"] == "abc-123"
+
+    async def test_strips_framing_headers_on_existing_proxy_exception(self):
+        from litellm.proxy._types import ProxyException
+
+        exc = ProxyException(
+            message="Resource exhausted",
+            type="rate_limit_error",
+            param=None,
+            code=429,
+            headers={
+                "content-length": "42",
+                "transfer-encoding": "chunked",
+                "x-request-id": "abc-123",
+            },
+        )
+        proxy_exc = await self._invoke(exc)
+        assert "content-length" not in proxy_exc.headers
+        assert "transfer-encoding" not in proxy_exc.headers
+        assert proxy_exc.headers["x-request-id"] == "abc-123"
+
+    async def test_strips_browser_security_headers(self):
+        exc = litellm.RateLimitError(
+            message="Resource exhausted",
+            llm_provider="vertex_ai",
+            model="gemini-2.0-flash",
+        )
+        exc.headers = {
+            "access-control-allow-origin": "https://evil.example.com",
+            "content-security-policy": "default-src https://evil.example.com",
+            "clear-site-data": '"cache", "cookies", "storage"',
+            "strict-transport-security": "max-age=0",
+            "x-frame-options": "ALLOWALL",
+            "x-request-id": "abc-123",
+        }
+        proxy_exc = await self._invoke(exc)
+        assert "access-control-allow-origin" not in proxy_exc.headers
+        assert "content-security-policy" not in proxy_exc.headers
+        assert "clear-site-data" not in proxy_exc.headers
+        assert "strict-transport-security" not in proxy_exc.headers
+        assert "x-frame-options" not in proxy_exc.headers
+        assert proxy_exc.headers["x-request-id"] == "abc-123"
+
+    async def test_strips_unsafe_headers_added_by_response_headers_hook(self):
+        exc = litellm.RateLimitError(
+            message="Resource exhausted",
+            llm_provider="vertex_ai",
+            model="gemini-2.0-flash",
+        )
+        exc.headers = {"x-request-id": "abc-123"}
+        proxy_exc = await self._invoke(
+            exc,
+            callback_headers={
+                "x-frame-options": "ALLOWALL",
+                "content-length": "42",
+                "x-custom-safe": "1",
+            },
+        )
+        assert "x-frame-options" not in proxy_exc.headers
+        assert "content-length" not in proxy_exc.headers
+        assert proxy_exc.headers["x-custom-safe"] == "1"
+        assert proxy_exc.headers["x-request-id"] == "abc-123"
 
 
 class TestAsyncStreamingDataGeneratorFastPath:
@@ -5354,3 +5521,228 @@ class TestModelDeploymentsSupportStreamOptions:
 
     def test_non_string_model_is_not_injected(self):
         assert self._support(None, None) is False
+
+
+class TestPerRequestModelGroupAlias:
+    """``router_settings.model_group_alias`` on a key or team has to be resolved
+    by the proxy: the Router resolves aliases from its own shared instance
+    attribute, which only ever holds the global config map."""
+
+    @staticmethod
+    def _router() -> litellm.Router:
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "group-a",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+                },
+                {
+                    "model_name": "group-b",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake"},
+                },
+            ]
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "alias_map, expected",
+        [
+            ({"group-a": "group-b"}, "group-b"),
+            ({"group-a": {"model": "group-b", "hidden": True}}, "group-b"),
+            ({"group-b": "group-a"}, None),
+            ({"group-a": "group-a"}, None),
+            ({"group-a": {"hidden": True}}, None),
+            ({}, None),
+            (None, None),
+        ],
+    )
+    async def test_resolves_alias_for_the_requested_model_group(self, alias_map, expected):
+        resolved = await _resolve_per_request_model_group_alias(
+            requested_model="group-a",
+            router_settings={"model_group_alias": alias_map},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),
+            llm_router=self._router(),
+        )
+
+        assert resolved == expected
+
+    @pytest.mark.asyncio
+    async def test_alias_target_outside_the_key_allowlist_is_rejected(self):
+        """Access was authorized against the requested group, so a rewrite that
+        the key could not have requested directly must not be served."""
+        with pytest.raises(ProxyException) as exc_info:
+            await _resolve_per_request_model_group_alias(
+                requested_model="group-a",
+                router_settings={"model_group_alias": {"group-a": "group-b"}},
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=["group-a"]),
+                llm_router=self._router(),
+            )
+
+        assert exc_info.value.code == "403"
+        assert "group-b" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_alias_target_inside_the_key_allowlist_resolves(self):
+        resolved = await _resolve_per_request_model_group_alias(
+            requested_model="group-a",
+            router_settings={"model_group_alias": {"group-a": "group-b"}},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=["group-a", "group-b"]),
+            llm_router=self._router(),
+        )
+
+        assert resolved == "group-b"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("requested_model", [None, ["group-a", "group-b"]])
+    async def test_non_string_requested_model_is_left_alone(self, requested_model):
+        """The routed model is not always a string (a batch request carries a
+        list), and an unhashable one must not blow up the alias lookup."""
+        resolved = await _resolve_per_request_model_group_alias(
+            requested_model=requested_model,
+            router_settings={"model_group_alias": {"group-a": "group-b"}},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),
+            llm_router=self._router(),
+        )
+
+        assert resolved is None
+
+    @pytest.mark.asyncio
+    async def test_pre_call_logic_rewrites_the_requested_model(self, monkeypatch):
+        """End to end through the request path: a key carrying the alias must
+        leave pre-call processing pointing at the alias target, not at the
+        group the caller asked for."""
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"model": "group-a"})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return kwargs.get("data", {})
+
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+            return copy.deepcopy(data)
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=passthrough_pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(
+            return_value={"model_group_alias": {"group-a": "group-b"}}
+        )
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="acompletion",
+            llm_router=self._router(),
+        )
+
+        assert returned_data["model"] == "group-b"
+        assert returned_data["router_settings_override"] == {"model_group_alias": {"group-a": "group-b"}}
+        # The rewrite has to land before the pre-call hooks: they are where
+        # per-model budgets and rate limits are enforced, so resolving later
+        # applies the requested group's limits to a call the target serves.
+        assert mock_proxy_logging_obj.pre_call_hook.call_args.kwargs["data"]["model"] == "group-b"
+
+    @pytest.mark.asyncio
+    async def test_team_level_alias_rewrites_the_requested_model(self, monkeypatch):
+        """The team path is separate resolution, not a variant of the key path:
+        settings are looked up on the team only when the key carries none. Runs
+        the real hierarchical lookup rather than mocking it, so this covers the
+        team half of the fix end to end."""
+        from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
+
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"model": "group-a"})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return kwargs.get("data", {})
+
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+            return copy.deepcopy(data)
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=passthrough_pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.get_team_object",
+            AsyncMock(return_value=SimpleNamespace(router_settings={"model_group_alias": {"group-a": "group-b"}})),
+        )
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[], team_id="team-1"),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=RealProxyConfig(),
+            route_type="acompletion",
+            llm_router=self._router(),
+        )
+
+        assert returned_data["model"] == "group-b"
+
+    @pytest.mark.asyncio
+    async def test_model_level_guardrails_resolve_against_the_alias_target(self, monkeypatch):
+        """Model-level guardrails are merged by model group name, so the merge
+        must see the target rather than the group the caller named."""
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"model": "group-a"})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return kwargs.get("data", {})
+
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+            return copy.deepcopy(data)
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=passthrough_pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+
+        merged_for: list = []
+
+        def recording_merge(data, llm_router, trust_client_model_info=True):
+            merged_for.append(data.get("model"))
+            return data
+
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "_check_and_merge_model_level_guardrails",
+            recording_merge,
+        )
+
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(
+            return_value={"model_group_alias": {"group-a": "group-b"}}
+        )
+
+        await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="acompletion",
+            llm_router=self._router(),
+        )
+
+        assert merged_for == ["group-b"]

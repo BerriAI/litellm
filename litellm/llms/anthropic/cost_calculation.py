@@ -3,7 +3,7 @@ Helper util for handling anthropic-specific cost calculation
 - e.g.: prompt caching
 """
 
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, Final, Optional
 
 from pydantic import BaseModel, ValidationError
 
@@ -31,7 +31,7 @@ def _compute_cache_only_cost(model_info: "ModelInfo", usage: "Usage", service_ti
     if usage.prompt_tokens_details is None:
         return 0.0
 
-    prompt_tokens_details = _parse_prompt_tokens_details(usage)
+    prompt_tokens_details: Final = _parse_prompt_tokens_details(usage)
     (
         _,
         _,
@@ -56,7 +56,7 @@ def _compute_cache_only_cost(model_info: "ModelInfo", usage: "Usage", service_ti
     return cache_cost
 
 
-def cost_per_token(model: str, usage: "Usage", service_tier: str | None = None) -> Tuple[float, float]:
+def cost_per_token(model: str, usage: "Usage", service_tier: str | None = None) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -78,8 +78,8 @@ def cost_per_token(model: str, usage: "Usage", service_tier: str | None = None) 
 
     # Apply provider_specific_entry multipliers for geo/speed routing
     try:
-        model_info = litellm.get_model_info(model=model, custom_llm_provider="anthropic")
-        provider_specific_entry: dict = model_info.get("provider_specific_entry") or {}
+        model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="anthropic")
+        provider_specific_entry: Final[dict] = model_info.get("provider_specific_entry") or {}
 
         multiplier = 1.0
         if (
@@ -92,7 +92,7 @@ def cost_per_token(model: str, usage: "Usage", service_tier: str | None = None) 
             multiplier *= provider_specific_entry.get("fast", 1.0)
 
         if multiplier != 1.0:
-            cache_cost = _compute_cache_only_cost(model_info=model_info, usage=usage, service_tier=service_tier)
+            cache_cost: Final = _compute_cache_only_cost(model_info=model_info, usage=usage, service_tier=service_tier)
             prompt_cost = (prompt_cost - cache_cost) * multiplier + cache_cost
             completion_cost *= multiplier
     except Exception:
@@ -121,7 +121,7 @@ def get_anthropic_web_search_requests_from_response(
     if not isinstance(response_object, dict):
         return None
     try:
-        probe = _AnthropicResponseProbe.model_validate(response_object)
+        probe: Final = _AnthropicResponseProbe.model_validate(response_object)
     except ValidationError:
         return None
     if probe.usage is None or probe.usage.server_tool_use is None:
@@ -144,18 +144,18 @@ def get_cost_for_anthropic_web_search(
 
     if usage is None:
         return 0.0
-    web_search_requests = _get_web_search_requests(getattr(usage, "server_tool_use", None))
+    web_search_requests: Final = _get_web_search_requests(getattr(usage, "server_tool_use", None))
     if web_search_requests is None:
         return 0.0
 
     ## Get the cost per web search request
-    search_context_pricing: SearchContextCostPerQuery = (
+    search_context_pricing: Final[SearchContextCostPerQuery] = (
         model_info.get("search_context_cost_per_query") or SearchContextCostPerQuery()
     )
-    cost_per_web_search_request = search_context_pricing.get("search_context_size_medium", 0.0)
+    cost_per_web_search_request: Final = search_context_pricing.get("search_context_size_medium", 0.0)
     if cost_per_web_search_request is None or cost_per_web_search_request == 0.0:
         return 0.0
 
     ## Calculate the total cost
-    total_cost = cost_per_web_search_request * web_search_requests
+    total_cost: Final = cost_per_web_search_request * web_search_requests
     return total_cost

@@ -7,13 +7,14 @@ Phoenix + any other OpenInference-aware backend simultaneously.
 """
 
 import json
-from typing import Callable, Sequence
+from collections.abc import Callable, Sequence
+from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
+    MAX_TOOL_DEFINITION_ATTRS_PER_SPAN,
     collect,
     drop_none,
-    MAX_TOOL_DEFINITION_ATTRS_PER_SPAN,
     json_if,
     message_content,
     output_messages,
@@ -94,8 +95,8 @@ class OpenInferenceMapper:
     @staticmethod
     def _messages(prefix: str, value_key: str, messages: Sequence[object]) -> AttributeMap:
         """Per-message ``{prefix}.{idx}.message.*`` keys + the ``value_key`` blob."""
-        parsed = [(m.get("role") if isinstance(m, dict) else None, message_content(m)) for m in messages]
-        attrs = drop_none(
+        parsed: Final = [(m.get("role") if isinstance(m, dict) else None, message_content(m)) for m in messages]
+        attrs: Final = drop_none(
             {
                 key: value
                 for idx, (role, content) in enumerate(parsed)

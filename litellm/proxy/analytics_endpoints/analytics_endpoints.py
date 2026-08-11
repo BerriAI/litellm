@@ -1,6 +1,6 @@
 #### Analytics Endpoints #####
 from datetime import datetime, timezone
-from typing import Annotated
+from typing import Annotated, Final
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,7 +9,7 @@ from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.cache_activity import CacheActivityResponse, get_cache_activity
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
 def _parse_date(value: str, param_name: str) -> datetime:

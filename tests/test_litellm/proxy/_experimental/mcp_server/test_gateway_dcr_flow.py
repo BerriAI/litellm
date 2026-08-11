@@ -212,7 +212,7 @@ async def test_authorize_with_session_hands_browser_to_connect_page_with_flow_co
     response = _authorize(client_id, session_user_id="u1")
     assert response.status_code == 303
     location = urlparse(response.headers["location"])
-    assert location.path == "/ui/chat/integrations"
+    assert location.path == "/ui/connect"
     params = parse_qs(location.query)
     handle = params["connect_flow"][0]
     assert params["connect_client"] == ["https://claude.ai"]

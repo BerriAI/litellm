@@ -15,6 +15,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 from create_mock_standard_logging_payload import create_standard_logging_payload
 from litellm.types.utils import StandardLoggingPayload
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
 
 
 @pytest.fixture
@@ -1816,6 +1817,7 @@ def test_init_auto_router_deployment_success(mock_auto_router, model_list):
         default_model="gpt-5-mini",
         embedding_model="text-embedding-3-small",
         litellm_router_instance=router,
+        max_input_chars=DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     )
 
     # Verify the auto-router was added to the router's auto_routers dict

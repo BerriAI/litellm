@@ -14,6 +14,7 @@ import {
 import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@/components/ui/table";
 
 declare module "@tanstack/react-table" {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- declaration merging requires the type parameters to match the upstream ColumnMeta signature exactly (TS2428)
   interface ColumnMeta<TData extends RowData, TValue> {
     numeric?: boolean;
   }

@@ -36,7 +36,7 @@ def _setup_model_block_mocks(monkeypatch, *, updated_blocked: bool):
     mock_router = MagicMock()
     mock_router.get_model_ids.return_value = [model_id]
 
-    mock_clear_cache = AsyncMock(return_value=True)
+    mock_clear_cache = AsyncMock(return_value=None)
     mock_audit_log = AsyncMock(return_value=None)
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)

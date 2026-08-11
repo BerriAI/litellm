@@ -469,13 +469,14 @@ async def test_create__fallback_body_custom_llm_provider(harness):
 
 
 @pytest.mark.asyncio
-async def test_create__unified_file_id_single_model(harness):
+async def test_create__unified_file_id_single_model_disables_cross_model_fallbacks(harness):
     set_body(
         harness,
         {
             "input_file_id": "litellm_proxy_unified_id",
             "endpoint": "/v1/chat/completions",
             "completion_window": "24h",
+            "disable_fallbacks": False,
         },
     )
     with (
@@ -489,6 +490,7 @@ async def test_create__unified_file_id_single_model(harness):
     harness.litellm_acreate.assert_not_called()
     # model injected from the unified id, input_file_id restored, hidden param set
     assert harness.router_kwargs()["model"] == "gpt-4o-mini"
+    assert harness.router_kwargs()["disable_fallbacks"] is True
     assert resp.input_file_id == "litellm_proxy_unified_id"
     assert resp._hidden_params["unified_file_id"] == "unified-xyz"
 
@@ -935,8 +937,7 @@ class RetrieveHarness:
     creds_resolver: MagicMock
     get_batch_from_db: AsyncMock
     update_batch_in_db: AsyncMock
-    resolve_input: AsyncMock
-    resolve_output: AsyncMock
+    ensure_managed_files: AsyncMock
 
     @property
     def router_aretrieve(self) -> AsyncMock:
@@ -973,8 +974,7 @@ def retrieve_harness():
     # Default: DB miss -> always fall through to provider routing.
     get_batch_from_db = AsyncMock(return_value=(None, None))
     update_batch_in_db = AsyncMock(return_value=None)
-    resolve_input = AsyncMock(return_value=None)
-    resolve_output = AsyncMock(return_value=None)
+    ensure_managed_files = AsyncMock(return_value=None)
 
     with ExitStack() as stack:
         stack.enter_context(
@@ -1001,8 +1001,7 @@ def retrieve_harness():
         )
         stack.enter_context(patch.object(endpoints, "get_batch_from_database", get_batch_from_db))
         stack.enter_context(patch.object(endpoints, "update_batch_in_database", update_batch_in_db))
-        stack.enter_context(patch.object(endpoints, "resolve_input_file_id_to_unified", resolve_input))
-        stack.enter_context(patch.object(endpoints, "resolve_output_file_ids_to_unified", resolve_output))
+        stack.enter_context(patch.object(endpoints, "ensure_batch_response_managed_file_ids", ensure_managed_files))
         stack.enter_context(patch.object(litellm, "aretrieve_batch", litellm_aretrieve))
         stack.enter_context(patch.object(litellm, "enable_loadbalancing_on_batch_endpoints", False))
         stack.enter_context(patch.object(proxy_server, "llm_router", router))
@@ -1024,8 +1023,7 @@ def retrieve_harness():
             creds_resolver=router.get_deployment_credentials_with_provider,
             get_batch_from_db=get_batch_from_db,
             update_batch_in_db=update_batch_in_db,
-            resolve_input=resolve_input,
-            resolve_output=resolve_output,
+            ensure_managed_files=ensure_managed_files,
         )
 
 
@@ -1150,9 +1148,8 @@ async def test_retrieve__unified_batch_id_routes_to_router(retrieve_harness):
     assert resp._hidden_params["unified_batch_id"] == UNIFIED_BATCH_ID
     assert resp._hidden_params["model_id"] == "gpt-4o-mini"
 
-    # raw provider file ids on the response are resolved back to unified ids.
-    retrieve_harness.resolve_input.assert_called_once()
-    retrieve_harness.resolve_output.assert_called_once()
+    # raw provider file ids on the response are normalized to managed unified ids.
+    retrieve_harness.ensure_managed_files.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -1168,9 +1165,8 @@ async def test_retrieve__loadbalancing_raw_id_routes_to_router(retrieve_harness)
     # not a unified id -> hidden param reflects that, no model_id stamped.
     assert resp._hidden_params["unified_batch_id"] is False
     assert "model_id" not in resp._hidden_params
-    # not a unified id -> no file-id resolution.
-    retrieve_harness.resolve_input.assert_not_called()
-    retrieve_harness.resolve_output.assert_not_called()
+    # not a unified id -> no managed-file normalization.
+    retrieve_harness.ensure_managed_files.assert_not_called()
 
 
 # --------------------------------------------------------------------------- #
@@ -1261,14 +1257,18 @@ async def test_retrieve__db_terminal_state_short_circuits(retrieve_harness, stat
 @pytest.mark.asyncio
 async def test_retrieve__db_terminal_unified_resolves_file_ids(retrieve_harness):
     db_response = make_batch(id="batch-from-db", status="completed")
-    retrieve_harness.get_batch_from_db.return_value = (MagicMock(), db_response)
+    db_batch_object = MagicMock()
+    retrieve_harness.get_batch_from_db.return_value = (db_batch_object, db_response)
 
     with patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
         await call_retrieve(retrieve_harness, "batch-unified-blob")
 
-    # Terminal short-circuit still resolves raw provider file ids to unified.
-    retrieve_harness.resolve_input.assert_called_once()
-    retrieve_harness.resolve_output.assert_called_once()
+    # Terminal short-circuit still registers/normalizes raw provider file ids.
+    retrieve_harness.ensure_managed_files.assert_called_once()
+    ensure_kwargs = retrieve_harness.ensure_managed_files.call_args.kwargs
+    assert ensure_kwargs["response"] is db_response
+    assert ensure_kwargs["db_batch_object"] is db_batch_object
+    assert ensure_kwargs["unified_batch_id"] == UNIFIED_BATCH_ID
     retrieve_harness.litellm_aretrieve.assert_not_called()
     retrieve_harness.router_aretrieve.assert_not_called()
 
@@ -1899,6 +1899,17 @@ async def test_cancel__unified_batch_id_routes_to_router(cancel_harness):
 
 
 @pytest.mark.asyncio
+async def test_cancel__db_write_receives_caller_auth(cancel_harness):
+    """update_batch_in_database can only mint managed IDs for a cancelled batch's
+    output files when it has an auth context, so cancel must forward the caller's."""
+    caller = UserAPIKeyAuth(api_key="sk-test", user_id="user-cancel-1")
+    with patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
+        await call_cancel(cancel_harness, "batch-unified-blob", user=caller)
+
+    assert cancel_harness.update_batch_in_db.call_args.kwargs["user_api_key_dict"] is caller
+
+
+@pytest.mark.asyncio
 async def test_cancel__unified_missing_model_id_400(cancel_harness):
     # unified id with no model_id segment -> get_model_id returns None -> 400.
     with patch.object(
@@ -2242,3 +2253,176 @@ async def test_cancel__provider_only_resolves_named_vertex_credentials(cancel_ha
         "vertex_location": "us-central1",
         "vertex_credentials": "/creds/customer-sa.json",
     }
+
+
+# =========================================================================== #
+# require_managed_files - raw provider ids must not reach the provider.        #
+#                                                                              #
+# Ownership rows only exist for LiteLLM managed ids. A raw provider id sent to #
+# these routes is forwarded under the shared provider credentials with no      #
+# tenant check, so any caller who learns another tenant's id can read its      #
+# batch, reuse its file as batch input, or cancel its job. These lock the      #
+# guard on every batches route that accepts a caller-supplied id.              #
+# =========================================================================== #
+
+
+def _unified_batch_id(model_id: str = "azure/gpt-4o", batch_id: str = "batch-provider-id") -> str:
+    import base64
+
+    from litellm.types.utils import SpecialEnums
+
+    unified = SpecialEnums.LITELLM_MANAGED_BATCH_COMPLETE_STR.value.format(model_id, batch_id)
+    return base64.urlsafe_b64encode(unified.encode()).decode().rstrip("=")
+
+
+def _unified_file_id() -> str:
+    import base64
+
+    from litellm.types.utils import SpecialEnums
+
+    unified = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+        "application/json", "managed-id", "gpt-4o-mini", "file-provider-id", "gpt-4o-mini-id"
+    )
+    return base64.urlsafe_b64encode(unified.encode()).decode().rstrip("=")
+
+
+@dataclass(frozen=True)
+class ManagedResourceAccessCheckerStub:
+    file_access: bool = True
+    object_access: bool = True
+
+    async def can_user_call_unified_file_id(
+        self,
+        unified_file_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> bool:
+        return self.file_access
+
+    async def can_user_call_unified_object_id(
+        self,
+        unified_object_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> bool:
+        return self.object_access
+
+
+@pytest.mark.asyncio
+async def test_create__raw_input_file_id_rejected_when_managed_files_required(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-victim-abc123",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    with patch.object(litellm, "require_managed_files", True):
+        with pytest.raises(ProxyException) as exc:
+            await call_create(harness)
+
+    assert exc.value.code == "400"
+    harness.litellm_acreate.assert_not_called()
+    harness.router_acreate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create__model_encoded_input_file_id_rejected_when_managed_files_required(harness):
+    """A model-encoded id is client-forgeable and has no ownership row, so it is
+    not a managed file id and must be rejected like any other raw id."""
+    set_body(
+        harness,
+        {
+            "input_file_id": AZURE_FILE_ID,
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    with patch.object(litellm, "require_managed_files", True):
+        with pytest.raises(ProxyException) as exc:
+            await call_create(harness)
+
+    assert exc.value.code == "400"
+    harness.litellm_acreate.assert_not_called()
+    harness.router_acreate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create__raw_input_file_id_allowed_when_managed_files_not_required(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-victim-abc123",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    with patch.object(litellm, "require_managed_files", False):
+        await call_create(harness)
+
+    assert harness.acreate_kwargs()["input_file_id"] == "file-victim-abc123"
+
+
+@pytest.mark.asyncio
+async def test_create__other_teams_unified_input_file_id_rejected(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": _unified_file_id(),
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    harness.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub(file_access=False)
+
+    with patch.object(litellm, "require_managed_files", True):
+        with pytest.raises(ProxyException) as exc:
+            await call_create(harness)
+
+    assert exc.value.code == "403"
+    harness.litellm_acreate.assert_not_called()
+    harness.router_acreate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_retrieve__raw_batch_id_rejected_when_managed_files_required(retrieve_harness):
+    with patch.object(litellm, "require_managed_files", True):
+        with pytest.raises(ProxyException) as exc:
+            await call_retrieve(retrieve_harness, "batch-victim-abc123")
+
+    assert exc.value.code == "400"
+    retrieve_harness.litellm_aretrieve.assert_not_called()
+    retrieve_harness.router_aretrieve.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_retrieve__unified_batch_id_allowed_when_managed_files_required(retrieve_harness):
+    retrieve_harness.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub()
+
+    with patch.object(litellm, "require_managed_files", True):
+        await call_retrieve(retrieve_harness, _unified_batch_id())
+
+    assert retrieve_harness.router_aretrieve.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_cancel__raw_batch_id_rejected_when_managed_files_required(cancel_harness):
+    with patch.object(litellm, "require_managed_files", True):
+        with pytest.raises(ProxyException) as exc:
+            await call_cancel(cancel_harness, "batch-victim-abc123")
+
+    assert exc.value.code == "400"
+    cancel_harness.litellm_acancel.assert_not_called()
+    cancel_harness.router_acancel.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancel__unified_batch_id_allowed_when_managed_files_required(cancel_harness):
+    cancel_harness.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub()
+
+    with patch.object(litellm, "require_managed_files", True):
+        await call_cancel(cancel_harness, _unified_batch_id())
+
+    assert cancel_harness.router_acancel.call_count == 1

@@ -959,6 +959,27 @@ class TestToolChoiceTransformation:
         )
         assert result == {"type": "function", "function": {"name": "get_weather"}}
 
+    def test_transform_tool_choice_custom_follows_function_downgrade(self):
+        """
+        This bridge downgrades custom tools to function tools
+        (convert_custom_tool_to_function_tool), so a custom tool_choice must become a
+        function tool_choice naming the same tool or it references a tool type absent
+        from the converted request.
+        """
+        flat = LiteLLMCompletionResponsesConfig._transform_tool_choice(
+            {"type": "custom", "name": "ApplyPatch"}
+        )
+        assert flat == {"type": "function", "function": {"name": "ApplyPatch"}}
+
+        nested = LiteLLMCompletionResponsesConfig._transform_tool_choice(
+            {"type": "custom", "custom": {"name": "ApplyPatch"}}
+        )
+        assert nested == {"type": "function", "function": {"name": "ApplyPatch"}}
+
+    def test_transform_tool_choice_custom_without_name_falls_back_to_required(self):
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice({"type": "custom"})
+        assert result == "required"
+
     def test_transform_tool_choice_function_without_name_falls_back_to_required(self):
         """A function-type dict with no name still falls back to required"""
         result = LiteLLMCompletionResponsesConfig._transform_tool_choice(
@@ -1750,6 +1771,27 @@ class TestUsageTransformation:
         assert response_usage.input_tokens_details is not None
         assert response_usage.input_tokens_details.cached_tokens == 3
         assert response_usage.input_tokens_details.text_tokens == 6
+
+    def test_transform_usage_preserves_cache_write_tokens(self):
+        """Regression for #34801: the chat-completions to Responses bridge dropped
+        cache-write tokens, so cache-creation billing disappeared on that route."""
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=10,
+            total_tokens=1010,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=100,
+                cache_write_tokens=800,
+            ),
+        )
+
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=usage
+        )
+
+        assert response_usage.input_tokens_details is not None
+        assert response_usage.input_tokens_details.cached_tokens == 100
+        assert getattr(response_usage.input_tokens_details, "cache_write_tokens", None) == 800
 
     def test_transform_usage_with_reasoning_tokens_gemini(self):
         """Test that reasoning_tokens from Gemini are properly transformed to output_tokens_details"""

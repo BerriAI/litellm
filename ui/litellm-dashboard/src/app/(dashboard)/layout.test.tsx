@@ -29,6 +29,10 @@ vi.mock("@/components/LicenseExpiryBanner", () => ({
   LicenseExpiryBanner: () => null,
 }));
 
+vi.mock("@/components/UserBanner", () => ({
+  UserBanner: () => null,
+}));
+
 vi.mock("@/contexts/ThemeContext", () => ({
   ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));

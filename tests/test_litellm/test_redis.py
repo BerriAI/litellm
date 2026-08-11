@@ -845,3 +845,22 @@ def test_url_config_drops_kwargs_the_connection_cannot_accept(client_only_kwarg,
     assert pool is not None
     pool.make_connection()
     assert pool.connection_kwargs.get("socket_timeout") == 5.0
+
+
+def test_redis_uses_the_hiredis_response_parser():
+    """The C parser must be the one redis-py actually picks.
+
+    hiredis is declared in the `proxy` extra purely for speed; nothing imports it, so
+    dropping it from pyproject.toml would silently fall back to the pure-Python parser
+    with no other symptom. redis-py selects it at import time, so asserting on the
+    selection is what catches that.
+    """
+    from redis._parsers import _HiredisParser
+    from redis.connection import HIREDIS_AVAILABLE, DefaultParser
+
+    assert HIREDIS_AVAILABLE, "hiredis is not installed; redis-py fell back to the pure-Python parser"
+    assert DefaultParser is _HiredisParser, f"redis-py selected {DefaultParser.__name__}, expected _HiredisParser"
+
+    client = get_redis_client(host="redis-host", port=6379)
+    connection = client.connection_pool.make_connection()
+    assert isinstance(connection._parser, _HiredisParser)

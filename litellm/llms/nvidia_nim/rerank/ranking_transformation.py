@@ -6,7 +6,7 @@ Use this by passing "nvidia_nim/ranking/<model>" to force the /v1/ranking endpoi
 Reference: https://build.nvidia.com/nvidia/llama-3_2-nv-rerankqa-1b-v2/deploy
 """
 
-from typing import Dict, Optional
+from typing import Final
 
 from litellm.llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig
 
@@ -30,18 +30,16 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
     def _get_clean_model_name(self, model: str) -> str:
         """Strip 'nvidia_nim/' and 'ranking/' prefixes from model name."""
         # First strip nvidia_nim/ prefix if present
-        if model.startswith("nvidia_nim/"):
-            model = model[len("nvidia_nim/") :]
+        model = model.removeprefix("nvidia_nim/")
         # Then strip ranking/ prefix if present
-        if model.startswith("ranking/"):
-            model = model[len("ranking/") :]
+        model = model.removeprefix("ranking/")
         return model
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
-        optional_params: Optional[dict] = None,
+        optional_params: dict | None = None,
     ) -> str:
         """
         Construct the Nvidia NIM ranking URL.
@@ -56,22 +54,21 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
         if api_base.endswith("/ranking"):
             return api_base
 
-        if api_base.endswith("/v1"):
-            api_base = api_base[:-3]
+        api_base = api_base.removesuffix("/v1")
 
         return f"{api_base}/v1/ranking"
 
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: Dict,
+        optional_rerank_params: dict,
         headers: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
     ) -> dict:
         """
         Transform request, using clean model name without 'ranking/' prefix.
         """
-        clean_model = self._get_clean_model_name(model)
+        clean_model: Final = self._get_clean_model_name(model)
         return super().transform_rerank_request(
             model=clean_model,
             optional_rerank_params=optional_rerank_params,

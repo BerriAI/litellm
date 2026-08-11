@@ -692,3 +692,64 @@ def test_cleanup_batch_size_env_var(monkeypatch):
     monkeypatch.delenv("SPEND_LOG_CLEANUP_BATCH_SIZE", raising=False)
     importlib.reload(constants_module)
     importlib.reload(cleanup_module)
+
+
+def _mock_prisma_for_retention(side_effect: list) -> "MagicMock":
+    from unittest.mock import AsyncMock, MagicMock
+
+    client = MagicMock()
+    client.db.execute_raw = AsyncMock(side_effect=side_effect)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_retention_alone_does_not_touch_the_session_rollup():
+    client = _mock_prisma_for_retention([0, 0])
+    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
+    cleaner.pod_lock_manager = None
+    await cleaner.cleanup_old_spend_logs(client)
+    tables = [call[0][0] for call in client.db.execute_raw.call_args_list]
+    assert any('"LiteLLM_SpendLogs"' in sql for sql in tables)
+    assert not any('"LiteLLM_AutoRouterSession"' in sql for sql in tables)
+
+
+@pytest.mark.asyncio
+async def test_session_retention_alone_cleans_only_the_session_rollup():
+    client = _mock_prisma_for_retention([0])
+    cleaner = SpendLogCleanup(general_settings={"maximum_autorouter_session_retention_period": "365d"})
+    cleaner.pod_lock_manager = None
+    await cleaner.cleanup_old_spend_logs(client)
+    tables = [call[0][0] for call in client.db.execute_raw.call_args_list]
+    assert len(tables) == 1
+    assert '"LiteLLM_AutoRouterSession"' in tables[0]
+
+
+@pytest.mark.asyncio
+async def test_each_retention_key_cuts_off_at_its_own_horizon():
+    from datetime import datetime, timezone
+
+    client = _mock_prisma_for_retention([0, 0, 0])
+    cleaner = SpendLogCleanup(
+        general_settings={
+            "maximum_spend_logs_retention_period": "7d",
+            "maximum_autorouter_session_retention_period": "365d",
+        }
+    )
+    cleaner.pod_lock_manager = None
+    await cleaner.cleanup_old_spend_logs(client)
+    cutoffs = {
+        ("LiteLLM_AutoRouterSession" if '"LiteLLM_AutoRouterSession"' in call[0][0] else "logs"): call[0][1]
+        for call in client.db.execute_raw.call_args_list
+    }
+    now = datetime.now(timezone.utc)
+    assert (now - cutoffs["logs"]).days == 7
+    assert (now - cutoffs["LiteLLM_AutoRouterSession"]).days == 365
+
+
+@pytest.mark.asyncio
+async def test_no_retention_keys_means_no_cleanup_at_all():
+    client = _mock_prisma_for_retention([])
+    cleaner = SpendLogCleanup(general_settings={})
+    cleaner.pod_lock_manager = None
+    await cleaner.cleanup_old_spend_logs(client)
+    assert client.db.execute_raw.await_count == 0

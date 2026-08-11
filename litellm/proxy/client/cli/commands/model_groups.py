@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Final, Literal
 
 import click
 import rich
@@ -27,8 +27,8 @@ def model_groups() -> None:
 @click.pass_context
 def list_model_groups(ctx: click.Context, output_format: Literal["table", "json"]) -> None:
     """List model groups accessible to your key, with mode and pricing"""
-    client = create_client(ctx)
-    groups = client.model_groups.info()
+    client: Final = create_client(ctx)
+    groups: Final = client.model_groups.info()
     if not isinstance(groups, list):
         raise click.ClickException(
             f"Unexpected response from /model_group/info: expected a list, got {type(groups).__name__}"
@@ -38,7 +38,7 @@ def list_model_groups(ctx: click.Context, output_format: Literal["table", "json"
         rich.print_json(data=groups)
         return
 
-    table = rich.table.Table(title="Accessible Model Groups")
+    table: Final = rich.table.Table(title="Accessible Model Groups")
     table.add_column("Model", style="cyan")
     table.add_column("Mode", style="green")
     table.add_column("Input $/token", style="yellow")

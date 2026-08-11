@@ -11,6 +11,7 @@ shadow the failure itself.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import Final
 
 
 def iter_exception_tree(exc: BaseException) -> Iterator[BaseException]:
@@ -18,8 +19,8 @@ def iter_exception_tree(exc: BaseException) -> Iterator[BaseException]:
     ``raise ... from`` cause subtree, then ``ExceptionGroup`` members in raise order, then the
     incidental ``__context__`` chain last. Cycle-safe via identity tracking, and iterative so a
     deep chain cannot overflow the interpreter stack."""
-    seen: set[int] = set()
-    stack = [exc]
+    seen: Final[set[int]] = set()
+    stack: Final = [exc]
     while stack:
         current = stack.pop()
         if id(current) in seen:

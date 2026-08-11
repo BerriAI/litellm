@@ -139,9 +139,12 @@ class TestPerDeploymentNumRetries:
         router._update_kwargs_before_fallbacks(model="test-model", kwargs=kwargs)
         assert kwargs["num_retries"] == 10  # Request-level takes precedence
 
-    def test_global_num_retries_used_when_no_deployment_setting(self):
+    def test_update_kwargs_does_not_fill_in_a_num_retries_default(self):
         """
-        Test that global num_retries is used when deployment has no num_retries.
+        A request that carries no num_retries must stay that way through
+        _update_kwargs_before_fallbacks. Filling in the router default here is what made a
+        request indistinguishable from "no request value", which let a deployment's
+        litellm_params.num_retries outrank the header/body value.
         """
         router = Router(
             model_list=[
@@ -150,16 +153,15 @@ class TestPerDeploymentNumRetries:
                     "litellm_params": {
                         "model": "openai/gpt-4",
                         "api_key": "test-key",
-                        # No num_retries set
                     },
                 },
             ],
             num_retries=7,  # Global setting
         )
 
-        kwargs = {}
+        kwargs: dict = {}
         router._update_kwargs_before_fallbacks(model="test-model", kwargs=kwargs)
-        assert kwargs["num_retries"] == 7  # Uses global
+        assert kwargs.get("num_retries") is None
 
     def test_set_deployment_num_retries_with_string_value(self):
         """
@@ -226,33 +228,22 @@ class TestNumRetriesNoneGuard:
             num_retries=num_retries,
         )
 
-    def test_update_kwargs_normalises_explicit_none_to_router_default(self):
+    def test_update_kwargs_preserves_an_explicit_zero(self):
         """
-        _update_kwargs_before_fallbacks must normalise an explicit num_retries=None to
-        the router default (not leave it as None), while preserving an explicit 0.
+        An explicit num_retries=0 must survive _update_kwargs_before_fallbacks (retries stay
+        disabled), and an explicit None must not be turned into a value that reads as a
+        request-level setting. Resolving None to the router default is
+        async_function_with_retries' job, which the behavioural tests below pin.
         """
         router = self._mock_router(num_retries=4)
 
-        # explicit None -> router default
-        kwargs = {"num_retries": None}
-        router._update_kwargs_before_fallbacks(model="mock-model", kwargs=kwargs)
-        assert kwargs["num_retries"] == 4
-
-        # explicit 0 is preserved (retries stay disabled)
-        kwargs = {"num_retries": 0}
+        kwargs: dict = {"num_retries": 0}
         router._update_kwargs_before_fallbacks(model="mock-model", kwargs=kwargs)
         assert kwargs["num_retries"] == 0
 
-        # absent -> router default (unchanged behaviour)
-        kwargs = {}
-        router._update_kwargs_before_fallbacks(model="mock-model", kwargs=kwargs)
-        assert kwargs["num_retries"] == 4
-
-        # explicit None with router default also None -> 0 (mirrors the downstream guard)
-        router.num_retries = None  # simulate update_settings(num_retries=None) (#28126)
         kwargs = {"num_retries": None}
         router._update_kwargs_before_fallbacks(model="mock-model", kwargs=kwargs)
-        assert kwargs["num_retries"] == 0
+        assert kwargs.get("num_retries") is None
 
     @pytest.mark.asyncio
     async def test_acompletion_num_retries_none_does_not_raise_typeerror(self):
@@ -575,3 +566,183 @@ class TestRequestNumRetriesBeatsGlobal:
                     model="mock", messages=[{"role": "user", "content": "hi"}]
                 )
         assert counter.attempts == 3
+
+
+class TestRequestNumRetriesBeatsDeployment:
+    """
+    Documented precedence for num_retries on the proxy:
+
+        x-litellm-num-retries header > request body > model_list litellm_params > litellm_settings
+
+    The header and the body both arrive at the router as the num_retries kwarg (the proxy
+    overwrites the body value with the header one), so "request level" covers both.
+
+    The regression: a failing deployment stamps its own litellm_params.num_retries onto the
+    raised exception, and async_function_with_retries adopted that value unconditionally, so a
+    deployment setting outranked the header and the body instead of sitting below them.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _restore_litellm_globals(self):
+        prev_num_retries = litellm.num_retries
+        prev_callbacks = litellm.callbacks
+        yield
+        litellm.num_retries = prev_num_retries
+        litellm.callbacks = prev_callbacks
+
+    @staticmethod
+    def _router(*, global_num_retries, deployment_num_retries):
+        litellm_params = {
+            "model": "openai/mock",
+            "api_key": "sk-fake",
+            "mock_response": "litellm.InternalServerError",
+        }
+        if deployment_num_retries is not None:
+            litellm_params["num_retries"] = deployment_num_retries
+        return Router(
+            model_list=[{"model_name": "mock", "litellm_params": litellm_params}],
+            num_retries=global_num_retries,
+        )
+
+    async def _count_attempts(
+        self,
+        *,
+        global_num_retries,
+        deployment_num_retries,
+        request_num_retries,
+        mock_testing_rate_limit_error=False,
+    ):
+        counter = _AttemptCounter()
+        litellm.callbacks = [counter]
+        litellm.num_retries = global_num_retries
+        router = self._router(
+            global_num_retries=global_num_retries,
+            deployment_num_retries=deployment_num_retries,
+        )
+        kwargs = {"model": "mock", "messages": [{"role": "user", "content": "hi"}]}
+        if request_num_retries is not None:
+            kwargs["num_retries"] = request_num_retries
+        if mock_testing_rate_limit_error:
+            kwargs["mock_testing_rate_limit_error"] = True
+        with patch("asyncio.sleep", return_value=None):
+            with pytest.raises((litellm.InternalServerError, litellm.RateLimitError)):
+                await router.acompletion(**kwargs)
+        return counter.attempts
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("request_num_retries, expected_attempts", [(3, 4), (0, 1)])
+    async def test_request_num_retries_overrides_deployment(
+        self, request_num_retries, expected_attempts
+    ):
+        """
+        global=1, deployment=2, request=3 -> 4 attempts, and request=0 -> a single attempt.
+        Before the fix the deployment value won, so both cases sent 3 attempts.
+        """
+        attempts = await self._count_attempts(
+            global_num_retries=1,
+            deployment_num_retries=2,
+            request_num_retries=request_num_retries,
+        )
+        assert attempts == expected_attempts
+
+    @pytest.mark.asyncio
+    async def test_deployment_num_retries_still_beats_global_when_request_omits_it(self):
+        """
+        The deployment value keeps its place directly above litellm_settings: global=1 and
+        deployment=2 with no request value -> 1 initial attempt + 2 retries.
+        """
+        attempts = await self._count_attempts(
+            global_num_retries=1, deployment_num_retries=2, request_num_retries=None
+        )
+        assert attempts == 3
+
+    @pytest.mark.asyncio
+    async def test_global_num_retries_applies_when_neither_request_nor_deployment_sets_it(self):
+        """Bottom of the chain is unchanged: global=3, nothing else set -> 4 attempts."""
+        attempts = await self._count_attempts(
+            global_num_retries=3, deployment_num_retries=None, request_num_retries=None
+        )
+        assert attempts == 4
+
+    @pytest.mark.asyncio
+    async def test_request_num_retries_overrides_deployment_on_the_rate_limit_mock_path(self):
+        """
+        mock_testing_rate_limit_error raises before the first upstream call and carries the
+        deployment's num_retries on the mock exception - a second place the deployment value is
+        injected. The request value must still win: request=3 leaves 3 real attempts, where the
+        deployment value would leave 2.
+        """
+        attempts = await self._count_attempts(
+            global_num_retries=1,
+            deployment_num_retries=2,
+            request_num_retries=3,
+            mock_testing_rate_limit_error=True,
+        )
+        assert attempts == 3
+
+
+class TestDeploymentNumRetriesOnNonCompletionEntryPoints:
+    """
+    aimage_generation and its siblings (adapter completion, file create, batch create, batch cancel)
+    run through the same retry loop as acompletion, so a deployment's litellm_params.num_retries must
+    apply there too whenever the request carries none.
+
+    These entry points used to pre-fill num_retries with the router default before handing kwargs to
+    the retry loop. That default is indistinguishable from a caller-supplied value, so it would
+    permanently suppress the deployment setting once the loop started ranking request above
+    deployment.
+
+    The provider SDK adds a fixed number of its own attempts per router attempt on this path, so the
+    factor is calibrated from a single-router-attempt run rather than hard coded.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate(self):
+        prev = litellm.num_retries
+        litellm.num_retries = None
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        yield
+        litellm.num_retries = prev
+        litellm.aclient_session = None
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+    async def _upstream_count(self, label, deployment_num_retries=None, **call_kwargs):
+        counter = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            counter["n"] += 1
+            return httpx.Response(500, headers={"retry-after": "0"}, json={"error": {"message": "boom"}})
+
+        litellm.aclient_session = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        litellm_params = {
+            "model": "openai/dall-e-3",
+            "api_key": "sk-fake",
+            "api_base": f"https://imgretry-{label}.local/v1",
+        }
+        if deployment_num_retries is not None:
+            litellm_params["num_retries"] = deployment_num_retries
+        router = Router(
+            model_list=[{"model_name": "img", "litellm_params": litellm_params}],
+            num_retries=0,
+        )
+        with patch("asyncio.sleep", return_value=None):
+            with pytest.raises(litellm.InternalServerError):
+                await router.aimage_generation(model="img", prompt="a cat", **call_kwargs)
+        return counter["n"]
+
+    @pytest.mark.asyncio
+    async def test_deployment_num_retries_applies_to_image_generation(self):
+        """
+        Router default 0, deployment 2, no request value -> 3 router attempts. Asserted against a
+        calibrated single-attempt run so the provider SDK's own attempt count does not matter.
+        """
+        one_attempt = await self._upstream_count("calibrate")
+        assert one_attempt > 0
+        assert await self._upstream_count("dep2", deployment_num_retries=2) == 3 * one_attempt
+
+    @pytest.mark.asyncio
+    async def test_request_num_retries_still_wins_on_image_generation(self):
+        """A request value outranks the deployment here too: deployment 4, request 1 -> 2 attempts."""
+        one_attempt = await self._upstream_count("calibrate2")
+        assert await self._upstream_count("req1", deployment_num_retries=4, num_retries=1) == 2 * one_attempt
