@@ -528,12 +528,13 @@ class TestKeyOrTeamIsOverBudget:
 
 
 @pytest.mark.asyncio
-class TestSuccessHookSkipsWhenOverBudget:
-    async def test_over_budget_key_is_skipped_before_scheduling_the_shadow_task(self):
-        job = ActiveShadowEvalJob(id="j1", router_name="r", shadow_percentage=100.0, judge_model="m", status="running")
-        logger, _, router = _logger_with_mocks(job)
-        logger._run_shadow_eval = AsyncMock()
-        kwargs = {
+class TestBudgetGateRunsInTheDetachedTaskNotTheCallback:
+    """get_current_spend can fall back to an authoritative DB read; the production
+    success callback must never await that, so the gate lives in the detached task."""
+
+    @staticmethod
+    def _kwargs(spend: float):
+        return {
             "standard_logging_object": {
                 "id": "req-1",
                 "model": "gpt-4o",
@@ -541,44 +542,51 @@ class TestSuccessHookSkipsWhenOverBudget:
                 "metadata": {
                     "user_api_key_hash": "key-hash",
                     "user_api_key_max_budget": 10.0,
-                    "user_api_key_spend": 10.0,
+                    "user_api_key_spend": spend,
                 },
             },
             "litellm_params": {"metadata": {}},
             "messages": [{"role": "user", "content": "hi"}],
         }
+
+    @staticmethod
+    def _job():
+        return ActiveShadowEvalJob(id="j1", router_name="r", shadow_percentage=100.0, judge_model="m", status="running")
+
+    async def test_over_budget_key_never_fires_a_shadow_call(self):
+        logger, _, router = _logger_with_mocks(self._job())
+        response = {"choices": [{"message": {"content": "real answer"}}]}
 
         with patch("litellm.proxy.proxy_server.get_current_spend", AsyncMock(return_value=10.0)):
-            await logger.async_log_success_event(kwargs, MagicMock(), None, None)
-        await asyncio.sleep(0)
+            await logger.async_log_success_event(self._kwargs(spend=10.0), response, None, None)
+            await asyncio.sleep(0.05)
 
-        logger._run_shadow_eval.assert_not_awaited()
         router.acompletion.assert_not_called()
 
-    async def test_under_budget_key_still_schedules_the_shadow_task(self):
-        job = ActiveShadowEvalJob(id="j1", router_name="r", shadow_percentage=100.0, judge_model="m", status="running")
-        logger, _, router = _logger_with_mocks(job)
-        logger._run_shadow_eval = AsyncMock()
-        kwargs = {
-            "standard_logging_object": {
-                "id": "req-1",
-                "model": "gpt-4o",
-                "call_type": "acompletion",
-                "metadata": {
-                    "user_api_key_hash": "key-hash",
-                    "user_api_key_max_budget": 10.0,
-                    "user_api_key_spend": 4.0,
-                },
-            },
-            "litellm_params": {"metadata": {}},
-            "messages": [{"role": "user", "content": "hi"}],
-        }
+    async def test_under_budget_key_fires_the_shadow_call(self):
+        logger, _, router = _logger_with_mocks(self._job())
+        router.acompletion = AsyncMock(return_value={"choices": [{"message": {"content": "shadow"}}]})
+        response = {"choices": [{"message": {"content": "real answer"}}]}
 
         with patch("litellm.proxy.proxy_server.get_current_spend", AsyncMock(return_value=4.0)):
-            await logger.async_log_success_event(kwargs, MagicMock(), None, None)
-        await asyncio.sleep(0)
+            await logger.async_log_success_event(self._kwargs(spend=4.0), response, None, None)
+            await asyncio.sleep(0.05)
 
-        logger._run_shadow_eval.assert_awaited_once()
+        router.acompletion.assert_awaited_once()
+
+    async def test_the_callback_itself_never_awaits_the_spend_read(self):
+        """The spend read must happen after the callback returns, inside the task."""
+        logger, _, _ = _logger_with_mocks(self._job())
+        get_current_spend = AsyncMock(return_value=0.0)
+        response = {"choices": [{"message": {"content": "real answer"}}]}
+
+        with patch("litellm.proxy.proxy_server.get_current_spend", get_current_spend):
+            await logger.async_log_success_event(self._kwargs(spend=0.0), response, None, None)
+            spend_reads_when_callback_returned = get_current_spend.await_count
+            await asyncio.sleep(0.05)
+
+        assert spend_reads_when_callback_returned == 0
+        assert get_current_spend.await_count > 0
 
 
 @pytest.mark.asyncio

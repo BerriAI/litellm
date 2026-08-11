@@ -330,8 +330,6 @@ class ShadowEvalLogger(CustomLogger):
                 return  # only chat-shaped traffic is comparable
             if self._inflight_shadow_tasks >= _MAX_CONCURRENT_SHADOW_TASKS:
                 return
-            if await _key_or_team_is_over_budget(metadata):
-                return  # the shadowed key/team has no budget left for the extra calls
             raw_messages: Final = kwargs.get("messages")
             self._inflight_shadow_tasks += 1
             task: Final = asyncio.create_task(
@@ -347,6 +345,7 @@ class ShadowEvalLogger(CustomLogger):
                         dict(payload.get("model_parameters") or {})  # mutable-ok: frozen snapshot
                     ),
                     parent_metadata=MappingProxyType(dict(request_metadata)),  # mutable-ok: frozen snapshot
+                    budget_metadata=MappingProxyType(dict(metadata)),  # mutable-ok: frozen snapshot
                 )
             )
             task.add_done_callback(lambda _: setattr(self, "_inflight_shadow_tasks", self._inflight_shadow_tasks - 1))
@@ -451,12 +450,20 @@ class ShadowEvalLogger(CustomLogger):
         real_model: str,
         model_parameters: Mapping[str, object],
         parent_metadata: Mapping[str, object],
+        budget_metadata: Mapping[str, object] = _EMPTY_METADATA,
     ) -> None:
-        """Detached background task: shadow call -> blind judge -> verdict row."""
+        """Detached background task: budget gate -> shadow call -> blind judge -> verdict row.
+
+        The budget read lives here, not in the success hook: get_current_spend can fall
+        back to an authoritative DB read, which a detached task absorbs and the
+        production callback must not.
+        """
         prisma: Final = self._prisma_provider()
         try:
             real_text: Final = self._extract_response_text(response_obj)
             if not real_text or not messages:
+                return
+            if await _key_or_team_is_over_budget(budget_metadata):
                 return
 
             shadow: Final = await self._call_router_shadow(job.router_name, messages, model_parameters, parent_metadata)
