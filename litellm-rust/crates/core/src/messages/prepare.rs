@@ -33,6 +33,7 @@ pub(super) fn prepare_messages_call(
 
     let auth_strategy = config.auth_strategy();
     let already_authorized = has_header(&headers, auth_strategy.header_name())
+        || (config.accepts_authorization_header() && has_header(&headers, "authorization"))
         || (config.accepts_bearer_auth() && has_bearer_auth(&headers));
     if !already_authorized {
         let api_key = config.resolve_api_key(request.api_key, &env_lookup)?;

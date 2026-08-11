@@ -39,6 +39,10 @@ pub trait AnthropicMessagesProviderConfig: Sync {
         false
     }
 
+    fn accepts_authorization_header(&self) -> bool {
+        false
+    }
+
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         &[
             ("anthropic-version", "2023-06-01"),
