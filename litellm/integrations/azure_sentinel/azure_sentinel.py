@@ -78,8 +78,8 @@ class AzureSentinelLogger(CustomBatchLogger):
                 If not provided, will use AZURE_SENTINEL_AUDIT_STREAM_NAME env var or the standard stream name.
             authority_host (str, optional): Microsoft Entra authority host that issues the OAuth2 token,
                 e.g. "https://login.microsoftonline.us" for Azure Government. If not provided, will use
-                AZURE_AUTHORITY_HOST env var or default to the Azure Public Cloud authority. The Azure
-                Monitor audience is derived from it.
+                AZURE_SENTINEL_AUTHORITY_HOST or AZURE_AUTHORITY_HOST env vars, or default to the Azure
+                Public Cloud authority. The Azure Monitor audience is derived from it.
         """
         self.async_httpx_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
@@ -95,7 +95,10 @@ class AzureSentinelLogger(CustomBatchLogger):
             client_secret or os.getenv("AZURE_SENTINEL_CLIENT_SECRET") or os.getenv("AZURE_CLIENT_SECRET")
         )
         resolved_authority_host: Final = self._normalize_authority_host(
-            authority_host or os.getenv("AZURE_AUTHORITY_HOST") or DEFAULT_AZURE_AUTHORITY_HOST
+            authority_host
+            or os.getenv("AZURE_SENTINEL_AUTHORITY_HOST")
+            or os.getenv("AZURE_AUTHORITY_HOST")
+            or DEFAULT_AZURE_AUTHORITY_HOST
         )
 
         if not resolved_dcr_immutable_id:

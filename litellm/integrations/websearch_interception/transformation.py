@@ -412,6 +412,15 @@ class WebSearchTransformation:
         block that should accompany the model's text reply when the original
         request used a native ``web_search_*`` tool.
 
+        The spec'd shape carries page text only in ``encrypted_content``, an
+        opaque server-issued blob that we cannot mint. Emitting the four spec
+        fields alone would drop the snippet entirely, leaving the client (and
+        the model, on any replayed follow-up turn) with URLs and titles but no
+        evidence to answer from, forcing a fetch per result. So the snippet is
+        carried in an additive ``snippet`` key alongside the spec fields.
+        ``encrypted_content`` stays empty rather than holding plaintext, which
+        would assert encryption semantics that do not hold.
+
         Spec reference:
         https://docs.anthropic.com/en/api/web-search-tool
 
@@ -438,6 +447,7 @@ class WebSearchTransformation:
                         "title": title,
                         "page_age": page_age,
                         "encrypted_content": "",
+                        "snippet": getattr(r, "snippet", "") or "",
                     }
                 )
         return {
