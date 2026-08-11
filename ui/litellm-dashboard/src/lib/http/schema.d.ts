@@ -26280,6 +26280,8 @@ export interface components {
             } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
+            /** Settings Updated At */
+            settings_updated_at?: string | null;
             /**
              * Soft Budget Cooldown
              * @default false
@@ -27719,6 +27721,8 @@ export interface components {
             } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
+            /** Settings Updated At */
+            settings_updated_at?: string | null;
             /**
              * Soft Budget Cooldown
              * @default false
@@ -34887,6 +34891,8 @@ export interface components {
             rpm_limit_per_model?: {
                 [key: string]: number;
             } | null;
+            /** Settings Updated At */
+            settings_updated_at?: string | null;
             /** Soft Budget */
             soft_budget?: number | null;
             /**
