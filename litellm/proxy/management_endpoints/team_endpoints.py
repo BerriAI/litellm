@@ -5728,8 +5728,8 @@ def _validate_aggregated_date_range(start_date: str | None, end_date: str | None
             detail={"error": "Please provide start_date and end_date"},
         )
     try:
-        parsed_start: Final = datetime.strptime(start_date, "%Y-%m-%d")
-        parsed_end: Final = datetime.strptime(end_date, "%Y-%m-%d")
+        parsed_start: Final = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        parsed_end: Final = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     except ValueError:
         raise HTTPException(
             status_code=400,
