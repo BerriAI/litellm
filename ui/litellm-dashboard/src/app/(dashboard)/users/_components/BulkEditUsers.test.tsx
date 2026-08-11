@@ -1,5 +1,21 @@
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  const t = (key: string, values?: Record<string, unknown>) => {
+    const copy = key.split(".").reduce<unknown>((value, segment) => {
+      if (typeof value !== "object" || value === null) return undefined;
+      return (value as Record<string, unknown>)[segment];
+    }, resources.en.gateway);
+    if (typeof copy !== "string") return key;
+    return Object.entries(values ?? {}).reduce(
+      (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+      copy,
+    );
+  };
+  return { useTranslation: () => ({ t, i18n: { language: "en", resolvedLanguage: "en" } }) };
+});
 import { renderWithProviders, screen, waitFor } from "../../../../../tests/test-utils";
 import BulkEditUserModal from "./BulkEditUsers";
 import { userBulkUpdateUserCall, teamBulkMemberAddCall } from "@/components/networking";

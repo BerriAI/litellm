@@ -35,6 +35,7 @@ import { UsersTable } from "./view_users/UsersTable";
 import UserInfoView from "./view_users/user_info_view";
 import { UserInfo } from "@/components/networking";
 import { Skeleton } from "antd";
+import { useTranslation } from "react-i18next";
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -59,6 +60,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   teams,
   orgAdminOrgIds,
 }) => {
+  const { t } = useTranslation("gateway");
   const isProxyAdmin = userRole ? isProxyAdminRole(userRole) : false;
   const queryClient = useQueryClient();
 
@@ -157,19 +159,19 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const handleResetPassword = useCallback(
     async (userId: string) => {
       if (!accessToken) {
-        NotificationsManager.fromBackend("Access token not found");
+        NotificationsManager.fromBackend(t("users.notifications.accessTokenMissing"));
         return;
       }
       try {
-        NotificationsManager.success("Generating password reset link...");
+        NotificationsManager.success(t("users.notifications.generatingResetLink"));
         const data = await invitationCreateCall(accessToken, userId);
         setInvitationLinkData(data);
         setIsInvitationLinkModalVisible(true);
       } catch (error) {
-        NotificationsManager.fromBackend("Failed to generate password reset link");
+        NotificationsManager.fromBackend(t("users.notifications.resetLinkFailed"));
       }
     },
-    [accessToken],
+    [accessToken, t],
   );
 
   const confirmDelete = async () => {
@@ -185,10 +187,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           return { ...previousData, users: updatedUsers };
         });
 
-        NotificationsManager.success("User deleted successfully");
+        NotificationsManager.success(t("users.notifications.deleted"));
       } catch (error) {
         console.error("Error deleting user:", error);
-        NotificationsManager.fromBackend("Failed to delete user");
+        NotificationsManager.fromBackend(t("users.notifications.deleteFailed"));
       } finally {
         setIsDeleteModalOpen(false);
         setUserToDelete(null);
@@ -226,7 +228,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         return { ...previousData, users: updatedUsers };
       });
 
-      NotificationsManager.success(`User ${editedUser.user_id} updated successfully`);
+      NotificationsManager.success(t("users.notifications.updated", { userId: editedUser.user_id }));
     } catch (error) {
       console.error("There was an error updating the user", error);
     }
@@ -376,7 +378,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                   className="flex items-center"
                   data-testid="toggle-user-selection"
                 >
-                  {selectionMode ? "Cancel Selection" : "Select Users"}
+                  {selectionMode ? t("users.selection.cancel") : t("users.selection.select")}
                 </Button>
               )}
 
@@ -388,7 +390,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                   className="flex items-center"
                   data-testid="bulk-edit-users"
                 >
-                  Bulk Edit ({selectedUsers.length} selected)
+                  {t("users.selection.bulkEdit", { count: selectedUsers.length })}
                 </Button>
               )}
             </>
@@ -399,8 +401,8 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       {isProxyAdmin ? (
         <TabGroup defaultIndex={0}>
           <TabList className="mb-4">
-            <Tab>Users</Tab>
-            <Tab>Default User Settings</Tab>
+            <Tab>{t("users.tabs.users")}</Tab>
+            <Tab>{t("users.tabs.defaultSettings")}</Tab>
           </TabList>
 
           <TabPanels>
@@ -432,18 +434,18 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 
       <DeleteResourceModal
         isOpen={isDeleteModalOpen}
-        title="Delete User?"
-        message="Are you sure you want to delete this user? This action cannot be undone."
-        resourceInformationTitle="User Information"
+        title={t("users.delete.title")}
+        message={t("users.delete.message")}
+        resourceInformationTitle={t("users.delete.information")}
         resourceInformation={[
-          { label: "Email", value: userToDelete?.user_email },
-          { label: "User ID", value: userToDelete?.user_id, code: true },
+          { label: t("users.fields.email"), value: userToDelete?.user_email },
+          { label: t("users.fields.userId"), value: userToDelete?.user_id, code: true },
           {
-            label: "Global Proxy Role",
+            label: t("users.fields.globalRole"),
             value:
               (userToDelete && possibleUIRoles?.[userToDelete.user_role]?.ui_label) || userToDelete?.user_role || "-",
           },
-          { label: "Total Spend (USD)", value: userToDelete?.spend?.toFixed(2) },
+          { label: t("users.fields.totalSpend"), value: userToDelete?.spend?.toFixed(2) },
         ]}
         onCancel={cancelDelete}
         onOk={confirmDelete}
