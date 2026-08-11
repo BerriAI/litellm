@@ -63,7 +63,7 @@ def merge_bedrock_aws_request_params(
     no static credentials configured.
     """
     request_params: Final = {**optional_params, **litellm_params}  # mutable-ok: AWS helpers require a plain dict
-    has_static_deployment_credentials = all(
+    has_static_deployment_credentials: Final = all(
         isinstance(litellm_params.get(key), str) and bool(litellm_params.get(key))
         for key in ("aws_access_key_id", "aws_secret_access_key", "aws_region_name")
     )

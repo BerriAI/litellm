@@ -844,13 +844,14 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         )
 
         # s3_region_name always wins for S3 operations (same priority as in
-        # get_complete_file_url above). Overwrite aws_region_name unconditionally
-        # so the SigV4 region matches the URL region, avoiding SignatureDoesNotMatch.
+        # get_complete_file_url above). Overwrite aws_region_name unconditionally,
+        # after the deployment-credential merge, so the SigV4 region matches the
+        # URL region, avoiding SignatureDoesNotMatch.
+        merged_params: Final = merge_bedrock_aws_request_params(litellm_params, optional_params)
         s3_region_name: Final = litellm_params.get("s3_region_name") or optional_params.get("s3_region_name")
-        if s3_region_name:
-            optional_params = {**optional_params, "aws_region_name": s3_region_name}
-
-        request_params: Final = merge_bedrock_aws_request_params(litellm_params, optional_params)
+        request_params: Final = (
+            {**merged_params, "aws_region_name": s3_region_name} if s3_region_name else merged_params
+        )
 
         # Sign the request and return a pre-signed request object
         signed_headers, signed_body = self._sign_s3_request(
