@@ -14,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
+import type { TFunction } from "i18next";
 
 interface OrganizationBudget {
   max_budget?: number | null;
@@ -24,12 +25,12 @@ interface OrganizationBudget {
 const getOrganizationBudget = (organization: Organization): OrganizationBudget =>
   (organization.litellm_budget_table ?? {}) as OrganizationBudget;
 
-function OrganizationLimitsCell({ organization }: { organization: Organization }) {
+function OrganizationLimitsCell({ organization, t }: { organization: Organization; t: TFunction<"gateway"> }) {
   const { tpm_limit, rpm_limit } = getOrganizationBudget(organization);
   return (
     <div className="flex flex-col text-xs text-muted-foreground">
-      <span>TPM: {tpm_limit ? tpm_limit : "Unlimited"}</span>
-      <span>RPM: {rpm_limit ? rpm_limit : "Unlimited"}</span>
+      <span>TPM: {tpm_limit ? tpm_limit : t("organizations.table.unlimited")}</span>
+      <span>RPM: {rpm_limit ? rpm_limit : t("organizations.table.unlimited")}</span>
     </div>
   );
 }
@@ -38,13 +39,14 @@ interface OrganizationRowActionsProps {
   organization: Organization;
   onEditClick: (organizationId: string) => void;
   onDeleteClick: (organizationId: string) => void;
+  t: TFunction<"gateway">;
 }
 
-function OrganizationRowActions({ organization, onEditClick, onDeleteClick }: OrganizationRowActionsProps) {
+function OrganizationRowActions({ organization, onEditClick, onDeleteClick, t }: OrganizationRowActionsProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label="Open organization actions"
+        aria-label={t("organizations.table.openActions")}
         data-testid={`organization-actions-${organization.organization_id}`}
         className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-muted-foreground")}
       >
@@ -56,7 +58,7 @@ function OrganizationRowActions({ organization, onEditClick, onDeleteClick }: Or
           onClick={() => onEditClick(organization.organization_id)}
         >
           <Pencil />
-          Edit
+          {t("organizations.table.edit")}
         </DropdownMenuItem>
         <DropdownMenuItem
           variant="destructive"
@@ -64,7 +66,7 @@ function OrganizationRowActions({ organization, onEditClick, onDeleteClick }: Or
           onClick={() => onDeleteClick(organization.organization_id)}
         >
           <Trash2 />
-          Delete
+          {t("organizations.table.delete")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -76,6 +78,7 @@ export interface OrganizationsTableColumnsDeps {
   onOrganizationClick: (organizationId: string) => void;
   onEditClick: (organizationId: string) => void;
   onDeleteClick: (organizationId: string) => void;
+  t: TFunction<"gateway">;
 }
 
 export const getOrganizationsTableColumns = ({
@@ -83,12 +86,13 @@ export const getOrganizationsTableColumns = ({
   onOrganizationClick,
   onEditClick,
   onDeleteClick,
+  t,
 }: OrganizationsTableColumnsDeps): ColumnDef<Organization>[] => [
   {
     id: "organization_id",
     accessorKey: "organization_id",
-    meta: { title: "Organization ID" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Organization ID" />,
+    meta: { title: t("organizations.table.organizationId") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("organizations.table.organizationId")} />,
     size: 220,
     enableSorting: true,
     cell: ({ row }) => (
@@ -103,8 +107,8 @@ export const getOrganizationsTableColumns = ({
   {
     id: "organization_alias",
     accessorKey: "organization_alias",
-    meta: { title: "Organization Name" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Organization Name" />,
+    meta: { title: t("organizations.table.organizationName") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("organizations.table.organizationName")} />,
     size: 200,
     enableSorting: true,
     cell: ({ row }) => {
@@ -120,8 +124,8 @@ export const getOrganizationsTableColumns = ({
     id: "created_at",
     accessorKey: "created_at",
     sortingFn: "datetime",
-    meta: { title: "Created" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Created" />,
+    meta: { title: t("organizations.table.created") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("organizations.table.created")} />,
     size: 130,
     enableSorting: true,
     cell: ({ row }) => <DateCell value={row.original.created_at} precision="date" />,
@@ -129,57 +133,71 @@ export const getOrganizationsTableColumns = ({
   {
     id: "spend",
     accessorKey: "spend",
-    meta: { title: "Spend (USD)" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Spend (USD)" />,
+    meta: { title: t("organizations.table.spend") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("organizations.table.spend")} />,
     size: 120,
     enableSorting: true,
     cell: ({ row }) => <MoneyCell value={row.original.spend} decimals={4} />,
   },
   {
     id: "max_budget",
-    meta: { title: "Budget (USD)" },
-    header: "Budget (USD)",
+    meta: { title: t("organizations.table.budget") },
+    header: t("organizations.table.budget"),
     size: 120,
     enableSorting: false,
     cell: ({ row }) => (
-      <MoneyCell value={getOrganizationBudget(row.original).max_budget} decimals={2} emptyText="Unlimited" showZero />
+      <MoneyCell
+        value={getOrganizationBudget(row.original).max_budget}
+        decimals={2}
+        emptyText={t("organizations.table.unlimited")}
+        showZero
+      />
     ),
   },
   {
     id: "models",
-    meta: { title: "Models", skeleton: "chips" },
-    header: "Models",
+    meta: { title: t("organizations.table.models"), skeleton: "chips" },
+    header: t("organizations.table.models"),
     size: 260,
     enableSorting: false,
     cell: ({ row }) => <ModelsCell models={row.original.models} />,
   },
   {
     id: "limits",
-    meta: { title: "TPM / RPM Limits" },
-    header: "TPM / RPM Limits",
+    meta: { title: t("organizations.table.limits") },
+    header: t("organizations.table.limits"),
     size: 150,
     enableSorting: false,
-    cell: ({ row }) => <OrganizationLimitsCell organization={row.original} />,
+    cell: ({ row }) => <OrganizationLimitsCell organization={row.original} t={t} />,
   },
   {
     id: "members",
-    meta: { title: "Members" },
-    header: "Members",
+    meta: { title: t("organizations.table.members") },
+    header: t("organizations.table.members"),
     size: 100,
     enableSorting: false,
-    cell: ({ row }) => <span className="text-sm">{row.original.members?.length ?? 0} Members</span>,
+    cell: ({ row }) => (
+      <span className="text-sm">
+        {t("organizations.table.memberCount", { count: row.original.members?.length ?? 0 })}
+      </span>
+    ),
   },
   {
     id: "actions",
     meta: { className: "text-right", headerClassName: "text-right" },
-    header: () => <span className="sr-only">Actions</span>,
+    header: () => <span className="sr-only">{t("organizations.table.actions")}</span>,
     size: 64,
     enableSorting: false,
     enableHiding: false,
     cell: ({ row }) =>
       userRole === "Admin" ? (
         <div className="flex justify-end">
-          <OrganizationRowActions organization={row.original} onEditClick={onEditClick} onDeleteClick={onDeleteClick} />
+          <OrganizationRowActions
+            organization={row.original}
+            onEditClick={onEditClick}
+            onDeleteClick={onDeleteClick}
+            t={t}
+          />
         </div>
       ) : null,
   },
