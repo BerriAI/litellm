@@ -23,6 +23,7 @@ import { ChevronsUpDown } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { cn } from "@/lib/cva.config";
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 const { Text } = Typography;
 
@@ -69,6 +70,7 @@ interface UserDropdownProps {
 }
 
 const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar", collapsed = false }) => {
+  const { t } = useTranslation("common");
   const { userId, userEmail, userRoleLabel: userRole, premiumUser } = useAuthorized();
   const disableShowPrompts = useDisableShowPrompts();
   const disableBlogPosts = useDisableBlogPosts();
@@ -86,7 +88,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
       label: (
         <Space>
           <LogoutOutlined />
-          Logout
+          {t("nav.account.logout")}
         </Space>
       ),
       onClick: onLogout,
@@ -102,11 +104,11 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
         </Space>
         {premiumUser ? (
           <Tag icon={<CrownOutlined />} color="gold">
-            Premium
+            {t("nav.account.premium")}
           </Tag>
         ) : (
-          <Tooltip title="Upgrade to Premium for advanced features" placement="left">
-            <Tag icon={<CrownOutlined />}>Standard</Tag>
+          <Tooltip title={t("nav.account.upgradeTooltip")} placement="left">
+            <Tag icon={<CrownOutlined />}>{t("nav.account.standard")}</Tag>
           </Tooltip>
         )}
       </Space>
@@ -114,7 +116,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
         <Space>
           <UserOutlined />
-          <Text type="secondary">User ID</Text>
+          <Text type="secondary">{t("nav.account.userId")}</Text>
         </Space>
         <Text copyable ellipsis style={{ maxWidth: "150px" }} title={userId || "-"}>
           {userId || "-"}
@@ -123,13 +125,13 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
         <Space>
           <SafetyOutlined />
-          <Text type="secondary">Role</Text>
+          <Text type="secondary">{t("nav.account.role")}</Text>
         </Space>
         <Text>{userRole}</Text>
       </Space>
       <Divider style={{ margin: "8px 0" }} />
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Text type="secondary">Hide New Feature Indicators</Text>
+        <Text type="secondary">{t("nav.account.hideNewFeatureIndicators")}</Text>
         <Switch
           size="small"
           checked={disableShowNewBadge}
@@ -143,11 +145,11 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
               emitLocalStorageChange("disableShowNewBadge");
             }
           }}
-          aria-label="Toggle hide new feature indicators"
+          aria-label={t("nav.account.toggleNewFeatureIndicators")}
         />
       </Space>
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Text type="secondary">Hide All Prompts</Text>
+        <Text type="secondary">{t("nav.account.hideAllPrompts")}</Text>
         <Switch
           size="small"
           checked={disableShowPrompts}
@@ -160,11 +162,11 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
               emitLocalStorageChange("disableShowPrompts");
             }
           }}
-          aria-label="Toggle hide all prompts"
+          aria-label={t("nav.account.toggleAllPrompts")}
         />
       </Space>
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Text type="secondary">Hide Blog Posts</Text>
+        <Text type="secondary">{t("nav.account.hideBlogPosts")}</Text>
         <Switch
           size="small"
           checked={disableBlogPosts}
@@ -177,11 +179,11 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
               emitLocalStorageChange("disableBlogPosts");
             }
           }}
-          aria-label="Toggle hide blog posts"
+          aria-label={t("nav.account.toggleBlogPosts")}
         />
       </Space>
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Text type="secondary">Hide Bouncing Icon</Text>
+        <Text type="secondary">{t("nav.account.hideBouncingIcon")}</Text>
         <Switch
           size="small"
           checked={disableBouncingIcon}
@@ -194,7 +196,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
               emitLocalStorageChange("disableBouncingIcon");
             }
           }}
-          aria-label="Toggle hide bouncing icon"
+          aria-label={t("nav.account.toggleBouncingIcon")}
         />
       </Space>
     </Space>
@@ -204,6 +206,11 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
   const initials = initialsFromIdentity(userEmail, userId);
   const hue = hueFromString(seed);
   const displayName = navAccountDisplayName(userEmail, userId);
+  const localizedDisplayName = displayName === "Account" ? t("nav.account.fallbackName") : displayName;
+  const accountMenuLabel = t("nav.account.menuAria", {
+    role: userRole ?? t("nav.account.unknownRole"),
+    identity: userEmail || userId || t("nav.account.unknownIdentity"),
+  });
 
   return (
     <Dropdown
@@ -227,9 +234,9 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
             "flex w-full items-center rounded-lg border border-transparent transition-colors hover:bg-sidebar-accent",
             collapsed ? "justify-center px-0 py-1" : "gap-2.5 px-2 py-1.5 text-left",
           )}
-          aria-label={`Account menu — ${userRole ?? "Unknown role"} — signed in as ${userEmail || userId || "unknown"}`}
+          aria-label={accountMenuLabel}
           aria-haspopup="menu"
-          title={collapsed ? displayName : undefined}
+          title={collapsed ? localizedDisplayName : undefined}
         >
           <Avatar className="size-[30px] shadow-inner ring-1 ring-black/5" aria-hidden>
             <AvatarFallback className="font-semibold text-white" style={{ backgroundColor: `hsl(${hue} 46% 38%)` }}>
@@ -239,7 +246,9 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
           {!collapsed && (
             <>
               <span className="min-w-0 flex-1 leading-tight">
-                <span className="block truncate text-[13px] font-medium text-sidebar-foreground">{displayName}</span>
+                <span className="block truncate text-[13px] font-medium text-sidebar-foreground">
+                  {localizedDisplayName}
+                </span>
                 {userRole && <span className="block truncate text-[11px] text-muted-foreground">{userRole}</span>}
               </span>
               <ChevronsUpDown size={16} strokeWidth={1.75} className="shrink-0 text-muted-foreground" aria-hidden />
@@ -250,7 +259,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
         <Button
           type="text"
           className="flex! max-w-[min(200px,34vw)] items-center gap-2 rounded-md! py-0.5! pl-1! pr-2! transition-colors hover:bg-gray-100!"
-          aria-label={`Account menu — ${userRole ?? "Unknown role"} — signed in as ${userEmail || userId || "unknown"}`}
+          aria-label={accountMenuLabel}
           aria-haspopup="menu"
         >
           <Avatar className="shadow-inner ring-1 ring-black/5" aria-hidden>
@@ -259,7 +268,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
             </AvatarFallback>
           </Avatar>
           <span className="hidden min-w-0 truncate text-left text-sm font-medium leading-none text-gray-900 md:inline">
-            {displayName}
+            {localizedDisplayName}
           </span>
           <DownOutlined className="hidden shrink-0 text-[10px] text-gray-400 md:inline" aria-hidden />
         </Button>
