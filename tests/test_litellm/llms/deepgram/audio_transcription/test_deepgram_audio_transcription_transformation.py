@@ -152,22 +152,20 @@ def test_get_complete_url_with_multiple_params():
 
 
 def test_get_complete_url_with_language_parameter():
-    """Test that language parameter is excluded from query string (handled separately)"""
+    """Test that language parameter is included in the query string"""
     handler = DeepgramAudioTranscriptionConfig()
     url = handler.get_complete_url(
         api_base=None,
         api_key=None,
         model="nova-2",
         optional_params={
-            "language": "en",
+            "language": "zh",
             "punctuate": True,
         },
         litellm_params={},
     )
-    expected_url = "https://api.deepgram.com/v1/listen?model=nova-2&punctuate=true"
+    expected_url = "https://api.deepgram.com/v1/listen?model=nova-2&punctuate=true&language=zh"
     assert url == expected_url
-    # Language should NOT appear in URL as it's handled separately
-    assert "language=" not in url
 
 
 def test_get_complete_url_with_custom_api_base():

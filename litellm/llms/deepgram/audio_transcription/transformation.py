@@ -215,19 +215,16 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         Returns:
             Dictionary of filtered and formatted query parameters
         """
-        query_params: Final = {}
+        supported_openai_params: Final = self.get_supported_openai_params(model)
         provider_specific_params: Final = self.get_provider_specific_params(
             optional_params=optional_params,
             model=model,
-            openai_params=self.get_supported_openai_params(model),
+            openai_params=supported_openai_params,
         )
+        openai_params: Final = {key: value for key, value in optional_params.items() if key in supported_openai_params}
+        query_params: Final = {**provider_specific_params, **openai_params}
 
-        for key, value in provider_specific_params.items():
-            # Format and add the parameter
-            formatted_value = self._format_param_value(value)
-            query_params[key] = formatted_value
-
-        return query_params
+        return {key: self._format_param_value(value) for key, value in query_params.items()}
 
     def validate_environment(
         self,
