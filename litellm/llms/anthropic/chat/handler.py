@@ -236,7 +236,7 @@ class AnthropicChatCompletion(BaseLLM):
             json_mode=json_mode,
             speed=optional_params.get("speed") if optional_params else None,
             inference_geo=AnthropicConfig.get_request_inference_geo(optional_params)
-            or AnthropicConfig.get_request_inference_geo(litellm_params if isinstance(litellm_params, dict) else None),
+            or AnthropicConfig.get_request_inference_geo(litellm_params),
             tool_name_reverse_map=(
                 litellm_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY) if isinstance(litellm_params, dict) else None
             ),
@@ -459,9 +459,7 @@ class AnthropicChatCompletion(BaseLLM):
                     json_mode=json_mode,
                     speed=optional_params.get("speed") if optional_params else None,
                     inference_geo=AnthropicConfig.get_request_inference_geo(optional_params)
-                    or AnthropicConfig.get_request_inference_geo(
-                        litellm_params if isinstance(litellm_params, dict) else None
-                    ),
+                    or AnthropicConfig.get_request_inference_geo(litellm_params),
                     tool_name_reverse_map=(
                         litellm_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY)
                         if isinstance(litellm_params, dict)
