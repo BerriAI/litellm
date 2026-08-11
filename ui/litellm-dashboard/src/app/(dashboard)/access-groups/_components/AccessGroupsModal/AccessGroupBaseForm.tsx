@@ -4,6 +4,7 @@ import { ModelSelect } from "@/components/ModelSelect/ModelSelect";
 import type { FormInstance } from "antd";
 import { Form, Input, Select, Space, Tabs } from "antd";
 import { BotIcon, InfoIcon, LayersIcon, ServerIcon } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 const { TextArea } = Input;
 
@@ -21,6 +22,7 @@ interface AccessGroupBaseFormProps {
 }
 
 export function AccessGroupBaseForm({ form, isNameDisabled = false }: AccessGroupBaseFormProps) {
+  const { t } = useTranslation("gateway");
   const { data: agentsData } = useAgents();
   const { data: mcpServersData } = useMCPServers();
 
@@ -32,25 +34,25 @@ export function AccessGroupBaseForm({ form, isNameDisabled = false }: AccessGrou
       label: (
         <Space align="center" size={4}>
           <InfoIcon size={16} />
-          General Info
+          {t("accessGroups.form.generalInfo")}
         </Space>
       ),
       children: (
         <div style={{ paddingTop: 16 }}>
           <Form.Item
             name="name"
-            label="Group Name"
+            label={t("accessGroups.form.groupName")}
             rules={[
               {
                 required: true,
-                message: "Please enter the access group name",
+                message: t("accessGroups.form.nameRequired"),
               },
             ]}
           >
-            <Input placeholder="e.g. Engineering Team" disabled={isNameDisabled} />
+            <Input placeholder={t("accessGroups.form.namePlaceholder")} disabled={isNameDisabled} />
           </Form.Item>
-          <Form.Item name="description" label="Description">
-            <TextArea rows={4} placeholder="Describe the purpose of this access group..." />
+          <Form.Item name="description" label={t("accessGroups.fields.description")}>
+            <TextArea rows={4} placeholder={t("accessGroups.form.descriptionPlaceholder")} />
           </Form.Item>
         </div>
       ),
@@ -60,12 +62,12 @@ export function AccessGroupBaseForm({ form, isNameDisabled = false }: AccessGrou
       label: (
         <Space align="center" size={4}>
           <LayersIcon size={16} />
-          Models
+          {t("accessGroups.table.models")}
         </Space>
       ),
       children: (
         <div style={{ paddingTop: 16 }}>
-          <Form.Item name="modelIds" label="Allowed Models">
+          <Form.Item name="modelIds" label={t("accessGroups.form.allowedModels")}>
             <ModelSelect
               context="global"
               value={form.getFieldValue("modelIds") ?? []}
@@ -81,15 +83,15 @@ export function AccessGroupBaseForm({ form, isNameDisabled = false }: AccessGrou
       label: (
         <Space align="center" size={4}>
           <ServerIcon size={16} />
-          MCP Servers
+          {t("accessGroups.table.mcpServers")}
         </Space>
       ),
       children: (
         <div style={{ paddingTop: 16 }}>
-          <Form.Item name="mcpServerIds" label="Allowed MCP Servers">
+          <Form.Item name="mcpServerIds" label={t("accessGroups.form.allowedMcpServers")}>
             <Select
               mode="multiple"
-              placeholder="Select MCP servers"
+              placeholder={t("accessGroups.form.selectMcpServers")}
               style={{ width: "100%" }}
               optionFilterProp="label"
               allowClear
@@ -107,15 +109,15 @@ export function AccessGroupBaseForm({ form, isNameDisabled = false }: AccessGrou
       label: (
         <Space align="center" size={4}>
           <BotIcon size={16} />
-          Agents
+          {t("accessGroups.table.agents")}
         </Space>
       ),
       children: (
         <div style={{ paddingTop: 16 }}>
-          <Form.Item name="agentIds" label="Allowed Agents">
+          <Form.Item name="agentIds" label={t("accessGroups.form.allowedAgents")}>
             <Select
               mode="multiple"
-              placeholder="Select agents"
+              placeholder={t("accessGroups.form.selectAgents")}
               style={{ width: "100%" }}
               optionFilterProp="label"
               allowClear

@@ -6,6 +6,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import { AccessGroupDetail } from "./AccessGroupsDetailsPage";
 
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: () => ({
+      t: (key: string, values?: Record<string, unknown>) => {
+        const copy = key.split(".").reduce<unknown>((value, segment) => {
+          if (typeof value !== "object" || value === null) return undefined;
+          return (value as Record<string, unknown>)[segment];
+        }, resources.en.gateway);
+        if (typeof copy !== "string") return key;
+        return Object.entries(values ?? {}).reduce(
+          (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+          copy,
+        );
+      },
+      i18n: { language: "en", resolvedLanguage: "en" },
+    }),
+  };
+});
+
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails");
 vi.mock("./AccessGroupsModal/AccessGroupEditModal", () => ({
   AccessGroupEditModal: ({ visible, onCancel }: { visible: boolean; onCancel: () => void }) =>

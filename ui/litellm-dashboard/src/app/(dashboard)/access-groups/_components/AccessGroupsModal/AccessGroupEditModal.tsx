@@ -4,6 +4,7 @@ import MessageManager from "@/components/molecules/message_manager";
 import { AccessGroupBaseForm, AccessGroupFormValues } from "./AccessGroupBaseForm";
 import { useEditAccessGroup, AccessGroupUpdateParams } from "@/app/(dashboard)/hooks/accessGroups/useEditAccessGroup";
 import { AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
+import { useTranslation } from "react-i18next";
 
 interface AccessGroupEditModalProps {
   visible: boolean;
@@ -13,6 +14,7 @@ interface AccessGroupEditModalProps {
 }
 
 export function AccessGroupEditModal({ visible, accessGroup, onCancel, onSuccess }: AccessGroupEditModalProps) {
+  const { t } = useTranslation("gateway");
   const [form] = Form.useForm<AccessGroupFormValues>();
   const editMutation = useEditAccessGroup();
 
@@ -45,7 +47,7 @@ export function AccessGroupEditModal({ visible, accessGroup, onCancel, onSuccess
           { accessGroupId: accessGroup.access_group_id, params },
           {
             onSuccess: () => {
-              MessageManager.success("Access group updated successfully");
+              MessageManager.success(t("accessGroups.form.updated"));
               onSuccess?.();
               onCancel();
             },
@@ -57,13 +59,13 @@ export function AccessGroupEditModal({ visible, accessGroup, onCancel, onSuccess
 
   return (
     <Modal
-      title="Edit Access Group"
+      title={t("accessGroups.form.editTitle")}
       open={visible}
       onOk={handleOk}
       onCancel={onCancel}
       width={700}
-      okText="Save Changes"
-      cancelText="Cancel"
+      okText={t("accessGroups.form.saveChanges")}
+      cancelText={t("accessGroups.form.cancel")}
       confirmLoading={editMutation.isPending}
       destroyOnHidden
     >
