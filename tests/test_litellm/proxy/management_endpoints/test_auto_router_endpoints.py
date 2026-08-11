@@ -875,6 +875,17 @@ class TestShadowEvalJobLifecycleEndpoints:
         assert prisma.db.litellm_shadowevaljob.find_many.call_args.kwargs["order"] == {"created_at": "desc"}
 
     @pytest.mark.asyncio
+    async def test_list_limit_reaches_the_query(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import list_shadow_eval_jobs
+
+        prisma = self._prisma(monkeypatch)
+        prisma.db.litellm_shadowevaljob.find_many = AsyncMock(return_value=[])
+
+        await list_shadow_eval_jobs(ADMIN, limit=120)
+
+        assert prisma.db.litellm_shadowevaljob.find_many.call_args.kwargs["take"] == 120
+
+    @pytest.mark.asyncio
     async def test_get_returns_the_job_with_aggregated_results(self, monkeypatch: pytest.MonkeyPatch):
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_shadow_eval_job
 

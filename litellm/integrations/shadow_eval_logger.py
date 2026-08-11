@@ -532,6 +532,8 @@ class ShadowEvalLogger(CustomLogger):
         """
         prisma: Final = self._prisma_provider()
         try:
+            if prisma is None:
+                return  # nowhere to record a verdict; spending on shadow/judge calls would be pure waste
             real_text: Final = self._extract_response_text(response_obj)
             if not real_text or not messages:
                 return
@@ -552,9 +554,6 @@ class ShadowEvalLogger(CustomLogger):
             )
             if isinstance(verdict, _CallFailure):
                 await self._bump_failed(job.id, verdict.error)
-                return
-
-            if prisma is None:
                 return
             await prisma.db.litellm_shadowevalverdict.create(
                 data={  # mutable-ok: Prisma payload

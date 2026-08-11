@@ -389,6 +389,33 @@ class TestStoppedJobCannotBeReactivated:
 
 
 @pytest.mark.asyncio
+class TestNoPaidCallsWithoutAPlaceToRecordThem:
+    async def test_pipeline_spends_nothing_when_prisma_is_unavailable(self):
+        """Regression: the prisma check sat below the shadow and judge dispatch, so a
+        DB outage mid-flight paid for both provider calls and then dropped the
+        verdict. No verdict storage means no paid calls at all."""
+        router = _router_mock()
+        router.acompletion = AsyncMock()
+        logger = ShadowEvalLogger(router_provider=lambda: router, prisma_provider=lambda: None)
+        logger._call_judge = AsyncMock()
+
+        job = ActiveShadowEvalJob(id="j1", router_name="r", judge_model="m", shadow_percentage=100.0, status="running")
+        await logger._run_shadow_eval(
+            job=job,
+            request_id="req-1",
+            messages=[{"role": "user", "content": "hi"}],
+            response_obj={"choices": [{"message": {"content": "real text"}}]},
+            real_model="gpt-4o",
+            real_response_tokens=42,
+            model_parameters={},
+            parent_metadata={},
+        )
+
+        router.acompletion.assert_not_awaited()
+        logger._call_judge.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 class TestVerdictRowRecordsBothSides:
     async def test_verdict_row_carries_ids_and_token_counts_for_both_arms(self):
         """real_response_tokens next to shadow_response_tokens is what lets a reader

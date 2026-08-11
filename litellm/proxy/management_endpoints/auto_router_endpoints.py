@@ -820,6 +820,7 @@ async def start_shadow_eval(
 async def list_shadow_eval_jobs(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     api_key_id: Annotated[str | None, Query(description="Filter to jobs shadowing this key")] = None,
+    limit: Annotated[int, Query(ge=1, le=200, description="Newest jobs to return")] = 50,
 ) -> list[GetShadowEvalJobResponse]:
     """List shadow eval jobs, newest first. Results are omitted; fetch a single job for them."""
     from litellm.proxy.proxy_server import prisma_client
@@ -832,7 +833,7 @@ async def list_shadow_eval_jobs(
     records: Final = await prisma_client.db.litellm_shadowevaljob.find_many(
         where=where,
         order={"created_at": "desc"},  # mutable-ok: Prisma order
-        take=50,  # mutable-ok: Prisma order
+        take=limit,
     )
     return [_job_to_response(record, results=None) for record in records or ()]  # mutable-ok: FastAPI response_model
 

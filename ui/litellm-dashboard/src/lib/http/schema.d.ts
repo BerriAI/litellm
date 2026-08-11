@@ -37194,6 +37194,8 @@ export interface operations {
             query?: {
                 /** @description Filter to jobs shadowing this key */
                 api_key_id?: string | null;
+                /** @description Newest jobs to return */
+                limit?: number;
             };
             header?: never;
             path?: never;
