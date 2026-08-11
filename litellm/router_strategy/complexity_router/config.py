@@ -22,6 +22,13 @@ class ComplexityTier(str, Enum):
     REASONING = "REASONING"
 
 
+class RubricPreset(str, Enum):
+    """Which calibration examples the built-in classifier rubric carries."""
+
+    AGENTIC = "agentic"
+    CHAT = "chat"
+
+
 TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
     ComplexityTier.SIMPLE,
     ComplexityTier.MEDIUM,
@@ -273,6 +280,18 @@ class ClassifierLLMConfig(BaseModel):
         default=3000,
         description="Timeout budget for the classification call, in milliseconds",
     )
+    rubric: RubricPreset = Field(
+        default=RubricPreset.AGENTIC,
+        description=(
+            "Which calibration examples the built-in rubric carries. 'agentic' (the default) anchors routine "
+            "installs, builds, multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does "
+            "not route to the most expensive tier; it suits agent, terminal, and coding-assistant traffic as "
+            "well as mixed traffic. 'chat' omits those engineering anchors, for a deployment serving only "
+            "conversational traffic. Both share the same tier criteria, so this moves where the boundary sits "
+            "without changing the taxonomy. Mutually exclusive with system_prompt, which replaces the rubric "
+            "this would select. Only applies when classifier_type is 'llm'."
+        ),
+    )
     system_prompt: str | None = Field(
         default=None,
         description=(
@@ -297,6 +316,17 @@ class ClassifierLLMConfig(BaseModel):
         if value is not None and not value.strip():
             raise ValueError("classifier_llm_config.system_prompt must be non-empty; omit it to use the default rubric")
         return value
+
+    @model_validator(mode="after")
+    def _reject_rubric_with_system_prompt(self) -> "ClassifierLLMConfig":
+        # A custom prompt is the classifier's whole system role, so a preset set alongside it would never
+        # reach the wire. Rejecting it beats honoring one of two settings the operator asked for.
+        if self.system_prompt is not None and "rubric" in self.model_fields_set:
+            raise ValueError(
+                "classifier_llm_config.rubric and system_prompt are mutually exclusive: system_prompt replaces "
+                "the built-in rubric the preset would select. Drop one."
+            )
+        return self
 
 
 class ComplexityRouterConfig(BaseModel):

@@ -3761,6 +3761,24 @@ class TestAutoRouterClassifierDefaultPrompt:
         assert "Tiers:" in response.system_prompt
 
     @pytest.mark.asyncio
+    async def test_rubric_preset_selects_the_calibration_examples(self):
+        """A router on the chat preset must not prefill the editor with the agentic rubric, or the
+        operator edits a prompt their classifier never sends."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            get_auto_router_classifier_default_prompt,
+        )
+        from litellm.router_strategy.complexity_router import RubricPreset, classification_system_prompt
+
+        for preset in RubricPreset:
+            response = await get_auto_router_classifier_default_prompt(context_window_size=5, rubric=preset)
+            assert response.system_prompt == classification_system_prompt(5, rubric=preset)
+
+        agentic = await get_auto_router_classifier_default_prompt(context_window_size=5)
+        chat = await get_auto_router_classifier_default_prompt(context_window_size=5, rubric=RubricPreset.CHAT)
+        assert "Calibration on engineering tasks" in agentic.system_prompt
+        assert "Calibration on engineering tasks" not in chat.system_prompt
+
+    @pytest.mark.asyncio
     async def test_context_window_size_changes_the_closing_line(self):
         """The editor must prefill the prompt matching the configured window, not a fixed one."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (

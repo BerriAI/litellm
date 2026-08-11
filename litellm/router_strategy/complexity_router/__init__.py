@@ -17,6 +17,7 @@ from litellm.router_strategy.complexity_router.config import (
     ComplexityRouterConfig,
     ComplexityTier,
     ReminderMarkerPair,
+    RubricPreset,
 )
 
 __all__ = [
@@ -26,5 +27,6 @@ __all__ = [
     "ComplexityRouterConfig",
     "ComplexityTier",
     "ReminderMarkerPair",
+    "RubricPreset",
     "classification_system_prompt",
 ]
