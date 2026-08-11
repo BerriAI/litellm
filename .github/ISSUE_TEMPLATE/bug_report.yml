@@ -78,7 +78,7 @@ body:
         <!-- Include the commands (e.g., curl) and their full output, screenshots, or a screen recording demonstrating that the bug happens
              The proof must be completely e2e with no mocks, against a live proxy you ran yourself (e.g., litellm --config config.yaml --detailed_debug on localhost:4000), hitting real LLM provider APIs and costing real $ where the bug involves a provider call. `pytest` commands are not enough
              Show exactly what the end user sees or does, matching the User Flow above step for step
-             Include the LiteLLM version or commit hash the proof was captured at
+             Start with the config.yaml (or SDK setup) and any env vars the proxy ran with, then the exact version or commit hash the proof was captured at, so a maintainer can stand up the same proxy before running your commands
              If the bug applies to more than one of the LLM endpoints (/v1/responses, /v1/chat/completions, /v1/messages), include proof for every one of them, not just one
              For UI bugs: include screenshots and the page URLs you were on
              Redact API keys and any other secrets before pasting -->
