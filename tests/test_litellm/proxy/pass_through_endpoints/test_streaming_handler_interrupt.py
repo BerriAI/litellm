@@ -383,23 +383,19 @@ def _openai_passthrough_stream_chunks():
 
 async def _collect_openai_passthrough_chunks(chunks, endpoint_type):
     response = _make_streaming_response(chunks)
-    with patch.object(
-        PassThroughStreamingHandler,
-        "_route_streaming_logging_to_handler",
-        new=AsyncMock(),
+    received = []
+    async for chunk in PassThroughStreamingHandler.chunk_processor(
+        response=response,
+        request_body={"model": "gpt-4o-mini", "stream": True},
+        litellm_logging_obj=MagicMock(),
+        endpoint_type=endpoint_type,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/openai/v1/chat/completions",
+        route_streaming_logging=AsyncMock(),
     ):
-        received = []
-        async for chunk in PassThroughStreamingHandler.chunk_processor(
-            response=response,
-            request_body={"model": "gpt-4o-mini", "stream": True},
-            litellm_logging_obj=MagicMock(),
-            endpoint_type=endpoint_type,
-            start_time=datetime.now(),
-            passthrough_success_handler_obj=MagicMock(),
-            url_route="/openai/v1/chat/completions",
-        ):
-            received.append(chunk)
-        await asyncio.sleep(0)
+        received.append(chunk)
+    await asyncio.sleep(0)
     return received
 
 
@@ -424,6 +420,27 @@ async def test_chunk_processor_injects_cost_into_openai_passthrough_usage_frame(
     assert final_payload["usage"]["prompt_tokens"] == 11
     assert final_payload["usage"]["completion_tokens"] == 4
     assert final_payload["usage"]["total_tokens"] == 15
+
+
+@pytest.mark.asyncio
+async def test_chunk_processor_injects_cost_into_usage_frame_fragmented_across_chunks(monkeypatch):
+    """Regression: an SSE usage frame split across transport chunks must still get
+    cost injected once the frame completes, instead of passing through untouched."""
+    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+    whole = _openai_passthrough_stream_chunks()
+    usage_frame = whole[2]
+    split_at = len(usage_frame) // 2
+    chunks = [whole[0], whole[1], usage_frame[:split_at], usage_frame[split_at:], whole[3]]
+
+    received = await _collect_openai_passthrough_chunks(chunks, EndpointType.OPENAI)
+
+    reassembled = b"".join(received).decode("utf-8")
+    usage_lines = [ln for ln in reassembled.split("\n") if '"total_tokens"' in ln]
+    assert len(usage_lines) == 1
+    final_payload = json.loads(usage_lines[0].split("data:", 1)[1].strip())
+    assert final_payload["usage"]["cost"] > 0
+    assert final_payload["usage"]["prompt_tokens"] == 11
+    assert reassembled.endswith("data: [DONE]\n\n")
 
 
 @pytest.mark.asyncio
