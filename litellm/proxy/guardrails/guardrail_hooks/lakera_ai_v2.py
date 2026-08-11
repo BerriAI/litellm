@@ -77,7 +77,7 @@ def _template_uses_reason_placeholder(template: str) -> bool:
 
 
 def _event_hook_includes_during_call(
-    event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | str | list[str] | None,
+    event_hook: GuardrailEventHooks | Sequence[GuardrailEventHooks] | Mode | str | Sequence[str] | None,
 ) -> bool:
     """True if ``event_hook`` could ever resolve to during_call, covering a plain
     value, a list of values, or a tag-based Mode (checked across every tag value
