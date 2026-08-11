@@ -14,6 +14,7 @@ import { Checkbox } from "antd";
 import { Text } from "@tremor/react";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { CrudOp, MCPToolEntry, CRUD_GROUP_META, groupToolsByCrud } from "../../utils/mcpToolCrudClassification";
+import { useTranslation } from "react-i18next";
 
 interface McpCrudPermissionPanelProps {
   /** List of tools available on this MCP server. */
@@ -69,6 +70,7 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
   readOnly = false,
   searchFilter = "",
 }) => {
+  const { t } = useTranslation("gateway");
   const [collapsed, setCollapsed] = useState<Record<CrudOp, boolean>>({
     read: false,
     create: false,
@@ -170,25 +172,34 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
                 ) : (
                   <ChevronDownIcon className="w-4 h-4 text-gray-500 shrink-0" />
                 )}
-                <span className="font-semibold text-gray-900 text-sm">{meta.label}</span>
+                <span className="font-semibold text-gray-900 text-sm">
+                  {t(`permissions.mcp.tools.groups.${op}.label`)}
+                </span>
                 <span className={`text-xs px-2 py-0.5 rounded-full ${RISK_BADGE[meta.risk]}`}>
                   {meta.risk === "high"
-                    ? "High Risk"
+                    ? t("permissions.mcp.tools.risk.high")
                     : meta.risk === "medium"
-                      ? "Medium Risk"
+                      ? t("permissions.mcp.tools.risk.medium")
                       : meta.risk === "low"
-                        ? "Safe"
-                        : "Unclassified"}
+                        ? t("permissions.mcp.tools.risk.low")
+                        : t("permissions.mcp.tools.risk.unknown")}
                 </span>
                 <span className="text-xs text-gray-500 ml-1">
-                  {group.filter((t) => effectiveAllowed.has(t.name)).length}/{group.length} allowed
+                  {t("permissions.mcp.tools.allowedCount", {
+                    allowed: group.filter((tool) => effectiveAllowed.has(tool.name)).length,
+                    total: group.length,
+                  })}
                 </span>
               </button>
 
               {!readOnly && (
                 <div className="flex items-center gap-2 ml-4">
                   <Text className="text-xs text-gray-500">
-                    {fullyAllowed ? "All on" : partial ? "Partial" : "All off"}
+                    {fullyAllowed
+                      ? t("permissions.mcp.tools.allOn")
+                      : partial
+                        ? t("permissions.mcp.tools.partial")
+                        : t("permissions.mcp.tools.allOff")}
                   </Text>
                   {/* Checkbox supports `indeterminate`; Switch does not. */}
                   <Checkbox
@@ -204,7 +215,7 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
             {/* Description row */}
             {!isCollapsed && (
               <div className="px-4 pt-2 pb-1 text-xs text-gray-500 bg-white border-b border-gray-100">
-                {meta.description}
+                {t(`permissions.mcp.tools.groups.${op}.description`)}
               </div>
             )}
 
@@ -245,7 +256,7 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
                             allowed ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
                           }`}
                         >
-                          {allowed ? "on" : "off"}
+                          {allowed ? t("permissions.mcp.tools.on") : t("permissions.mcp.tools.off")}
                         </span>
                       </div>
                     );

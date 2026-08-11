@@ -4,6 +4,7 @@ import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolset
 import { Select } from "antd";
 import React from "react";
 import { ALL_PROXY_MCP_SERVERS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "@/components/mcp_tools/constants";
+import { useTranslation } from "react-i18next";
 
 interface MCPServerSelectorProps {
   onChange: (selected: { servers: string[]; accessGroups: string[]; toolsets: string[] }) => void;
@@ -28,12 +29,13 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   value,
   className,
   accessToken,
-  placeholder = "Select MCP servers",
+  placeholder,
   disabled = false,
   teamId,
   allowNoMcpServers = false,
   allowAllProxyMcpServers = false,
 }) => {
+  const { t } = useTranslation("gateway");
   const { data: mcpServers = [], isLoading: serversLoading } = useMCPServers(teamId);
   const { data: accessGroups = [], isLoading: groupsLoading } = useMCPAccessGroups();
   const { data: toolsets = [], isLoading: toolsetsLoading } = useMCPToolsets();
@@ -48,19 +50,19 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
       label: group,
       value: group,
       type: "accessGroup" as const,
-      searchText: `${group} Access Group`,
+      searchText: `${group} ${t("permissions.accessGroup")}`,
     })),
     ...mcpServers.map((server) => ({
       label: `${server.server_name || server.server_id} (${server.server_id})`,
       value: server.server_id,
       type: "server" as const,
-      searchText: `${server.server_name || server.server_id} ${server.server_id} MCP Server`,
+      searchText: `${server.server_name || server.server_id} ${server.server_id} ${t("permissions.mcp.server")}`,
     })),
     ...toolsets.map((toolset) => ({
       label: toolset.toolset_name,
       value: `${TOOLSET_PREFIX}${toolset.toolset_id}`,
       type: "toolset" as const,
-      searchText: `${toolset.toolset_name} ${toolset.toolset_id} Toolset`,
+      searchText: `${toolset.toolset_name} ${toolset.toolset_id} ${t("permissions.toolset")}`,
     })),
   ];
 
@@ -70,9 +72,9 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
     toolset: "#722ed1",
   };
   const labelByType: Record<string, string> = {
-    accessGroup: "Access Group",
-    server: "MCP Server",
-    toolset: "Toolset",
+    accessGroup: t("permissions.accessGroup"),
+    server: t("permissions.mcp.server"),
+    toolset: t("permissions.toolset"),
   };
 
   // Flatten value for Select — prefix toolset IDs
@@ -109,7 +111,7 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
     <div>
       <Select
         mode="multiple"
-        placeholder={placeholder}
+        placeholder={placeholder || t("permissions.mcp.selectServers")}
         onChange={handleChange}
         value={selectedValues}
         loading={loading}
@@ -129,16 +131,22 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
           <Select.Option
             key={ALL_PROXY_MCP_SERVERS_SENTINEL}
             value={ALL_PROXY_MCP_SERVERS_SENTINEL}
-            label="All Proxy MCP Servers"
+            label={t("permissions.mcp.allProxyServers")}
           >
-            <span style={{ color: "#1890ff", fontWeight: 500 }}>All Proxy MCP Servers</span>
+            <span style={{ color: "#1890ff", fontWeight: 500 }}>{t("permissions.mcp.allProxyServers")}</span>
           </Select.Option>
         )}
         {allowNoMcpServers && (
-          <Select.Option key={NO_MCP_SERVERS_SENTINEL} value={NO_MCP_SERVERS_SENTINEL} label="No MCP Servers">
+          <Select.Option
+            key={NO_MCP_SERVERS_SENTINEL}
+            value={NO_MCP_SERVERS_SENTINEL}
+            label={t("permissions.mcp.noServers")}
+          >
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <span style={{ flex: 1 }}>No MCP Servers</span>
-              <span style={{ color: "#8c8c8c", fontSize: "12px", fontWeight: 500, opacity: 0.8 }}>Block all</span>
+              <span style={{ flex: 1 }}>{t("permissions.mcp.noServers")}</span>
+              <span style={{ color: "#8c8c8c", fontSize: "12px", fontWeight: 500, opacity: 0.8 }}>
+                {t("permissions.mcp.blockAll")}
+              </span>
             </div>
           </Select.Option>
         )}

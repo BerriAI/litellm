@@ -5,6 +5,24 @@ import MCPServerPermissions from "./MCPServerPermissions";
 import * as networking from "../networking";
 import { ALL_PROXY_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 
+const localization = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  const t = (key: string, values?: Record<string, unknown>) => {
+    const copy = key.split(".").reduce<unknown>((value, segment) => {
+      if (typeof value !== "object" || value === null) return undefined;
+      return (value as Record<string, unknown>)[segment];
+    }, resources[localization.language].gateway);
+    if (typeof copy !== "string") return key;
+    return Object.entries(values ?? {}).reduce(
+      (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+      copy,
+    );
+  };
+  return { useTranslation: () => ({ t }) };
+});
+
 vi.mock("../networking");
 
 describe("MCPServerPermissions", () => {
@@ -16,6 +34,23 @@ describe("MCPServerPermissions", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localization.language = "en";
+  });
+
+  it("shows MCP permissions in Russian when Russian is selected", () => {
+    localization.language = "ru";
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    expect(screen.getByText("MCP-серверы")).toBeInTheDocument();
+    expect(screen.getByText("MCP-серверы, группы доступа и наборы инструментов не настроены")).toBeInTheDocument();
   });
 
   it("should display MCP servers with their aliases and IDs", async () => {
