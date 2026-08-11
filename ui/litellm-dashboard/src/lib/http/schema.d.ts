@@ -34222,6 +34222,8 @@ export interface components {
             routing_strategy_args?: {
                 [key: string]: unknown;
             } | null;
+            /** Tag Routing Prefix */
+            tag_routing_prefix?: string | null;
             /** Timeout */
             timeout?: number | null;
         };
@@ -35391,6 +35393,8 @@ export interface components {
         };
         /** ModelInfo */
         litellm__types__router__ModelInfo: {
+            /** Allow Fail Open */
+            allow_fail_open?: boolean | null;
             /** Base Model */
             base_model?: string | null;
             /** Blocked */
@@ -35410,6 +35414,8 @@ export interface components {
              * @default false
              */
             db_model: boolean;
+            /** Enable Tag Filtering */
+            enable_tag_filtering?: boolean | null;
             /** Id */
             id: string | null;
             /** Input Cost Per Character */
