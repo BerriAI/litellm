@@ -531,7 +531,7 @@ class TestJudgeCostEstimate:
             completion_tokens=JUDGE_MAX_OUTPUT_TOKENS,
         )
         assert completion_cost > 0
-        assert _estimate_judge_cost_per_call(self.JUDGE_MODEL) == prompt_cost + completion_cost
+        assert _estimate_judge_cost_per_call(None, self.JUDGE_MODEL) == prompt_cost + completion_cost
 
     def test_estimate_is_not_still_pinned_to_the_old_200_token_budget(self):
         import litellm as litellm_module
@@ -545,7 +545,65 @@ class TestJudgeCostEstimate:
                 model=self.JUDGE_MODEL, prompt_tokens=_JUDGE_PROMPT_TOKENS_ESTIMATE, completion_tokens=200
             )
         )
-        assert _estimate_judge_cost_per_call(self.JUDGE_MODEL) > stale
+        assert _estimate_judge_cost_per_call(None, self.JUDGE_MODEL) > stale
+
+
+class TestJudgeModelValidation:
+    """A judge the dispatch path cannot resolve fails every sampled turn silently, so
+    start must reject it up front instead of accepting a job that only ever bills
+    shadow calls."""
+
+    @staticmethod
+    def _router() -> MagicMock:
+        router = MagicMock()
+        router.auto_routers = {}
+        router.complexity_routers = {"claude-auto": [MagicMock()]}
+        router.adaptive_routers = {}
+        router.quality_routers = {}
+        router.model_group_alias = {}
+        router.get_model_list = MagicMock(return_value=None)
+        return router
+
+    def test_unresolvable_judge_model_is_a_400(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import _validate_judge_model
+
+        with pytest.raises(HTTPException) as exc:
+            _validate_judge_model(self._router(), "opus")
+
+        assert exc.value.status_code == 400
+        assert "opus" in str(exc.value.detail)
+
+    def test_configured_deployment_name_is_accepted(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import _validate_judge_model
+
+        router = self._router()
+        router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o"}}])
+        _validate_judge_model(router, "opus")
+
+    def test_provider_qualified_public_name_is_accepted_without_a_router(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import _validate_judge_model
+
+        _validate_judge_model(None, "openai/gpt-4o")
+
+    def test_an_auto_router_is_rejected_as_judge(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import _validate_judge_model
+
+        with pytest.raises(HTTPException) as exc:
+            _validate_judge_model(self._router(), "claude-auto")
+
+        assert exc.value.status_code == 400
+        assert "auto-router" in str(exc.value.detail)
+
+    def test_estimate_prices_a_deployment_by_its_underlying_model(self):
+        """The deployment name an admin typed is not a pricing key; the estimate must
+        price the provider model behind it, not fall back to the flat $0.01."""
+        from litellm.proxy.management_endpoints.auto_router_endpoints import _judge_pricing_model
+
+        router = self._router()
+        router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "anthropic/claude-sonnet-5"}}])
+
+        assert _judge_pricing_model(router, "opus") == "anthropic/claude-sonnet-5"
+        assert _judge_pricing_model(None, "openai/gpt-4o") == "openai/gpt-4o"
 
 
 class TestShadowEvalJobsAreTimeBound:
@@ -765,6 +823,7 @@ class TestShadowEvalJobLifecycleEndpoints:
         record.request_count = 100
         record.completed_count = 9
         record.failed_count = 1
+        record.last_error = None
         record.cost_estimate = 3.0
         record.cost_actual = 0.42
         record.created_at = datetime(2026, 8, 1, tzinfo=timezone.utc)

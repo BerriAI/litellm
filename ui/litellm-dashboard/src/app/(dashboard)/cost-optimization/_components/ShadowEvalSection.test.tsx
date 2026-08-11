@@ -225,6 +225,20 @@ describe("ShadowEvalSection", () => {
     expect(screen.queryByText(/By prompt difficulty/)).not.toBeInTheDocument();
   });
 
+  it("surfaces the last shadow/judge failure so a growing failed_count is diagnosable", () => {
+    const j = job({ failed_count: 7, last_error: "judge call failed: LLM Provider NOT provided" });
+    mockHooks({ jobs: [j], detail: j });
+    render(<ShadowEvalSection accessToken="token" />);
+    expect(screen.getByText(/LLM Provider NOT provided/)).toBeInTheDocument();
+  });
+
+  it("shows no failure banner when nothing has failed", () => {
+    const j = job({ failed_count: 0, last_error: null });
+    mockHooks({ jobs: [j], detail: j });
+    render(<ShadowEvalSection accessToken="token" />);
+    expect(screen.queryByText(/Last failure/)).not.toBeInTheDocument();
+  });
+
   it("shows a stop button for running jobs but not completed ones", () => {
     const running = job({ status: "running" });
     mockHooks({ jobs: [running], detail: running });

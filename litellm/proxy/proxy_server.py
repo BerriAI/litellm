@@ -1184,6 +1184,8 @@ async def proxy_startup_event(app: FastAPI):
                 _tagged.strategy._state_loaded = True
     asyncio.create_task(_adaptive_router_flusher_loop())
 
+    _start_shadow_eval_lifecycle_loop()
+
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
 
@@ -2219,11 +2221,27 @@ def _register_shadow_eval_logger() -> None:
 
     Cheap when idle: with no active LiteLLM_ShadowEvalJob rows the hook is one
     cached dict lookup per request. Registered alongside cost tracking because
-    it has the same hard dependency on prisma_client.
+    it has the same hard dependency on prisma_client. Its lifecycle loop is
+    started separately at proxy startup, once an event loop exists.
     """
     from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
     litellm.logging_callback_manager.add_litellm_callback(ShadowEvalLogger())
+
+
+def _start_shadow_eval_lifecycle_loop() -> None:
+    """Start the registered shadow-eval logger's periodic lifecycle loop.
+
+    The loop owns counter flushes, snapshot refreshes, and finishing jobs whose
+    window or spend cap has passed, so a job on a key that goes quiet still ends
+    on schedule with its final counters written.
+    """
+    from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
+
+    for callback in litellm.callbacks:
+        if isinstance(callback, ShadowEvalLogger):
+            callback.start_lifecycle_loop()
+            return
 
 
 # Bounds authoritative DB re-reads when enforcing a budget against a

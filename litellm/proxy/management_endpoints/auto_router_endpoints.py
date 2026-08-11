@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Annotated, Final
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BudgetExceededError
 from litellm.integrations.shadow_eval_logger import JUDGE_MAX_OUTPUT_TOKENS
@@ -524,19 +525,61 @@ def _is_configured_pre_routing_strategy(llm_router: "Router", router_name: str) 
     )
 
 
-def _estimate_judge_cost_per_call(judge_model: str) -> float:
-    """Price one judge call: ~4k prompt tokens (two responses + conversation) + the judge's output budget."""
-    try:
-        import litellm as _litellm
+def _judge_model_is_router_resolvable(llm_router: "Router | None", judge_model: str) -> bool:
+    """Whether the judge name resolves through the proxy's router, the same check the
+    judge dispatch itself makes (and llm_as_a_judge before it), so validation cannot
+    accept a name the call path then fails on."""
+    return llm_router is not None and bool(
+        judge_model in llm_router.model_group_alias or llm_router.get_model_list(model_name=judge_model)
+    )
 
-        prompt_cost, completion_cost = _litellm.cost_per_token(
-            model=judge_model, prompt_tokens=_JUDGE_PROMPT_TOKENS_ESTIMATE, completion_tokens=JUDGE_MAX_OUTPUT_TOKENS
+
+def _validate_judge_model(llm_router: "Router | None", judge_model: str) -> None:
+    """Reject a judge model the dispatch path cannot resolve, at start rather than as a
+    silently growing failed_count once the job is already sampling and billing."""
+    if llm_router is not None and _is_configured_pre_routing_strategy(llm_router, judge_model):
+        raise HTTPException(
+            status_code=400,
+            detail=f"judge_model '{judge_model}' is an auto-router; the judge must be a plain model",
+        )
+    if _judge_model_is_router_resolvable(llm_router, judge_model):
+        return
+    try:
+        litellm.get_llm_provider(model=judge_model)
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"judge_model '{judge_model}' is neither a model configured on this proxy nor a "
+                "provider-qualified public model name (e.g. 'anthropic/claude-sonnet-5')"
+            ),
+        ) from e
+
+
+def _judge_pricing_model(llm_router: "Router | None", judge_model: str) -> str:
+    """The name to price the judge under: a configured deployment's underlying
+    provider model when the judge is a deployment (the deployment name itself is
+    admin-arbitrary and not a pricing key), the given name otherwise."""
+    deployments: Final = llm_router.get_model_list(model_name=judge_model) if llm_router is not None else None
+    if deployments:
+        underlying: Final = deployments[0].get("litellm_params", {}).get("model")
+        if isinstance(underlying, str) and underlying:
+            return underlying
+    return judge_model
+
+
+def _estimate_judge_cost_per_call(llm_router: "Router | None", judge_model: str) -> float:
+    """Price one judge call: ~4k prompt tokens (two responses + conversation) + the judge's output budget."""
+    pricing_model: Final = _judge_pricing_model(llm_router, judge_model)
+    try:
+        prompt_cost, completion_cost = litellm.cost_per_token(
+            model=pricing_model, prompt_tokens=_JUDGE_PROMPT_TOKENS_ESTIMATE, completion_tokens=JUDGE_MAX_OUTPUT_TOKENS
         )
         estimated: Final = prompt_cost + completion_cost
         if estimated > 0:
             return estimated
     except Exception as e:  # noqa: BLE001  # unknown judge model: fall back to a flat per-call figure
-        verbose_proxy_logger.debug("shadow_eval: judge cost lookup failed for %s: %s", judge_model, e)
+        verbose_proxy_logger.debug("shadow_eval: judge cost lookup failed for %s: %s", pricing_model, e)
     return _FALLBACK_JUDGE_COST_PER_CALL
 
 
@@ -652,6 +695,7 @@ class _ShadowEvalJobRow(BaseModel):
     request_count: int
     completed_count: int
     failed_count: int
+    last_error: str | None = None
     cost_estimate: float | None = None
     cost_actual: float = 0.0
     created_at: datetime
@@ -674,6 +718,7 @@ def _job_to_response(record: object, results: ShadowEvalResult | None) -> GetSha
         request_count=row.request_count,
         completed_count=row.completed_count,
         failed_count=row.failed_count,
+        last_error=row.last_error,
         results=results,
         cost_estimate=row.cost_estimate,
         cost_actual=row.cost_actual,
@@ -715,6 +760,7 @@ async def start_shadow_eval(
             status_code=400,
             detail=f"'{data.router_name}' is not a configured auto-router",
         )
+    _validate_judge_model(llm_router, data.judge_model)
 
     existing: Final = await prisma_client.db.litellm_shadowevaljob.find_first(
         where={  # mutable-ok: Prisma filter
@@ -732,7 +778,7 @@ async def start_shadow_eval(
     sampled: Final = int(
         recent_requests * (data.duration_days / _ESTIMATE_LOOKBACK_DAYS) * data.shadow_percentage / 100.0
     )
-    per_call: Final = _estimate_judge_cost_per_call(data.judge_model)
+    per_call: Final = _estimate_judge_cost_per_call(llm_router, data.judge_model)
     estimated_cost: Final = round(sampled * per_call, 2)
     ends_at: Final = datetime.now(timezone.utc) + timedelta(days=data.duration_days)
 
@@ -829,7 +875,7 @@ async def stop_shadow_eval_job(
     job_id: str,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> GetShadowEvalJobResponse:
-    """Stop an active shadow eval job. Existing verdicts are kept; sampling halts within ~30s."""
+    """Stop an active shadow eval job. Existing verdicts are kept; sampling halts within ~10s."""
     from litellm.proxy.proxy_server import prisma_client
 
     _require_admin_writer(user_api_key_dict, "stop a shadow eval")

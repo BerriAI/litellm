@@ -1466,10 +1466,7 @@ model LiteLLM_ShadowEvalJob {
   request_count       Int      @default(0) // total requests on the shadowed key during the job
   completed_count     Int      @default(0) // verdicts written
   failed_count        Int      @default(0) // shadow calls or judge calls that failed
-
-  // Results (written incrementally or at end)
-  // { groups: [ { tier: "SIMPLE", turn_count: N, real_win_rate_pct: X, shadow_win_rate_pct: Y, tie_rate_pct: Z, avg_confidence: C } ] }
-  result_json         Json?
+  last_error          String?  // most recent shadow/judge failure, for diagnosing a growing failed_count
 
   cost_estimate       Float?   // estimated cost of running the judge
   cost_actual         Float    @default(0) // actual cost (judge calls * price)

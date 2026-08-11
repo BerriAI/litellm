@@ -298,6 +298,12 @@ const JobResults: React.FC<{
         ) : null}
       </div>
 
+      {job.failed_count > 0 && job.last_error ? (
+        <p className="border-b bg-red-50 px-6 py-2 text-xs text-destructive">
+          Last failure: <span className="font-mono">{job.last_error}</span>
+        </p>
+      ) : null}
+
       {results && results.groups.length > 0 ? (
         <>
           <div className="flex flex-col justify-center gap-1 border-b px-6 py-4">

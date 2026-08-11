@@ -25392,6 +25392,11 @@ export interface components {
             /** Job Id */
             job_id: string;
             /**
+             * Last Error
+             * @description The most recent shadow or judge failure, so a growing failed_count is diagnosable
+             */
+            last_error?: string | null;
+            /**
              * Request Count
              * @description Total requests observed on the shadowed key since the job started
              */

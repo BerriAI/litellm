@@ -2157,3 +2157,70 @@ async def test_daily_transaction_compression_saved_tokens_zero_when_absent():
     assert transaction["compression_saved_tokens"] == 0
     assert transaction["compression_savings_spend"] == 0
     assert transaction["prompt_caching_savings_spend"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["shadow_eval_router", "shadow_eval_judge", "autorouter_classifier"])
+async def test_internal_sub_calls_keep_spend_but_are_not_counted_as_requests(origin: str):
+    """Regression: shadow-eval and classifier sub-calls counted toward api_requests, so
+    the shadow-eval cost estimate (SUM(api_requests) over LiteLLM_DailyUserSpend) fed on
+    its own output and usage dashboards inflated. Spend and tokens must still land so
+    budgets and billing stay whole; the derived auto-router savings of a shadow
+    duplicate is not a saving anyone realized."""
+    db_writer = DBSpendUpdateWriter()
+    payload = {
+        "user": "user-1",
+        "api_key": "hashed-key",
+        "model": "gpt-4o",
+        "model_group": "gpt-4o",
+        "custom_llm_provider": "openai",
+        "startTime": datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc),
+        "spend": 0.05,
+        "prompt_tokens": 90,
+        "completion_tokens": 10,
+        "metadata": json.dumps(
+            {
+                "internal_call_origin": origin,
+                "routing_decision": {"router_model_name": "claude-auto", "router_type": "complexity"},
+            }
+        ),
+    }
+    prisma = MagicMock()
+    prisma.get_request_status = MagicMock(return_value="success")
+
+    transaction = await db_writer._common_add_spend_log_transaction_to_daily_transaction(payload, prisma)
+
+    assert transaction is not None
+    assert transaction["api_requests"] == 0
+    assert transaction["successful_requests"] == 0
+    assert transaction["failed_requests"] == 0
+    assert transaction["spend"] == 0.05
+    assert transaction["prompt_tokens"] == 90
+    assert transaction["autorouter_savings_spend"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_user_requests_still_count_as_requests():
+    """The negative class for the internal-origin exclusion: an ordinary user request
+    keeps counting, so the exclusion cannot silently zero the whole rollup."""
+    db_writer = DBSpendUpdateWriter()
+    payload = {
+        "user": "user-1",
+        "api_key": "hashed-key",
+        "model": "gpt-4o",
+        "model_group": "gpt-4o",
+        "custom_llm_provider": "openai",
+        "startTime": datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc),
+        "spend": 0.05,
+        "prompt_tokens": 90,
+        "completion_tokens": 10,
+        "metadata": json.dumps({}),
+    }
+    prisma = MagicMock()
+    prisma.get_request_status = MagicMock(return_value="success")
+
+    transaction = await db_writer._common_add_spend_log_transaction_to_daily_transaction(payload, prisma)
+
+    assert transaction is not None
+    assert transaction["api_requests"] == 1
+    assert transaction["successful_requests"] == 1

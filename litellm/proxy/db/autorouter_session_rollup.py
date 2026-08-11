@@ -180,11 +180,16 @@ def build_autorouter_turn_transaction(
 
     The routing_decision record is what says a request was auto-routed at all, so a
     request without one (including the auto-router's own classifier sub-calls) never
-    reaches the rollup. Failed requests served nothing and are excluded. Cache facts
-    are derived from the payload's own usage record through the savings owner, never
-    handed in beside it.
+    reaches the rollup. Internal sub-calls that DO carry one (a shadow eval's duplicate
+    of a request through the router) are excluded by their internal_call_origin stamp:
+    they are not traffic a user sent, so counting them would manufacture sessions and
+    savings in the adoption metrics. Failed requests served nothing and are excluded.
+    Cache facts are derived from the payload's own usage record through the savings
+    owner, never handed in beside it.
     """
     if payload.get("status") != "success":
+        return None
+    if metadata.get("internal_call_origin"):
         return None
     routing_decision: Final = metadata.get("routing_decision")
     if not isinstance(routing_decision, Mapping) or not routing_decision:

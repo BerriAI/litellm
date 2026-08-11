@@ -250,6 +250,9 @@ class GetShadowEvalJobResponse(BaseModel):
     request_count: int = Field(description="Total requests observed on the shadowed key since the job started")
     completed_count: int = Field(description="Verdicts written so far")
     failed_count: int = Field(description="Shadow or judge calls that errored and were skipped")
+    last_error: str | None = Field(
+        default=None, description="The most recent shadow or judge failure, so a growing failed_count is diagnosable"
+    )
     results: ShadowEvalResult | None = Field(
         default=None, description="Present once at least one verdict has been recorded"
     )

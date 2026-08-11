@@ -15,15 +15,21 @@ Flow per sampled request (all in a detached background task, zero added latency)
    the judge cannot learn a position bias.
 3. Write a ``LiteLLM_ShadowEvalVerdict`` row and bump the job's counters.
 
-Shadow and judge calls carry ``shadow_eval_internal`` metadata so this logger
-ignores its own traffic and cannot recurse. They also carry the shadowed key's
-identity metadata, so the provider spend they incur is attributed to that key
-(and its team/org/user) and counts against every budget that key is subject to,
-including the global proxy budget. A shadow/judge pair is skipped outright if
-the shadowed key or its team is already at or over budget, read from the same
-cross-pod spend counters the normal auth path reserves against. A job
-additionally stops itself once its sampling window (``ends_at``) closes or its
-judge spend reaches a multiple of the estimate quoted when it started.
+Shadow and judge calls carry an ``internal_call_origin`` stamp, the same field
+every internal sub-call (including the auto-router's own classifier) is marked
+with, and the logger skips any request carrying it: its own traffic cannot
+recurse, and internal sub-calls billed to the shadowed key are never judged as
+if a user sent them. The calls also carry the shadowed key's identity metadata,
+so the provider spend they incur is attributed to that key (and its team/org/
+user) and counts against every budget that key is subject to, including the
+global proxy budget. A shadow/judge pair is skipped outright if the shadowed
+key or its team is already at or over budget, read from the same cross-pod
+spend counters the normal auth path reserves against.
+
+Job lifecycle (counter flushes, snapshot refresh, stopping a job at its
+``ends_at`` or judge-spend cap) runs on a periodic loop started at proxy
+startup, never on the request path: an idle key's job still ends on schedule,
+and the final counter batch lands without needing another request to arrive.
 """
 
 import asyncio
@@ -41,6 +47,7 @@ from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.internal_call_metadata import sanitized_forwardable_call_metadata
 from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
@@ -52,13 +59,10 @@ if TYPE_CHECKING:
 
 _JSON_FENCE_RE: Final = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
 
-# Metadata marker that tags shadow/judge calls made by this logger, so the
-# success hook skips them instead of shadowing the shadow.
-SHADOW_EVAL_INTERNAL_MARKER: Final = "shadow_eval_internal"
-
-# How long the active-job snapshot is cached. A shadow-eval job starting
-# or stopping takes up to this long to be noticed by running pods.
-_JOB_CACHE_TTL_SECONDS: Final = 30.0
+# Cadence of the lifecycle loop: snapshot refresh, counter flush, and job
+# finalization all run on this tick. A job starting or stopping takes up to
+# one tick to be noticed by running pods.
+_LIFECYCLE_TICK_SECONDS: Final = 10.0
 
 # Upper bound on concurrent shadow+judge pipelines per pod, so a traffic spike
 # turns into skipped samples rather than an unbounded task pileup.
@@ -73,13 +77,14 @@ _MAX_JUDGE_CHARS: Final = 16_000
 # to failed_count, while a larger one buys nothing but cost exposure.
 JUDGE_MAX_OUTPUT_TOKENS: Final = 500
 
-_SEEN_FLUSH_INTERVAL_SECONDS: Final = 10.0
+# Persisted diagnosis bound: the most recent shadow/judge failure, truncated.
+_MAX_LAST_ERROR_CHARS: Final = 500
 
 # A job stops sampling once its judge spend reaches this multiple of the estimate shown
 # at start. The headroom absorbs an estimate that undershot the real traffic mix without
 # letting the job run away; the floor keeps a cent-sized estimate from stopping a job on
-# its first verdict. cost_actual is read from the job cache, so overshoot is bounded by
-# _JOB_CACHE_TTL_SECONDS worth of judge calls.
+# its first verdict. cost_actual is read from the job snapshot, so overshoot is bounded
+# by _LIFECYCLE_TICK_SECONDS worth of judge calls.
 _SPEND_CAP_MULTIPLIER: Final = 1.5
 _SPEND_CAP_FLOOR_USD: Final = 1.0
 
@@ -163,6 +168,33 @@ def _unmask_preference(raw_preference: str, real_is_a: bool) -> str:
     if normalized == "b":
         return "shadow" if real_is_a else "real"
     return "tie"
+
+
+@dataclass(frozen=True, slots=True)
+class _CallFailure:
+    """A shadow or judge call that produced no usable response, with why."""
+
+    error: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ShadowResponse:
+    """A successful shadow call: (text, routed model, tier, completion tokens)."""
+
+    text: str
+    model: str
+    tier: str | None
+    completion_tokens: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _JudgeVerdict:
+    """A parsed judge verdict, unmasked back to real/shadow/tie."""
+
+    preference: str
+    confidence: float
+    reasoning: str
+    cost: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,15 +311,44 @@ class ShadowEvalLogger(CustomLogger):
         self._router_provider = router_provider or _default_router_provider
         self._prisma_provider = prisma_provider or _default_prisma_provider
         # Snapshot of every active job, keyed by shadowed api_key_id. Refreshed as a
-        # whole: active jobs are admin-started and capped at one per key, so the set is
-        # tiny, and one find_many per pod per TTL keeps DB load flat no matter how many
-        # distinct keys the proxy serves.
-        self._jobs_by_key: dict[str, ActiveShadowEvalJob] = {}  # mutable-ok: TTL cache
-        self._jobs_fetched_at: float | None = None
-        self._jobs_refresh_task: asyncio.Task[None] | None = None
+        # whole by the lifecycle loop: active jobs are admin-started and capped at one
+        # per key, so the set is tiny, and one find_many per pod per tick keeps DB load
+        # flat no matter how many distinct keys the proxy serves.
+        self._jobs_by_key: dict[str, ActiveShadowEvalJob] = {}  # mutable-ok: loop-refreshed snapshot
         self._inflight_shadow_tasks: int = 0
         self._pending_seen: dict[str, int] = {}  # mutable-ok: flush buffer
-        self._last_seen_flush: float = 0.0
+        self._lifecycle_task: asyncio.Task[None] | None = None
+
+    def start_lifecycle_loop(self) -> None:
+        """Idempotently start the periodic loop that owns job lifecycle off the request path."""
+        if self._lifecycle_task is not None and not self._lifecycle_task.done():
+            return
+        self._lifecycle_task = asyncio.create_task(self._lifecycle_loop())
+
+    async def _lifecycle_loop(self) -> None:
+        while True:
+            try:
+                await self._lifecycle_tick()
+            except Exception as e:  # noqa: BLE001  # the loop must survive any single tick failing
+                verbose_logger.debug("shadow_eval: lifecycle tick failed: %s", e)
+            await asyncio.sleep(_LIFECYCLE_TICK_SECONDS)
+
+    async def _lifecycle_tick(self) -> None:
+        """One tick: flush counters while jobs are still active, refresh, then finalize.
+
+        Flushing before finalizing lets an expiring job's last counter batch land while
+        its row still passes the active-status guard.
+        """
+        await self._flush_seen_counts()
+        await self._refresh_active_jobs()
+        for job in tuple(self._jobs_by_key.values()):
+            if _job_is_past_its_end(job):
+                await self._finalize_job(job, "reached its scheduled end")
+            elif _job_is_over_spend_cap(job):
+                await self._finalize_job(
+                    job,
+                    f"spend ${job.cost_actual:.4f} reached the cap for its ${job.cost_estimate or 0.0:.4f} estimate",
+                )
 
     #### hook ####
 
@@ -310,33 +371,22 @@ class ShadowEvalLogger(CustomLogger):
             request_metadata: Final = (
                 raw_request_metadata if isinstance(raw_request_metadata, Mapping) else _EMPTY_METADATA
             )
-            if request_metadata.get(SHADOW_EVAL_INTERNAL_MARKER):
-                return  # our own shadow/judge traffic
+            if request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
+                return  # internal sub-call (our own shadow/judge, a classifier, ...), not user traffic
             api_key_hash: Final = metadata.get("user_api_key_hash")
             if not api_key_hash:
                 return
-            job: Final = self._get_active_job(api_key_hash)
+            job: Final = self._jobs_by_key.get(str(api_key_hash))
             if job is None:
                 return
-            if _job_is_past_its_end(job):
-                await self._finalize_job(job, "reached its scheduled end")
-                return
-            if _job_is_over_spend_cap(job):
-                await self._finalize_job(
-                    job,
-                    f"spend ${job.cost_actual:.4f} reached the cap for its ${job.cost_estimate or 0.0:.4f} estimate",
-                )
-                return
+            if _job_is_past_its_end(job) or _job_is_over_spend_cap(job):
+                return  # stop sampling now; the lifecycle loop finalizes the row
             request_id: Final = payload.get("id") or ""
             if not request_id:
                 return
             # The job tracks every request it saw, sampled or not, so the UI can
-            # show "N of M requests shadowed".
+            # show "N of M requests shadowed". Flushed by the lifecycle loop.
             self._pending_seen[job.id] = self._pending_seen.get(job.id, 0) + 1
-            now: Final = asyncio.get_event_loop().time()
-            if now - self._last_seen_flush >= _SEEN_FLUSH_INTERVAL_SECONDS:
-                self._last_seen_flush = now
-                asyncio.create_task(self._flush_seen_counts())
             if not _sample_hits(request_id, job.id, job.shadow_percentage):
                 return
             if payload.get("call_type") not in (None, "completion", "acompletion", "chat_completion"):
@@ -369,23 +419,9 @@ class ShadowEvalLogger(CustomLogger):
 
     #### job lookup ####
 
-    def _get_active_job(self, api_key_hash: str) -> ActiveShadowEvalJob | None:
-        """Serve from the snapshot; never await the DB on the request path.
-
-        An expired (or missing) snapshot kicks a detached refresh and this request is
-        answered from whatever is already in memory — possibly stale, on a cold pod
-        possibly empty. A sampled eval tolerates a missed slice far better than every
-        request on the proxy tolerating a synchronous Prisma read in its success hook.
-        """
-        now: Final = asyncio.get_event_loop().time()
-        expired: Final = self._jobs_fetched_at is None or now - self._jobs_fetched_at >= _JOB_CACHE_TTL_SECONDS
-        if expired and (self._jobs_refresh_task is None or self._jobs_refresh_task.done()):
-            self._jobs_refresh_task = asyncio.create_task(self._refresh_active_jobs(now))
-        return self._jobs_by_key.get(api_key_hash)
-
-    async def _refresh_active_jobs(self, now: float) -> None:
+    async def _refresh_active_jobs(self) -> None:
         """Reload the active-job set. On a DB blip the stale snapshot is kept and the
-        next TTL retries, so a blip degrades freshness rather than turning the feature off."""
+        next tick retries, so a blip degrades freshness rather than turning the feature off."""
         prisma: Final = self._prisma_provider()
         if prisma is None:
             return
@@ -410,7 +446,6 @@ class ShadowEvalLogger(CustomLogger):
                 ends_at=_as_utc(getattr(record, "ends_at", None)),
             )
         self._jobs_by_key = jobs_by_key  # mutable-ok: atomic snapshot swap
-        self._jobs_fetched_at = now
 
     async def _finalize_job(self, job: ActiveShadowEvalJob, reason: str) -> None:
         """Flip a finished job to completed, keeping the verdicts it already produced.
@@ -440,15 +475,24 @@ class ShadowEvalLogger(CustomLogger):
             verbose_logger.debug("shadow_eval: failed to stop job %s: %s", job.id, e)
 
     async def _flush_seen_counts(self) -> None:
+        """Write the buffered request counts, guarded on the job still being active.
+
+        The guard makes stopping a job freeze its counter: a pod serving a stale
+        snapshot keeps buffering for up to one tick, and this write drops those
+        increments instead of growing a stopped job's request_count.
+        """
         prisma: Final = self._prisma_provider()
-        if prisma is None:
+        if prisma is None or not self._pending_seen:
             return
         pending: Final = self._pending_seen
         self._pending_seen = {}  # mutable-ok: fresh flush buffer
         for job_id, count in pending.items():
             try:
-                await prisma.db.litellm_shadowevaljob.update(
-                    where={"id": job_id},  # mutable-ok: Prisma filter
+                await prisma.db.litellm_shadowevaljob.update_many(
+                    where={  # mutable-ok: Prisma filter
+                        "id": job_id,
+                        "status": {"in": ["pending", "running"]},  # mutable-ok: Prisma filter
+                    },
                     data={"request_count": {"increment": count}},  # mutable-ok: Prisma payload
                 )
             except Exception as e:  # noqa: BLE001  # counter drift is acceptable; failing the loop is not
@@ -482,22 +526,20 @@ class ShadowEvalLogger(CustomLogger):
                 return
 
             shadow: Final = await self._call_router_shadow(job.router_name, messages, model_parameters, parent_metadata)
-            if shadow is None:
-                await self._bump_failed(job.id)
+            if isinstance(shadow, _CallFailure):
+                await self._bump_failed(job.id, shadow.error)
                 return
-            shadow_text, shadow_model, tier, shadow_tokens = shadow
 
             verdict: Final = await self._call_judge(
                 judge_model=job.judge_model,
                 messages=messages,
                 real_text=real_text,
-                shadow_text=shadow_text,
+                shadow_text=shadow.text,
                 parent_metadata=parent_metadata,
             )
-            if verdict is None:
-                await self._bump_failed(job.id)
+            if isinstance(verdict, _CallFailure):
+                await self._bump_failed(job.id, verdict.error)
                 return
-            preference, confidence, reasoning, judge_cost = verdict
 
             if prisma is None:
                 return
@@ -505,13 +547,13 @@ class ShadowEvalLogger(CustomLogger):
                 data={  # mutable-ok: Prisma payload
                     "job_id": job.id,
                     "request_id": request_id,
-                    "tier_classification": tier,
+                    "tier_classification": shadow.tier,
                     "real_model": real_model,
-                    "shadow_model": shadow_model,
-                    "shadow_response_tokens": shadow_tokens,
-                    "judge_preference": preference,
-                    "judge_confidence": confidence,
-                    "judge_reasoning": reasoning[:1000] if reasoning else None,
+                    "shadow_model": shadow.model,
+                    "shadow_response_tokens": shadow.completion_tokens,
+                    "judge_preference": verdict.preference,
+                    "judge_confidence": verdict.confidence,
+                    "judge_reasoning": verdict.reasoning[:1000] if verdict.reasoning else None,
                     "judge_model": job.judge_model,
                 }
             )
@@ -522,22 +564,28 @@ class ShadowEvalLogger(CustomLogger):
                 },
                 data={  # mutable-ok: Prisma payload
                     "completed_count": {"increment": 1},  # mutable-ok: Prisma operator
-                    "cost_actual": {"increment": judge_cost},  # mutable-ok: Prisma operator
+                    "cost_actual": {"increment": verdict.cost},  # mutable-ok: Prisma operator
                     "status": "running",
                 },
             )
         except Exception as e:  # noqa: BLE001  # detached task: log, count, never raise
             verbose_logger.debug("shadow_eval: pipeline failed for %s: %s", request_id, e)
-            await self._bump_failed(job.id)
+            await self._bump_failed(job.id, f"pipeline error: {e}")
 
-    async def _bump_failed(self, job_id: str) -> None:
+    async def _bump_failed(self, job_id: str, error: str) -> None:
         prisma: Final = self._prisma_provider()
         if prisma is None:
             return
         try:
-            await prisma.db.litellm_shadowevaljob.update(
-                where={"id": job_id},  # mutable-ok: Prisma filter
-                data={"failed_count": {"increment": 1}},  # mutable-ok: Prisma payload
+            await prisma.db.litellm_shadowevaljob.update_many(
+                where={  # mutable-ok: Prisma filter
+                    "id": job_id,
+                    "status": {"in": ["pending", "running"]},  # mutable-ok: Prisma filter
+                },
+                data={  # mutable-ok: Prisma payload
+                    "failed_count": {"increment": 1},  # mutable-ok: Prisma operator
+                    "last_error": error[:_MAX_LAST_ERROR_CHARS],
+                },
             )
         except Exception as e:  # noqa: BLE001  # counter drift is acceptable
             verbose_logger.debug("shadow_eval: failed_count increment failed: %s", e)
@@ -548,20 +596,18 @@ class ShadowEvalLogger(CustomLogger):
         messages: Sequence[Mapping[str, object]],
         model_parameters: Mapping[str, object],
         parent_metadata: Mapping[str, object],
-    ) -> tuple[str, str, str | None, int | None] | None:
-        """Send the prompt through the auto-router; return (text, model, tier, completion_tokens)."""
+    ) -> "_ShadowResponse | _CallFailure":
+        """Send the prompt through the auto-router being evaluated."""
         router: Final = self._router_provider()
         if router is None:
-            verbose_logger.debug("shadow_eval: no router available")
-            return None
+            return _CallFailure("no router configured on this pod")
         # Carries the shadowed key's identity so this call's real provider spend is
         # attributed to, and budget-checked against, the key whose traffic it copies.
         # The router's pre-routing hook also writes its routing decision into this dict;
         # read it back after the call for tier attribution.
-        attribution: Final = sanitized_forwardable_call_metadata(parent_metadata, SHADOW_EVAL_ROUTER_CALL_ORIGIN)
-        shadow_metadata: Final[dict[str, object]] = attribution | {  # mutable-ok: router writes back
-            SHADOW_EVAL_INTERNAL_MARKER: True
-        }
+        shadow_metadata: Final[dict[str, object]] = sanitized_forwardable_call_metadata(  # mutable-ok: router writes back
+            parent_metadata, SHADOW_EVAL_ROUTER_CALL_ORIGIN
+        )
         shadow_params: Final = {  # mutable-ok: splatted as kwargs
             k: v for k, v in model_parameters.items() if k not in ("stream", "metadata")
         }
@@ -574,19 +620,21 @@ class ShadowEvalLogger(CustomLogger):
             )
         except Exception as e:  # noqa: BLE001  # provider errors are a counted failure, not a crash
             verbose_logger.debug("shadow_eval: router call failed: %s", e)
-            return None
+            return _CallFailure(f"shadow router call failed: {e}")
         text: Final = self._extract_response_text(response)
         if not text:
-            return None
+            return _CallFailure("shadow router returned an empty response")
         raw_decision: Final = shadow_metadata.get("routing_decision")
         routing_decision: Final = raw_decision if isinstance(raw_decision, Mapping) else _EMPTY_METADATA
         raw_tier: Final = routing_decision.get("tier_label") or routing_decision.get("tier")
-        tier: Final = str(raw_tier) if raw_tier is not None else None
-        model: Final = str(getattr(response, "model", None) or routing_decision.get("routed_model") or "")
         usage: Final = getattr(response, "usage", None)
         raw_tokens: Final = getattr(usage, "completion_tokens", None) if usage is not None else None
-        completion_tokens: Final = int(raw_tokens) if isinstance(raw_tokens, int) else None
-        return text, model, tier, completion_tokens
+        return _ShadowResponse(
+            text=text,
+            model=str(getattr(response, "model", None) or routing_decision.get("routed_model") or ""),
+            tier=str(raw_tier) if raw_tier is not None else None,
+            completion_tokens=int(raw_tokens) if isinstance(raw_tokens, int) else None,
+        )
 
     async def _call_judge(
         self,
@@ -595,8 +643,10 @@ class ShadowEvalLogger(CustomLogger):
         real_text: str,
         shadow_text: str,
         parent_metadata: Mapping[str, object],
-    ) -> tuple[str, float, str, float] | None:
-        """Blind pairwise judge. Returns (preference, confidence, reasoning, cost)."""
+    ) -> "_JudgeVerdict | _CallFailure":
+        """Blind pairwise judge, dispatched through the proxy's router when the judge
+        model is a configured deployment (so DB-stored credentials work), the SDK
+        otherwise (provider-qualified public names with credentials in the env)."""
         real_is_a: Final = random.random() < 0.5
         response_a: Final = real_text if real_is_a else shadow_text
         response_b: Final = shadow_text if real_is_a else real_text
@@ -612,32 +662,50 @@ class ShadowEvalLogger(CustomLogger):
             f"Response B:\n{response_b[:_MAX_JUDGE_CHARS]}\n\n"
             "Which response is better?"
         )
-        judge_metadata: Final = sanitized_forwardable_call_metadata(parent_metadata, SHADOW_EVAL_JUDGE_CALL_ORIGIN) | {
-            SHADOW_EVAL_INTERNAL_MARKER: True
-        }
+        judge_metadata: Final = sanitized_forwardable_call_metadata(parent_metadata, SHADOW_EVAL_JUDGE_CALL_ORIGIN)
+        judge_messages: Final = [  # mutable-ok: SDK takes a list
+            {"role": "system", "content": PAIRWISE_JUDGE_SYSTEM_PROMPT},  # mutable-ok: SDK message
+            {"role": "user", "content": user_prompt},  # mutable-ok: SDK message
+        ]
+        router: Final = self._router_provider()
+        use_router: Final = router is not None and (
+            judge_model in router.model_group_alias or router.get_model_list(model_name=judge_model)
+        )
         try:
-            response: Final = await litellm.acompletion(
-                model=judge_model,
-                messages=[  # mutable-ok: SDK takes a list
-                    {"role": "system", "content": PAIRWISE_JUDGE_SYSTEM_PROMPT},  # mutable-ok: SDK message
-                    {"role": "user", "content": user_prompt},  # mutable-ok: SDK message
-                ],
-                temperature=0,
-                max_tokens=JUDGE_MAX_OUTPUT_TOKENS,
-                metadata=judge_metadata,
+            response: Final = (
+                await router.acompletion(  # pyright: ignore[reportOptionalMemberAccess]  # use_router implies router is not None
+                    model=judge_model,
+                    messages=judge_messages,
+                    temperature=0,
+                    max_tokens=JUDGE_MAX_OUTPUT_TOKENS,
+                    metadata=judge_metadata,
+                    num_retries=0,
+                    fallbacks=[],
+                )
+                if use_router
+                else await litellm.acompletion(
+                    model=judge_model,
+                    messages=judge_messages,
+                    temperature=0,
+                    max_tokens=JUDGE_MAX_OUTPUT_TOKENS,
+                    metadata=judge_metadata,
+                )
             )
         except Exception as e:  # noqa: BLE001  # judge outages are a counted failure, not a crash
             verbose_logger.debug("shadow_eval: judge call failed: %s", e)
-            return None
+            return _CallFailure(f"judge call failed: {e}")
         try:
             raw: Final = response["choices"][0]["message"]["content"] or ""
             verdict: Final = _parse_pairwise_verdict(raw)
         except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as e:
             verbose_logger.debug("shadow_eval: unparseable judge verdict: %s", e)
-            return None
-        preference: Final = _unmask_preference(verdict.preference, real_is_a)
-        confidence: Final = max(0.0, min(1.0, verdict.confidence))
-        return preference, confidence, verdict.reasoning, _judge_call_cost(response)
+            return _CallFailure(f"unparseable judge verdict: {e}")
+        return _JudgeVerdict(
+            preference=_unmask_preference(verdict.preference, real_is_a),
+            confidence=max(0.0, min(1.0, verdict.confidence)),
+            reasoning=verdict.reasoning,
+            cost=_judge_call_cost(response),
+        )
 
     @staticmethod
     def _extract_response_text(response_obj: object) -> str:

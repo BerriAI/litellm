@@ -511,6 +511,22 @@ def test_cost_tracking_adds_two_callbacks_when_prisma_set(monkeypatch):
     }
 
 
+@pytest.mark.asyncio
+async def test_startup_starts_the_shadow_eval_lifecycle_loop(monkeypatch):
+    """The loop owns counter flushes and finishing expired jobs, so a job on a key
+    that goes quiet still ends on schedule; it must be running after startup."""
+    import litellm
+    from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
+
+    logger = ShadowEvalLogger(router_provider=lambda: None, prisma_provider=lambda: None)
+    monkeypatch.setattr(litellm, "callbacks", [logger], raising=False)
+
+    ps._start_shadow_eval_lifecycle_loop()
+
+    assert logger._lifecycle_task is not None and not logger._lifecycle_task.done()
+    logger._lifecycle_task.cancel()
+
+
 def test_cost_tracking_no_op_when_prisma_missing(monkeypatch):
     """Without a prisma_client cost_tracking is a no-op — not an error."""
     import litellm

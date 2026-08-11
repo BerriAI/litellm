@@ -93,6 +93,15 @@ class TestBuildTransaction:
     def test_requests_without_a_routing_decision_are_skipped(self, metadata: dict):
         assert _build(metadata=metadata) is None
 
+    @pytest.mark.parametrize("origin", ["shadow_eval_router", "shadow_eval_judge", "autorouter_classifier"])
+    def test_internal_sub_calls_are_excluded_even_with_a_routing_decision(self, origin: str):
+        """Regression: a shadow eval duplicates requests through the router, so its
+        sub-calls carry a genuine routing_decision and rolled up as real routed
+        sessions, inflating session counts and saved_spend in the benchmarks a
+        pre-adoption eval renders next to. Traffic no user sent must never
+        become adoption metrics."""
+        assert _build(metadata=_metadata(internal_call_origin=origin)) is None
+
     def test_the_tier_the_decision_recorded_is_carried_onto_the_transaction(self):
         transaction = _build(metadata=_metadata(routing_decision={**ROUTING_DECISION, "tier": "reasoning"}))
         assert transaction is not None and transaction.tier == "reasoning"
