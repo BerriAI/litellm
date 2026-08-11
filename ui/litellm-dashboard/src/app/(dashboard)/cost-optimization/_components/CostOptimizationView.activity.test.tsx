@@ -1,5 +1,13 @@
-import { fireEvent, render, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { renderWithProviders, testQueryClient } from "../../../../../tests/test-utils";
+
+const { useAuthorizedMock } = vi.hoisted(() => ({ useAuthorizedMock: vi.fn() }));
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: useAuthorizedMock,
+}));
 
 const mockUserDailyActivityCall = vi.fn();
 
@@ -36,10 +44,15 @@ const singlePage = {
 };
 
 describe("CostOptimizationView daily activity", () => {
+  beforeEach(() => {
+    testQueryClient.clear();
+    useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole: "proxy_admin" });
+  });
+
   it("fetches daily activity once for the page and shares it with every tab that needs it", async () => {
     mockUserDailyActivityCall.mockResolvedValue(singlePage);
 
-    const { getByRole, getByTestId } = render(
+    const { getByRole, getByTestId } = renderWithProviders(
       <CostOptimizationView accessToken="test-token" userId="u1" userRole="proxy_admin" />,
     );
 
