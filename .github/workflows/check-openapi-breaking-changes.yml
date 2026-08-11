@@ -1,4 +1,4 @@
-name: Check UI API Types Sync
+name: Check OpenAPI Breaking Changes
 
 on:
   pull_request:
@@ -16,10 +16,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check-sync:
-    name: Verify schema.d.ts matches the proxy OpenAPI spec
+  check-breaking:
+    name: Verify openapi.json is current and has no breaking changes
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      OASDIFF_VERSION: "1.28.0"
+      OASDIFF_SHA256: "e0ef076f2cf953d922addc04be9c3851cf3ec18f7678d2b94d44cea23dca51b5"
     steps:
       - name: Checkout repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -27,7 +30,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 2
 
-      - name: Detect changes that can affect the generated types
+      - name: Detect changes that can affect the spec
         id: changes
         run: |
           set -euo pipefail
@@ -37,10 +40,10 @@ jobs:
             exit 0
           fi
           files="$(git diff --name-only "$base" HEAD)"
-          if grep -Eq '^(litellm/(proxy|types)/|scripts/dump_openapi\.py$|ui/litellm-dashboard/(src/lib/http/schema\.d\.ts|scripts/gen-api-types\.mjs|package(-lock)?\.json)$|\.github/workflows/check-ui-api-types\.yml$)' <<< "$files"; then
+          if grep -Eq '^(litellm/|openapi\.json$|scripts/dump_openapi\.py$|\.github/workflows/check-openapi-breaking-changes\.yml$)' <<< "$files"; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
-            echo "No proxy, types or generator changes in this pull request, nothing to verify."
+            echo "No backend or spec changes in this pull request, nothing to verify."
             echo "relevant=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -79,36 +82,47 @@ jobs:
         if: steps.changes.outputs.relevant == 'true'
         run: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
-      - name: Set up Node.js
+      - name: Regenerate the spec
         if: steps.changes.outputs.relevant == 'true'
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version-file: ui/litellm-dashboard/.nvmrc
-          cache: "npm"
-          cache-dependency-path: ui/litellm-dashboard/package-lock.json
+        run: uv run --no-sync python scripts/dump_openapi.py openapi.json
 
-      - name: Install dashboard dependencies
-        if: steps.changes.outputs.relevant == 'true'
-        working-directory: ui/litellm-dashboard
-        run: npm ci
-
-      - name: Regenerate types from the live spec
-        if: steps.changes.outputs.relevant == 'true'
-        working-directory: ui/litellm-dashboard
-        env:
-          LITELLM_PYTHON: "uv run --no-sync python"
-        run: npm run gen:api
-
-      - name: Fail if types are stale
+      - name: Fail if the committed spec is stale
         if: steps.changes.outputs.relevant == 'true'
         run: |
-          if ! git diff --exit-code -- ui/litellm-dashboard/src/lib/http/schema.d.ts; then
-            echo "::error file=ui/litellm-dashboard/src/lib/http/schema.d.ts::Generated API types are out of sync with the proxy OpenAPI spec."
+          if ! git diff --exit-code -- openapi.json; then
+            echo "::error file=openapi.json::openapi.json is out of sync with the proxy's routes."
             echo ""
-            echo "A backend route or model changed without regenerating the dashboard types."
-            echo "To fix, run from ui/litellm-dashboard:"
-            echo "  npm run gen:api"
-            echo "then commit the updated src/lib/http/schema.d.ts."
+            echo "A backend route or model changed without regenerating the committed spec."
+            echo "To fix, run from the repo root:"
+            echo "  uv run python scripts/dump_openapi.py openapi.json"
+            echo "then commit the updated openapi.json."
             exit 1
           fi
-          echo "schema.d.ts is in sync with the proxy OpenAPI spec."
+          echo "openapi.json is in sync with the proxy's routes."
+
+      - name: Install oasdiff
+        if: steps.changes.outputs.relevant == 'true'
+        run: |
+          set -euo pipefail
+          curl -sSL -o "${RUNNER_TEMP}/oasdiff.tar.gz" \
+            "https://github.com/oasdiff/oasdiff/releases/download/v${OASDIFF_VERSION}/oasdiff_${OASDIFF_VERSION}_linux_amd64.tar.gz"
+          echo "${OASDIFF_SHA256}  ${RUNNER_TEMP}/oasdiff.tar.gz" | sha256sum -c -
+          mkdir -p "${RUNNER_TEMP}/oasdiff-bin"
+          tar -xzf "${RUNNER_TEMP}/oasdiff.tar.gz" -C "${RUNNER_TEMP}/oasdiff-bin" oasdiff
+
+      - name: Fail on breaking API changes vs the base branch
+        if: steps.changes.outputs.relevant == 'true'
+        run: |
+          set -euo pipefail
+          if ! git cat-file -e "HEAD^1:openapi.json" 2>/dev/null; then
+            echo "The base branch has no openapi.json yet, skipping the breaking-change diff."
+            exit 0
+          fi
+          git show "HEAD^1:openapi.json" > "${RUNNER_TEMP}/base_openapi.json"
+          if ! "${RUNNER_TEMP}/oasdiff-bin/oasdiff" breaking -f githubactions --fail-on ERR "${RUNNER_TEMP}/base_openapi.json" openapi.json; then
+            echo ""
+            echo "This pull request makes a breaking change to the proxy's public API."
+            echo "If the break is intentional and approved, a maintainer can merge over this failing check."
+            exit 1
+          fi
+          echo "No breaking API changes against the base branch."

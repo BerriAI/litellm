@@ -9,6 +9,11 @@
  *
  * The Python interpreter must have litellm installed. Override which one via
  * LITELLM_PYTHON (CI passes "uv run --no-sync python"); defaults to python3.
+ *
+ * The dump itself lives in scripts/dump_openapi.py at the repo root, shared
+ * with the OpenAPI breaking-change CI gate. --include-internal forces the
+ * internal UI routes (hidden from the served /openapi.json) into the spec so
+ * they get typed here.
  */
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -23,33 +28,10 @@ const specDir = mkdtempSync(join(tmpdir(), "litellm-openapi-"));
 const specPath = join(specDir, "openapi.json");
 
 const python = (process.env.LITELLM_PYTHON ?? "python3").split(" ");
-// The dashboard calls internal UI routes that the public /openapi.json hides via
-// include_in_schema=False. Force them in so they get typed here; this mutates a
-// throwaway interpreter, so the spec the proxy actually serves is unchanged.
-// Python 3.13 strips a docstring's common leading indentation at compile time
-// while 3.12 keeps it, so the same model yields differently-indented descriptions
-// depending on the interpreter — enough to make this output non-reproducible
-// across CI and contributors. inspect.cleandoc normalizes every description to one
-// canonical form regardless of interpreter, so the generated file is stable.
-const dumpSpec = [
-  "import inspect, json, sys",
-  "from litellm.proxy.proxy_server import app",
-  "from fastapi.routing import APIRoute",
-  "for route in app.routes:",
-  "    if isinstance(route, APIRoute):",
-  "        route.include_in_schema = True",
-  "app.openapi_schema = None",
-  "def normalize(node):",
-  "    if isinstance(node, dict):",
-  "        return {k: inspect.cleandoc(v) if k == 'description' and isinstance(v, str) else normalize(v) for k, v in node.items()}",
-  "    if isinstance(node, list):",
-  "        return [normalize(v) for v in node]",
-  "    return node",
-  "with open(sys.argv[1], 'w') as f: json.dump(normalize(app.openapi()), f, sort_keys=True)",
-].join("\n");
+const dumpScript = join(repoRoot, "scripts", "dump_openapi.py");
 
 try {
-  execFileSync(python[0], [...python.slice(1), "-c", dumpSpec, specPath], {
+  execFileSync(python[0], [...python.slice(1), dumpScript, "--include-internal", specPath], {
     cwd: repoRoot,
     stdio: "inherit",
   });

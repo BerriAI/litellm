@@ -266,6 +266,7 @@ python-source = "."
 bindings = "pyo3"
 include = ["litellm/proxy/_experimental/out/**"]
 exclude = [
+    "openapi.json",
     "litellm/proxy/enterprise",
     "litellm/proxy/enterprise/**",
     "**/__pycache__",
