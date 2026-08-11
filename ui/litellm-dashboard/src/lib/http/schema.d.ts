@@ -26789,10 +26789,24 @@ export interface components {
             aws_bedrock_project_id?: string | null;
             /** Aws Bedrock Runtime Endpoint */
             aws_bedrock_runtime_endpoint?: string | null;
+            /** Aws External Id */
+            aws_external_id?: string | null;
+            /** Aws Profile Name */
+            aws_profile_name?: string | null;
             /** Aws Region Name */
             aws_region_name?: string | null;
+            /** Aws Role Name */
+            aws_role_name?: string | null;
             /** Aws Secret Access Key */
             aws_secret_access_key?: string | null;
+            /** Aws Session Name */
+            aws_session_name?: string | null;
+            /** Aws Session Token */
+            aws_session_token?: string | null;
+            /** Aws Sts Endpoint */
+            aws_sts_endpoint?: string | null;
+            /** Aws Web Identity Token */
+            aws_web_identity_token?: string | null;
             /** Azure Ad Token */
             azure_ad_token?: string | null;
             /** Budget Duration */
@@ -35467,10 +35481,24 @@ export interface components {
             aws_bedrock_project_id?: string | null;
             /** Aws Bedrock Runtime Endpoint */
             aws_bedrock_runtime_endpoint?: string | null;
+            /** Aws External Id */
+            aws_external_id?: string | null;
+            /** Aws Profile Name */
+            aws_profile_name?: string | null;
             /** Aws Region Name */
             aws_region_name?: string | null;
+            /** Aws Role Name */
+            aws_role_name?: string | null;
             /** Aws Secret Access Key */
             aws_secret_access_key?: string | null;
+            /** Aws Session Name */
+            aws_session_name?: string | null;
+            /** Aws Session Token */
+            aws_session_token?: string | null;
+            /** Aws Sts Endpoint */
+            aws_sts_endpoint?: string | null;
+            /** Aws Web Identity Token */
+            aws_web_identity_token?: string | null;
             /** Azure Ad Token */
             azure_ad_token?: string | null;
             /** Budget Duration */
