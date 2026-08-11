@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Final, NamedTuple
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.utils import _get_cost_per_unit, generic_cost_per_token
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -26,29 +26,42 @@ class SavingsSpend(NamedTuple):
     autorouter: float = 0.0
 
 
-def _input_and_cache_read_cost(model: str | None, custom_llm_provider: str | None) -> tuple[float, float]:
+def _input_cache_read_and_write_cost(info: ModelInfo | None) -> tuple[float, float, float]:
     """
-    Return ``(input_cost_per_token, cache_read_cost_per_token)`` for a model.
+    Return ``(input_cost, cache_read_cost, cache_write_cost)`` per token.
 
-    Falls open to ``(0.0, 0.0)`` when the model is unknown so savings degrade to
-    zero rather than raising inside the spend writer. When a model has no
-    separate cache-read price the cache-read cost mirrors the input cost, which
-    yields zero caching savings.
+    ``info`` is whatever pricing the caller resolved -- deployment rates when the
+    request came through a router deployment, public rates otherwise -- so a
+    negotiated price is honoured here rather than silently replaced by the list rate.
+    ``None`` falls open to ``(0.0, 0.0, 0.0)`` so savings degrade to zero rather than
+    raising inside the spend writer.
+
+    Prices are read through ``_get_cost_per_unit``, the same accessor the cost
+    calculator uses, which coerces the string prices a ``config.yaml`` can produce
+    (``"3e-7"``) and resolves service-tier suffixes.
+
+    An absent cache price mirrors the input cost, which yields a zero discount on the
+    read leg and a zero premium on the write leg. Mirroring rather than taking
+    ``_get_cost_per_unit``'s 0.0 default is load-bearing on the write leg: a zero write
+    price would make the premium ``0 - input_cost``, turning a model that simply has no
+    write pricing into a spurious extra saving.
+
+    The two legs then differ on an explicit ``0.0``, and the asymmetry is deliberate. A
+    free cache *write* does not exist -- entries carrying a literal zero (``deepseek-chat``
+    does) mean "no separate price", so a falsy write price also mirrors input. A free
+    cache *read* is real: 15 models charge for input and serve reads for nothing, which
+    is the largest discount available, so the read leg keeps its literal zero.
     """
-    if not model:
-        return 0.0, 0.0
-    try:
-        info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-    except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models; degrade to zero savings
-        verbose_proxy_logger.debug(
-            "savings: no model info for provider=%s model=%s (%s)", custom_llm_provider, model, e
-        )
-        return 0.0, 0.0
-    input_cost: Final = float(info.get("input_cost_per_token") or 0.0)
-    cache_read_cost: Final = info.get("cache_read_input_token_cost")
-    if cache_read_cost is None:
-        return input_cost, input_cost
-    return input_cost, float(cache_read_cost)
+    if info is None:
+        return 0.0, 0.0, 0.0
+    input_cost: Final = _get_cost_per_unit(info, "input_cost_per_token") or 0.0
+    cache_read_cost: Final = _get_cost_per_unit(info, "cache_read_input_token_cost", default_value=None)
+    cache_write_cost: Final = _get_cost_per_unit(info, "cache_creation_input_token_cost", default_value=None)
+    return (
+        input_cost,
+        input_cost if cache_read_cost is None else cache_read_cost,
+        cache_write_cost if cache_write_cost else input_cost,
+    )
 
 
 class _ModelIdentity(NamedTuple):
@@ -434,10 +447,28 @@ def compute_savings_spend(
     Dollar savings for one request, split by optimization driver.
 
     Compression savings price the tokens compression removed at the model's
-    input rate. Prompt-caching savings price the cache-read tokens at the
-    difference between the input rate and the discounted cache-read rate; the
-    read count is derived here from ``usage_object`` so no caller can hand in a
-    count that disagrees with the usage record. Auto-router savings compare the
+    input rate. Prompt-caching savings are NET: the cache-read discount minus the
+    premium paid to write those entries, both derived here from ``usage_object`` so no
+    caller can hand in a count that disagrees with the usage record.
+
+    The net form follows from what the request would have cost with caching off. The
+    provider reports ``prompt_tokens`` as the inclusive total of three disjoint
+    partitions (uncached text, cache reads, cache writes), so an uncached counterfactual
+    bills every one of those tokens at the flat input rate::
+
+        would_have_cost = (text + reads + writes) * input
+        actually_cost   = text * input + reads * read_rate + writes * write_rate
+        savings         = reads * (input - read_rate) - writes * (write_rate - input)
+
+    So the write leg subtracts the write PREMIUM, not the whole write cost: those tokens
+    had to be sent either way, and the counterfactual already pays the input rate for
+    them. The premium stays signed, because a handful of models price writes below their
+    input rate and there the write is a genuine extra saving.
+
+    A request that only writes cache and gets no hits therefore reports negative savings,
+    which is accurate: it really did cost more than the uncached call would have. The
+    daily rollup increments arithmetically, so those rows offset positive ones in the
+    same bucket. Auto-router savings compare the
     served ``model`` against the counterfactual baseline the router recorded on
     its ``routing_decision``, and are zero unless the two differ. That record
     also says whether the conversation was already underway, which is what tells
@@ -454,10 +485,21 @@ def compute_savings_spend(
     the same way; that is pre-existing behaviour on two shipped drivers rather than
     something introduced here, and moving those numbers is its own change.
     """
-    input_cost, cache_read_cost = _input_and_cache_read_cost(model, custom_llm_provider)
+    # Deployment rates when the request came through one, public rates otherwise --
+    # `_effective_model_info` merges a deployment's configured prices over the built-in
+    # map, so a negotiated price is not silently replaced by the list rate.
+    router_instance: Router | None = llm_router() if llm_router else None
+    identity: Final = _resolve_model(model, custom_llm_provider)
+    pricing: Final = _effective_model_info(router_instance, model_id, model or "") or (
+        _model_info(identity) if identity else None
+    )
+    input_cost, cache_read_cost, cache_write_cost = _input_cache_read_and_write_cost(pricing)
     compression: Final = max(compression_saved_tokens, 0) * input_cost
     cache_read_input_tokens: Final = extract_cache_read_tokens(usage_object)
-    prompt_caching: Final = max(cache_read_input_tokens, 0) * max(input_cost - cache_read_cost, 0.0)
+    cache_creation_input_tokens: Final = extract_cache_creation_tokens(usage_object)
+    read_discount: Final = max(cache_read_input_tokens, 0) * max(input_cost - cache_read_cost, 0.0)
+    write_premium: Final = max(cache_creation_input_tokens, 0) * (cache_write_cost - input_cost)
+    prompt_caching: Final = read_discount - write_premium
 
     usage: Final = _usage_from_spend_log(usage_object)
     if usage is None or not model:
@@ -480,9 +522,7 @@ def compute_savings_spend(
             # Absent means the router never recorded a shape, which is the conservative
             # reading: charge the cache write rather than claim a first turn's saving.
             conversation_continuing=decision.get("conversation_continuing") is not False,
-            selected_info=_effective_model_info(
-                (router_instance := llm_router() if llm_router else None), model_id, model or ""
-            ),
+            selected_info=_effective_model_info(router_instance, model_id, model or ""),
             baseline_info=_effective_model_info(router_instance, baseline_id, baseline_model or ""),
             cost_breakdown=cost_breakdown,
         )
