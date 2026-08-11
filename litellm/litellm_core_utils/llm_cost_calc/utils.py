@@ -2,7 +2,7 @@
 ## Helper utilities for cost_per_token()
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -291,24 +291,21 @@ def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> tuple[float, 
     )
 
 
-def _is_within_off_peak_window(off_peak_hours_utc: str | list[str], current_time: datetime | None = None) -> bool:
+def _is_within_off_peak_window(off_peak_hours_utc: str | Sequence[str], current_time: datetime | None = None) -> bool:
     """Return True if current_time (UTC, defaulting to now) falls inside any off-peak window.
 
     off_peak_hours_utc is a "HH:MM-HH:MM" string in UTC, or a list of such strings for providers
     with multiple daily windows (e.g. ["16:30-00:30", "04:00-06:00"]). A window may wrap past
     midnight. The start is inclusive and the end is exclusive; malformed windows are ignored.
     """
-    if current_time is None:
-        current_time = datetime.now(timezone.utc)
-    elif current_time.tzinfo is not None:
-        current_time = current_time.astimezone(timezone.utc)
-    now = current_time.time()
-    windows = [off_peak_hours_utc] if isinstance(off_peak_hours_utc, str) else off_peak_hours_utc
+    reference: Final = current_time if current_time is not None else datetime.now(timezone.utc)
+    now: Final = (reference.astimezone(timezone.utc) if reference.tzinfo is not None else reference).time()
+    windows: Final = (off_peak_hours_utc,) if isinstance(off_peak_hours_utc, str) else off_peak_hours_utc
     for window in windows:
         try:
             start_str, end_str = window.split("-")
-            start = datetime.strptime(start_str.strip(), "%H:%M").time()
-            end = datetime.strptime(end_str.strip(), "%H:%M").time()
+            start = datetime.strptime(start_str.strip(), "%H:%M").replace(tzinfo=timezone.utc).time()
+            end = datetime.strptime(end_str.strip(), "%H:%M").replace(tzinfo=timezone.utc).time()
         except (ValueError, AttributeError):
             continue
         if start <= end:
@@ -344,10 +341,10 @@ def _apply_off_peak_pricing(
     than overwritten when a model combines off-peak and above-threshold rates. Any rate left
     unset in off_peak_pricing falls back to the standard rate.
     """
-    off_peak = model_info.get("off_peak_pricing")
+    off_peak: Final = model_info.get("off_peak_pricing")
     if not off_peak:
         return prompt_base_cost, completion_base_cost, cache_read_cost
-    hours_utc = off_peak.get("hours_utc")
+    hours_utc: Final = off_peak.get("hours_utc")
     if not hours_utc or not _is_within_off_peak_window(hours_utc, current_time):
         return prompt_base_cost, completion_base_cost, cache_read_cost
     return (
@@ -413,15 +410,15 @@ def _get_token_base_cost(
         k for k in model_info if k.startswith("input_cost_per_token_above_") and not k.endswith(_SERVICE_TIER_SUFFIXES)
     ]
     if not threshold_keys:
-        prompt_base_cost, completion_base_cost, cache_read_cost = _apply_off_peak_pricing(
+        off_peak_prompt_cost, off_peak_completion_cost, off_peak_cache_read_cost = _apply_off_peak_pricing(
             model_info, current_time, prompt_base_cost, completion_base_cost, cache_read_cost
         )
         return (
-            prompt_base_cost,
-            completion_base_cost,
+            off_peak_prompt_cost,
+            off_peak_completion_cost,
             cache_creation_cost,
             cache_creation_cost_above_1hr,
-            cache_read_cost,
+            off_peak_cache_read_cost,
         )
 
     # Only sort the threshold keys (typically 1-2 keys instead of 66+)
@@ -522,15 +519,15 @@ def _get_token_base_cost(
             except Exception:
                 continue
 
-    prompt_base_cost, completion_base_cost, cache_read_cost = _apply_off_peak_pricing(
+    discounted_prompt_cost, discounted_completion_cost, discounted_cache_read_cost = _apply_off_peak_pricing(
         model_info, current_time, prompt_base_cost, completion_base_cost, cache_read_cost
     )
     return (
-        prompt_base_cost,
-        completion_base_cost,
+        discounted_prompt_cost,
+        discounted_completion_cost,
         cache_creation_cost,
         cache_creation_cost_above_1hr,
-        cache_read_cost,
+        discounted_cache_read_cost,
     )
 
 
