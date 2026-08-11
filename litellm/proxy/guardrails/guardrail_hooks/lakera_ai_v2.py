@@ -24,7 +24,7 @@ from litellm.proxy.guardrails._content_utils import (
     has_non_string_content,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIBreakdownItem,
@@ -66,6 +66,28 @@ def humanize_lakera_block_reasons(breakdown: Sequence[LakeraAIBreakdownItem] | N
         )
     )
     return ", ".join(phrases) if phrases else "a content safety concern"
+
+
+def _event_hook_includes_during_call(
+    event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | str | list[str] | None,
+) -> bool:
+    """True if ``event_hook`` could ever resolve to during_call, covering a plain
+    value, a list of values, or a tag-based Mode (checked across every tag value
+    and the default)."""
+    candidates: Final = (
+        tuple(event_hook.tags.values()) + (event_hook.default,)
+        if isinstance(event_hook, Mode)
+        else tuple(event_hook)
+        if isinstance(event_hook, list)
+        else (event_hook,)
+    )
+
+    flattened: Final = tuple(
+        value
+        for candidate in candidates
+        for value in (tuple(candidate) if isinstance(candidate, list) else (candidate,))
+    )
+    return any(value == GuardrailEventHooks.during_call for value in flattened if value is not None)
 
 
 class LakeraAIGuardrail(CustomGuardrail):
@@ -123,6 +145,11 @@ class LakeraAIGuardrail(CustomGuardrail):
         self.on_flagged = on_flagged or "block"
         self.advisory_system_message = advisory_system_message
         if self.advisory_system_message is not None:
+            if "{reason}" not in self.advisory_system_message:
+                raise ValueError(
+                    "Invalid advisory_system_message template: must include the {reason} "
+                    "placeholder so the LLM sees why the request was flagged."
+                )
             try:
                 self.advisory_system_message.format(reason="placeholder")
             except (KeyError, IndexError, ValueError) as e:
@@ -132,6 +159,12 @@ class LakeraAIGuardrail(CustomGuardrail):
                 ) from e
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(**kwargs)
+        if self.on_flagged == "inject_system_message" and _event_hook_includes_during_call(self.event_hook):
+            raise ValueError(
+                "on_flagged='inject_system_message' is not supported for mode='during_call': during_call "
+                "runs concurrently with the LLM dispatch with no pre-call barrier, so the advisory message "
+                "cannot reliably reach the request. Use mode='pre_call' instead."
+            )
 
     def _build_advisory_message(self, lakera_response: LakeraAIResponse | None) -> str:
         """Format the advisory message shown to the LLM when on_flagged='inject_system_message'."""

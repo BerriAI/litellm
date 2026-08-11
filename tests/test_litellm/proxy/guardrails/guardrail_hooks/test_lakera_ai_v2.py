@@ -15,6 +15,7 @@ from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIGuardrail,
     humanize_lakera_block_reasons,
 )
+from litellm.types.guardrails import Mode
 from litellm.types.utils import ModelResponse
 
 
@@ -130,6 +131,46 @@ class TestAdvisorySystemMessageValidation:
 
     def test_none_template_is_allowed(self):
         LakeraAIGuardrail(api_key="test_key", advisory_system_message=None)
+
+    def test_template_missing_reason_placeholder_raises_at_construction(self):
+        """A template with no {reason} placeholder passes str.format() cleanly but
+        silently never tells the LLM why the request was flagged, defeating the
+        point of advisory mode; this must be rejected too, not just malformed ones."""
+        with pytest.raises(ValueError, match="must include the {reason} placeholder"):
+            LakeraAIGuardrail(api_key="test_key", advisory_system_message="This request was flagged.")
+
+
+class TestAdvisoryModeDuringCallUnsupported:
+    """inject_system_message cannot deliver its advertised behavior for
+    mode='during_call' (no pre-call barrier exists to land the mutation before
+    dispatch), so that combination must be rejected at construction time rather
+    than silently downgrading to monitor with no clear signal to the operator."""
+
+    def test_during_call_string_mode_raises_at_construction(self):
+        with pytest.raises(ValueError, match="not supported for mode='during_call'"):
+            LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message", event_hook="during_call")
+
+    def test_during_call_in_list_mode_raises_at_construction(self):
+        with pytest.raises(ValueError, match="not supported for mode='during_call'"):
+            LakeraAIGuardrail(
+                api_key="test_key",
+                on_flagged="inject_system_message",
+                event_hook=["pre_call", "during_call"],
+            )
+
+    def test_during_call_in_tag_mode_raises_at_construction(self):
+        with pytest.raises(ValueError, match="not supported for mode='during_call'"):
+            LakeraAIGuardrail(
+                api_key="test_key",
+                on_flagged="inject_system_message",
+                event_hook=Mode(tags={"vip": "during_call"}, default="pre_call"),
+            )
+
+    def test_pre_call_only_mode_constructs_without_error(self):
+        LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message", event_hook="pre_call")
+
+    def test_during_call_with_block_mode_constructs_without_error(self):
+        LakeraAIGuardrail(api_key="test_key", on_flagged="block", event_hook="during_call")
 
 
 class TestAdvisoryModeWiring:
