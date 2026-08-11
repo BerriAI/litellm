@@ -1,15 +1,20 @@
 use std::collections::BTreeMap;
 
-use litellm_core::CoreResult;
-use litellm_core::audio_transcription::transformation::AudioTranscriptionProviderConfig;
-use litellm_core::error::CoreError;
-use litellm_core::providers::bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG;
 use serde_json::{Map, Value};
+
+use crate::CoreResult;
+use crate::error::CoreError;
+
+use super::transformation::AudioTranscriptionProviderConfig;
+
+#[cfg(feature = "bedrock-auth")]
+use crate::providers::bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG;
 
 pub(super) fn audio_transcription_provider_config(
     provider: &str,
 ) -> Option<&'static dyn AudioTranscriptionProviderConfig> {
     match provider {
+        #[cfg(feature = "bedrock-auth")]
         "bedrock" => Some(&BEDROCK_AUDIO_TRANSCRIPTION_CONFIG),
         _ => None,
     }
@@ -40,6 +45,7 @@ pub(super) fn has_header(headers: &BTreeMap<String, String>, name: &str) -> bool
 
 pub(super) fn truncate_error_body(body: &str) -> String {
     let truncated: String = body.chars().take(256).collect();
+
     if truncated.chars().count() == body.chars().count() {
         truncated
     } else {
