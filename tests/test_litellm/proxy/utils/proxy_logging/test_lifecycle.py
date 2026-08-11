@@ -129,6 +129,21 @@ def test_startup_event_initializes_slack_and_callbacks(proxy_logging):
     }
 
 
+@pytest.mark.asyncio
+async def test_startup_event_schedules_deprecation_check_before_its_alert_type_is_on(proxy_logging):
+    """Alerting config can enable the deprecation alert after startup, so the loop must already be running"""
+    proxy_logging.alerting = ["slack"]
+    proxy_logging.slack_alerting_instance = MagicMock()
+    proxy_logging.slack_alerting_instance.alert_types = []
+    proxy_logging.slack_alerting_instance._run_scheduled_deprecation_check = AsyncMock()
+    proxy_logging._init_litellm_callbacks = MagicMock()
+
+    proxy_logging.startup_event(llm_router=None, redis_usage_cache=None)
+
+    assert proxy_logging.deprecation_check_started is True
+    proxy_logging.slack_alerting_instance._run_scheduled_deprecation_check.assert_called_once_with()
+
+
 def test_startup_event_propagates_init_callbacks_failure_raises(proxy_logging):
     proxy_logging.slack_alerting_instance = MagicMock()
     proxy_logging.slack_alerting_instance.alert_types = []
