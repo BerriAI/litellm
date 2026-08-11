@@ -207,6 +207,23 @@ class TestCloseCommentText:
         assert "end-to-end qa proof" in body.lower()
         assert "mock" in body.lower()
 
+    def test_issue_recovery_comments_should_name_feature_dead_end_evidence(
+        self, triage_module
+    ):
+        # The feature-request pass bar demands end-to-end evidence of the
+        # dead-end, so the close and grace-warning recovery bullets must ask
+        # for it too — otherwise a requester follows those exact instructions
+        # (description + use case only) and fails `reconsider` again with no
+        # hint of what else was needed.
+        verdict = {"verdict": "fail", "missing": [], "explanation": ""}
+        for body in (
+            triage_module.format_issue_close_comment(verdict),
+            triage_module.format_grace_warning_issue_comment(verdict),
+        ):
+            normalized = " ".join(body.split())
+            assert "end-to-end evidence of the dead-end" in normalized
+            assert "showing where the flow stops today" in normalized
+
     def test_all_agent_shin_comments_should_use_bullet_train_emoji(self, triage_module):
         # The bullet train (🚅) is Agent Shin's symbol, matching the LiteLLM
         # logo; the previous wave (👋) was generic and didn't match the bot's
