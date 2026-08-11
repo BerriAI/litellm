@@ -258,6 +258,50 @@ describe("Settings", () => {
     expect(getByText("well-formed")).toBeInTheDocument();
   });
 
+  // Regression: the Edit scope dialog is driven by a Form store that Form.useForm() owns.
+  // initialValues only seeds that store on first mount, so reopening the dialog for a second
+  // destination left the first one's scope in the fields while only the title changed. Save
+  // sends the whole access object, so pressing it wrote the stale scope -- silently turning a
+  // team-scoped destination global and leaking every tenant's traces to it. The parent keys
+  // the modal per destination so the store is rebuilt each time.
+  it("should show each destination's own scope when Edit scope is reopened for another one", async () => {
+    const user = userEvent.setup();
+    credentialsFixture = {
+      credentials: [
+        {
+          credential_name: "global-dest",
+          credential_info: { credential_type: "logging", description: "generic", access: { global: true } },
+        },
+        {
+          credential_name: "team-dest",
+          credential_info: { credential_type: "logging", description: "generic", access: { teams: ["team-1"] } },
+        },
+      ],
+    };
+
+    const { findByText } = renderSettings(defaultProps);
+    await findByText("Active Logging Callbacks");
+
+    const openEditScope = async (name: string) => {
+      await user.click(await screen.findByTestId(`callback-actions-${name}-success`));
+      await user.click(await screen.findByTestId("destination-action-edit-access"));
+      return await screen.findByText(`Edit scope — ${name}`);
+    };
+    const globalSwitch = () => document.querySelector(".ant-modal .ant-switch");
+    const closeDialog = async () => {
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(document.querySelector(".ant-modal-title")).not.toBeInTheDocument());
+    };
+
+    await openEditScope("global-dest");
+    expect(globalSwitch()).toHaveAttribute("aria-checked", "true");
+    await closeDialog();
+
+    await openEditScope("team-dest");
+    // Before the fix this read "true", carried over from global-dest.
+    expect(globalSwitch()).toHaveAttribute("aria-checked", "false");
+  });
+
   it("should hold the callbacks table in loading state until the fetch settles", async () => {
     let resolveCallbacks: (value: {
       callbacks: never[];

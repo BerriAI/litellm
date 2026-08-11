@@ -590,6 +590,15 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               />
               {accessToken && (
                 <EditLoggingCredentialModal
+                  // Remount per destination. Form.useForm() owns a store that outlives the
+                  // dialog and initialValues only seeds it on first mount, so reopening for
+                  // another credential kept the previous one's scope in the fields while the
+                  // title updated -- and Save sends the whole access object, so that stale
+                  // scope was written, silently turning a team destination global.
+                  // Neither destroyOnHidden nor resetting the fields from an effect fixes
+                  // this (the portal's children mount after the effect runs); remounting the
+                  // component, and with it the form store, is what works. Verified by A/B.
+                  key={editAccessFor?.name ?? "none"}
                   accessToken={accessToken}
                   credentialName={editAccessFor?.name ?? null}
                   access={editAccessFor?.access}

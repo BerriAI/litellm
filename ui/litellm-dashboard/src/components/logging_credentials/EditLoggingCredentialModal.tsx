@@ -33,8 +33,6 @@ const EditLoggingCredentialModal: React.FC<EditLoggingCredentialModalProps> = ({
   onClose,
   onSaved,
 }) => {
-  // destroyOnClose remounts the Form each open, so initialValues re-seeds from the
-  // current destination -- no effect syncing prop into state.
   const [form] = Form.useForm<AccessForm>();
 
   const handleSave = async () => {
@@ -65,7 +63,7 @@ const EditLoggingCredentialModal: React.FC<EditLoggingCredentialModalProps> = ({
       onCancel={onClose}
       onOk={handleSave}
       okText="Save"
-      destroyOnClose
+      destroyOnHidden
     >
       <Form<AccessForm> form={form} layout="vertical" preserve={false} initialValues={{ access: access ?? {} }}>
         <Form.Item name="access" noStyle>
