@@ -7,6 +7,7 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { TextInput, Button as TremorButton } from "@tremor/react";
 import { Form, Input, Select, Switch, Tooltip } from "antd";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
@@ -82,6 +83,7 @@ export function KeyEditView({
   userRole,
   premiumUser = false,
 }: KeyEditViewProps) {
+  const { t } = useTranslation("gateway");
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const [form] = Form.useForm();
   const [promptsList, setPromptsList] = useState<string[]>([]);
@@ -255,7 +257,7 @@ export function KeyEditView({
         const response = await tagListCall(accessToken);
         setTagsList(response);
       } catch (error) {
-        NotificationsManager.fromBackend("Error fetching tags: " + error);
+        NotificationsManager.fromBackend(t("virtualKeys.edit.tagFetchFailed", { error: String(error) }));
       }
     };
     fetchTags();
@@ -347,11 +349,11 @@ export function KeyEditView({
 
   return (
     <Form form={form} onFinish={handleSubmit} initialValues={initialValues} layout="vertical">
-      <Form.Item label="Key Alias" name="key_alias">
+      <Form.Item label={t("virtualKeys.edit.keyAlias")} name="key_alias">
         <TextInput />
       </Form.Item>
 
-      <Form.Item label="Models" name="models">
+      <Form.Item label={t("virtualKeys.createKey.models")} name="models">
         <Form.Item
           noStyle
           shouldUpdate={(prevValues, currentValues) =>
@@ -375,7 +377,7 @@ export function KeyEditView({
               <>
                 <Select
                   mode="multiple"
-                  placeholder="Select models"
+                  placeholder={t("virtualKeys.createKey.selectModels")}
                   style={{ width: "100%" }}
                   disabled={isDisabled}
                   value={isDisabled ? [] : models}
@@ -390,9 +392,11 @@ export function KeyEditView({
                   }}
                 >
                   {keyData.team_id != null ? (
-                    team != null && <Select.Option value="all-team-models">All Team Models</Select.Option>
+                    team != null && (
+                      <Select.Option value="all-team-models">{t("virtualKeys.createKey.allTeamModels")}</Select.Option>
+                    )
                   ) : (
-                    <Select.Option value="all-proxy-models">All Proxy Models</Select.Option>
+                    <Select.Option value="all-proxy-models">{t("virtualKeys.createKey.allProxyModels")}</Select.Option>
                   )}
                   {availableModels.map((model) => (
                     <Select.Option key={model} value={model} disabled={hasAllModelsSentinel(models)}>
@@ -402,7 +406,7 @@ export function KeyEditView({
                 </Select>
                 {isDisabled && (
                   <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                    Models field is disabled for this key type
+                    {t("virtualKeys.createKey.modelsDisabled")}
                   </div>
                 )}
               </>
@@ -411,7 +415,7 @@ export function KeyEditView({
         </Form.Item>
       </Form.Item>
 
-      <Form.Item label="Key Type">
+      <Form.Item label={t("virtualKeys.createKey.keyType")}>
         <Form.Item
           noStyle
           shouldUpdate={(prevValues, currentValues) => prevValues.allowed_routes !== currentValues.allowed_routes}
@@ -430,7 +434,7 @@ export function KeyEditView({
 
             return (
               <Select
-                placeholder="Select key type"
+                placeholder={t("virtualKeys.createKey.selectKeyType")}
                 style={{ width: "100%" }}
                 optionLabelProp="label"
                 value={keyTypeValue}
@@ -449,27 +453,27 @@ export function KeyEditView({
                   }
                 }}
               >
-                <Select.Option value="default" label="Full Access">
+                <Select.Option value="default" label={t("virtualKeys.createKey.fullAccess")}>
                   <div style={{ padding: "4px 0" }}>
-                    <div style={{ fontWeight: 500 }}>Full Access</div>
+                    <div style={{ fontWeight: 500 }}>{t("virtualKeys.createKey.fullAccess")}</div>
                     <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                      Can call all routes (AI APIs, Management, and read-only)
+                      {t("virtualKeys.createKey.fullAccessDescription")}
                     </div>
                   </div>
                 </Select.Option>
-                <Select.Option value="llm_api" label="AI APIs">
+                <Select.Option value="llm_api" label={t("virtualKeys.createKey.aiApis")}>
                   <div style={{ padding: "4px 0" }}>
-                    <div style={{ fontWeight: 500 }}>AI APIs</div>
+                    <div style={{ fontWeight: 500 }}>{t("virtualKeys.createKey.aiApis")}</div>
                     <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                      Can call only AI API routes (chat/completions, embeddings, etc.)
+                      {t("virtualKeys.createKey.aiApisDescription")}
                     </div>
                   </div>
                 </Select.Option>
-                <Select.Option value="management" label="Management">
+                <Select.Option value="management" label={t("virtualKeys.createKey.management")}>
                   <div style={{ padding: "4px 0" }}>
-                    <div style={{ fontWeight: 500 }}>Management</div>
+                    <div style={{ fontWeight: 500 }}>{t("virtualKeys.createKey.management")}</div>
                     <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                      Can call only management routes (user/team/key management)
+                      {t("virtualKeys.createKey.managementDescription")}
                     </div>
                   </div>
                 </Select.Option>
@@ -482,30 +486,34 @@ export function KeyEditView({
       <Form.Item
         label={
           <span>
-            Allowed Routes{" "}
-            <Tooltip title="List of allowed routes for the key (comma-separated). Can be specific routes (e.g., '/chat/completions') or route patterns (e.g., 'llm_api_routes', 'management_routes', '/keys/*'). Leave empty to allow all routes.">
+            {t("virtualKeys.edit.allowedRoutes")}{" "}
+            <Tooltip title={t("virtualKeys.edit.allowedRoutesTooltip")}>
               <InfoCircleOutlined style={{ marginLeft: "4px" }} />
             </Tooltip>
           </span>
         }
         name="allowed_routes"
       >
-        <Input placeholder="Enter allowed routes (comma-separated). Special values: llm_api_routes, management_routes. Examples: llm_api_routes, /chat/completions, /keys/*. Leave empty to allow all routes" />
+        <Input placeholder={t("virtualKeys.edit.allowedRoutesPlaceholder")} />
       </Form.Item>
 
-      <Form.Item label="Max Budget (USD)" name="max_budget">
-        <NumericalInput step={0.01} style={{ width: "100%" }} placeholder="Enter a numerical value" />
+      <Form.Item label={t("virtualKeys.createKey.optional.maxBudget")} name="max_budget">
+        <NumericalInput
+          step={0.01}
+          style={{ width: "100%" }}
+          placeholder={t("virtualKeys.createKey.optional.numericInput")}
+        />
       </Form.Item>
 
-      <Form.Item label="Reset Budget" name="budget_duration">
-        <BudgetDurationDropdown placeholder="Never resets" />
+      <Form.Item label={t("virtualKeys.createKey.optional.resetBudget")} name="budget_duration">
+        <BudgetDurationDropdown placeholder={t("virtualKeys.createKey.optional.neverResets")} />
       </Form.Item>
 
       <Form.Item
         label={
           <span>
-            Budget Windows{" "}
-            <Tooltip title="Set multiple independent budget windows (e.g., hourly $10 AND monthly $200). Each window tracks spend separately and resets on its own schedule.">
+            {t("virtualKeys.createKey.optional.budgetWindows")}{" "}
+            <Tooltip title={t("virtualKeys.edit.budgetWindowsTooltip")}>
               <InfoCircleOutlined style={{ marginLeft: "4px" }} />
             </Tooltip>
           </span>
@@ -517,8 +525,8 @@ export function KeyEditView({
       <Form.Item
         label={
           <span>
-            Budget Fallbacks{" "}
-            <Tooltip title="When a model exceeds its per-model budget, requests automatically reroute to fallback models instead of failing">
+            {t("virtualKeys.createKey.optional.budgetFallbacks")}{" "}
+            <Tooltip title={t("virtualKeys.createKey.optional.budgetFallbacksTooltip")}>
               <InfoCircleOutlined style={{ marginLeft: "4px" }} />
             </Tooltip>
           </span>
@@ -531,13 +539,13 @@ export function KeyEditView({
         />
       </Form.Item>
 
-      <Form.Item label="TPM Limit" name="tpm_limit">
+      <Form.Item label={t("virtualKeys.edit.tpmLimit")} name="tpm_limit">
         <NumericalInput min={0} />
       </Form.Item>
 
       <RateLimitTypeFormItem type="tpm" name="tpm_limit_type" showDetailedDescriptions={false} />
 
-      <Form.Item label="RPM Limit" name="rpm_limit">
+      <Form.Item label={t("virtualKeys.edit.rpmLimit")} name="rpm_limit">
         <NumericalInput min={0} />
       </Form.Item>
 
@@ -546,8 +554,8 @@ export function KeyEditView({
       <Form.Item
         label={
           <span>
-            Throttle on budget exceeded{" "}
-            <Tooltip title="When this key exceeds its max budget, throttle its TPM/RPM to the globally configured percentage instead of blocking access entirely. Requires budget_exceeded_throttle_percentage in litellm_settings and a TPM/RPM limit on the key.">
+            {t("virtualKeys.createKey.optional.throttle")}{" "}
+            <Tooltip title={t("virtualKeys.edit.throttleTooltip")}>
               <InfoCircleOutlined style={{ marginLeft: "4px" }} />
             </Tooltip>
           </span>
@@ -555,26 +563,29 @@ export function KeyEditView({
         name="throttle_on_budget_exceeded"
         valuePropName="checked"
       >
-        <Switch checkedChildren="Yes" unCheckedChildren="No" />
+        <Switch
+          checkedChildren={t("virtualKeys.createKey.optional.yes")}
+          unCheckedChildren={t("virtualKeys.createKey.optional.no")}
+        />
       </Form.Item>
 
-      <Form.Item label="Max Parallel Requests" name="max_parallel_requests">
+      <Form.Item label={t("virtualKeys.createKey.optional.advancedMaxParallelRequests")} name="max_parallel_requests">
         <NumericalInput min={0} />
       </Form.Item>
 
-      <Form.Item label="Model TPM Limit" name="model_tpm_limit">
+      <Form.Item label={t("virtualKeys.edit.modelTpmLimit")} name="model_tpm_limit">
         <Input.TextArea rows={4} placeholder='{"gpt-4": 100, "claude-v1": 200}' />
       </Form.Item>
 
-      <Form.Item label="Model RPM Limit" name="model_rpm_limit">
+      <Form.Item label={t("virtualKeys.edit.modelRpmLimit")} name="model_rpm_limit">
         <Input.TextArea rows={4} placeholder='{"gpt-4": 100, "claude-v1": 200}' />
       </Form.Item>
 
       <Form.Item
         label={
           <span>
-            Per-Tag Rate Limits{" "}
-            <Tooltip title="Scope rate limits to a request tag so each tag (e.g. a cell or group) gets its own RPM counter. Requests without a matching tag fall back to the key-level limit.">
+            {t("virtualKeys.createKey.optional.perTagLimits")}{" "}
+            <Tooltip title={t("virtualKeys.edit.perTagLimitsTooltip")}>
               <InfoCircleOutlined style={{ marginLeft: "4px" }} />
             </Tooltip>
           </span>
@@ -583,7 +594,7 @@ export function KeyEditView({
         <TagRateLimitEditor value={tagRateLimits} onChange={setTagRateLimits} />
       </Form.Item>
 
-      <Form.Item label="Guardrails" name="guardrails">
+      <Form.Item label={t("virtualKeys.createKey.optional.guardrails")} name="guardrails">
         {accessToken && (
           <GuardrailSelector
             onChange={(v) => {
@@ -598,8 +609,8 @@ export function KeyEditView({
       <Form.Item
         label={
           <span>
-            Disable Global Guardrails{" "}
-            <Tooltip title="When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)">
+            {t("virtualKeys.createKey.optional.disableGlobalGuardrails")}{" "}
+            <Tooltip title={t("virtualKeys.edit.disableGlobalGuardrailsTooltip")}>
               <InfoCircleOutlined style={{ marginLeft: "4px" }} />
             </Tooltip>
           </span>
@@ -607,14 +618,18 @@ export function KeyEditView({
         name="disable_global_guardrails"
         valuePropName="checked"
       >
-        <Switch disabled={!canEditGuardrails} checkedChildren="Yes" unCheckedChildren="No" />
+        <Switch
+          disabled={!canEditGuardrails}
+          checkedChildren={t("virtualKeys.createKey.optional.yes")}
+          unCheckedChildren={t("virtualKeys.createKey.optional.no")}
+        />
       </Form.Item>
 
       <Form.Item
         label={
           <span>
-            Policies{" "}
-            <Tooltip title="Apply policies to this key to control guardrails and other settings">
+            {t("virtualKeys.createKey.optional.policies")}{" "}
+            <Tooltip title={t("virtualKeys.createKey.optional.policiesTooltip")}>
               <InfoCircleOutlined style={{ marginLeft: "4px" }} />
             </Tooltip>
           </span>
@@ -632,11 +647,11 @@ export function KeyEditView({
         )}
       </Form.Item>
 
-      <Form.Item label="Tags" name="tags">
+      <Form.Item label={t("virtualKeys.createKey.optional.tags")} name="tags">
         <Select
           mode="tags"
           style={{ width: "100%" }}
-          placeholder="Select or enter tags"
+          placeholder={t("virtualKeys.createKey.optional.selectTags")}
           options={Object.values(tagsList).map((tag) => ({
             value: tag.name,
             label: tag.name,
@@ -645,18 +660,18 @@ export function KeyEditView({
         />
       </Form.Item>
 
-      <Form.Item label="Prompts" name="prompts">
-        <Tooltip title={!premiumUser ? "Setting prompts by key is a premium feature" : ""} placement="top">
+      <Form.Item label={t("virtualKeys.createKey.optional.prompts")} name="prompts">
+        <Tooltip title={!premiumUser ? t("virtualKeys.edit.promptsPremiumTooltip") : ""} placement="top">
           <Select
             mode="tags"
             style={{ width: "100%" }}
             disabled={!premiumUser}
             placeholder={
               !premiumUser
-                ? "Premium feature - Upgrade to set prompts by key"
+                ? t("virtualKeys.createKey.optional.promptsPremium")
                 : Array.isArray(keyData.metadata?.prompts) && keyData.metadata.prompts.length > 0
-                  ? `Current: ${keyData.metadata.prompts.join(", ")}`
-                  : "Select or enter prompts"
+                  ? t("virtualKeys.edit.currentValues", { values: keyData.metadata.prompts.join(", ") })
+                  : t("virtualKeys.createKey.optional.selectPrompts")
             }
             options={promptsList.map((name) => ({ value: name, label: name }))}
           />
@@ -666,51 +681,53 @@ export function KeyEditView({
       <Form.Item
         label={
           <span>
-            Access Groups{" "}
-            <Tooltip title="Assign access groups to this key. Access groups control which models, MCP servers, and agents this key can use">
+            {t("virtualKeys.createKey.optional.accessGroups")}{" "}
+            <Tooltip title={t("virtualKeys.createKey.optional.accessGroupsTooltip")}>
               <InfoCircleOutlined style={{ marginLeft: "4px" }} />
             </Tooltip>
           </span>
         }
         name="access_group_ids"
       >
-        <AccessGroupSelector placeholder="Select access groups (optional)" />
+        <AccessGroupSelector placeholder={t("virtualKeys.createKey.optional.selectAccessGroups")} />
       </Form.Item>
 
       <Form.Item
-        label="Allowed Pass Through Routes"
+        label={t("virtualKeys.createKey.optional.passThroughRoutes")}
         name="allowed_passthrough_routes"
-        tooltip={!premiumUser ? "Setting allowed pass through routes by key is a premium feature" : undefined}
+        tooltip={!premiumUser ? t("virtualKeys.edit.passThroughPremiumTooltip") : undefined}
       >
         <PassThroughRoutesSelector
           accessToken={accessToken || ""}
           placeholder={
             !premiumUser
-              ? "Premium feature - Upgrade to set allowed pass through routes by key"
+              ? t("virtualKeys.createKey.optional.passThroughRoutesPremium")
               : Array.isArray(keyData.metadata?.allowed_passthrough_routes) &&
                   keyData.metadata.allowed_passthrough_routes.length > 0
-                ? `Current: ${keyData.metadata.allowed_passthrough_routes.join(", ")}`
-                : "Select or enter allowed pass through routes"
+                ? t("virtualKeys.edit.currentValues", {
+                    values: keyData.metadata.allowed_passthrough_routes.join(", "),
+                  })
+                : t("virtualKeys.createKey.optional.selectPassThroughRoutes")
           }
           disabled={!premiumUser}
         />
       </Form.Item>
 
-      <Form.Item label="Vector Stores" name="vector_stores">
+      <Form.Item label={t("virtualKeys.createKey.optional.vectorStores")} name="vector_stores">
         <VectorStoreSelector
           onChange={(values: string[]) => form.setFieldValue("vector_stores", values)}
           value={form.getFieldValue("vector_stores")}
           accessToken={accessToken || ""}
-          placeholder="Select vector stores"
+          placeholder={t("virtualKeys.createKey.optional.selectVectorStores")}
         />
       </Form.Item>
 
-      <Form.Item label="MCP Servers / Access Groups" name="mcp_servers_and_groups">
+      <Form.Item label={t("virtualKeys.edit.mcpServersAndGroups")} name="mcp_servers_and_groups">
         <MCPServerSelector
           onChange={(val) => form.setFieldValue("mcp_servers_and_groups", val)}
           value={form.getFieldValue("mcp_servers_and_groups")}
           accessToken={accessToken || ""}
-          placeholder="Select MCP servers or access groups (optional)"
+          placeholder={t("virtualKeys.createKey.optional.selectMcpServers")}
           allowNoMcpServers
         />
       </Form.Item>
@@ -741,20 +758,20 @@ export function KeyEditView({
         )}
       </Form.Item>
 
-      <Form.Item label="Agents / Access Groups" name="agents_and_groups">
+      <Form.Item label={t("virtualKeys.edit.agentsAndGroups")} name="agents_and_groups">
         <AgentSelector
           onChange={(val) => form.setFieldValue("agents_and_groups", val)}
           value={form.getFieldValue("agents_and_groups")}
           accessToken={accessToken || ""}
-          placeholder="Select agents or access groups (optional)"
+          placeholder={t("virtualKeys.createKey.optional.selectAgents")}
         />
       </Form.Item>
 
       <Form.Item
         label={
           <span>
-            Organization{" "}
-            <Tooltip title="The organization this key belongs to. Selecting an organization filters the available teams.">
+            {t("virtualKeys.createKey.organization")}{" "}
+            <Tooltip title={t("virtualKeys.createKey.organizationTooltip")}>
               <InfoCircleOutlined style={{ marginLeft: "4px" }} />
             </Tooltip>
           </span>
@@ -773,12 +790,12 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item
-        label="Team ID"
+        label={t("virtualKeys.edit.teamId")}
         name="team_id"
-        help={enableProjectsUI && hasProject ? "Team is locked because this key belongs to a project" : undefined}
+        help={enableProjectsUI && hasProject ? t("virtualKeys.edit.teamLockedByProject") : undefined}
       >
         <Select
-          placeholder="Select team"
+          placeholder={t("virtualKeys.edit.selectTeam")}
           showSearch
           disabled={enableProjectsUI && hasProject}
           style={{ width: "100%" }}
@@ -811,11 +828,11 @@ export function KeyEditView({
         </Select>
       </Form.Item>
       {enableProjectsUI && hasProject && (
-        <Form.Item label="Project">
+        <Form.Item label={t("virtualKeys.createKey.project")}>
           <Input value={projectDisplay ?? ""} disabled />
         </Form.Item>
       )}
-      <Form.Item label="Logging Settings" name="logging_settings">
+      <Form.Item label={t("virtualKeys.createKey.optional.loggingSettings")} name="logging_settings">
         <EditLoggingSettings
           value={form.getFieldValue("logging_settings")}
           onChange={(values) => form.setFieldValue("logging_settings", values)}
@@ -830,7 +847,7 @@ export function KeyEditView({
         />
       </Form.Item>
 
-      <Form.Item label="Metadata" name="metadata">
+      <Form.Item label={t("virtualKeys.createKey.optional.metadata")} name="metadata">
         <Input.TextArea rows={10} />
       </Form.Item>
 
@@ -868,10 +885,10 @@ export function KeyEditView({
       <div className="sticky z-10 bg-white p-4 border-t border-gray-200 -bottom-6 -inset-x-6">
         <div className="flex justify-end items-center gap-2">
           <TremorButton variant="secondary" onClick={onCancel} disabled={isKeySaving}>
-            Cancel
+            {t("virtualKeys.edit.cancel")}
           </TremorButton>
           <TremorButton type="submit" loading={isKeySaving}>
-            Save Changes
+            {t("virtualKeys.edit.saveChanges")}
           </TremorButton>
         </div>
       </div>

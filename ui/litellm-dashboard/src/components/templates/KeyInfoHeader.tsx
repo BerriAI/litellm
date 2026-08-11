@@ -19,6 +19,7 @@ import {
 } from "@ant-design/icons";
 import LabeledField from "../common_components/LabeledField";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
+import { useTranslation } from "react-i18next";
 
 const { Title, Text } = Typography;
 
@@ -51,13 +52,14 @@ interface KeyInfoHeaderProps {
 }
 
 function UserField({ userAlias, userEmail, userId }: { userAlias?: string | null; userEmail: string; userId: string }) {
+  const { t } = useTranslation("gateway");
   const labelEl = (
     <Space size={4}>
       <Text type="secondary">
         <UserOutlined />
       </Text>
       <Text type="secondary" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-        User
+        {t("virtualKeys.columns.user")}
       </Text>
     </Space>
   );
@@ -80,9 +82,9 @@ function UserField({ userAlias, userEmail, userId }: { userAlias?: string | null
   const popoverContent = (
     <div className="flex flex-col gap-2 text-xs min-w-[200px] max-w-[300px]">
       {[
-        { label: "User Alias", value: userAlias ?? null },
-        { label: "User Email", value: userEmail || null },
-        { label: "User ID", value: userId || null },
+        { label: t("virtualKeys.columns.userAlias"), value: userAlias ?? null },
+        { label: t("virtualKeys.columns.userEmail"), value: userEmail || null },
+        { label: t("virtualKeys.columns.userId"), value: userId || null },
       ].map(({ label, value }) => (
         <div key={label} className="flex flex-col min-w-0">
           <span className="text-gray-400">{label}</span>
@@ -142,22 +144,30 @@ export function KeyInfoHeader({
   onToggleBlocked,
   isBlocked = false,
   canModifyKey = true,
-  backButtonText = "Back to Keys",
+  backButtonText,
   regenerateDisabled = false,
   regenerateTooltip,
 }: KeyInfoHeaderProps) {
+  const { t } = useTranslation("gateway");
   const destructiveActionItems: MenuProps["items"] = [
     ...(onToggleBlocked
       ? [
           isBlocked
-            ? { key: "unblock", label: "Unblock Key", icon: <CheckCircleOutlined /> }
-            : { key: "block", label: "Block Key", icon: <StopOutlined />, danger: true },
+            ? { key: "unblock", label: t("virtualKeys.details.unblockKey"), icon: <CheckCircleOutlined /> }
+            : { key: "block", label: t("virtualKeys.details.blockKey"), icon: <StopOutlined />, danger: true },
         ]
       : []),
     ...(onResetSpend
-      ? [{ key: "reset-spend", label: "Reset Spend", icon: <TransactionOutlined />, danger: true }]
+      ? [
+          {
+            key: "reset-spend",
+            label: t("virtualKeys.details.resetSpend"),
+            icon: <TransactionOutlined />,
+            danger: true,
+          },
+        ]
       : []),
-    { key: "delete", label: "Delete Key", icon: <DeleteOutlined />, danger: true },
+    { key: "delete", label: t("virtualKeys.details.deleteKey"), icon: <DeleteOutlined />, danger: true },
   ];
 
   const handleDestructiveActionClick: MenuProps["onClick"] = ({ key }) => {
@@ -171,31 +181,41 @@ export function KeyInfoHeader({
       {onCreateNew && (
         <div style={{ marginBottom: 16 }}>
           <Button type="primary" icon={<PlusOutlined />} onClick={onCreateNew}>
-            Create New Key
+            {t("virtualKeys.details.createNewKey")}
           </Button>
         </div>
       )}
 
       <div style={{ marginBottom: 16 }}>
         <Button type="text" icon={<ArrowLeftOutlined />} onClick={onBack}>
-          {backButtonText}
+          {backButtonText ?? t("virtualKeys.details.back")}
         </Button>
       </div>
 
       <Flex justify="space-between" align="start" style={{ marginBottom: 20 }}>
         <div>
           <Space align="center">
-            <Title level={3} copyable={{ tooltips: ["Copy Key Alias", "Copied!"] }} style={{ margin: 0 }}>
+            <Title
+              level={3}
+              copyable={{ tooltips: [t("virtualKeys.details.copyAlias"), t("virtualKeys.details.copied")] }}
+              style={{ margin: 0 }}
+            >
               {data.keyName}
             </Title>
             {isBlocked && (
               <Tag color="red" icon={<StopOutlined />}>
-                Blocked
+                {t("virtualKeys.status.blocked")}
               </Tag>
             )}
           </Space>
-          <Text type="secondary" copyable={{ text: data.keyId, tooltips: ["Copy Key ID", "Copied!"] }}>
-            Key ID: {data.keyId}
+          <Text
+            type="secondary"
+            copyable={{
+              text: data.keyId,
+              tooltips: [t("virtualKeys.details.copyId"), t("virtualKeys.details.copied")],
+            }}
+          >
+            {t("virtualKeys.columns.keyId")}: {data.keyId}
           </Text>
         </div>
         {canModifyKey && (
@@ -203,7 +223,7 @@ export function KeyInfoHeader({
             <Tooltip title={regenerateTooltip || ""}>
               <span>
                 <Button icon={<SyncOutlined />} onClick={onRegenerate} disabled={regenerateDisabled}>
-                  Regenerate Key
+                  {t("virtualKeys.details.regenerateKey")}
                 </Button>
               </span>
             </Tooltip>
@@ -211,7 +231,7 @@ export function KeyInfoHeader({
               menu={{ items: destructiveActionItems, onClick: handleDestructiveActionClick }}
               trigger={["click"]}
             >
-              <Button icon={<MoreOutlined />} aria-label="More key actions" />
+              <Button icon={<MoreOutlined />} aria-label={t("virtualKeys.details.moreActions")} />
             </Dropdown>
           </Space>
         )}
@@ -220,15 +240,15 @@ export function KeyInfoHeader({
       <Flex align="stretch" gap={40} style={{ marginBottom: 40 }}>
         <Space direction="vertical" size={16}>
           <UserField userAlias={data.userAlias} userEmail={data.userEmail} userId={data.userId} />
-          <LabeledField label="Expires" value={data.expires} icon={<FieldTimeOutlined />} />
+          <LabeledField label={t("virtualKeys.columns.expires")} value={data.expires} icon={<FieldTimeOutlined />} />
         </Space>
 
         <Divider type="vertical" style={{ height: "auto" }} />
 
         <Space direction="vertical" size={16}>
-          <LabeledField label="Created At" value={data.createdAt} icon={<CalendarOutlined />} />
+          <LabeledField label={t("virtualKeys.columns.createdAt")} value={data.createdAt} icon={<CalendarOutlined />} />
           <LabeledField
-            label="Created By"
+            label={t("virtualKeys.columns.createdBy")}
             value={data.createdBy}
             icon={<SafetyCertificateOutlined />}
             truncate
@@ -240,8 +260,16 @@ export function KeyInfoHeader({
         <Divider type="vertical" style={{ height: "auto" }} />
 
         <Space direction="vertical" size={16}>
-          <LabeledField label="Last Updated" value={data.lastUpdated} icon={<ClockCircleOutlined />} />
-          <LabeledField label="Last Active" value={data.lastActive} icon={<ThunderboltOutlined />} />
+          <LabeledField
+            label={t("virtualKeys.columns.updatedAt")}
+            value={data.lastUpdated}
+            icon={<ClockCircleOutlined />}
+          />
+          <LabeledField
+            label={t("virtualKeys.columns.lastActive")}
+            value={data.lastActive}
+            icon={<ThunderboltOutlined />}
+          />
         </Space>
       </Flex>
     </div>

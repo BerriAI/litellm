@@ -9,6 +9,28 @@ import { keyDeleteCall, keyUpdateCall } from "../networking";
 import { QueryClient } from "@tanstack/react-query";
 import KeyInfoView from "./key_info_view";
 
+const localization = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: (namespace: keyof (typeof resources)["en"] = "common") => ({
+      t: (key: string, values?: Record<string, unknown>) => {
+        const copy = key.split(".").reduce<unknown>((value, segment) => {
+          if (typeof value !== "object" || value === null) return undefined;
+          return (value as Record<string, unknown>)[segment];
+        }, resources[localization.language][namespace]);
+        if (typeof copy !== "string") return key;
+        return Object.entries(values ?? {}).reduce(
+          (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+          copy,
+        );
+      },
+      i18n: { resolvedLanguage: localization.language, language: localization.language },
+    }),
+  };
+});
+
 const editViewMocks = vi.hoisted(() => ({
   onSubmit: undefined as ((v: Record<string, any>) => Promise<void>) | undefined,
 }));
@@ -57,6 +79,7 @@ vi.mock("@/utils/dataUtils", () => ({
 
 describe("KeyInfoView", () => {
   beforeEach(() => {
+    localization.language = "en";
     vi.mocked(useTeams).mockReturnValue({
       teams: [],
       setTeams: vi.fn(),

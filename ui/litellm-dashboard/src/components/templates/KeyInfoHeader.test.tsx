@@ -1,7 +1,29 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyInfoHeader, KeyInfoData } from "./KeyInfoHeader";
+
+const localization = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  return {
+    useTranslation: (namespace: keyof (typeof resources)["en"] = "common") => ({
+      t: (key: string, values?: Record<string, unknown>) => {
+        const copy = key.split(".").reduce<unknown>((value, segment) => {
+          if (typeof value !== "object" || value === null) return undefined;
+          return (value as Record<string, unknown>)[segment];
+        }, resources[localization.language][namespace]);
+        if (typeof copy !== "string") return key;
+        return Object.entries(values ?? {}).reduce(
+          (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+          copy,
+        );
+      },
+      i18n: { resolvedLanguage: localization.language, language: localization.language },
+    }),
+  };
+});
 
 const MOCK_DATA: KeyInfoData = {
   keyName: "My Test Key",
@@ -17,6 +39,10 @@ const MOCK_DATA: KeyInfoData = {
 };
 
 describe("KeyInfoHeader", () => {
+  beforeEach(() => {
+    localization.language = "en";
+  });
+
   it("should render", () => {
     render(<KeyInfoHeader data={MOCK_DATA} />);
     expect(screen.getByText("My Test Key")).toBeInTheDocument();
@@ -35,8 +61,18 @@ describe("KeyInfoHeader", () => {
     expect(screen.getByText("Created At")).toBeInTheDocument();
     expect(screen.getByText("Created By")).toBeInTheDocument();
     expect(screen.getByText("Expires")).toBeInTheDocument();
-    expect(screen.getByText("Last Updated")).toBeInTheDocument();
+    expect(screen.getByText("Updated At")).toBeInTheDocument();
     expect(screen.getByText("Last Active")).toBeInTheDocument();
+  });
+
+  it("renders header controls in Russian", () => {
+    localization.language = "ru";
+    render(<KeyInfoHeader data={MOCK_DATA} />);
+
+    expect(screen.getByText(/ID ключа:/)).toBeInTheDocument();
+    expect(screen.getByText("Создан")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /назад к ключам/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /перевыпустить ключ/i })).toBeInTheDocument();
   });
 
   describe("back button", () => {
