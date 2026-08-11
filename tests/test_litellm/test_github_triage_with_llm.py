@@ -672,6 +672,11 @@ class TestBuildPrompts:
         assert "mocked or stubbed" in normalized
         # Prose-only steps are explicitly insufficient now.
         assert "steps to reproduce" in normalized
+        # An unedited issue-form scaffold must not read as evidence: the proof
+        # field ships with visible headings, so the judge has to be told that
+        # bare headings with nothing under them count as absent.
+        assert "unfilled template scaffold" in normalized
+        assert "counts as absent, not as evidence" in normalized
 
     def test_should_not_crash_when_pr_body_contains_curly_braces(self, triage_module):
         """User-supplied content with `{` / `}` must NOT be re-parsed by

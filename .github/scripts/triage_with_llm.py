@@ -582,7 +582,9 @@ def build_issue_prompt(*, title: str, body: str) -> str:
                   Commands whose external dependencies (LLM provider, DB,
                   network) are mocked or stubbed do NOT count.
               Prose-only "steps to reproduce" with no run output, video, or
-              screenshot do NOT satisfy (1).
+              screenshot do NOT satisfy (1). An unfilled template scaffold
+              (bare headings such as "Version or commit:" with nothing under
+              them, empty numbered lists) counts as absent, not as evidence.
           (2) Expected vs. actual behavior (`has_expected_vs_actual`).
 
         FAIL the bug report if either (1) or (2) is missing. Do not bias
