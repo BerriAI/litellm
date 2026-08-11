@@ -12,11 +12,12 @@ import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.tag_rate_limiter import (
+    _CONCURRENCY_MIN_SAFETY_TTL_SECONDS,
     _build_group_limits,
     _build_limits_index,
     _ConfiguredLimit,
-    _CONCURRENCY_MIN_SAFETY_TTL_SECONDS,
     _extract_identity,
+    _pending_concurrency_holder,
     _PROXY_TagRateLimiter,
 )
 from litellm.types.router import TagRateLimitEntry
@@ -72,14 +73,38 @@ def test_extract_identity_skips_negation_tags():
 
 
 # ---------------------------------------------------------------------------
+# TagRateLimitEntry -- period_seconds validation
+# ---------------------------------------------------------------------------
+
+
+def test_tag_rate_limit_entry_rejects_zero_period_seconds():
+    with pytest.raises(Exception):
+        TagRateLimitEntry(name="n", limit=1, period_seconds=0)
+
+
+def test_tag_rate_limit_entry_rejects_negative_period_seconds():
+    with pytest.raises(Exception):
+        TagRateLimitEntry(name="n", limit=1, period_seconds=-1)
+
+
+def test_tag_rate_limit_entry_accepts_positive_period_seconds():
+    entry = TagRateLimitEntry(name="n", limit=1, period_seconds=60)
+    assert entry.period_seconds == 60
+
+
+# ---------------------------------------------------------------------------
 # _build_group_limits -- chain-wide vs per-deployment scoping
 # ---------------------------------------------------------------------------
 
 
 def test_build_group_limits_chain_wide_when_all_deployments_agree():
     deployments = [
-        _deployment("grp", "dep-1", {"token_limits": {"limits": [{"name": "daily", "limit": 500, "period_seconds": 86400}]}}),
-        _deployment("grp", "dep-2", {"token_limits": {"limits": [{"name": "daily", "limit": 500, "period_seconds": 86400}]}}),
+        _deployment(
+            "grp", "dep-1", {"token_limits": {"limits": [{"name": "daily", "limit": 500, "period_seconds": 86400}]}}
+        ),
+        _deployment(
+            "grp", "dep-2", {"token_limits": {"limits": [{"name": "daily", "limit": 500, "period_seconds": 86400}]}}
+        ),
     ]
     configured = _build_group_limits(deployments, "tokens")
     assert len(configured) == 1
@@ -94,8 +119,12 @@ def test_build_group_limits_per_deployment_when_values_diverge():
     per-deployment-scoped entries instead.
     """
     deployments = [
-        _deployment("grp", "dep-1", {"token_limits": {"limits": [{"name": "daily", "limit": 500, "period_seconds": 86400}]}}),
-        _deployment("grp", "dep-2", {"token_limits": {"limits": [{"name": "daily", "limit": 999, "period_seconds": 86400}]}}),
+        _deployment(
+            "grp", "dep-1", {"token_limits": {"limits": [{"name": "daily", "limit": 500, "period_seconds": 86400}]}}
+        ),
+        _deployment(
+            "grp", "dep-2", {"token_limits": {"limits": [{"name": "daily", "limit": 999, "period_seconds": 86400}]}}
+        ),
     ]
     configured = _build_group_limits(deployments, "tokens")
     assert len(configured) == 2
@@ -108,7 +137,9 @@ def test_build_group_limits_per_deployment_when_values_diverge():
 
 def test_build_group_limits_per_deployment_when_only_some_declare_it():
     deployments = [
-        _deployment("grp", "dep-1", {"token_limits": {"limits": [{"name": "daily", "limit": 500, "period_seconds": 86400}]}}),
+        _deployment(
+            "grp", "dep-1", {"token_limits": {"limits": [{"name": "daily", "limit": 500, "period_seconds": 86400}]}}
+        ),
         _deployment("grp", "dep-2", {}),
     ]
     configured = _build_group_limits(deployments, "tokens")
@@ -158,7 +189,11 @@ async def test_filter_deployments_allows_under_limit_and_rejects_at_limit(time_c
             _deployment(
                 "grp",
                 "dep-1",
-                {"request_limits": {"limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 2, "period_seconds": 60}]}},
+                {
+                    "request_limits": {
+                        "limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 2, "period_seconds": 60}]
+                    }
+                },
             )
         ]
     )
@@ -261,7 +296,10 @@ async def test_different_tag_ids_with_same_name_do_not_share_a_counter(time_cont
 
     # end_user_id "u1" makes its one allowed request.
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
     )
 
     # team_id "u1" -- identical value, different tag_id, its own untouched
@@ -274,11 +312,17 @@ async def test_different_tag_ids_with_same_name_do_not_share_a_counter(time_cont
     # Both identities are now genuinely at their own limit of 1.
     with pytest.raises(ProxyRateLimitError):
         await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
         )
     with pytest.raises(ProxyRateLimitError):
         await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["team_id:u1"]}}
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["team_id:u1"]}},
         )
 
 
@@ -302,12 +346,20 @@ async def test_load_balanced_group_per_deployment_breach_rejects_whole_hop(time_
             _deployment(
                 "grp",
                 "dep-1",
-                {"request_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]}},
+                {
+                    "request_limits": {
+                        "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]
+                    }
+                },
             ),
             _deployment(
                 "grp",
                 "dep-2",
-                {"request_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 999, "period_seconds": 86400}]}},
+                {
+                    "request_limits": {
+                        "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 999, "period_seconds": 86400}]
+                    }
+                },
             ),
         ]
     )
@@ -340,9 +392,17 @@ async def test_log_success_event_increments_configured_units(time_controller):
                 "grp",
                 "dep-1",
                 {
-                    "token_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 500000, "period_seconds": 86400}]},
-                    "request_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 100, "period_seconds": 86400}]},
-                    "dollar_limits": {"limits": [{"name": "monthly", "tag_id": "end_user_id", "limit": 50.0, "period_seconds": 2592000}]},
+                    "token_limits": {
+                        "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 500000, "period_seconds": 86400}]
+                    },
+                    "request_limits": {
+                        "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 100, "period_seconds": 86400}]
+                    },
+                    "dollar_limits": {
+                        "limits": [
+                            {"name": "monthly", "tag_id": "end_user_id", "limit": 50.0, "period_seconds": 2592000}
+                        ]
+                    },
                 },
             )
         ]
@@ -366,8 +426,12 @@ async def test_log_success_event_increments_configured_units(time_controller):
     token_key = f"{{tag_rl:grp:tokens:daily:end_user_id:chain:u1}}:{int(now) // 86400}"
     dollar_key = f"{{tag_rl:grp:dollars:monthly:end_user_id:chain:u1}}:{int(now) // 2592000}"
 
-    assert float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
-    assert float(await limiter.internal_usage_cache.async_get_cache(key=dollar_key, litellm_parent_otel_span=None)) == 0.01
+    assert (
+        float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
+    )
+    assert (
+        float(await limiter.internal_usage_cache.async_get_cache(key=dollar_key, litellm_parent_otel_span=None)) == 0.01
+    )
 
     # "requests" is accounted atomically at admission (async_filter_deployments),
     # not here -- async_log_success_event must not touch its bucket at all.
@@ -429,7 +493,10 @@ async def test_cross_unit_rejection_does_not_leave_a_phantom_increment(time_cont
 
     # Occupy the one concurrency slot.
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
     )
 
     # A second attempt: requests-unit alone would admit (well under 10), but
@@ -437,7 +504,10 @@ async def test_cross_unit_rejection_does_not_leave_a_phantom_increment(time_cont
     # requests counter must remain untouched by this rejected attempt.
     with pytest.raises(ProxyRateLimitError) as exc_info:
         await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
         )
     assert exc_info.value.detail["type"] == "concurrency"
 
@@ -456,12 +526,19 @@ async def test_concurrency_limit_rejects_third_concurrent_reservation(time_contr
 
     kwargs_1 = {"metadata": {"tags": ["end_user_id:u1"]}}
     kwargs_2 = {"metadata": {"tags": ["end_user_id:u1"]}}
-    await limiter.async_filter_deployments(model="grp", healthy_deployments=healthy, messages=None, request_kwargs=kwargs_1)
-    await limiter.async_filter_deployments(model="grp", healthy_deployments=healthy, messages=None, request_kwargs=kwargs_2)
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=kwargs_1
+    )
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=kwargs_2
+    )
 
     with pytest.raises(ProxyRateLimitError) as exc_info:
         await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
         )
     assert exc_info.value.detail["type"] == "concurrency"
 
@@ -482,7 +559,11 @@ async def test_requests_admission_is_race_free_under_genuine_concurrency(time_co
             _deployment(
                 "grp",
                 "dep-1",
-                {"request_limits": {"limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 5, "period_seconds": 60}]}},
+                {
+                    "request_limits": {
+                        "limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 5, "period_seconds": 60}]
+                    }
+                },
             )
         ]
     )
@@ -519,7 +600,11 @@ async def test_index_refreshes_after_ttl_for_length_preserving_update(time_contr
             _deployment(
                 "grp",
                 "dep-1",
-                {"request_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]}},
+                {
+                    "request_limits": {
+                        "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]
+                    }
+                },
             )
         ]
     )
@@ -527,22 +612,33 @@ async def test_index_refreshes_after_ttl_for_length_preserving_update(time_contr
     healthy = router.model_list
 
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
     )
     with pytest.raises(ProxyRateLimitError):
         await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
         )
 
     # Same length, deployment mutated in place -- raise the limit to 100.
     router.model_list[0]["model_info"]["tag_rate_limits"] = {
-        "request_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 100, "period_seconds": 86400}]}
+        "request_limits": {
+            "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 100, "period_seconds": 86400}]
+        }
     }
 
     time_controller.advance(6)  # past _INDEX_TTL_SECONDS
 
     result = await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=router.model_list, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        model="grp",
+        healthy_deployments=router.model_list,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
     )
     assert result == router.model_list
 
@@ -555,21 +651,34 @@ async def test_concurrency_slot_released_on_success_frees_capacity(time_controll
     healthy = router.model_list
 
     kwargs = {"metadata": {"tags": ["end_user_id:u1"]}}
-    await limiter.async_filter_deployments(model="grp", healthy_deployments=healthy, messages=None, request_kwargs=kwargs)
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=kwargs
+    )
 
     # At capacity: a second concurrent request is rejected.
     with pytest.raises(ProxyRateLimitError):
         await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
         )
 
     # The first request completes -- its slot is released -- freeing capacity again.
-    kwargs["standard_logging_object"] = {"model_group": "grp", "model_id": "dep-1", "total_tokens": 0, "response_cost": 0}
+    kwargs["standard_logging_object"] = {
+        "model_group": "grp",
+        "model_id": "dep-1",
+        "total_tokens": 0,
+        "response_cost": 0,
+    }
     await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
     await asyncio.sleep(0)
 
     result = await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
     )
     assert result == healthy
 
@@ -582,7 +691,10 @@ async def test_concurrency_slot_released_on_failure_frees_capacity(time_controll
     healthy = router.model_list
 
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
     )
 
     await limiter.async_log_failure_event(
@@ -593,7 +705,10 @@ async def test_concurrency_slot_released_on_failure_frees_capacity(time_controll
     )
 
     result = await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
     )
     assert result == healthy
 
@@ -617,17 +732,26 @@ async def test_concurrency_slot_released_on_fallback_recovered_hop_failure(time_
     healthy = router.model_list
 
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
     )
     await limiter.async_log_failure_event(
-        kwargs={"standard_logging_object": {"model_group": "grp", "model_id": "dep-1"}, "metadata": {"tags": ["end_user_id:u1"]}},
+        kwargs={
+            "standard_logging_object": {"model_group": "grp", "model_id": "dep-1"},
+            "metadata": {"tags": ["end_user_id:u1"]},
+        },
         response_obj=None,
         start_time=0,
         end_time=0,
     )
 
     result = await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
     )
     assert result == healthy
 
@@ -667,7 +791,12 @@ async def test_pending_concurrency_context_does_not_leak_across_concurrent_tasks
     async def _release(tag_value):
         await limiter.async_log_success_event(
             kwargs={
-                "standard_logging_object": {"model_group": "grp", "model_id": "dep-1", "total_tokens": 0, "response_cost": 0},
+                "standard_logging_object": {
+                    "model_group": "grp",
+                    "model_id": "dep-1",
+                    "total_tokens": 0,
+                    "response_cost": 0,
+                },
                 "metadata": {"tags": [f"end_user_id:{tag_value}"]},
             },
             response_obj=None,
@@ -688,14 +817,20 @@ async def test_pending_concurrency_context_does_not_leak_across_concurrent_tasks
 
     # Exactly one slot was freed: a fresh request is admitted (back to 2 in flight)...
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:a"]}}
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:a"]}},
     )
     # ...but a second one does not, since B's reservation is genuinely still
     # held. If task isolation were broken, task A's release would have
     # drained B's reservation too, and this would wrongly admit.
     with pytest.raises(ProxyRateLimitError):
         await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:a"]}}
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:a"]}},
         )
 
 
@@ -730,7 +865,10 @@ async def test_concurrency_released_for_every_hop_across_a_real_task_boundary(ti
         # (dedup allows exactly the first failure through), releasing its
         # own key immediately.
         await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
         )
         await limiter.async_log_failure_event(
             kwargs={"standard_logging_object": {"model_group": "grp"}, "metadata": {"tags": ["end_user_id:u1"]}},
@@ -742,14 +880,20 @@ async def test_concurrency_released_for_every_hop_across_a_real_task_boundary(ti
         # Hop 2 (a retry or fallback) admits and also fails, but -- per
         # litellm's dedup -- no async_log_failure_event call follows it.
         await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
         )
 
         # Hop 3 admits and succeeds. Its success event, dispatched as a
         # child task (mirroring the real worker hop), must release both
         # hop 2's still-pending reservation and its own.
         await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
         )
 
         async def _hop_3_success_event():
@@ -776,10 +920,16 @@ async def test_concurrency_released_for_every_hop_across_a_real_task_boundary(ti
     # hop 3's own were released. If the earlier hop's leaked reservation
     # hadn't been released too, only one of these two admissions would succeed.
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
     )
     result = await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
     )
     assert result == healthy
 
@@ -817,7 +967,10 @@ async def test_own_rejection_does_not_release_a_live_reservation(time_controller
     # One legitimate request, in its own task, holds the only slot.
     async def _admit():
         await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
         )
 
     await asyncio.create_task(_admit())
@@ -828,7 +981,10 @@ async def test_own_rejection_does_not_release_a_live_reservation(time_controller
     async def _reject_and_fire_failure_event():
         with pytest.raises(ProxyRateLimitError) as exc_info:
             await limiter.async_filter_deployments(
-                model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+                model="grp",
+                healthy_deployments=healthy,
+                messages=None,
+                request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
             )
         await limiter.async_log_failure_event(
             kwargs={
@@ -848,7 +1004,10 @@ async def test_own_rejection_does_not_release_a_live_reservation(time_controller
     # it, this would wrongly admit instead.
     with pytest.raises(ProxyRateLimitError):
         await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
         )
 
 
@@ -865,7 +1024,11 @@ async def test_token_limit_rejects_once_bucket_is_seeded_at_limit(time_controlle
             _deployment(
                 "grp",
                 "dep-1",
-                {"token_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1000, "period_seconds": 86400}]}},
+                {
+                    "token_limits": {
+                        "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1000, "period_seconds": 86400}]
+                    }
+                },
             )
         ]
     )
@@ -878,7 +1041,10 @@ async def test_token_limit_rejects_once_bucket_is_seeded_at_limit(time_controlle
 
     with pytest.raises(ProxyRateLimitError) as exc_info:
         await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
         )
     assert exc_info.value.detail["type"] == "tokens"
     assert exc_info.value.detail["limit_name"] == "daily"
@@ -892,7 +1058,11 @@ async def test_dollar_limit_rejects_once_bucket_is_seeded_at_limit(time_controll
             _deployment(
                 "grp",
                 "dep-1",
-                {"dollar_limits": {"limits": [{"name": "monthly", "tag_id": "team_id", "limit": 50.0, "period_seconds": 2592000}]}},
+                {
+                    "dollar_limits": {
+                        "limits": [{"name": "monthly", "tag_id": "team_id", "limit": 50.0, "period_seconds": 2592000}]
+                    }
+                },
             )
         ]
     )
@@ -905,7 +1075,10 @@ async def test_dollar_limit_rejects_once_bucket_is_seeded_at_limit(time_controll
 
     with pytest.raises(ProxyRateLimitError) as exc_info:
         await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["team_id:t1"]}}
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["team_id:t1"]}},
         )
     assert exc_info.value.detail["type"] == "dollars"
     assert exc_info.value.detail["tag_value"] == "t1"
@@ -942,14 +1115,18 @@ async def test_redis_backed_requests_admission_is_race_free_under_genuine_concur
     try:
         await redis_cache.ping()
     except Exception as e:
-        pytest.skip(f"Redis connection failed: {str(e)}")
+        pytest.skip(f"Redis connection failed: {e!s}")
 
     router = litellm.Router(
         model_list=[
             _deployment(
                 "grp",
                 "dep-1",
-                {"request_limits": {"limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 5, "period_seconds": 60}]}},
+                {
+                    "request_limits": {
+                        "limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 5, "period_seconds": 60}]
+                    }
+                },
             )
         ]
     )
@@ -960,7 +1137,10 @@ async def test_redis_backed_requests_admission_is_race_free_under_genuine_concur
     async def attempt():
         try:
             await limiter.async_filter_deployments(
-                model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": [f"end_user_id:{tag}"]}}
+                model="grp",
+                healthy_deployments=healthy,
+                messages=None,
+                request_kwargs={"metadata": {"tags": [f"end_user_id:{tag}"]}},
             )
             return True
         except ProxyRateLimitError:
@@ -977,7 +1157,7 @@ async def test_redis_backed_cross_unit_rejection_does_not_leave_a_phantom_increm
     try:
         await redis_cache.ping()
     except Exception as e:
-        pytest.skip(f"Redis connection failed: {str(e)}")
+        pytest.skip(f"Redis connection failed: {e!s}")
 
     router = litellm.Router(
         model_list=[
@@ -1000,11 +1180,17 @@ async def test_redis_backed_cross_unit_rejection_does_not_leave_a_phantom_increm
     tag = f"redis-phantom-check-{uuid.uuid4().hex}"
 
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": [f"end_user_id:{tag}"]}}
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": [f"end_user_id:{tag}"]}},
     )
     with pytest.raises(ProxyRateLimitError) as exc_info:
         await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": [f"end_user_id:{tag}"]}}
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": [f"end_user_id:{tag}"]}},
         )
     assert exc_info.value.detail["type"] == "concurrency"
 
@@ -1031,7 +1217,11 @@ def test_build_limits_index_is_also_keyed_by_team_public_model_name():
     configured limits, or a team-aliased chain's limits are silently never
     checked.
     """
-    deployment = _deployment("real-model-name", "dep-1", {"token_limits": {"limits": [{"name": "daily", "limit": 500, "period_seconds": 86400}]}})
+    deployment = _deployment(
+        "real-model-name",
+        "dep-1",
+        {"token_limits": {"limits": [{"name": "daily", "limit": 500, "period_seconds": 86400}]}},
+    )
     deployment["model_info"]["team_id"] = "team-1"
     deployment["model_info"]["team_public_model_name"] = "team-alias-name"
     index = _build_limits_index([deployment])
@@ -1047,11 +1237,15 @@ def test_build_limits_index_keeps_different_teams_same_alias_separate():
     `(team_id, name)` rather than by name alone. Keying the limits index by
     name alone would let one team's config silently overwrite another's.
     """
-    team_a = _deployment("model-a", "dep-a", {"token_limits": {"limits": [{"name": "daily", "limit": 100, "period_seconds": 86400}]}})
+    team_a = _deployment(
+        "model-a", "dep-a", {"token_limits": {"limits": [{"name": "daily", "limit": 100, "period_seconds": 86400}]}}
+    )
     team_a["model_info"]["team_id"] = "team-a"
     team_a["model_info"]["team_public_model_name"] = "shared-alias"
 
-    team_b = _deployment("model-b", "dep-b", {"token_limits": {"limits": [{"name": "daily", "limit": 999, "period_seconds": 86400}]}})
+    team_b = _deployment(
+        "model-b", "dep-b", {"token_limits": {"limits": [{"name": "daily", "limit": 999, "period_seconds": 86400}]}}
+    )
     team_b["model_info"]["team_id"] = "team-b"
     team_b["model_info"]["team_public_model_name"] = "shared-alias"
 
@@ -1075,12 +1269,18 @@ def test_build_limits_index_merges_alias_limits_across_different_model_names():
     the same alias, only the entry declared by whichever model_name group
     is processed last would survive.
     """
-    dep_a = _deployment("model_name_team1_aaa", "dep-a", {"token_limits": {"limits": [{"name": "daily", "limit": 100, "period_seconds": 86400}]}})
+    dep_a = _deployment(
+        "model_name_team1_aaa",
+        "dep-a",
+        {"token_limits": {"limits": [{"name": "daily", "limit": 100, "period_seconds": 86400}]}},
+    )
     dep_a["model_info"]["team_id"] = "team-1"
     dep_a["model_info"]["team_public_model_name"] = "shared-alias"
 
     dep_b = _deployment(
-        "model_name_team1_bbb", "dep-b", {"dollar_limits": {"limits": [{"name": "monthly", "limit": 50.0, "period_seconds": 2592000}]}}
+        "model_name_team1_bbb",
+        "dep-b",
+        {"dollar_limits": {"limits": [{"name": "monthly", "limit": 50.0, "period_seconds": 2592000}]}},
     )
     dep_b["model_info"]["team_id"] = "team-1"
     dep_b["model_info"]["team_public_model_name"] = "shared-alias"
@@ -1094,7 +1294,15 @@ def test_build_limits_index_merges_alias_limits_across_different_model_names():
 @pytest.mark.asyncio
 async def test_filter_deployments_enforces_limit_when_called_with_team_alias(time_controller):
     limiter = _make_limiter(time_controller)
-    deployment = _deployment("real-model-name", "dep-1", {"request_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]}})
+    deployment = _deployment(
+        "real-model-name",
+        "dep-1",
+        {
+            "request_limits": {
+                "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]
+            }
+        },
+    )
     deployment["model_info"]["team_id"] = "team-1"
     deployment["model_info"]["team_public_model_name"] = "team-alias-name"
     router = litellm.Router(model_list=[deployment])
@@ -1104,9 +1312,13 @@ async def test_filter_deployments_enforces_limit_when_called_with_team_alias(tim
     # Router passes the alias as `model`, not "real-model-name", and threads
     # the caller's team_id through request metadata.
     request_kwargs = {"metadata": {"tags": ["end_user_id:u1"], "user_api_key_team_id": "team-1"}}
-    await limiter.async_filter_deployments(model="team-alias-name", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs)
+    await limiter.async_filter_deployments(
+        model="team-alias-name", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
     with pytest.raises(ProxyRateLimitError):
-        await limiter.async_filter_deployments(model="team-alias-name", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs)
+        await limiter.async_filter_deployments(
+            model="team-alias-name", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+        )
 
 
 @pytest.mark.asyncio
@@ -1117,11 +1329,27 @@ async def test_filter_deployments_does_not_cross_team_alias_boundary(time_contro
     counted) by team-a's configured limit and usage.
     """
     limiter = _make_limiter(time_controller)
-    team_a = _deployment("model-a", "dep-a", {"request_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]}})
+    team_a = _deployment(
+        "model-a",
+        "dep-a",
+        {
+            "request_limits": {
+                "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]
+            }
+        },
+    )
     team_a["model_info"]["team_id"] = "team-a"
     team_a["model_info"]["team_public_model_name"] = "shared-alias"
 
-    team_b = _deployment("model-b", "dep-b", {"request_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 5, "period_seconds": 86400}]}})
+    team_b = _deployment(
+        "model-b",
+        "dep-b",
+        {
+            "request_limits": {
+                "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 5, "period_seconds": 86400}]
+            }
+        },
+    )
     team_b["model_info"]["team_id"] = "team-b"
     team_b["model_info"]["team_public_model_name"] = "shared-alias"
 
@@ -1167,8 +1395,12 @@ def test_concurrency_divergent_config_is_dropped_not_scoped_per_deployment():
     with no concurrency entry at all.
     """
     deployments = [
-        _deployment("grp", "dep-1", {"concurrency_limits": {"limits": [{"name": "inflight", "limit": 2, "period_seconds": 60}]}}),
-        _deployment("grp", "dep-2", {"concurrency_limits": {"limits": [{"name": "inflight", "limit": 5, "period_seconds": 60}]}}),
+        _deployment(
+            "grp", "dep-1", {"concurrency_limits": {"limits": [{"name": "inflight", "limit": 2, "period_seconds": 60}]}}
+        ),
+        _deployment(
+            "grp", "dep-2", {"concurrency_limits": {"limits": [{"name": "inflight", "limit": 5, "period_seconds": 60}]}}
+        ),
     ]
     configured = _build_group_limits(deployments, "concurrency")
     assert configured == []
@@ -1176,7 +1408,9 @@ def test_concurrency_divergent_config_is_dropped_not_scoped_per_deployment():
 
 def test_concurrency_partial_declaration_is_dropped_not_scoped_per_deployment():
     deployments = [
-        _deployment("grp", "dep-1", {"concurrency_limits": {"limits": [{"name": "inflight", "limit": 2, "period_seconds": 60}]}}),
+        _deployment(
+            "grp", "dep-1", {"concurrency_limits": {"limits": [{"name": "inflight", "limit": 2, "period_seconds": 60}]}}
+        ),
         _deployment("grp", "dep-2", {}),
     ]
     configured = _build_group_limits(deployments, "concurrency")
@@ -1185,8 +1419,12 @@ def test_concurrency_partial_declaration_is_dropped_not_scoped_per_deployment():
 
 def test_concurrency_identical_across_all_deployments_is_still_chain_wide():
     deployments = [
-        _deployment("grp", "dep-1", {"concurrency_limits": {"limits": [{"name": "inflight", "limit": 2, "period_seconds": 60}]}}),
-        _deployment("grp", "dep-2", {"concurrency_limits": {"limits": [{"name": "inflight", "limit": 2, "period_seconds": 60}]}}),
+        _deployment(
+            "grp", "dep-1", {"concurrency_limits": {"limits": [{"name": "inflight", "limit": 2, "period_seconds": 60}]}}
+        ),
+        _deployment(
+            "grp", "dep-2", {"concurrency_limits": {"limits": [{"name": "inflight", "limit": 2, "period_seconds": 60}]}}
+        ),
     ]
     configured = _build_group_limits(deployments, "concurrency")
     assert len(configured) == 1
@@ -1206,9 +1444,63 @@ def test_concurrency_ttl_floor_overrides_a_too_short_period_seconds():
 
 
 def test_concurrency_ttl_floor_does_not_shorten_a_longer_period_seconds():
-    entry = TagRateLimitEntry(name="inflight", tag_id="end_user_id", limit=1, period_seconds=_CONCURRENCY_MIN_SAFETY_TTL_SECONDS + 100)
+    entry = TagRateLimitEntry(
+        name="inflight", tag_id="end_user_id", limit=1, period_seconds=_CONCURRENCY_MIN_SAFETY_TTL_SECONDS + 100
+    )
     configured_limit = _ConfiguredLimit(unit="concurrency", entry=entry, deployment_scope=None)
     assert _PROXY_TagRateLimiter._ttl_for(configured_limit) == _CONCURRENCY_MIN_SAFETY_TTL_SECONDS + 100
+
+
+# ---------------------------------------------------------------------------
+# pending-concurrency-key holder must survive a detached asyncio.create_task
+# fork (e.g. litellm's own failure-logging dispatch) without a rebind in that
+# forked task hiding the release from the parent, and a release must never
+# sweep up a key a still-live sibling hop appended in the meantime
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_release_in_a_forked_task_is_visible_to_the_parent_context():
+    _pending_concurrency_holder().keys.clear()
+    _pending_concurrency_holder().keys.append("key1")
+
+    async def detached_release():
+        return _PROXY_TagRateLimiter._pop_pending_concurrency_keys()
+
+    released = await asyncio.create_task(detached_release())
+    assert released == ["key1"]
+
+    # The parent's own binding must see the same, now-empty holder --
+    # not a stale copy still holding "key1".
+    assert _pending_concurrency_holder().keys == []
+
+
+@pytest.mark.asyncio
+async def test_release_does_not_sweep_up_a_key_appended_after_its_snapshot():
+    _pending_concurrency_holder().keys.clear()
+    _pending_concurrency_holder().keys.append("key1")
+
+    async def detached_release_then_sibling_admits():
+        released = _PROXY_TagRateLimiter._pop_pending_concurrency_keys()
+        # A sibling hop's admission, appending to the same shared holder,
+        # interleaved right after this release's snapshot was taken.
+        _pending_concurrency_holder().keys.append("key2")
+        return released
+
+    released = await asyncio.create_task(detached_release_then_sibling_admits())
+    assert released == ["key1"]
+    # key2 must still be pending for its own hop's eventual release.
+    assert _pending_concurrency_holder().keys == ["key2"]
+
+
+@pytest.mark.asyncio
+async def test_release_is_not_repeated_for_the_same_snapshot():
+    _pending_concurrency_holder().keys.clear()
+    _pending_concurrency_holder().keys.append("key1")
+    first = _PROXY_TagRateLimiter._pop_pending_concurrency_keys()
+    second = _PROXY_TagRateLimiter._pop_pending_concurrency_keys()
+    assert first == ["key1"]
+    assert second == []
 
 
 # ---------------------------------------------------------------------------
@@ -1233,8 +1525,12 @@ async def test_cross_unit_refund_leaves_no_phantom_increment_in_memory(time_cont
                 "grp",
                 "dep-1",
                 {
-                    "request_limits": {"limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 10, "period_seconds": 60}]},
-                    "concurrency_limits": {"limits": [{"name": "inflight", "tag_id": "end_user_id", "limit": 1, "period_seconds": 60}]},
+                    "request_limits": {
+                        "limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 10, "period_seconds": 60}]
+                    },
+                    "concurrency_limits": {
+                        "limits": [{"name": "inflight", "tag_id": "end_user_id", "limit": 1, "period_seconds": 60}]
+                    },
                 },
             )
         ]
@@ -1243,11 +1539,17 @@ async def test_cross_unit_refund_leaves_no_phantom_increment_in_memory(time_cont
     healthy = router.model_list
 
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:refund-check"]}}
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:refund-check"]}},
     )
     with pytest.raises(ProxyRateLimitError):
         await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:refund-check"]}}
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:refund-check"]}},
         )
 
     now = time_controller.now().timestamp()
@@ -1422,7 +1724,11 @@ async def test_request_limit_without_scope_by_key_hash_still_shares_one_counter(
             _deployment(
                 "grp",
                 "dep-1",
-                {"request_limits": {"limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 2, "period_seconds": 60}]}},
+                {
+                    "request_limits": {
+                        "limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 2, "period_seconds": 60}]
+                    }
+                },
             )
         ]
     )

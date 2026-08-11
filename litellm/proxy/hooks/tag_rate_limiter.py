@@ -1,24 +1,11 @@
-"""
-Tag-scoped token, request, dollar, and concurrency rate limits.
-
-Each limit entry is keyed by an arbitrary caller-supplied tag value (not a
-DB-provisioned entity, not composed with the calling API key) and enforced on
-every routing attempt for a chain/model-group -- the primary hop and every
-fallback hop, each checked against its own configuration.
-
-Opt-in via `litellm_settings.callbacks: ["tag_rate_limiter"]` (not part of
-`PROXY_HOOKS`), following the `dynamic_rate_limiter_v3` precedent: this hook
-reuses `_PROXY_MaxParallelRequestsHandler_v3`'s Redis/TTL-preserving increment
-machinery rather than duplicating it, and is never joined onto the default
-limiter every proxy already runs.
-"""
+"""Tag-scoped token, request, dollar, and concurrency rate limits."""
 
 import asyncio
 import contextvars
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
@@ -123,10 +110,10 @@ class _ConfiguredLimit:
     # None => chain-wide (every deployment in the model_group shares one
     # bucket). Otherwise the sorted deployment ids that declared this exact
     # value -- the bucket is shared among only those deployments.
-    deployment_scope: Optional[tuple[str, ...]]
+    deployment_scope: tuple[str, ...] | None
 
 
-def _extract_identity(tags: list[str], tag_id: str) -> Optional[str]:
+def _extract_identity(tags: list[str], tag_id: str) -> str | None:
     """
     First tag matching `f"{tag_id}:"`, value after the colon. Tags starting
     with `!` are tag-routing negation markers, not identity tags, and are
@@ -141,11 +128,11 @@ def _extract_identity(tags: list[str], tag_id: str) -> Optional[str]:
     return None
 
 
-def _deployment_id(deployment: dict) -> Optional[str]:
+def _deployment_id(deployment: dict) -> str | None:
     return (deployment.get("model_info") or {}).get("id")
 
 
-def _extract_team_id(request_kwargs: dict) -> Optional[str]:
+def _extract_team_id(request_kwargs: dict) -> str | None:
     """Same two-channel lookup Router itself uses to resolve a caller's own
     team-scoped deployment (see `Router._common_checks_available_deployment`,
     which reads `user_api_key_team_id` from `metadata` falling back to
@@ -156,7 +143,7 @@ def _extract_team_id(request_kwargs: dict) -> Optional[str]:
     return team_id if isinstance(team_id, str) else None
 
 
-def _extract_key_hash(request_kwargs: dict) -> Optional[str]:
+def _extract_key_hash(request_kwargs: dict) -> str | None:
     """Same two-channel lookup as `_extract_team_id`, but for the calling
     virtual key's hash: `LiteLLMProxyRequestSetup` sets `metadata["user_api_key"]`
     to `user_api_key_dict.api_key`, which despite the plain name is already
@@ -262,7 +249,7 @@ class _LimitsIndex:
     by_model_name: dict[str, list[_ConfiguredLimit]]
     by_team_alias: dict[tuple[str, str], list[_ConfiguredLimit]]
 
-    def resolve(self, model: str, team_id: Optional[str]) -> list[_ConfiguredLimit]:
+    def resolve(self, model: str, team_id: str | None) -> list[_ConfiguredLimit]:
         if team_id is not None:
             scoped = self.by_team_alias.get((team_id, model))
             if scoped is not None:
@@ -339,36 +326,34 @@ _INDEX_TTL_SECONDS = 5.0
 # slowly. period_seconds can still raise the TTL further, never lower it.
 _CONCURRENCY_MIN_SAFETY_TTL_SECONDS = 3600
 
+
 # Concurrency reservation keys accumulated for the current logical request,
-# not yet released. A `ContextVar` rather than a plain module-level
-# collection or a dict keyed by anything from `kwargs`, because every
-# candidate for "correlate this hop with its logical request" that litellm
-# itself exposes turns out to be either caller-controlled (`litellm_call_id`
-# is `request.headers["x-litellm-call-id"]`, falling back to a fresh uuid
-# only when absent -- two unrelated concurrent requests reusing the same
-# caller-chosen value would merge their reservations under one key) or
-# task-discontinuous (the success path runs `async_log_success_event` from
-# inside a process-global `LoggingWorker` task, never the admission-time
-# task, so `id(asyncio.current_task())` differs even for one hop's own
-# success). `ContextVar` is the one mechanism immune to both problems: its
-# value is pure Python-runtime state, never caller-visible or
-# caller-settable, and litellm's own logging pipeline is already built to
-# propagate it correctly across every task boundary a hop crosses --
-# `asyncio.create_task()` copies the calling context by default (used for
-# `wrapper_async`'s success dispatch in `litellm/utils.py` and for this
-# hook's own rejections propagating through `Router.async_callback_filter_
-# deployments`), and `LoggingWorker.enqueue()` (`litellm/litellm_core_utils/
-# logging_worker.py`) explicitly calls `contextvars.copy_context()` at
-# enqueue time and later runs the queued coroutine via
-# `task["context"].run(asyncio.create_task, ...)`, so a value set during
-# admission is still visible when the eventual release callback executes,
-# however many hops or worker hops later that turns out to be. Each
-# concurrent request gets its own isolated context (forked at whatever
-# `create_task` call started it), so two unrelated requests never share a
-# value regardless of what identifiers they happen to reuse.
-_pending_concurrency_keys: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar(
-    "tag_rate_limiter_pending_concurrency_keys", default=()
+# not yet released. Held via a ContextVar bound to a mutable holder object
+# (not an immutable tuple rebound with `.set()`) because `asyncio.create_task`
+# only copies which *object* a ContextVar is bound to, not a snapshot of that
+# object's contents: a `.set()` performed inside a task forked off this
+# context mutates only that task's own binding, invisible to the parent task
+# that continues on to a fallback hop. Mutating a shared holder in place is
+# visible from every task forked after the holder was first created,
+# regardless of which task performs the mutation.
+class _PendingConcurrencyKeys:
+    __slots__ = ("keys",)
+
+    def __init__(self) -> None:
+        self.keys: list[str] = []
+
+
+_pending_concurrency_keys: contextvars.ContextVar[_PendingConcurrencyKeys | None] = contextvars.ContextVar(
+    "tag_rate_limiter_pending_concurrency_keys", default=None
 )
+
+
+def _pending_concurrency_holder() -> _PendingConcurrencyKeys:
+    holder = _pending_concurrency_keys.get()
+    if holder is None:
+        holder = _PendingConcurrencyKeys()
+        _pending_concurrency_keys.set(holder)
+    return holder
 
 
 class _TagRateLimitIndex:
@@ -377,7 +362,7 @@ class _TagRateLimitIndex:
 
     def __init__(self, time_provider: Callable[[], datetime]) -> None:
         self._time_provider = time_provider
-        self._cache_key: Optional[tuple[int, int]] = None
+        self._cache_key: tuple[int, int] | None = None
         self._built_at: float = 0.0
         self._index: _LimitsIndex = _LimitsIndex(by_model_name={}, by_team_alias={})
 
@@ -392,7 +377,7 @@ class _TagRateLimitIndex:
         return self._index
 
 
-def _scope_suffix(deployment_scope: Optional[tuple[str, ...]]) -> str:
+def _scope_suffix(deployment_scope: tuple[str, ...] | None) -> str:
     return "chain" if deployment_scope is None else "dep:" + "+".join(deployment_scope)
 
 
@@ -401,7 +386,7 @@ def _bucket_key(
     configured: _ConfiguredLimit,
     tag_value: str,
     bucket_id: int,
-    key_hash: Optional[str] = None,
+    key_hash: str | None = None,
 ) -> str:
     scope = _scope_suffix(configured.deployment_scope)
     key_suffix = f":key:{key_hash}" if key_hash is not None else ""
@@ -413,7 +398,7 @@ def _inflight_key(
     model_group: str,
     configured: _ConfiguredLimit,
     tag_value: str,
-    key_hash: Optional[str] = None,
+    key_hash: str | None = None,
 ) -> str:
     """Concurrency counter key: not epoch-bucketed, since "how many are in
     flight right now" has no window to reset on -- it's released explicitly
@@ -428,14 +413,14 @@ class _PROXY_TagRateLimiter(CustomLogger):
     def __init__(
         self,
         internal_usage_cache: DualCache,
-        time_provider: Optional[Callable[[], datetime]] = None,
+        time_provider: Callable[[], datetime] | None = None,
     ):
         self.internal_usage_cache = InternalUsageCache(dual_cache=internal_usage_cache)
         self._v3 = _PROXY_MaxParallelRequestsHandler_v3(self.internal_usage_cache, time_provider=time_provider)
         self._time_provider = time_provider or datetime.now
         self._index = _TagRateLimitIndex(time_provider=self._time_provider)
         self._lock = asyncio.Lock()
-        self.llm_router: Optional[Router] = None
+        self.llm_router: Router | None = None
         redis_cache = self.internal_usage_cache.dual_cache.redis_cache
         self._check_and_incr_script = (
             redis_cache.async_register_script(TAG_RL_CHECK_AND_INCR_SCRIPT) if redis_cache is not None else None
@@ -479,7 +464,7 @@ class _PROXY_TagRateLimiter(CustomLogger):
     async def _atomic_check_and_increment(
         self,
         checks: list[tuple[str, float, float, int]],
-    ) -> tuple[Optional[int], list[float]]:
+    ) -> tuple[int | None, list[float]]:
         """
         All-or-nothing across every (key, limit, increment, ttl) in `checks`:
         if any would exceed its limit, none are incremented -- a single hop's
@@ -524,9 +509,9 @@ class _PROXY_TagRateLimiter(CustomLogger):
         self,
         model: str,
         healthy_deployments: list[dict],
-        messages: Optional[list[AllMessageValues]],
-        request_kwargs: Optional[dict] = None,
-        parent_otel_span: Optional[Span] = None,
+        messages: list[AllMessageValues] | None,
+        request_kwargs: dict | None = None,
+        parent_otel_span: Span | None = None,
     ) -> list[dict]:
         if not healthy_deployments or not isinstance(healthy_deployments, list) or self.llm_router is None:
             return healthy_deployments
@@ -579,11 +564,11 @@ class _PROXY_TagRateLimiter(CustomLogger):
                 configured_limit, tag_value, _key = atomic_checks[failing_index]
                 self._raise_over_limit(configured_limit, tag_value, model, current=values[0])
 
-            concurrency_keys = tuple(
+            concurrency_keys = [
                 key for configured_limit, _tag_value, key in atomic_checks if configured_limit.unit == "concurrency"
-            )
+            ]
             if concurrency_keys:
-                _pending_concurrency_keys.set(_pending_concurrency_keys.get() + concurrency_keys)
+                _pending_concurrency_holder().keys.extend(concurrency_keys)
 
         return healthy_deployments
 
@@ -602,8 +587,8 @@ class _PROXY_TagRateLimiter(CustomLogger):
     async def _read_only_values(
         self,
         read_only_checks: list[tuple[_ConfiguredLimit, str, str]],
-        parent_otel_span: Optional[Span],
-    ) -> list[Optional[float]]:
+        parent_otel_span: Span | None,
+    ) -> list[float | None]:
         if not read_only_checks:
             return []
         keys = [key for _cfg, _tag_value, key in read_only_checks]
@@ -617,7 +602,7 @@ class _PROXY_TagRateLimiter(CustomLogger):
     def _raise_if_over_limit(
         self,
         read_only_checks: list[tuple[_ConfiguredLimit, str, str]],
-        current_values: list[Optional[float]],
+        current_values: list[float | None],
         model: str,
     ) -> None:
         for (configured_limit, tag_value, _key), current_value in zip(read_only_checks, current_values):
@@ -676,61 +661,43 @@ class _PROXY_TagRateLimiter(CustomLogger):
             except Exception as e:  # noqa: BLE001 - releasing a slot must never raise into the caller's request path
                 verbose_proxy_logger.warning("tag_rate_limiter: failed to release concurrency slot %s: %s", key, e)
 
+    @staticmethod
+    def _pop_pending_concurrency_keys() -> list[str]:
+        # Snapshot then remove only those exact keys, never a blanket clear:
+        # a sibling hop can still be live and appending to the same shared
+        # holder concurrently (see the holder's own comment above), so
+        # wiping the whole list here would silently strand that hop's
+        # reservation instead of releasing it later.
+        holder = _pending_concurrency_keys.get()
+        if holder is None or not holder.keys:
+            return []
+        keys = list(holder.keys)
+        for key in keys:
+            try:
+                holder.keys.remove(key)
+            except ValueError:
+                pass
+        return keys
+
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        """
-        Release every concurrency slot accumulated onto `_pending_concurrency_keys`
-        for the current logical request. Never recomputes a key from
-        `standard_logging_object`: only releases exactly what admission
-        itself accumulated, so a rejection this hook raises for being over
-        its own limit -- which `_atomic_check_and_increment` already
-        refunded synchronously, inside that same call, before ever adding
-        anything here -- naturally has nothing new to release, by
-        construction, rather than needing a special case for it.
-
-        The explicit `ProxyRateLimitError` check below is belt-and-suspenders
-        on top of that: hops of one logical request run strictly
-        sequentially today (a fallback is only ever attempted after the
-        previous hop has fully concluded, including firing its own
-        completion event), so a rejected hop's own `_pending_concurrency_keys`
-        is provably empty by the time this fires. If a future routing
-        strategy ever dispatches hops concurrently instead, that invariant
-        would break silently; this check means a rejection never releases
-        anything even if it does. `ProxyRateLimitError.detail` carries
-        `{"error": "tag_rate_limit_exceeded", ...}`, a string unique to this
-        module, so it's distinguishable from a genuine provider failure.
-
-        litellm dedupes this event to fire once per logical request (the
-        first failed hop only, via `Logging.has_run_logging`'s
-        `has_logged_async_failure` guard). That no longer matters for
-        correctness here: whichever event fires next for this request --
-        this one, `async_log_success_event`, or another failed hop's -- pops
-        and releases whatever has accumulated in `_pending_concurrency_keys`
-        since the last release, covering every hop this event's dedup would
-        otherwise skip. See that variable's module-level docstring for why a
-        `ContextVar` is what makes this safe: it survives every task
-        boundary a hop crosses (litellm's own logging pipeline is built to
-        propagate it), without ever depending on anything a caller supplies.
-        """
         if isinstance(kwargs.get("exception"), ProxyRateLimitError):
             detail = kwargs["exception"].detail if isinstance(kwargs["exception"].detail, dict) else {}
             if detail.get("error") == "tag_rate_limit_exceeded":
                 return
 
-        release_keys = _pending_concurrency_keys.get()
+        release_keys = self._pop_pending_concurrency_keys()
         if release_keys:
-            _pending_concurrency_keys.set(())
-            await self._release_keys(list(release_keys))
+            await self._release_keys(release_keys)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        release_keys = _pending_concurrency_keys.get()
+        release_keys = self._pop_pending_concurrency_keys()
         if release_keys:
-            _pending_concurrency_keys.set(())
-            asyncio.create_task(self._release_keys(list(release_keys)))
+            asyncio.create_task(self._release_keys(release_keys))
 
         if self.llm_router is None:
             return
 
-        standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
+        standard_logging_object: StandardLoggingPayload | None = kwargs.get("standard_logging_object")
         if standard_logging_object is None:
             return
 
