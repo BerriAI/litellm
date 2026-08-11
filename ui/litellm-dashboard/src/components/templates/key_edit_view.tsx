@@ -150,6 +150,7 @@ export function KeyEditView({
     guardrails: keyData.metadata?.guardrails,
     disable_global_guardrails: keyData.metadata?.disable_global_guardrails || false,
     throttle_on_budget_exceeded: keyData.metadata?.throttle_on_budget_exceeded || false,
+    enable_prompt_caching: keyData.metadata?.enable_prompt_caching || false,
     ...estimateFields(keyData.metadata),
     prompts: keyData.metadata?.prompts,
     tags: keyData.metadata?.tags,
@@ -178,36 +179,8 @@ export function KeyEditView({
   };
 
   useEffect(() => {
-    form.setFieldsValue({
-      ...keyData,
-      token: keyData.token || keyData.token_id,
-      budget_duration: canonicalBudgetDuration(keyData.budget_duration),
-      metadata: formatMetadataForDisplay(stripTagsFromMetadata(keyData.metadata)),
-      guardrails: keyData.metadata?.guardrails,
-      disable_global_guardrails: keyData.metadata?.disable_global_guardrails || false,
-      prompts: keyData.metadata?.prompts,
-      tags: keyData.metadata?.tags,
-      vector_stores: keyData.object_permission?.vector_stores || [],
-      mcp_servers_and_groups: {
-        servers: keyData.object_permission?.mcp_servers || [],
-        accessGroups: keyData.object_permission?.mcp_access_groups || [],
-        toolsets: keyData.object_permission?.mcp_toolsets || [],
-      },
-      mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
-      throttle_on_budget_exceeded: keyData.metadata?.throttle_on_budget_exceeded || false,
-      ...estimateFields(keyData.metadata),
-      logging_settings: extractLoggingSettings(keyData.metadata),
-      disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
-        ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
-        : [],
-      access_group_ids: keyData.access_group_ids || [],
-      auto_rotate: keyData.auto_rotate || false,
-      ...(keyData.rotation_interval && { rotation_interval: keyData.rotation_interval }),
-      allowed_routes:
-        Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0
-          ? keyData.allowed_routes.join(", ")
-          : "",
-    });
+    form.setFieldsValue(initialValues);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- initialValues is rebuilt from keyData every render; depending on it would re-run each render
   }, [keyData, form]);
 
   // Sync auto-rotation state with form values
@@ -527,6 +500,21 @@ export function KeyEditView({
           </span>
         }
         name="throttle_on_budget_exceeded"
+        valuePropName="checked"
+      >
+        <Switch checkedChildren="Yes" unCheckedChildren="No" />
+      </Form.Item>
+
+      <Form.Item
+        label={
+          <span>
+            Enable Prompt Caching{" "}
+            <Tooltip title="Automatically add prompt caching breakpoints (cache_control markers) to requests made with this key, cutting input cost on repeated prompts. Applies to Anthropic and Bedrock Claude models; requests that already set their own cache_control markers are left untouched.">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+        name="enable_prompt_caching"
         valuePropName="checked"
       >
         <Switch checkedChildren="Yes" unCheckedChildren="No" />

@@ -1734,6 +1734,21 @@ async def test_update_service_account_works_with_team_id():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("flag_value", [True, False])
+async def test_update_key_enable_prompt_caching_folds_into_metadata(flag_value):
+    """Top-level enable_prompt_caching on /key/update lands in key metadata, including flipping back to False."""
+    data = UpdateKeyRequest(key="sk-1", enable_prompt_caching=flag_value)
+    existing_key = LiteLLM_VerificationToken(
+        token="hashed", metadata={"enable_prompt_caching": not flag_value}
+    )
+
+    updated = await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    assert updated["metadata"]["enable_prompt_caching"] is flag_value
+    assert "enable_prompt_caching" not in {k for k in updated if k != "metadata"}
+
+
+@pytest.mark.asyncio
 async def test_update_preserves_service_account_id_when_metadata_replaced():
     """
     Regression: /key/update wholesale-replaced metadata, silently dropping
