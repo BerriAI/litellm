@@ -82,8 +82,21 @@ body:
              If the bug applies to more than one of the LLM endpoints (/v1/responses, /v1/chat/completions, /v1/messages), include proof for every one of them, not just one
              For UI bugs: include screenshots and the page URLs you were on. Scrub keys and tokens out of screenshots too, they show up in headers, request panels, and the Admin UI -->
 
+        Config / setup the proxy ran with:
+
+        Version or commit:
+
+        Commands and their full output:
+
     validations:
       required: true
+  - type: checkboxes
+    id: proof-attestation
+    attributes:
+      label: About that proof
+      options:
+        - label: It came from a live proxy I ran myself, with no mocks, and shows the real commands and their output rather than a `pytest` run
+          required: true
   - type: dropdown
     id: component
     attributes:
