@@ -220,6 +220,8 @@ class ChatBody(BaseModel):
     messages: list[ChatMessage]
     stream: bool = False
     max_tokens: int | None = None
+    max_completion_tokens: int | None = None
+    temperature: float | None = None
     user: str | None = None
     metadata: ChatMetadata | None = None
     reasoning_effort: str | None = None
@@ -297,6 +299,7 @@ class McpResponseMetadata(BaseModel):
 
 
 class OutMessage(BaseModel):
+    role: str | None = None
     content: str | None = None
     reasoning_content: str | None = None
     tool_calls: list[ToolCall] | None = None
@@ -327,6 +330,7 @@ class Usage(BaseModel):
 
 class ChatResponse(BaseModel):
     id: str | None = None
+    object: str | None = None
     model: str | None = None
     choices: list[ChatChoice] = []
     usage: Usage | None = None
@@ -386,6 +390,7 @@ class AnthropicMessagesBody(BaseModel):
     max_tokens: int
     stream: bool | None = None
     tools: list[AnthropicTool] | None = None
+    guardrails: list[str] | None = None
 
 
 class CountTokensBody(BaseModel):
