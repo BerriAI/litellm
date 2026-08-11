@@ -154,7 +154,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         self.advisory_system_message = advisory_system_message
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(**kwargs)
-        self._validate_advisory_config()
+        self._validate_advisory_config(on_flagged=self.on_flagged, advisory_system_message=self.advisory_system_message)
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
         """
@@ -162,26 +162,31 @@ class LakeraAIGuardrail(CustomGuardrail):
         (including ``on_flagged``/``advisory_system_message``) onto this live instance
         with no revalidation, so an in-place config update (via the DB/UI, without a
         restart) could otherwise reintroduce the exact invalid on_flagged/event_hook
-        combinations __init__ rejects. Re-run the same validation after every update.
+        combinations __init__ rejects. Validate the prospective post-update state
+        *before* mutating, so a rejected update leaves the live instance untouched
+        instead of raising after it's already been corrupted.
         """
+        self._validate_advisory_config(
+            on_flagged=getattr(litellm_params, "on_flagged", None) or self.on_flagged,
+            advisory_system_message=getattr(litellm_params, "advisory_system_message", None),
+        )
         super().update_in_memory_litellm_params(litellm_params=litellm_params)
-        self._validate_advisory_config()
 
-    def _validate_advisory_config(self) -> None:
-        if self.advisory_system_message is not None:
-            if not _template_uses_reason_placeholder(self.advisory_system_message):
+    def _validate_advisory_config(self, on_flagged: str, advisory_system_message: str | None) -> None:
+        if advisory_system_message is not None:
+            if not _template_uses_reason_placeholder(advisory_system_message):
                 raise ValueError(
                     "Invalid advisory_system_message template: must include a real {reason} "
                     "placeholder (not an escaped {{reason}}) so the LLM sees why the request was flagged."
                 )
             try:
-                self.advisory_system_message.format(reason="placeholder")
+                advisory_system_message.format(reason="placeholder")
             except (KeyError, IndexError, ValueError) as e:
                 raise ValueError(
                     f"Invalid advisory_system_message template: {e}. The template must be a valid "
                     "str.format() string using only the {reason} placeholder."
                 ) from e
-        if self.on_flagged == "inject_system_message" and _event_hook_includes_during_call(self.event_hook):
+        if on_flagged == "inject_system_message" and _event_hook_includes_during_call(self.event_hook):
             raise ValueError(
                 "on_flagged='inject_system_message' is not supported for mode='during_call': during_call "
                 "runs concurrently with the LLM dispatch with no pre-call barrier, so the advisory message "
