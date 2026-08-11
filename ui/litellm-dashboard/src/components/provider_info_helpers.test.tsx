@@ -78,6 +78,26 @@ describe("provider_info_helpers", () => {
       expect(result.logo).toBe(providerLogoMap[Providers.BedrockMantle]);
     });
 
+    it("should map meta slug to Meta Model API display name and logo", () => {
+      const result = getProviderLogoAndName("meta");
+      expect(result.displayName).toBe(Providers.META);
+      expect(result.logo).toBe(providerLogoMap[Providers.META]);
+    });
+
+    it("should resolve the META enum key to the Meta Model API logo", () => {
+      const result = getProviderLogoAndName("META");
+      expect(result.displayName).toBe(Providers.META);
+      expect(result.logo).toBe(providerLogoMap[Providers.META]);
+    });
+
+    it("should keep Meta Llama distinct from Meta Model API", () => {
+      const metaLlama = getProviderLogoAndName("meta_llama");
+      const metaModelApi = getProviderLogoAndName("meta");
+      expect(metaLlama.displayName).toBe(Providers.LLAMA);
+      expect(metaModelApi.displayName).toBe(Providers.META);
+      expect(metaLlama.displayName).not.toBe(metaModelApi.displayName);
+    });
+
     it("should handle provider values case-insensitively", () => {
       const result = getProviderLogoAndName("OPENAI");
       expect(result.displayName).toBe(Providers.OpenAI);
@@ -349,6 +369,20 @@ describe("provider_info_helpers", () => {
       expect(result).toContain("bedrock_mantle/openai.gpt-5.5");
       expect(result).not.toContain("bedrock-base");
       expect(result).not.toContain("bedrock-converse-model");
+    });
+
+    it("should return only meta models and exclude standalone meta_llama when called with 'META' provider key", () => {
+      // meta_llama starts with "meta_", so without treating it as a standalone
+      // subprovider the Meta Model API dropdown would also list Llama API models.
+      const modelMap = {
+        "meta/muse-spark-1.1": { litellm_provider: "meta" },
+        "meta_llama/Llama-3.3-70B-Instruct": { litellm_provider: "meta_llama" },
+        "openai-model": { litellm_provider: "openai" },
+      };
+      const result = getProviderModels("META" as Providers, modelMap);
+      expect(result).toEqual(["meta/muse-spark-1.1"]);
+      expect(result).not.toContain("meta_llama/Llama-3.3-70B-Instruct");
+      expect(result).not.toContain("openai-model");
     });
 
     it("should include fireworks_ai-embedding-models when called with 'FireworksAI' provider key", () => {
