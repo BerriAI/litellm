@@ -6,13 +6,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 const mockUserDailyActivityCall = vi.fn();
 const { useAuthorizedMock } = vi.hoisted(() => ({ useAuthorizedMock: vi.fn() }));
 
+const mockToolSpendResponse = { by_tool: [], daily: [], start_date: null, end_date: null };
+
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: useAuthorizedMock,
 }));
 
 vi.mock("@/components/networking", () => ({
   userDailyActivityCall: (...args: unknown[]) => mockUserDailyActivityCall(...args),
-  getToolSpend: vi.fn().mockResolvedValue({ by_tool: [], daily: [], start_date: null, end_date: null }),
+  getToolSpend: vi.fn().mockResolvedValue(mockToolSpendResponse),
   getGeneralSettingsCall: vi.fn().mockResolvedValue([]),
   organizationListCall: vi.fn().mockResolvedValue([]),
 }));

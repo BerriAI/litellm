@@ -11,7 +11,9 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 
 vi.mock("@/components/networking", () => ({
   organizationListCall: vi.fn().mockResolvedValue([]),
-  userDailyActivityCall: vi.fn().mockResolvedValue({ results: [], metadata: { total_pages: 1, has_more: false, page: 1 } }),
+  userDailyActivityCall: vi
+    .fn()
+    .mockResolvedValue({ results: [], metadata: { total_pages: 1, has_more: false, page: 1 } }),
 }));
 
 vi.mock("./UsageTab", () => ({ __esModule: true, default: () => <div data-testid="usage-tab" /> }));
@@ -30,7 +32,7 @@ const renderView = (userRole = "Admin") => {
   return render(
     <QueryClientProvider client={queryClient}>
       <CostOptimizationView accessToken="test-token" userId="u1" userRole={userRole} />
-    </QueryClientProvider>
+    </QueryClientProvider>,
   );
 };
 
