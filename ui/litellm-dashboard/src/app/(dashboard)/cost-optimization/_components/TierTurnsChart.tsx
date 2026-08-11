@@ -126,7 +126,7 @@ const TierTurnsChart: React.FC<TierTurnsChartProps> = ({ view, autoRouters }) =>
               <li key={slice.tier} className="flex items-start gap-2">
                 <span
                   className="mt-1.5 h-2 w-2 shrink-0 rounded-full ring-4 ring-white"
-                  style={{ backgroundColor: chartColorValue(colors[idx % colors.length]) }}
+                  style={{ backgroundColor: chartColorValue(colors[idx]) }}
                 />
                 <div className="min-w-0">
                   <p className="text-sm text-muted-foreground">
