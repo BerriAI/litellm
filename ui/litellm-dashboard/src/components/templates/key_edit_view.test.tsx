@@ -410,6 +410,36 @@ describe("KeyEditView", () => {
     });
   });
 
+  it("should initialize and submit enable_prompt_caching from key metadata", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithPromptCaching = {
+      ...MOCK_KEY_DATA,
+      metadata: { ...MOCK_KEY_DATA.metadata, enable_prompt_caching: true },
+    };
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithPromptCaching}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Enable Prompt Caching")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalledWith(expect.objectContaining({ enable_prompt_caching: true }));
+    });
+  });
+
   it("should disable models field when management routes are selected", async () => {
     const keyDataWithManagementRoutes = {
       ...MOCK_KEY_DATA,

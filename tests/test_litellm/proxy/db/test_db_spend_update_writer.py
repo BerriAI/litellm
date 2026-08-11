@@ -2157,3 +2157,67 @@ async def test_daily_transaction_compression_saved_tokens_zero_when_absent():
     assert transaction["compression_saved_tokens"] == 0
     assert transaction["compression_savings_spend"] == 0
     assert transaction["prompt_caching_savings_spend"] == 0
+
+
+@pytest.mark.asyncio
+async def test_commit_spend_updates_to_db_does_not_stamp_key_settings_updated_at():
+    """Spend flushes must leave settings_updated_at alone, or it decays into
+    another `updated_at` and stops being an audit signal."""
+    db_writer = DBSpendUpdateWriter()
+
+    mock_batcher = MagicMock()
+    mock_batcher.litellm_verificationtoken = MagicMock()
+    mock_batcher.litellm_verificationtoken.update_many = MagicMock()
+    mock_batcher.litellm_usertable = MagicMock()
+    mock_batcher.litellm_usertable.update_many = MagicMock()
+    mock_batcher.litellm_teamtable = MagicMock()
+    mock_batcher.litellm_teamtable.update_many = MagicMock()
+    mock_batcher.litellm_teammembership = MagicMock()
+    mock_batcher.litellm_teammembership.update_many = MagicMock()
+    mock_batcher.litellm_organizationtable = MagicMock()
+    mock_batcher.litellm_organizationtable.update_many = MagicMock()
+    mock_batcher.litellm_tagtable = MagicMock()
+    mock_batcher.litellm_tagtable.update_many = MagicMock()
+    mock_batcher.litellm_agentstable = MagicMock()
+    mock_batcher.litellm_agentstable.update_many = MagicMock()
+
+    mock_transaction = AsyncMock()
+    mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
+    mock_transaction.__aexit__ = AsyncMock(return_value=False)
+    mock_transaction.batch_ = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_batcher),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_transaction)
+
+    token = "hashed-token-abc"
+    response_cost = 0.25
+    db_spend_update_transactions = {
+        "user_list_transactions": {},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {token: response_cost},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {},
+        "org_list_transactions": {},
+        "tag_list_transactions": {},
+        "agent_list_transactions": {},
+    }
+
+    with patch("litellm.proxy.utils._raise_failed_update_spend_exception"):
+        await db_writer._commit_spend_updates_to_db(
+            prisma_client=mock_prisma_client,
+            n_retry_times=0,
+            proxy_logging_obj=MagicMock(),
+            db_spend_update_transactions=db_spend_update_transactions,
+        )
+
+    mock_batcher.litellm_verificationtoken.update_many.assert_called_once()
+    call_kwargs = mock_batcher.litellm_verificationtoken.update_many.call_args[1]
+    assert call_kwargs["where"] == {"token": token}
+    assert set(call_kwargs["data"]) == {"spend", "last_active"}
+    assert call_kwargs["data"]["spend"] == {"increment": response_cost}

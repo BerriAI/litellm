@@ -6781,6 +6781,7 @@ export interface paths {
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
+         *     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Anthropic and Bedrock Claude models only.
          *     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
          *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
@@ -7240,6 +7241,7 @@ export interface paths {
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
+         *     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Anthropic and Bedrock Claude models only.
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
          *     - blocked: Optional[bool] - Whether the key is blocked
          *     - aliases: Optional[dict] - Model aliases for the key - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
@@ -24987,6 +24989,8 @@ export interface components {
             disable_global_guardrails?: boolean | null;
             /** Duration */
             duration?: string | null;
+            /** Enable Prompt Caching */
+            enable_prompt_caching?: boolean | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Guardrails */
@@ -25147,6 +25151,8 @@ export interface components {
             disable_global_guardrails?: boolean | null;
             /** Duration */
             duration?: string | null;
+            /** Enable Prompt Caching */
+            enable_prompt_caching?: boolean | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Expires */
@@ -26280,6 +26286,8 @@ export interface components {
             } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
+            /** Settings Updated At */
+            settings_updated_at?: string | null;
             /**
              * Soft Budget Cooldown
              * @default false
@@ -27719,6 +27727,8 @@ export interface components {
             } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
+            /** Settings Updated At */
+            settings_updated_at?: string | null;
             /**
              * Soft Budget Cooldown
              * @default false
@@ -29616,6 +29626,8 @@ export interface components {
             disable_global_guardrails?: boolean | null;
             /** Duration */
             duration?: string | null;
+            /** Enable Prompt Caching */
+            enable_prompt_caching?: boolean | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Expires */
@@ -31461,6 +31473,8 @@ export interface components {
             disable_global_guardrails?: boolean | null;
             /** Duration */
             duration?: string | null;
+            /** Enable Prompt Caching */
+            enable_prompt_caching?: boolean | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Grace Period */
@@ -33856,6 +33870,8 @@ export interface components {
             disable_global_guardrails?: boolean | null;
             /** Duration */
             duration?: string | null;
+            /** Enable Prompt Caching */
+            enable_prompt_caching?: boolean | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Guardrails */
@@ -34218,6 +34234,8 @@ export interface components {
             routing_strategy_args?: {
                 [key: string]: unknown;
             } | null;
+            /** Tag Routing Prefix */
+            tag_routing_prefix?: string | null;
             /** Timeout */
             timeout?: number | null;
         };
@@ -34887,6 +34905,8 @@ export interface components {
             rpm_limit_per_model?: {
                 [key: string]: number;
             } | null;
+            /** Settings Updated At */
+            settings_updated_at?: string | null;
             /** Soft Budget */
             soft_budget?: number | null;
             /**
@@ -35385,6 +35405,8 @@ export interface components {
         };
         /** ModelInfo */
         litellm__types__router__ModelInfo: {
+            /** Allow Fail Open */
+            allow_fail_open?: boolean | null;
             /** Base Model */
             base_model?: string | null;
             /** Blocked */
@@ -35404,6 +35426,8 @@ export interface components {
              * @default false
              */
             db_model: boolean;
+            /** Enable Tag Filtering */
+            enable_tag_filtering?: boolean | null;
             /** Id */
             id: string | null;
             /** Input Cost Per Character */

@@ -3467,6 +3467,7 @@ all_litellm_params = (
         "caching_groups",
         "ttl",
         "cache",
+        "enable_prompt_caching",
         "no-log",
         "base_model",
         "stream_timeout",
