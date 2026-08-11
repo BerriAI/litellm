@@ -16,7 +16,7 @@ import litellm.litellm_core_utils.litellm_logging
 import litellm.types
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.constants import HOURS_IN_A_DAY
+from litellm.constants import HOURS_IN_A_DAY, SLACK_DAILY_REPORT_LOCK_ID
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_type
 from litellm.integrations.SlackAlerting.hanging_request_check import (
@@ -1562,7 +1562,9 @@ Model Info:
             if current_time - report_sent >= interval_seconds:
                 if (
                     pod_lock_manager is not None
-                    and (await pod_lock_manager.acquire_lock(cronjob_id="slack_daily_report", ttl=interval_seconds))
+                    and (
+                        await pod_lock_manager.acquire_lock(cronjob_id=SLACK_DAILY_REPORT_LOCK_ID, ttl=interval_seconds)
+                    )
                     is False
                 ):
                     return False

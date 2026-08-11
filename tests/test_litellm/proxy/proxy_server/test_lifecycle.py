@@ -807,6 +807,18 @@ async def _init_slack_alerting_jobs(
     return jobs, proxy_logging_obj
 
 
+@pytest.mark.parametrize("spend_report_frequency", ["0d", "-1d"])
+@pytest.mark.asyncio
+async def test_initialize_slack_alerting_jobs_invalid_non_positive_frequency_raises(spend_report_frequency):
+    """A non-positive window used to become an every-second APScheduler interval, and now also
+    computes a negative lock TTL, which expires instantly and suppresses the report for good."""
+    with pytest.raises(ValueError, match="positive number of days"):
+        await _init_slack_alerting_jobs(
+            acquire_lock_result=True,
+            spend_report_frequency=spend_report_frequency,
+        )
+
+
 @pytest.mark.asyncio
 async def test_weekly_spend_report_skipped_when_another_pod_holds_the_lock():
     """regression: issue #14809 - every pod ran its own weekly spend report job."""
@@ -817,7 +829,7 @@ async def test_weekly_spend_report_skipped_when_another_pod_holds_the_lock():
     proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report.assert_not_awaited()
     proxy_logging_obj.db_spend_update_writer.pod_lock_manager.acquire_lock.assert_awaited_once_with(
         cronjob_id="weekly_spend_report_job",
-        ttl=7 * 86400,
+        ttl=7 * 86400 - 3600,
     )
 
 
@@ -833,15 +845,17 @@ async def test_weekly_spend_report_sent_when_the_lock_is_free_or_absent(acquire_
 
 
 @pytest.mark.asyncio
-async def test_weekly_spend_report_lock_ttl_spans_the_configured_window():
-    """A TTL shorter than the window would let a later-booting pod re-send the same report."""
+async def test_weekly_spend_report_lock_ttl_tracks_the_configured_window():
+    """TTL is the window less an hour: long enough that no second pod re-sends inside the
+    window, short enough that the lock is gone before the next one opens. A fixed TTL would
+    break one end or the other as soon as spend_report_frequency changes."""
     jobs, proxy_logging_obj = await _init_slack_alerting_jobs(acquire_lock_result=True, spend_report_frequency="1d")
 
     await jobs["weekly_spend_report_job"]()
 
     proxy_logging_obj.db_spend_update_writer.pod_lock_manager.acquire_lock.assert_awaited_once_with(
         cronjob_id="weekly_spend_report_job",
-        ttl=86400,
+        ttl=86400 - 3600,
     )
     proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report.assert_awaited_once_with("1d")
 
@@ -882,15 +896,39 @@ async def test_spend_report_locks_are_never_released():
 
 @pytest.mark.asyncio
 async def test_prometheus_fallback_stats_job_skipped_when_another_pod_holds_the_lock(monkeypatch):
+    """The one await already on the mock is the unlocked startup send, which every pod still
+    does; only the scheduled job is deduped."""
     monkeypatch.setenv("PROMETHEUS_URL", "http://prometheus.invalid")
     jobs, proxy_logging_obj = await _init_slack_alerting_jobs(acquire_lock_result=False)
     send_fallback_stats = proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus
-    awaits_after_startup = send_fallback_stats.await_count
+    assert send_fallback_stats.await_count == 1
 
     await jobs["prometheus_fallback_stats_job"]()
 
-    assert send_fallback_stats.await_count == awaits_after_startup
+    assert send_fallback_stats.await_count == 1
     proxy_logging_obj.db_spend_update_writer.pod_lock_manager.acquire_lock.assert_awaited_once_with(
         cronjob_id="prometheus_fallback_stats_job",
         ttl=3600,
     )
+
+
+@pytest.mark.parametrize("acquire_lock_result", [True, None])
+@pytest.mark.asyncio
+async def test_prometheus_fallback_stats_job_runs_when_the_lock_is_free_or_absent(monkeypatch, acquire_lock_result):
+    monkeypatch.setenv("PROMETHEUS_URL", "http://prometheus.invalid")
+    jobs, proxy_logging_obj = await _init_slack_alerting_jobs(acquire_lock_result=acquire_lock_result)
+    send_fallback_stats = proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus
+    assert send_fallback_stats.await_count == 1
+
+    await jobs["prometheus_fallback_stats_job"]()
+
+    assert send_fallback_stats.await_count == 2
+
+
+@pytest.mark.parametrize("spend_report_frequency", ["0d", "-1d"])
+@pytest.mark.asyncio
+async def test_non_positive_spend_report_frequency_is_rejected_at_startup(spend_report_frequency: str):
+    """ "0d" used to coerce to an every-second job; with the TTL haircut it would compute a
+    negative lock TTL and silently never send, so it must fail loudly instead."""
+    with pytest.raises(ValueError, match="positive number of days"):
+        await _init_slack_alerting_jobs(acquire_lock_result=True, spend_report_frequency=spend_report_frequency)

@@ -233,6 +233,8 @@ from litellm.constants import (
     GLOBAL_PROXY_SPEND_CACHE_KEY,
     LITELLM_PROXY_ADMIN_NAME,
     LITELLM_PROXY_BUDGET_NAME,
+    MONTHLY_SPEND_REPORT_JOB_ID,
+    PROMETHEUS_FALLBACK_STATS_JOB_ID,
     PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
     PROXY_BATCH_POLLING_ENABLED,
     PROXY_BATCH_POLLING_INTERVAL,
@@ -240,6 +242,7 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
+    WEEKLY_SPEND_REPORT_JOB_ID,
 )
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import ModifyResponseException
@@ -9043,20 +9046,25 @@ class ProxyStartupEvent:
             spend_report_frequency: Final[str] = general_settings.get("spend_report_frequency", "7d") or "7d"
 
             days: Final = int(spend_report_frequency[:-1])
-            if spend_report_frequency[-1].lower() != "d":
-                raise ValueError("spend_report_frequency must be specified in days, e.g., '1d', '7d'")
+            if spend_report_frequency[-1].lower() != "d" or days <= 0:
+                raise ValueError("spend_report_frequency must be a positive number of days, e.g., '1d', '7d'")
 
             pod_lock_manager: Final = proxy_logging_obj.db_spend_update_writer.pod_lock_manager
+            weekly_lock_ttl: Final = duration_in_seconds(spend_report_frequency) - 3600
 
             async def _scheduled_weekly_spend_report() -> None:
                 # TTL spans the whole reporting window: each pod's interval anchor is its own
-                # boot time + jitter, so a shorter lock would let a later pod re-send the report
-                if await pod_lock_manager.acquire_lock(cronjob_id="weekly_spend_report_job", ttl=days * 86400) is False:
+                # boot time + jitter, so a shorter lock would let a later pod re-send the report.
+                # Minus an hour so the next window's first firer finds a free key
+                if (
+                    await pod_lock_manager.acquire_lock(cronjob_id=WEEKLY_SPEND_REPORT_JOB_ID, ttl=weekly_lock_ttl)
+                    is False
+                ):
                     return
                 await proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report(spend_report_frequency)
 
             async def _scheduled_monthly_spend_report() -> None:
-                if await pod_lock_manager.acquire_lock(cronjob_id="monthly_spend_report_job", ttl=3600) is False:
+                if await pod_lock_manager.acquire_lock(cronjob_id=MONTHLY_SPEND_REPORT_JOB_ID, ttl=3600) is False:
                     return
                 await proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report()
 
@@ -9065,7 +9073,7 @@ class ProxyStartupEvent:
                 "interval",
                 days=days,
                 next_run_time=datetime.now() + timedelta(seconds=10 + random.randint(0, 300)),
-                id="weekly_spend_report_job",
+                id=WEEKLY_SPEND_REPORT_JOB_ID,
                 replace_existing=True,
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
@@ -9074,7 +9082,7 @@ class ProxyStartupEvent:
                 _scheduled_monthly_spend_report,
                 "cron",
                 day=1,
-                id="monthly_spend_report_job",
+                id=MONTHLY_SPEND_REPORT_JOB_ID,
                 replace_existing=True,
             )
 
@@ -9083,7 +9091,7 @@ class ProxyStartupEvent:
 
                 async def _scheduled_fallback_stats() -> None:
                     if (
-                        await pod_lock_manager.acquire_lock(cronjob_id="prometheus_fallback_stats_job", ttl=3600)
+                        await pod_lock_manager.acquire_lock(cronjob_id=PROMETHEUS_FALLBACK_STATS_JOB_ID, ttl=3600)
                         is False
                     ):
                         return
@@ -9095,7 +9103,7 @@ class ProxyStartupEvent:
                     hour=PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
                     minute=0,
                     timezone=ZoneInfo("America/Los_Angeles"),
-                    id="prometheus_fallback_stats_job",
+                    id=PROMETHEUS_FALLBACK_STATS_JOB_ID,
                     replace_existing=True,
                 )
                 await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
