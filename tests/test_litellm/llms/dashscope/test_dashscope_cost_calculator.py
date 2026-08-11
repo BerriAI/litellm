@@ -196,6 +196,49 @@ class TestDashscopeCostCalculator:
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
+    @pytest.mark.parametrize(
+        "model, input_cost, output_cost, cache_read_cost, max_input_tokens, max_output_tokens",
+        (
+            ("qwen3.8-max", 2e-06, 6e-06, 2.5e-07, 991808, 131072),
+            ("deepseek-v4-pro", 2.4e-06, 4.8e-06, 2e-07, 1000000, 393216),
+            ("deepseek-v4-flash", 2e-07, 4e-07, 4e-08, 1000000, 393216),
+            ("deepseek-v4-flash-0731", 2e-07, 4e-07, 4e-08, 1000000, 393216),
+            ("glm-5.1", 1.4e-06, 4.4e-06, 2.6e-07, 202745, 131072),
+            ("glm-5.2", 1.4e-06, 4.4e-06, 2.8e-07, 1048576, 131072),
+            ("kimi-k2.7-code", 9.5e-07, 4e-06, 1.9e-07, 229376, 16384),
+        ),
+    )
+    def test_dashscope_latest_model_pricing(
+        self,
+        model: str,
+        input_cost: float,
+        output_cost: float,
+        cache_read_cost: float,
+        max_input_tokens: int,
+        max_output_tokens: int,
+    ) -> None:
+        """
+        Model Studio International (Singapore) pricing and context limits for the models
+        added for Qwen3.8, DeepSeek V4, GLM 5 and Kimi K2.7
+        """
+        usage = Usage(
+            prompt_tokens=10000,
+            completion_tokens=1000,
+            total_tokens=11000,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=4000),
+        )
+
+        prompt_cost, completion_cost = dashscope_cost_per_token(model=model, usage=usage)
+
+        model_info = litellm.get_model_info(f"dashscope/{model}")
+        assert model_info["max_input_tokens"] == max_input_tokens
+        assert model_info["max_output_tokens"] == max_output_tokens
+        assert model_info["supports_reasoning"] is True
+
+        expected_prompt_cost = 4000 * cache_read_cost + 6000 * input_cost
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+        assert math.isclose(completion_cost, 1000 * output_cost, rel_tol=1e-10)
+
     def test_dashscope_tiered_pricing_exceeding_highest_tier(self):
         """
         Tests tiered pricing when token count exceeds the highest defined tier range.
