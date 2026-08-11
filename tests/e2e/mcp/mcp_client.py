@@ -275,17 +275,22 @@ class McpClient:
         ).root
 
     def await_registered(self, server_id: str) -> None:
-        """Poll /v1/mcp/server until `server_id` is listed. Fails at poll_timeout.
+        """Poll /v1/mcp/server until `server_id` is listed, then wait out the
+        propagation budget. Fails at poll_timeout.
 
         The DB row exists the moment registration returns, but a data-plane pod
         answers the listing from a registry it refreshes on a periodic DB sync, so a
         pod that joined the load balancer after the write reports the server as
-        absent until its first sync.
+        absent until its first sync. The poll only proves ONE replica has the row;
+        settle_propagation is what makes the server safe to call on whichever
+        replica the next request lands on (mirrors ProxyClient.create_model).
         """
-        deadline = time.monotonic() + self.proxy.poll_timeout
+        written_at = time.monotonic()
+        deadline = written_at + self.proxy.poll_timeout
         while True:
             registered = frozenset(row.server_id for row in self.registered_servers())
             if server_id in registered:
+                settle_propagation(written_at)
                 return
             if time.monotonic() >= deadline:
                 raise AssertionError(
