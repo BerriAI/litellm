@@ -14,6 +14,7 @@ limiter every proxy already runs.
 """
 
 import asyncio
+import contextvars
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -338,6 +339,37 @@ _INDEX_TTL_SECONDS = 5.0
 # slowly. period_seconds can still raise the TTL further, never lower it.
 _CONCURRENCY_MIN_SAFETY_TTL_SECONDS = 3600
 
+# Concurrency reservation keys accumulated for the current logical request,
+# not yet released. A `ContextVar` rather than a plain module-level
+# collection or a dict keyed by anything from `kwargs`, because every
+# candidate for "correlate this hop with its logical request" that litellm
+# itself exposes turns out to be either caller-controlled (`litellm_call_id`
+# is `request.headers["x-litellm-call-id"]`, falling back to a fresh uuid
+# only when absent -- two unrelated concurrent requests reusing the same
+# caller-chosen value would merge their reservations under one key) or
+# task-discontinuous (the success path runs `async_log_success_event` from
+# inside a process-global `LoggingWorker` task, never the admission-time
+# task, so `id(asyncio.current_task())` differs even for one hop's own
+# success). `ContextVar` is the one mechanism immune to both problems: its
+# value is pure Python-runtime state, never caller-visible or
+# caller-settable, and litellm's own logging pipeline is already built to
+# propagate it correctly across every task boundary a hop crosses --
+# `asyncio.create_task()` copies the calling context by default (used for
+# `wrapper_async`'s success dispatch in `litellm/utils.py` and for this
+# hook's own rejections propagating through `Router.async_callback_filter_
+# deployments`), and `LoggingWorker.enqueue()` (`litellm/litellm_core_utils/
+# logging_worker.py`) explicitly calls `contextvars.copy_context()` at
+# enqueue time and later runs the queued coroutine via
+# `task["context"].run(asyncio.create_task, ...)`, so a value set during
+# admission is still visible when the eventual release callback executes,
+# however many hops or worker hops later that turns out to be. Each
+# concurrent request gets its own isolated context (forked at whatever
+# `create_task` call started it), so two unrelated requests never share a
+# value regardless of what identifiers they happen to reuse.
+_pending_concurrency_keys: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar(
+    "tag_rate_limiter_pending_concurrency_keys", default=()
+)
+
 
 class _TagRateLimitIndex:
     """Rebuilds the limits index when `llm_router.model_list` changes, or at
@@ -547,6 +579,12 @@ class _PROXY_TagRateLimiter(CustomLogger):
                 configured_limit, tag_value, _key = atomic_checks[failing_index]
                 self._raise_over_limit(configured_limit, tag_value, model, current=values[0])
 
+            concurrency_keys = tuple(
+                key for configured_limit, _tag_value, key in atomic_checks if configured_limit.unit == "concurrency"
+            )
+            if concurrency_keys:
+                _pending_concurrency_keys.set(_pending_concurrency_keys.get() + concurrency_keys)
+
         return healthy_deployments
 
     @staticmethod
@@ -640,97 +678,55 @@ class _PROXY_TagRateLimiter(CustomLogger):
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """
-        Release any concurrency slot reserved for this specific hop. This is
-        the only place concurrency gets released on failure -- there is no
-        `async_post_call_failure_hook` override here, deliberately: that hook
-        only fires once, if and when the entire request (every fallback
-        exhausted) ultimately fails, while this fires per hop, on every
-        failure, covering both that terminal case and a hop that fails but
-        gets recovered by a later fallback (which `async_post_call_failure_hook`
-        never sees at all). Implementing both would double-release the same
-        terminal failure's reservation: since the inflight counter is
-        aggregate, not per-request, that would silently free capacity
-        belonging to a different, still-running request sharing the same
-        tag, admitting one more concurrent request than configured rather
-        than merely under-counting.
+        Release every concurrency slot accumulated onto `_pending_concurrency_keys`
+        for the current logical request. Never recomputes a key from
+        `standard_logging_object`: only releases exactly what admission
+        itself accumulated, so a rejection this hook raises for being over
+        its own limit -- which `_atomic_check_and_increment` already
+        refunded synchronously, inside that same call, before ever adding
+        anything here -- naturally has nothing new to release, by
+        construction, rather than needing a special case for it.
+
+        The explicit `ProxyRateLimitError` check below is belt-and-suspenders
+        on top of that: hops of one logical request run strictly
+        sequentially today (a fallback is only ever attempted after the
+        previous hop has fully concluded, including firing its own
+        completion event), so a rejected hop's own `_pending_concurrency_keys`
+        is provably empty by the time this fires. If a future routing
+        strategy ever dispatches hops concurrently instead, that invariant
+        would break silently; this check means a rejection never releases
+        anything even if it does. `ProxyRateLimitError.detail` carries
+        `{"error": "tag_rate_limit_exceeded", ...}`, a string unique to this
+        module, so it's distinguishable from a genuine provider failure.
 
         litellm dedupes this event to fire once per logical request (the
         first failed hop only, via `Logging.has_run_logging`'s
-        `has_logged_async_failure` guard), so a later failed hop (a retry or
-        a further fallback) never gets a release of its own here; that
-        reservation self-heals via its safety TTL instead. An earlier design
-        accumulated every hop's keys in a registry keyed by
-        `litellm_call_id` specifically to close that gap, but
-        `litellm_call_id` is caller-controlled (`request.headers["x-litellm-
-        call-id"]`, falling back to a fresh uuid only when absent) -- two
-        genuinely concurrent, unrelated requests that happen to reuse the
-        same caller-chosen value would merge their reservations into one
-        registry entry, letting one request's completion release the
-        other's still-active slot and bypass the configured concurrency cap.
-        Recomputing the release key independently per hop, with no shared
-        registry at all, closes that vulnerability by construction: nothing
-        here is ever keyed by anything a caller supplies.
-
-        `Router.async_callback_filter_deployments` fires this same event for
-        an exception raised from *inside* `async_filter_deployments` itself
-        (its own except block re-raises after calling
-        `logging_obj.async_failure_handler`), not only for an actual
-        provider-call failure -- including a rejection this hook raises for
-        being over its own limit, before ever reserving anything for this
-        hop. `_atomic_check_and_increment` already refunds any of its own
-        earlier admissions synchronously, inside that same call, whenever it
-        rejects, so there is nothing left for this event to release for that
-        specific rejection; releasing anyway would decrement a live,
-        unrelated reservation actually held by some other in-flight request
-        sharing the same tag, letting a caller free up capacity simply by
-        retrying against an already-full bucket. `ProxyRateLimitError.detail`
-        carries `{"error": "tag_rate_limit_exceeded", ...}`, a string unique
-        to this module (no other rate-limit hook raises it), so this can be
-        distinguished reliably from a genuine provider failure.
+        `has_logged_async_failure` guard). That no longer matters for
+        correctness here: whichever event fires next for this request --
+        this one, `async_log_success_event`, or another failed hop's -- pops
+        and releases whatever has accumulated in `_pending_concurrency_keys`
+        since the last release, covering every hop this event's dedup would
+        otherwise skip. See that variable's module-level docstring for why a
+        `ContextVar` is what makes this safe: it survives every task
+        boundary a hop crosses (litellm's own logging pipeline is built to
+        propagate it), without ever depending on anything a caller supplies.
         """
         if isinstance(kwargs.get("exception"), ProxyRateLimitError):
             detail = kwargs["exception"].detail if isinstance(kwargs["exception"].detail, dict) else {}
             if detail.get("error") == "tag_rate_limit_exceeded":
                 return
 
-        if self.llm_router is None:
-            return
-
-        standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
-        if standard_logging_object is None:
-            return
-
-        model_group = standard_logging_object.get("model_group")
-        if not model_group:
-            return
-
-        standard_logging_metadata = standard_logging_object.get("metadata") or {}
-        team_id = standard_logging_metadata.get("user_api_key_team_id")
-        key_hash = standard_logging_metadata.get("user_api_key_hash")
-        configured = self._index.get(self.llm_router).resolve(model_group, team_id)
-        if not configured:
-            return
-
-        metadata_variable_name = get_metadata_variable_name_from_kwargs(kwargs)
-        tags = _get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name)
-        if not tags:
-            return
-
-        release_keys = [
-            _inflight_key(
-                model_group,
-                configured_limit,
-                tag_value,
-                key_hash=key_hash if configured_limit.entry.scope_by_key_hash else None,
-            )
-            for configured_limit in configured
-            if configured_limit.unit == "concurrency"
-            and (tag_value := _extract_identity(tags, configured_limit.entry.tag_id)) is not None
-        ]
+        release_keys = _pending_concurrency_keys.get()
         if release_keys:
-            await self._release_keys(release_keys)
+            _pending_concurrency_keys.set(())
+            await self._release_keys(list(release_keys))
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        release_keys = _pending_concurrency_keys.get()
+        if release_keys:
+            _pending_concurrency_keys.set(())
+            asyncio.create_task(self._release_keys(list(release_keys)))
+
         if self.llm_router is None:
             return
 
@@ -762,18 +758,13 @@ class _PROXY_TagRateLimiter(CustomLogger):
         }
 
         operations: list[RedisPipelineIncrementOperation] = []
-        release_keys: list[str] = []
         for configured_limit in configured:
+            if configured_limit.unit == "concurrency":
+                continue  # released above, from _pending_concurrency_keys
             if configured_limit.deployment_scope is not None and deployment_id not in configured_limit.deployment_scope:
                 continue
             tag_value = _extract_identity(tags, configured_limit.entry.tag_id)
             if tag_value is None:
-                continue
-            key_hash_for_limit = key_hash if configured_limit.entry.scope_by_key_hash else None
-            if configured_limit.unit == "concurrency":
-                release_keys.append(
-                    _inflight_key(model_group, configured_limit, tag_value, key_hash=key_hash_for_limit)
-                )
                 continue
             if configured_limit.unit not in increment_by_unit:
                 continue  # "requests" is accounted atomically at admission, not here
@@ -781,6 +772,7 @@ class _PROXY_TagRateLimiter(CustomLogger):
             if increment_value == 0:
                 continue
             bucket_id = int(now) // configured_limit.entry.period_seconds
+            key_hash_for_limit = key_hash if configured_limit.entry.scope_by_key_hash else None
             key = _bucket_key(model_group, configured_limit, tag_value, bucket_id, key_hash=key_hash_for_limit)
             operations.append(
                 RedisPipelineIncrementOperation(
@@ -789,9 +781,6 @@ class _PROXY_TagRateLimiter(CustomLogger):
                     ttl=configured_limit.entry.period_seconds + 3600,
                 )
             )
-
-        if release_keys:
-            asyncio.create_task(self._release_keys(release_keys))
 
         if not operations:
             return

@@ -633,63 +633,155 @@ async def test_concurrency_slot_released_on_fallback_recovered_hop_failure(time_
 
 
 @pytest.mark.asyncio
-async def test_concurrent_requests_sharing_a_caller_chosen_call_id_do_not_merge_reservations(time_controller):
+async def test_pending_concurrency_context_does_not_leak_across_concurrent_tasks(time_controller):
     """
-    Security regression test: litellm_call_id is caller-controlled (a
-    request can set the x-litellm-call-id header to any value; litellm only
-    generates one itself when the header is absent). An earlier design
-    correlated reservations across hops using litellm_call_id as a registry
-    key; two genuinely concurrent, unrelated requests that happened to reuse
-    the same caller-chosen value would have had their reservations merged
-    into one registry entry, so one request completing released the other's
-    still-active slot -- bypassing the configured concurrency cap entirely
-    for that identity. Release must never depend on any caller-supplied
-    identifier: two concurrent admissions sharing the identical
-    litellm_call_id must still each require their own release.
+    Security regression test, current design: `_pending_concurrency_keys` is
+    a `contextvars.ContextVar`, isolated per asyncio task/context rather
+    than a plain shared dict or list -- which matters because two genuinely
+    concurrent, unrelated requests each get their own task in production (a
+    hard ASGI guarantee, not something litellm or this hook controls), so
+    they can never share a context regardless of what identifiers (tags,
+    keys, litellm_call_id) they happen to reuse. Prove this directly: if
+    this were a shared collection instead of a real `ContextVar`, one task's
+    own release would incorrectly drain the other task's still-pending
+    reservation too, since nothing would distinguish which task accumulated
+    which key. An earlier design correlated reservations using
+    litellm_call_id specifically -- caller-controlled via the
+    x-litellm-call-id header -- as a registry key; that's what let two
+    unrelated concurrent requests merge reservations in the first place, and
+    is why this test isolates via real tasks rather than a shared id at all.
     """
     limiter = _make_limiter(time_controller)
     router = _concurrency_router(limit=2)
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
 
-    shared_call_id = "attacker-chosen-value"
-    await limiter.async_filter_deployments(
-        model="grp",
-        healthy_deployments=healthy,
-        messages=None,
-        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}, "litellm_call_id": shared_call_id},
-    )
-    await limiter.async_filter_deployments(
-        model="grp",
-        healthy_deployments=healthy,
-        messages=None,
-        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}, "litellm_call_id": shared_call_id},
-    )
+    async def _admit(tag_value):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": [f"end_user_id:{tag_value}"]}},
+        )
 
-    # Both concurrent requests admitted (2/2 in flight, sharing the same
-    # caller-chosen litellm_call_id). One of them fails.
-    await limiter.async_log_failure_event(
-        kwargs={
-            "litellm_call_id": shared_call_id,
-            "standard_logging_object": {"model_group": "grp"},
-            "metadata": {"tags": ["end_user_id:u1"]},
-        },
-        response_obj=None,
-        start_time=0,
-        end_time=0,
-    )
+    async def _release(tag_value):
+        await limiter.async_log_success_event(
+            kwargs={
+                "standard_logging_object": {"model_group": "grp", "model_id": "dep-1", "total_tokens": 0, "response_cost": 0},
+                "metadata": {"tags": [f"end_user_id:{tag_value}"]},
+            },
+            response_obj=None,
+            start_time=0,
+            end_time=0,
+        )
 
-    # Exactly one slot was freed: a third request is admitted (back to 2 in flight)...
+    # Two separate, genuinely concurrent tasks admit -- reaching capacity.
+    task_a = asyncio.create_task(_admit("a"))
+    task_b = asyncio.create_task(_admit("b"))
+    await task_a
+    await task_b
+
+    # Task A releases its own reservation, in its own task -- this must not
+    # also release task B's still-pending one.
+    await asyncio.create_task(_release("a"))
+    await asyncio.sleep(0)
+
+    # Exactly one slot was freed: a fresh request is admitted (back to 2 in flight)...
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:a"]}}
+    )
+    # ...but a second one does not, since B's reservation is genuinely still
+    # held. If task isolation were broken, task A's release would have
+    # drained B's reservation too, and this would wrongly admit.
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:a"]}}
+        )
+
+
+@pytest.mark.asyncio
+async def test_concurrency_released_for_every_hop_across_a_real_task_boundary(time_controller):
+    """
+    litellm dedupes `async_log_failure_event` to fire once per logical
+    request: only the first failed hop's failure reaches it (see
+    `Logging.has_run_logging`'s `has_logged_async_failure` guard); a later
+    failed hop (a retry or a further fallback) never gets its own failure
+    event at all. Reservations still accumulate at admission for every hop
+    regardless (onto `_pending_concurrency_keys`), so whichever event fires
+    next must release everything accumulated since the last release, not
+    just its own hop's key.
+
+    Hop 3's eventual success is fired as a child task of the same admission
+    chain -- exactly like litellm's real dispatch, where `wrapper_async`
+    create_task's the success path and `LoggingWorker.enqueue` explicitly
+    propagates the calling context -- to prove the fix survives the actual
+    task boundary a real success event crosses in production, not just a
+    same-coroutine call that would pass regardless of whether
+    `_pending_concurrency_keys` were a real `ContextVar` or an ordinary
+    variable.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=2)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    async def _one_logical_request():
+        # Hop 1 admits and fails; its failure event is the one that fires
+        # (dedup allows exactly the first failure through), releasing its
+        # own key immediately.
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        )
+        await limiter.async_log_failure_event(
+            kwargs={"standard_logging_object": {"model_group": "grp"}, "metadata": {"tags": ["end_user_id:u1"]}},
+            response_obj=None,
+            start_time=0,
+            end_time=0,
+        )
+
+        # Hop 2 (a retry or fallback) admits and also fails, but -- per
+        # litellm's dedup -- no async_log_failure_event call follows it.
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        )
+
+        # Hop 3 admits and succeeds. Its success event, dispatched as a
+        # child task (mirroring the real worker hop), must release both
+        # hop 2's still-pending reservation and its own.
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        )
+
+        async def _hop_3_success_event():
+            await limiter.async_log_success_event(
+                kwargs={
+                    "standard_logging_object": {
+                        "model_group": "grp",
+                        "model_id": "dep-1",
+                        "total_tokens": 0,
+                        "response_cost": 0,
+                    }
+                },
+                response_obj=None,
+                start_time=0,
+                end_time=0,
+            )
+
+        await asyncio.create_task(_hop_3_success_event())
+
+    await asyncio.create_task(_one_logical_request())
+    await asyncio.sleep(0)
+
+    # Full capacity (2) is free again -- both hop 2's leaked reservation and
+    # hop 3's own were released. If the earlier hop's leaked reservation
+    # hadn't been released too, only one of these two admissions would succeed.
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+    )
     result = await limiter.async_filter_deployments(
         model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
     )
     assert result == healthy
-    # ...but a fourth would exceed the limit of 2. If the shared call_id had
-    # merged both reservations into one release, this would wrongly admit.
-    with pytest.raises(ProxyRateLimitError):
-        await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
-        )
 
 
 @pytest.mark.asyncio
@@ -707,35 +799,49 @@ async def test_own_rejection_does_not_release_a_live_reservation(time_controller
     in-flight request sharing the same tag -- letting a caller free up
     capacity simply by retrying against an already-full bucket, no
     coordination with another request required.
+
+    The holder and the rejected attempt are modeled as two separate tasks
+    (matching how two independent real requests are always isolated in
+    production, each in its own asyncio task) so this actually exercises the
+    explicit ProxyRateLimitError guard rather than the ContextVar's own
+    per-task isolation, which would otherwise mask the same bug: two
+    admissions made directly in one shared coroutine would (correctly, but
+    for the wrong reason) never be able to explain away the bug this test is
+    for.
     """
     limiter = _make_limiter(time_controller)
     router = _concurrency_router(limit=1)
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
 
-    # One legitimate request holds the only slot.
-    await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
-    )
-
-    # A second attempt is rejected -- capture the real exception this hook raises.
-    with pytest.raises(ProxyRateLimitError) as exc_info:
+    # One legitimate request, in its own task, holds the only slot.
+    async def _admit():
         await limiter.async_filter_deployments(
             model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
         )
 
-    # Router's own exception handling fires async_log_failure_event for that
-    # rejection, exactly as Router.async_callback_filter_deployments does.
-    await limiter.async_log_failure_event(
-        kwargs={
-            "exception": exc_info.value,
-            "standard_logging_object": {"model_group": "grp"},
-            "metadata": {"tags": ["end_user_id:u1"]},
-        },
-        response_obj=None,
-        start_time=0,
-        end_time=0,
-    )
+    await asyncio.create_task(_admit())
+
+    # A second, unrelated request (its own task) is rejected, and Router's
+    # own exception handling fires async_log_failure_event for it, exactly
+    # as Router.async_callback_filter_deployments does.
+    async def _reject_and_fire_failure_event():
+        with pytest.raises(ProxyRateLimitError) as exc_info:
+            await limiter.async_filter_deployments(
+                model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+            )
+        await limiter.async_log_failure_event(
+            kwargs={
+                "exception": exc_info.value,
+                "standard_logging_object": {"model_group": "grp"},
+                "metadata": {"tags": ["end_user_id:u1"]},
+            },
+            response_obj=None,
+            start_time=0,
+            end_time=0,
+        )
+
+    await asyncio.create_task(_reject_and_fire_failure_event())
 
     # The first request's reservation must still be held: a third attempt is
     # still rejected. If the rejection's failure event had wrongly released
@@ -1355,28 +1461,60 @@ async def test_concurrency_scope_by_key_hash_gives_independent_reservations_per_
     reservation bucket -- keyA exhausting its own single slot must not
     block keyB's admission, and releasing keyA's reservation (via the
     standard_logging_object.metadata.user_api_key_hash channel) must free
-    keyA's capacity, not keyB's.
+    keyA's capacity, not keyB's. Each key is modeled as its own logical
+    request: one task does admission and then spawns its own release as a
+    child task, exactly like litellm's real dispatch (`wrapper_async`
+    create_task's the success path, itself a descendant of the same
+    admission-time task/context chain) -- release must never be spawned as
+    an unrelated sibling task from the test's own top level, which would
+    start from a fresh context that never saw the admission's `ContextVar`
+    write at all, an artifact of this test's own construction rather than a
+    real bug.
     """
     limiter = _make_limiter(time_controller)
     router = _concurrency_router_scoped_by_key(limit=1)
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
 
-    # keyA occupies its own single slot.
-    await limiter.async_filter_deployments(
-        model="grp",
-        healthy_deployments=healthy,
-        messages=None,
-        request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyA"}},
-    )
+    async def _admit(key: str):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": key}},
+        )
 
-    # keyB, same tag value, different key -- must still admit since it has its own bucket.
-    await limiter.async_filter_deployments(
-        model="grp",
-        healthy_deployments=healthy,
-        messages=None,
-        request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyB"}},
-    )
+    async def _release(key: str):
+        await limiter.async_log_success_event(
+            kwargs={
+                "standard_logging_object": {
+                    "model_group": "grp",
+                    "model_id": "dep-1",
+                    "total_tokens": 0,
+                    "response_cost": 0,
+                    "metadata": {"user_api_key_hash": key},
+                },
+                "metadata": {"tags": ["end_user_id:u1"]},
+            },
+            response_obj=None,
+            start_time=0,
+            end_time=0,
+        )
+
+    ready_to_release = asyncio.Event()
+
+    async def _key_a_admits_then_waits_then_releases_from_the_same_context_chain():
+        await _admit("keyA")
+        await ready_to_release.wait()
+        await asyncio.create_task(_release("keyA"))
+
+    # keyA occupies its own single slot; keyB, same tag value, different
+    # key, still admits since it has its own bucket.
+    key_a_task = asyncio.create_task(_key_a_admits_then_waits_then_releases_from_the_same_context_chain())
+    key_b_task = asyncio.create_task(_admit("keyB"))
+    await key_b_task
+    # Let key_a_task's admission run up to (but not past) `ready_to_release.wait()`.
+    await asyncio.sleep(0)
 
     # keyA is now at its own capacity -- a second keyA request is rejected.
     with pytest.raises(ProxyRateLimitError):
@@ -1387,22 +1525,9 @@ async def test_concurrency_scope_by_key_hash_gives_independent_reservations_per_
             request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyA"}},
         )
 
-    # Release keyA's reservation via the success event, matching its key hash.
-    await limiter.async_log_success_event(
-        kwargs={
-            "standard_logging_object": {
-                "model_group": "grp",
-                "model_id": "dep-1",
-                "total_tokens": 0,
-                "response_cost": 0,
-                "metadata": {"user_api_key_hash": "keyA"},
-            },
-            "metadata": {"tags": ["end_user_id:u1"]},
-        },
-        response_obj=None,
-        start_time=0,
-        end_time=0,
-    )
+    # Let keyA's task proceed to its own child-task release.
+    ready_to_release.set()
+    await key_a_task
     await asyncio.sleep(0)
 
     # keyA's capacity is freed -- a fresh keyA request now admits.
@@ -1415,7 +1540,8 @@ async def test_concurrency_scope_by_key_hash_gives_independent_reservations_per_
     assert result == healthy
 
     # keyB's own reservation is untouched by keyA's release -- a second keyB
-    # request is still rejected.
+    # request is still rejected. If task isolation were broken, keyA's
+    # release would have drained keyB's reservation too.
     with pytest.raises(ProxyRateLimitError):
         await limiter.async_filter_deployments(
             model="grp",
