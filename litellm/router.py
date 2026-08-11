@@ -922,6 +922,13 @@ class Router:
                     imbalance_threshold=sticky_weighted_args.get("imbalance_threshold", 1.5),
                     virtual_nodes=sticky_weighted_args.get("virtual_nodes", 150),
                     cache_ttl=sticky_weighted_args.get("cache_ttl", 600),
+                    observed_load_enabled=sticky_weighted_args.get("observed_load_enabled", False),
+                    observed_load_poll_interval=sticky_weighted_args.get("observed_load_poll_interval", 5.0),
+                    observed_load_ttl=sticky_weighted_args.get("observed_load_ttl", 15),
+                    observed_load_timeout=sticky_weighted_args.get("observed_load_timeout", 1.0),
+                    observed_load_waiting_weight=sticky_weighted_args.get("observed_load_waiting_weight", 1.0),
+                    dynamic_imbalance_thresholds=sticky_weighted_args.get("dynamic_imbalance_thresholds"),
+                    model_list=self.model_list,
                 )
                 if register_callbacks:
                     if isinstance(litellm.input_callback, list):
@@ -3177,7 +3184,10 @@ class Router:
             function_name=function_name,
         )
 
-        kwargs.setdefault(metadata_variable_name, {}).update(
+        metadata = kwargs.setdefault(metadata_variable_name, {})
+        if metadata.get("model_group") is None:
+            metadata["model_group"] = deployment_model_name
+        metadata.update(
             {
                 "deployment": deployment_litellm_model_name,
                 "model_info": model_info,
