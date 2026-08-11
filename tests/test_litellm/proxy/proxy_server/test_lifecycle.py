@@ -807,11 +807,12 @@ async def _init_slack_alerting_jobs(
     return jobs, proxy_logging_obj
 
 
-@pytest.mark.parametrize("spend_report_frequency", ["0d", "-1d"])
+@pytest.mark.parametrize("spend_report_frequency", ["0d", "-1d", "7h"])
 @pytest.mark.asyncio
-async def test_initialize_slack_alerting_jobs_invalid_non_positive_frequency_raises(spend_report_frequency):
+async def test_initialize_slack_alerting_jobs_invalid_frequency_raises(spend_report_frequency: str):
     """A non-positive window used to become an every-second APScheduler interval, and now also
-    computes a negative lock TTL, which expires instantly and suppresses the report for good."""
+    computes a negative lock TTL that expires instantly and suppresses the report for good.
+    match= is load-bearing: drop the guard and "-1d" still raises, but from duration_in_seconds."""
     with pytest.raises(ValueError, match="positive number of days"):
         await _init_slack_alerting_jobs(
             acquire_lock_result=True,
@@ -923,12 +924,3 @@ async def test_prometheus_fallback_stats_job_runs_when_the_lock_is_free_or_absen
     await jobs["prometheus_fallback_stats_job"]()
 
     assert send_fallback_stats.await_count == 2
-
-
-@pytest.mark.parametrize("spend_report_frequency", ["0d", "-1d"])
-@pytest.mark.asyncio
-async def test_non_positive_spend_report_frequency_is_rejected_at_startup(spend_report_frequency: str):
-    """ "0d" used to coerce to an every-second job; with the TTL haircut it would compute a
-    negative lock TTL and silently never send, so it must fail loudly instead."""
-    with pytest.raises(ValueError, match="positive number of days"):
-        await _init_slack_alerting_jobs(acquire_lock_result=True, spend_report_frequency=spend_report_frequency)
