@@ -9106,7 +9106,7 @@ class ProxyStartupEvent:
                     id=PROMETHEUS_FALLBACK_STATS_JOB_ID,
                     replace_existing=True,
                 )
-                await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
+                await _scheduled_fallback_stats()
 
     @classmethod
     async def _setup_prisma_client(

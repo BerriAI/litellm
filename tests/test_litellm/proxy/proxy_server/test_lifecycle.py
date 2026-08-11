@@ -897,20 +897,21 @@ async def test_spend_report_locks_are_never_released():
 
 @pytest.mark.asyncio
 async def test_prometheus_fallback_stats_job_skipped_when_another_pod_holds_the_lock(monkeypatch):
-    """The one await already on the mock is the unlocked startup send, which every pod still
-    does; only the scheduled job is deduped."""
+    """The boot-time send goes through the same gate, so a losing pod sends nothing at all:
+    startup and the scheduled job both stay at zero."""
     monkeypatch.setenv("PROMETHEUS_URL", "http://prometheus.invalid")
     jobs, proxy_logging_obj = await _init_slack_alerting_jobs(acquire_lock_result=False)
     send_fallback_stats = proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus
-    assert send_fallback_stats.await_count == 1
+    assert send_fallback_stats.await_count == 0
 
     await jobs["prometheus_fallback_stats_job"]()
 
-    assert send_fallback_stats.await_count == 1
-    proxy_logging_obj.db_spend_update_writer.pod_lock_manager.acquire_lock.assert_awaited_once_with(
+    assert send_fallback_stats.await_count == 0
+    proxy_logging_obj.db_spend_update_writer.pod_lock_manager.acquire_lock.assert_awaited_with(
         cronjob_id="prometheus_fallback_stats_job",
         ttl=3600,
     )
+    assert proxy_logging_obj.db_spend_update_writer.pod_lock_manager.acquire_lock.await_count == 2
 
 
 @pytest.mark.parametrize("acquire_lock_result", [True, None])
