@@ -10,14 +10,14 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, RootModel, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, RootModel, model_validator
 
 # ---------- keys ----------
 
 
 class ModelBudgetEntry(BaseModel):
-    budget_limit: float
-    time_period: str
+    budget_limit: float = Field(validation_alias=AliasChoices("budget_limit", "max_budget"))
+    time_period: str = Field(validation_alias=AliasChoices("time_period", "budget_duration"))
     rpm_limit: int | None = None
     tpm_limit: int | None = None
 

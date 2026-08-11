@@ -19,13 +19,13 @@ import time
 from collections.abc import Callable
 
 import pytest
-from pydantic import AliasChoices, BaseModel, Field, RootModel
+from pydantic import BaseModel, Field, RootModel
 
 from e2e_config import unique_marker
 from e2e_http import NoBody, Success, UnauthorizedError, UnknownApiError, is_ok, unwrap
 from lifecycle import ResourceManager
 from management_client import ManagementClient
-from models import KeyGenerateBody, OrgInfoParams, OrgNewBody, UserNewBody
+from models import KeyGenerateBody, ModelBudgetEntry, OrgInfoParams, OrgNewBody, UserNewBody
 
 pytestmark = pytest.mark.e2e
 
@@ -53,11 +53,6 @@ class BudgetNewBody(BaseModel):
 
 class BudgetNewResponse(BaseModel):
     budget_id: str
-
-
-class ModelBudgetEntry(BaseModel):
-    budget_limit: float = Field(validation_alias=AliasChoices("budget_limit", "max_budget"))
-    time_period: str = Field(validation_alias=AliasChoices("time_period", "budget_duration"))
 
 
 class BudgetUpdateBody(BaseModel):
