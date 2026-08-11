@@ -672,7 +672,7 @@ async def test_redis_write_failure_does_not_log_master_key(redis_no_ping, call_c
     """
     from litellm._logging import verbose_logger
 
-    cache: Final = RedisCache(host="127.0.0.1", port=6379, socket_timeout=0.5)
+    cache: Final = RedisCache(host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
     capture: Final = _CaptureRecords()
     verbose_logger.addFilter(capture)
     try:
