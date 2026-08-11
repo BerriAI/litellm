@@ -8,6 +8,7 @@ import { ApiError } from "@/lib/http/client";
 
 vi.mock("./useAutoRouterBenchmarks", () => ({ useAutoRouterBenchmarks: vi.fn() }));
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({ useAutoRouters: vi.fn() }));
+vi.mock("./ShadowEvalSection", () => ({ default: () => <div data-testid="shadow-eval-section" /> }));
 
 import { useAutoRouters } from "@/app/(dashboard)/hooks/models/useModels";
 
@@ -272,6 +273,14 @@ describe("AutoRouterBenchmarksTab", () => {
     fireEvent.click(screen.getByRole("tab", { name: "24h" }));
     expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", "24h");
     expect(screen.getByText("Last 24 hours")).toBeInTheDocument();
+  });
+
+  it("keeps the shadow eval section rendered while the benchmarks body is in its error state", () => {
+    mockHook({ error: new ApiError("boom", 500, {}) });
+    renderTab();
+
+    expect(screen.getByTestId("shadow-eval-section")).toBeInTheDocument();
+    expect(screen.getByText("Auto-router usage is unavailable right now")).toBeInTheDocument();
   });
 
   it("keeps the window picker reachable while a window has no sessions", () => {

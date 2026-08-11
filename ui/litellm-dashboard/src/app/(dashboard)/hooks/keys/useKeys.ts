@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery, UseQueryResult } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useQuery, UseQueryResult } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
@@ -110,6 +110,21 @@ export const useKeys = (
     enabled: Boolean(accessToken),
     staleTime: 30000, // 30 seconds
     placeholderData: keepPreviousData,
+  });
+};
+
+const infiniteKeyKeys = createQueryKeys("infiniteKeys");
+
+export const useInfiniteKeys = (pageSize: number, options: KeyListCallOptions = {}) => {
+  const { accessToken } = useAuthorized();
+
+  return useInfiniteQuery<KeysResponse>({
+    queryKey: infiniteKeyKeys.list({ limit: pageSize, ...options }),
+    queryFn: async ({ pageParam }) => await keyListCall(accessToken!, pageParam as number, pageSize, options),
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) =>
+      lastPage.current_page < lastPage.total_pages ? lastPage.current_page + 1 : undefined,
+    enabled: Boolean(accessToken),
   });
 };
 

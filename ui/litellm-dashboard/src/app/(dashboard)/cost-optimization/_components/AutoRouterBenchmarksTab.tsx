@@ -31,6 +31,7 @@ import {
   type BucketRow,
 } from "./autoRouterBenchmarks";
 import { usd } from "./costOptimizationUtils";
+import ShadowEvalSection from "./ShadowEvalSection";
 import TierTurnsChart from "./TierTurnsChart";
 import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
 
@@ -309,6 +310,8 @@ const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ acces
           </div>
         </div>
       </div>
+
+      <ShadowEvalSection accessToken={accessToken} />
 
       <BenchmarksBody
         isPending={isPending}
