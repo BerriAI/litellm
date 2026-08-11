@@ -76,17 +76,13 @@ class PassThroughStreamingHandler:
                     PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
                     if endpoint_type == EndpointType.VERTEX_AI:
                         if "streamRawPredict" in url_route or "rawPredict" in url_route:
-                            modified_chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+                            chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
                                 chunk, resolved_model_name
                             )
-                            if modified_chunk is not None:
-                                chunk = modified_chunk
                     else:  # EndpointType.ANTHROPIC
-                        modified_chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+                        chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
                             chunk, resolved_model_name
                         )
-                        if modified_chunk is not None:
-                            chunk = modified_chunk
 
                     yield chunk
         except Exception as e:

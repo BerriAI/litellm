@@ -23,7 +23,7 @@ from collections import defaultdict
 from collections.abc import AsyncGenerator, Callable, Generator, Mapping, Sequence
 from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypeVar, Union, cast
 
 import anyio
 import httpx
@@ -257,6 +257,14 @@ else:
     AdaptiveRouter = Any
     QualityRouter = Any
     PreRoutingHookResponse = Any
+
+RouterStrategySelector: TypeAlias = (
+    LeastBusyLoggingHandler
+    | LowestCostLoggingHandler
+    | LowestLatencyLoggingHandler
+    | LowestTPMLoggingHandler
+    | LowestTPMLoggingHandler_v2
+)
 
 
 def _cost_value_as_float(value: str | float | None) -> float | None:
@@ -728,7 +736,7 @@ class Router:
                 routing_strategy_args=routing_strategy_args,
             )
         self._init_routing_groups(self._routing_groups_input)
-        self._override_selectors: dict[str, Any] = {}
+        self._override_selectors: dict[str, RouterStrategySelector | None] = {}
         self._override_selectors_lock = threading.Lock()
         self.access_groups = None
         ## USAGE TRACKING ##
@@ -921,13 +929,13 @@ class Router:
         strategy: RoutingStrategy | str,
         routing_strategy_args: dict,
         register_callbacks: bool = True,
-    ) -> Any | None:
+    ) -> RouterStrategySelector | None:
         """
         Constructs a strategy selector for a given strategy.
         Returns None for `simple-shuffle` (no selector needed) and unknown
         strategies.
         """
-        selector: Any | None = None
+        selector: RouterStrategySelector | None = None
         match self._normalize_strategy(strategy):
             case RoutingStrategy.LEAST_BUSY.value:
                 selector = LeastBusyLoggingHandler(router_cache=self.cache)
@@ -964,7 +972,7 @@ class Router:
 
         return selector
 
-    def _unregister_router_selectors(self, selectors: list[Any]) -> None:
+    def _unregister_router_selectors(self, selectors: Sequence[object]) -> None:
         """
         Drop router-owned strategy selectors from litellm's global callback
         lists by identity. Used before re-init (`routing_strategy_init` /
@@ -1021,13 +1029,14 @@ class Router:
         `"default"` group, whose selectors are the `self.<strategy>_logger`
         attributes set up in `routing_strategy_init`.
         """
-        self._unregister_router_selectors(
-            [sel for selectors in getattr(self, "_group_selectors", {}).values() for sel in selectors.values()]
+        group_selectors: Final[Mapping[str, Mapping[str, RouterStrategySelector]]] = getattr(
+            self, "_group_selectors", {}
         )
+        self._unregister_router_selectors([sel for selectors in group_selectors.values() for sel in selectors.values()])
 
         self._routing_groups: dict[str, RoutingGroup] = {}
         self._model_to_group: dict[str, str] = {}
-        self._group_selectors: dict[str, dict[str, Any]] = {}
+        self._group_selectors: dict[str, dict[str, RouterStrategySelector]] = {}
 
         if not groups_input:
             return
@@ -1105,7 +1114,7 @@ class Router:
             return None
         return strategy
 
-    def _get_override_strategy_selector(self, strategy: str) -> Any | None:
+    def _get_override_strategy_selector(self, strategy: str) -> RouterStrategySelector | None:
         """
         Returns the selector for a per-request strategy override.
 
@@ -1126,7 +1135,9 @@ class Router:
                 )
             return self._override_selectors[strategy]
 
-    def _get_routing_context(self, model: str, request_kwargs: dict | None = None) -> tuple[str | None, Any | None]:
+    def _get_routing_context(
+        self, model: str, request_kwargs: dict | None = None
+    ) -> tuple[str | None, RouterStrategySelector | None]:
         """
         Resolves the routing strategy and selector to use for the given model.
 
@@ -1949,7 +1960,7 @@ class Router:
 
         return silent_kwargs
 
-    def _silent_experiment_completion(self, silent_model: str, messages: list[Any], **kwargs):
+    def _silent_experiment_completion(self, silent_model: str, messages: Sequence[Mapping[str, str]], **kwargs):
         """
         Run a silent experiment in the background (thread).
         """
@@ -2299,7 +2310,7 @@ class Router:
                     # in __init__ rather than declaring it as a class field, so
                     # static narrowing doesn't expose it. Mirror the sync path
                     # (_completion_streaming_iterator) and pull via getattr.
-                    chat: Final = getattr(built, "usage", None) if built is not None else None
+                    chat: Final[object | None] = getattr(built, "usage", None) if built is not None else None
                     if chat is not None:
                         # getattr-with-default because the test path may
                         # substitute a SimpleNamespace lacking some fields;
@@ -2393,7 +2404,7 @@ class Router:
         # ResponseOutputMessageParam, ...) — annotating as List[Dict[str, Any]]
         # rejects the list() spread of input_val. We cast the combined list to
         # ResponseInputParam at the return.
-        base: list[Any]
+        base: list[object]
         if isinstance(input_val, str):
             base = [
                 {
@@ -2406,7 +2417,7 @@ class Router:
             base = list(input_val)
         else:
             base = []
-        continuation: Final[list[Any]] = [
+        continuation: Final[list[object]] = [
             {
                 "type": "message",
                 "role": "developer",
@@ -2783,7 +2794,7 @@ class Router:
 
         return SyncFallbackStreamWrapper(stream_with_fallbacks())
 
-    async def _silent_experiment_acompletion(self, silent_model: str, messages: list[Any], **kwargs):
+    async def _silent_experiment_acompletion(self, silent_model: str, messages: Sequence[Mapping[str, str]], **kwargs):
         """
         Run a silent experiment in the background.
         """
@@ -3039,7 +3050,7 @@ class Router:
                 pass
 
     def _stamp_failed_deployment_id_with_effective_model_info(
-        self, exception: Exception, deployment: Mapping[str, Any], kwargs: Mapping[str, Any]
+        self, exception: Exception, deployment: Mapping[str, object], kwargs: Mapping[str, object]
     ) -> None:
         # A client-side-credential call gets a dynamic deployment id generated inside
         # _update_kwargs_with_deployment and stamped into kwargs["model_info"]; stamping
@@ -3562,8 +3573,8 @@ class Router:
         model: str,
         priority: int,
         original_function: Callable,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
+        args: tuple[object, ...],
+        kwargs: dict[str, object],
     ):
         parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
         ### FLOW ITEM ###
@@ -4651,7 +4662,7 @@ class Router:
         # fallback to the original reference for any non-picklable value.
         # The original_generic_function is preserved so the per-attempt
         # helper knows which underlying API to call on fallback.
-        fallback_kwargs: Final[dict[str, Any]] = kwargs.copy()
+        fallback_kwargs: Final[dict[str, object]] = kwargs.copy()
         if isinstance(fallback_kwargs.get("litellm_metadata"), dict):
             fallback_kwargs["litellm_metadata"] = safe_deep_copy(fallback_kwargs["litellm_metadata"])
         if isinstance(fallback_kwargs.get("metadata"), dict):
@@ -5698,7 +5709,7 @@ class Router:
 
             def sync_wrapper(
                 custom_llm_provider: str | None = None,
-                client: Any | None = None,
+                client: object | None = None,
                 **kwargs,
             ):
                 return self._generic_api_call_with_fallbacks(original_function=original_function, **kwargs)
@@ -5714,7 +5725,7 @@ class Router:
 
             def vector_store_sync_wrapper(
                 custom_llm_provider: str | None = None,
-                client: Any | None = None,
+                client: object | None = None,
                 **kwargs,
             ):
                 if custom_llm_provider and "custom_llm_provider" not in kwargs:
@@ -5736,7 +5747,7 @@ class Router:
 
             def vector_store_file_sync_wrapper(
                 custom_llm_provider: str | None = None,
-                client: Any | None = None,
+                client: object | None = None,
                 **kwargs,
             ):
                 return original_function(
@@ -5757,7 +5768,7 @@ class Router:
 
             def managed_agents_sync_wrapper(
                 custom_llm_provider: str | None = None,
-                client: Any | None = None,
+                client: object | None = None,
                 **kwargs,
             ):
                 if custom_llm_provider and "custom_llm_provider" not in kwargs:
@@ -7142,7 +7153,9 @@ class Router:
         except Exception as e:
             raise e
 
-    async def async_deployment_callback_on_failure(self, kwargs, completion_response: Any | None, start_time, end_time):
+    async def async_deployment_callback_on_failure(
+        self, kwargs, completion_response: object | None, start_time, end_time
+    ):
         """
         Update RPM usage for a deployment
         """
@@ -7843,7 +7856,7 @@ class Router:
                     continue
                 if self._has_registered_strategy(self.adaptive_routers, model_name, tagged.tags):
                     continue
-                adaptive_router = complexity_router._ensure_adaptive_router()
+                adaptive_router: AdaptiveRouter | None = complexity_router._ensure_adaptive_router()
                 if adaptive_router is not None:
                     self.adaptive_routers[model_name] = [
                         *self.adaptive_routers.get(model_name, []),
@@ -8131,7 +8144,7 @@ class Router:
                 self.provider_default_deployment_ids.append(deployment.model_info.id)
 
         _team_id: Final = deployment.model_info.get("team_id")
-        _team_public_model_name: Final = deployment.model_info.get("team_public_model_name")
+        _team_public_model_name: Final[str | None] = deployment.model_info.get("team_public_model_name")
         if _team_id is not None and _team_public_model_name is not None and "*" in _team_public_model_name:
             if _team_id not in self.team_pattern_routers:
                 self.team_pattern_routers[_team_id] = PatternMatchRouter()
@@ -9485,7 +9498,7 @@ class Router:
 
     async def set_response_headers(
         self,
-        response: Any,
+        response: object,
         model_group: str | None = None,
         request_kwargs: dict | None = None,
     ) -> Any:
@@ -11318,7 +11331,7 @@ class Router:
 
     @staticmethod
     def _redact_prompt_text_if_needed(
-        request_kwargs: Mapping[str, Any],
+        request_kwargs: Mapping[str, object],
         routing_decision: StandardLoggingRoutingDecision,
     ) -> StandardLoggingRoutingDecision:
         """Drop verbatim prompt text from the record when message logging is redacted.
@@ -11680,7 +11693,7 @@ class Router:
         flag. Used by credential-lookup helpers so passthrough file / batch endpoints
         cannot bypass the pause by resolving credentials directly.
         """
-        model_info: Final = getattr(deployment, "model_info", None)
+        model_info: Final[object | None] = getattr(deployment, "model_info", None)
         if model_info is None:
             return False
         return getattr(model_info, "blocked", None) is True

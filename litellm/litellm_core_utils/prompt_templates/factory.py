@@ -549,7 +549,7 @@ def _fetch_and_extract_template(
     return chat_template, bos_token, eos_token
 
 
-async def ahf_chat_template(model: str, messages: list, chat_template: Any | None = None):
+async def ahf_chat_template(model: str, messages: list, chat_template: str | None = None):
     """HuggingFace chat template (async version)"""
     from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
         _aget_chat_template_file,
@@ -576,7 +576,7 @@ async def ahf_chat_template(model: str, messages: list, chat_template: Any | Non
     )
 
 
-def hf_chat_template(model: str, messages: list, chat_template: Any | None = None):
+def hf_chat_template(model: str, messages: list, chat_template: str | None = None):
     """HuggingFace chat template (sync version)"""
     from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
         _get_chat_template_file,
@@ -1130,7 +1130,7 @@ def convert_to_azure_openai_messages(
 
 
 def infer_protocol_value(
-    value: Any,
+    value: object,
 ) -> Literal[
     "string_value",
     "number_value",
@@ -1702,7 +1702,9 @@ def convert_function_to_anthropic_tool_invoke(
         _name: Final = get_attribute_or_key(function_call, "name") or ""
         _arguments: Final = get_attribute_or_key(function_call, "arguments")
 
-        tool_input = parse_tool_call_arguments(_arguments, tool_name=_name, context="Anthropic function to tool invoke")
+        tool_input: Final = parse_tool_call_arguments(
+            _arguments, tool_name=_name, context="Anthropic function to tool invoke"
+        )
 
         anthropic_tool_invoke: Final = [
             AnthropicMessagesToolUseParam(
@@ -1764,7 +1766,7 @@ def convert_to_anthropic_tool_invoke(
 
     Fixes: https://github.com/BerriAI/litellm/issues/17737
     """
-    anthropic_tool_invoke: Final[list[AnthropicMessagesToolUseParam | dict[str, Any]]] = []
+    anthropic_tool_invoke: Final[list[AnthropicMessagesToolUseParam | dict[str, object]]] = []
 
     for tool in tool_calls:
         if not get_attribute_or_key(tool, "type") == "function":
@@ -1785,7 +1787,7 @@ def convert_to_anthropic_tool_invoke(
         # Server tool IDs start with "srvtoolu_"
         if tool_id.startswith("srvtoolu_"):
             # Create server_tool_use block instead of tool_use
-            _anthropic_server_tool_use: dict[str, Any] = {
+            _anthropic_server_tool_use: dict[str, object] = {
                 "type": "server_tool_use",
                 "id": tool_id,
                 "name": tool_name,
@@ -2177,7 +2179,7 @@ def _is_orphaned_tool_result(
     return False
 
 
-def _declared_tool_call_ids(message: Mapping[str, Any]) -> frozenset[str]:
+def _declared_tool_call_ids(message: Mapping[str, object]) -> frozenset[str]:
     tool_calls: Final = message.get("tool_calls")
     if not isinstance(tool_calls, list):
         return frozenset()
@@ -2186,7 +2188,7 @@ def _declared_tool_call_ids(message: Mapping[str, Any]) -> frozenset[str]:
     )
 
 
-def group_tool_exchanges(messages: Sequence[Mapping[str, Any]]) -> tuple[tuple[int, ...], ...]:
+def group_tool_exchanges(messages: Sequence[Mapping[str, object]]) -> tuple[tuple[int, ...], ...]:
     """Group message indices into tool exchanges: an assistant row that made
     tool calls, together with the tool rows answering the ids it declared.
 
@@ -2204,7 +2206,7 @@ def group_tool_exchanges(messages: Sequence[Mapping[str, Any]]) -> tuple[tuple[i
     return tuple(_iter_tool_exchange_groups(messages))
 
 
-def _iter_tool_exchange_groups(messages: Sequence[Mapping[str, Any]]) -> Iterator[tuple[int, ...]]:
+def _iter_tool_exchange_groups(messages: Sequence[Mapping[str, object]]) -> Iterator[tuple[int, ...]]:
     index = 0
     while index < len(messages):
         declared = _declared_tool_call_ids(messages[index])
@@ -2409,7 +2411,7 @@ def anthropic_messages_pt(
                             # Convert ChatCompletionImageUrlObject to dict if needed
                             image_url_value = m["image_url"]
                             if isinstance(image_url_value, str):
-                                image_url_input: str | dict[str, Any] = image_url_value
+                                image_url_input: str | dict[str, object] = image_url_value
                             else:
                                 # ChatCompletionImageUrlObject or dict case - convert to dict
                                 image_url_input = {
@@ -3179,7 +3181,7 @@ def _load_image_from_url(image_url):
     try:
         # Send a GET request to the image URL
         client: Final = HTTPHandler(concurrent_limit=1)
-        response: Final = safe_get(client, image_url)
+        response: Final[httpx.Response] = safe_get(client, image_url)
         response.raise_for_status()  # Raise an exception for HTTP errors
 
         # Check the response's content type to ensure it is an image
@@ -3382,7 +3384,7 @@ class BedrockImageProcessor:
     @staticmethod
     def _post_call_image_processing(response: httpx.Response, image_url: str = "") -> tuple[str, str]:
         # Check the response's content type to ensure it is an image
-        content_type = response.headers.get("content-type")
+        content_type: str | None = response.headers.get("content-type")
 
         # Use helper function to infer content type with fallback logic
         content_type = infer_content_type_from_url_and_content(
@@ -3406,7 +3408,7 @@ class BedrockImageProcessor:
                 params={"concurrent_limit": 1},
             )
             # Send a GET request to the image URL
-            response: Final = await async_safe_get(client, image_url)
+            response: Final[httpx.Response] = await async_safe_get(client, image_url)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
             return BedrockImageProcessor._post_call_image_processing(response, image_url)
@@ -3419,7 +3421,7 @@ class BedrockImageProcessor:
         try:
             client: Final = HTTPHandler(concurrent_limit=1)
             # Send a GET request to the image URL
-            response: Final = safe_get(client, image_url)
+            response: Final[httpx.Response] = safe_get(client, image_url)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
             return BedrockImageProcessor._post_call_image_processing(response, image_url)
@@ -5328,10 +5330,10 @@ def get_attribute_or_key(tool_or_function, attribute, default=None):
 class NormalizedToolCall(TypedDict):
     id: str | None
     name: str | None
-    arguments: dict[str, Any]
+    arguments: dict[str, object]
 
 
-def _parse_tool_call_arguments(raw: Any, tool_name: str | None, context: str) -> dict[str, Any]:
+def _parse_tool_call_arguments(raw: Any, tool_name: str | None, context: str) -> dict[str, object]:
     # Anthropic's tool_use blocks already carry a parsed dict in "input";
     # chat completions and the Responses API carry a JSON string that may be
     # truncated by the model, so route those through the repair-aware parser.
@@ -5352,12 +5354,12 @@ def _parse_tool_call_arguments(raw: Any, tool_name: str | None, context: str) ->
 
 
 def _tool_calls_from_chat_completion_response(
-    response: Any, include_all_choices: bool = False
+    response: object, include_all_choices: bool = False
 ) -> list[NormalizedToolCall]:
     choices: Final = get_attribute_or_key(response, "choices", None)
     if not (isinstance(choices, list) and choices):
         return []
-    tool_calls: Final[list[Any]] = []
+    tool_calls: Final[list[object]] = []
     for choice in choices if include_all_choices else choices[:1]:
         message = get_attribute_or_key(choice, "message", None)
         choice_tool_calls = get_attribute_or_key(message, "tool_calls", None) if message else None
@@ -5383,7 +5385,7 @@ def _tool_calls_from_chat_completion_response(
     return result
 
 
-def _tool_calls_from_responses_api_response(response: Any) -> list[NormalizedToolCall]:
+def _tool_calls_from_responses_api_response(response: object) -> list[NormalizedToolCall]:
     output: Final = get_attribute_or_key(response, "output", None)
     if not isinstance(output, list):
         return []
@@ -5406,7 +5408,7 @@ def _tool_calls_from_responses_api_response(response: Any) -> list[NormalizedToo
     return result
 
 
-def _tool_calls_from_anthropic_messages_response(response: Any) -> list[NormalizedToolCall]:
+def _tool_calls_from_anthropic_messages_response(response: object) -> list[NormalizedToolCall]:
     content: Final = get_attribute_or_key(response, "content", None)
     if not isinstance(content, list):
         return []
@@ -5425,7 +5427,7 @@ def _tool_calls_from_anthropic_messages_response(response: Any) -> list[Normaliz
     return result
 
 
-def get_tool_calls_from_response(response: Any, include_all_choices: bool = False) -> list[NormalizedToolCall]:
+def get_tool_calls_from_response(response: object, include_all_choices: bool = False) -> list[NormalizedToolCall]:
     """
     Extract tool/function calls from a response object into a normalized
     ``{"id", "name", "arguments"}`` shape, regardless of which API surface
@@ -5456,7 +5458,7 @@ def get_tool_calls_from_response(response: Any, include_all_choices: bool = Fals
     return []
 
 
-def has_tool_with_name(tools: Any, tool_name: str) -> bool:
+def has_tool_with_name(tools: object, tool_name: str) -> bool:
     """
     Check whether a tools list (as sent to an LLM) includes a tool with the
     given name, regardless of shape: OpenAI-style function tools
@@ -5482,9 +5484,9 @@ def has_tool_with_name(tools: Any, tool_name: str) -> bool:
 
 
 def resolve_structured_messages(
-    messages: list[dict[str, Any]] | None,
+    messages: list[dict[str, object]] | None,
     request_kwargs: dict[str, Any],
-) -> list[dict[str, Any]] | None:
+) -> list[dict[str, object]] | None:
     """
     Normalize a request's messages to OpenAI-spec chat-completions shape,
     regardless of which API surface produced them (chat completions,
