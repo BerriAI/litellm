@@ -28,23 +28,16 @@ jobs:
     if: ${{ !endsWith(github.event.pull_request.user.login, '[bot]') && !contains(github.event.pull_request.labels.*.name, 'ignore-pr-body-template') }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout lint script
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          sparse-checkout: .github/scripts
-          persist-credentials: false
-
       # The judging copy of the script comes from the base branch so a PR
-      # cannot weaken the checker that judges it. The merge-ref copy above is
-      # only the fallback for the PR that first introduces the script, when
-      # the base branch does not have it yet.
+      # cannot weaken the checker that judges it. No fallback to a
+      # PR-controlled copy: if the base branch does not carry the script yet,
+      # the check step below skips with a notice instead.
       - name: Checkout the base branch's lint script
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           sparse-checkout: .github/scripts
           persist-credentials: false
-          path: base-ref
 
       - name: List changed files
         env:
@@ -57,6 +50,9 @@ jobs:
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          SCRIPT=base-ref/.github/scripts/check_pr_body.py
-          [ -f "$SCRIPT" ] || SCRIPT=.github/scripts/check_pr_body.py
+          SCRIPT=.github/scripts/check_pr_body.py
+          if [ ! -f "$SCRIPT" ]; then
+            echo "::notice title=PR body template::Base branch has no checker script yet; skipping until it merges"
+            exit 0
+          fi
           python3 "$SCRIPT" --changed-files changed_files.txt
