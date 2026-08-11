@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.proxy.claude_code_endpoints import (
     ListPluginsResponse,
@@ -221,6 +222,18 @@ def _name_conflict_error(name: str) -> HTTPException:
     )
 
 
+def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
+    """Catalog mutations are restricted to proxy admins: marketplace.json is served
+    unauthenticated and any registered/updated entry is immediately installable by
+    every user, so a non-admin key must never be able to add or overwrite one.
+    """
+    if not is_proxy_admin(user_api_key_dict):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins may modify the Claude Code plugin marketplace."},
+        )
+
+
 @router.post(
     "/claude-code/plugins",
     tags=["Claude Code Marketplace"],
@@ -271,6 +284,8 @@ async def register_plugin(
     from prisma.errors import UniqueViolationError
 
     try:
+        _require_proxy_admin(user_api_key_dict)
+
         prisma_client: Final = await _get_prisma_client()
 
         if not re.match(r"^[a-z0-9-]+$", request.name):
@@ -468,6 +483,7 @@ async def get_plugin(
 async def update_plugin(
     plugin_name: str,
     request: UpdatePluginRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Update an existing plugin in the LiteLLM marketplace.
@@ -509,6 +525,8 @@ async def update_plugin(
     from prisma.errors import PrismaError
 
     try:
+        _require_proxy_admin(user_api_key_dict)
+
         prisma_client: Final = await _get_prisma_client()
 
         _validate_plugin_source(request.source)
@@ -570,6 +588,8 @@ async def enable_plugin(
         - plugin_name: The name of the plugin to enable
     """
     try:
+        _require_proxy_admin(user_api_key_dict)
+
         prisma_client: Final = await _get_prisma_client()
 
         plugin: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
@@ -615,6 +635,8 @@ async def disable_plugin(
         - plugin_name: The name of the plugin to disable
     """
     try:
+        _require_proxy_admin(user_api_key_dict)
+
         prisma_client: Final = await _get_prisma_client()
 
         plugin: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
@@ -660,6 +682,8 @@ async def delete_plugin(
         - plugin_name: The name of the plugin to delete
     """
     try:
+        _require_proxy_admin(user_api_key_dict)
+
         prisma_client: Final = await _get_prisma_client()
 
         plugin: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
