@@ -43,11 +43,10 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from typing import List, Literal, Optional, Union, overload
+from typing import Literal, overload
 
 import litellm
-from litellm.types.utils import Choices, Message, ModelResponse, Usage
-
+from litellm.types.utils import ModelResponse, Usage
 
 # ---------------------------------------------------------------------------
 # Judge prompt templates
@@ -219,30 +218,30 @@ async def _run_panel(
 
 @overload
 async def afusion(
-    models: List[str],
+    models: list[str],
     messages: list,
     *,
     judge_model: None = ...,
     strategy: FusionStrategy = ...,
     include_panel: bool = ...,
-    timeout: Optional[float] = ...,
-    temperature: Optional[float] = ...,
-    max_tokens: Optional[int] = ...,
+    timeout: float | None = ...,
+    temperature: float | None = ...,
+    max_tokens: int | None = ...,
     **kwargs,
 ) -> list[ModelResponse]: ...
 
 
 @overload
 async def afusion(
-    models: List[str],
+    models: list[str],
     messages: list,
     *,
     judge_model: str,
     strategy: FusionStrategy = ...,
     include_panel: bool = ...,
-    timeout: Optional[float] = ...,
-    temperature: Optional[float] = ...,
-    max_tokens: Optional[int] = ...,
+    timeout: float | None = ...,
+    temperature: float | None = ...,
+    max_tokens: int | None = ...,
     **kwargs,
 ) -> ModelResponse: ...
 
@@ -253,17 +252,17 @@ async def afusion(
 
 
 async def afusion(
-    models: List[str],
+    models: list[str],
     messages: list,
     *,
-    judge_model: Optional[str] = None,
+    judge_model: str | None = None,
     strategy: FusionStrategy = "single_judge",
     include_panel: bool = True,
-    timeout: Optional[float] = None,
-    temperature: Optional[float] = None,
-    max_tokens: Optional[int] = None,
+    timeout: float | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
     **kwargs,
-) -> Union[list[ModelResponse], ModelResponse]:
+) -> list[ModelResponse] | ModelResponse:
     """
     Async fusion: call panel models in parallel, optionally synthesize with judge.
 
@@ -346,46 +345,46 @@ async def afusion(
 
 @overload
 def fusion(
-    models: List[str],
+    models: list[str],
     messages: list,
     *,
     judge_model: None = ...,
     strategy: FusionStrategy = ...,
     include_panel: bool = ...,
-    timeout: Optional[float] = ...,
-    temperature: Optional[float] = ...,
-    max_tokens: Optional[int] = ...,
+    timeout: float | None = ...,
+    temperature: float | None = ...,
+    max_tokens: int | None = ...,
     **kwargs,
 ) -> list[ModelResponse]: ...
 
 
 @overload
 def fusion(
-    models: List[str],
+    models: list[str],
     messages: list,
     *,
     judge_model: str,
     strategy: FusionStrategy = ...,
     include_panel: bool = ...,
-    timeout: Optional[float] = ...,
-    temperature: Optional[float] = ...,
-    max_tokens: Optional[int] = ...,
+    timeout: float | None = ...,
+    temperature: float | None = ...,
+    max_tokens: int | None = ...,
     **kwargs,
 ) -> ModelResponse: ...
 
 
 def fusion(
-    models: List[str],
+    models: list[str],
     messages: list,
     *,
-    judge_model: Optional[str] = None,
+    judge_model: str | None = None,
     strategy: FusionStrategy = "single_judge",
     include_panel: bool = True,
-    timeout: Optional[float] = None,
-    temperature: Optional[float] = None,
-    max_tokens: Optional[int] = None,
+    timeout: float | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
     **kwargs,
-) -> Union[list[ModelResponse], ModelResponse]:
+) -> list[ModelResponse] | ModelResponse:
     """
     Sync fusion: call panel models in parallel, optionally synthesize with judge.
 
@@ -426,4 +425,4 @@ def fusion(
     )
 
 
-__all__ = ["fusion", "afusion", "FusionStrategy"]
+__all__ = ["FusionStrategy", "afusion", "fusion"]
