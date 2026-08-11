@@ -2322,6 +2322,53 @@ def test_edit_and_extension_support_custom_provider_from_extra_body(
 
 
 @pytest.mark.parametrize("endpoint", ["/v1/videos/edits", "/v1/videos/extensions"])
+def test_edit_and_extension_accept_form_encoded_after_auth_reads_body(
+    video_proxy_test_client, endpoint
+):
+    from fastapi import Request
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    captured_data = {}
+
+    async def _mock_base_process(self, **kwargs):
+        captured_data.update(self.data)
+        return {
+            "id": "video_resp_123",
+            "object": "video",
+            "status": "queued",
+            "created_at": 1712697600,
+        }
+
+    async def auth_that_reads_body_first(request: Request):
+        await _read_request_body(request=request)
+        return MagicMock()
+
+    app = video_proxy_test_client.app
+    app.dependency_overrides[user_api_key_auth] = auth_that_reads_body_first
+
+    with patch.object(
+        ProxyBaseLLMRequestProcessing,
+        "base_process_llm_request",
+        new=_mock_base_process,
+    ):
+        response = video_proxy_test_client.post(
+            endpoint,
+            headers={"Authorization": "Bearer sk-1234"},
+            data={
+                "model": "my-video-model",
+                "prompt": "brighter",
+                "video": "video_123",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert captured_data["video_id"] == "video_123"
+    assert captured_data["prompt"] == "brighter"
+
+
+@pytest.mark.parametrize("endpoint", ["/v1/videos/edits", "/v1/videos/extensions"])
 def test_edit_and_extension_route_with_encoded_video_ids(
     video_proxy_test_client, endpoint
 ):

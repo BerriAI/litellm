@@ -13,6 +13,27 @@ def extract_model_from_target_model_names(target_model_names: Any) -> str | None
     return target_model_names[0] if target_model_names else None
 
 
+def pop_video_reference_to_video_id(data: dict[str, Any]) -> None:
+    """
+    Normalize OpenAI video edit/extension payloads into ``video_id``.
+
+    JSON bodies use ``video: {"id": ...}``. Multipart and form-urlencoded bodies
+    may send a bare id string or a JSON-encoded reference object as a string field.
+    """
+    video_ref: Final = data.pop("video", {})
+    if isinstance(video_ref, dict):
+        video_id: Final = video_ref.get("id", "")
+    elif isinstance(video_ref, str):
+        try:
+            parsed_ref: Final = orjson.loads(video_ref)
+        except orjson.JSONDecodeError:
+            parsed_ref = None
+        video_id = parsed_ref.get("id", "") if isinstance(parsed_ref, dict) else video_ref
+    else:
+        video_id = ""
+    data["video_id"] = video_id
+
+
 def get_custom_provider_from_data(data: dict[str, Any]) -> str | None:
     custom_llm_provider: Final = data.get("custom_llm_provider")
     if custom_llm_provider:
