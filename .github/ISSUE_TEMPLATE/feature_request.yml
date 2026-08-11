@@ -58,11 +58,11 @@ body:
       description: |
         Run as many steps of the "After this feature (ideal user flow)" list as you can against a live proxy you ran yourself (e.g., `litellm --config config.yaml --detailed_debug` on localhost:4000), then paste the commands (e.g., curl) and their full output, ending at the step that dead-ends. Every rule below applies.
 
-        - Say plainly what stopped you there, in user terms: the option you passed came back ignored, the response 400'd naming an unsupported field, there is no button on the page for it. This is what proves the feature is genuinely missing rather than undocumented, and it is the single most useful thing you can give us
-        - No mocks. Where the flow involves a provider call, hit the real provider API, even though that costs real $. `pytest` commands are not enough
+        - Say plainly what stopped you there, in user terms: the option you passed came back ignored, the response 400'd naming an unsupported field, there is no button on the page for it. This is what proves the feature is genuinely missing rather than undocumented
+        - No mocks. Where the flow involves a provider call, hit the real provider API, even if it costs real $$$. `pytest` commands are not enough
         - Include the config.yaml (or SDK setup) and env vars the proxy ran with, plus the version or commit you were on. Keep the real values for env vars that aren't sensitive, and redact only the secrets: never paste a real API key, virtual key, database URL, or other credential, here or anywhere else in the issue
         - If the provider already supports this, link their API docs and paste a direct call to them succeeding, so we can see the shape LiteLLM should be sending
-        - For UI asks: include screenshots of the page you got stuck on and its URL. Scrub keys and tokens out of screenshots too, they show up in headers, request panels, and the Admin UI
+        - For UI asks: include screenshots of the page you got stuck on and its URL. Scrub keys and tokens out of screenshots too (for example, the virtual key is briefly shown in the panel right after you create a virtual key)
       placeholder: |
         Config / setup the proxy ran with:
 
@@ -73,13 +73,6 @@ body:
         What stopped me there:
     validations:
       required: true
-  - type: checkboxes
-    id: attempt-attestation
-    attributes:
-      label: About that attempt
-      options:
-        - label: I ran it against a live proxy myself, with no mocks, and the output above is what I actually got back
-          required: true
   - type: dropdown
     id: component
     attributes:
