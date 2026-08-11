@@ -372,9 +372,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         """
         Check if the model supports tool search on Bedrock.
 
-        On Amazon Bedrock, server-side tool search is supported on Claude
-        Opus 4.5/4.6/4.7, Sonnet 4.5/4.6, and Haiku 4.5 with the
-        tool-search-tool-2025-10-19 beta header.
+        The model map's ``supports_tool_search`` flag is authoritative when
+        ``model`` resolves to an entry that sets it; the name patterns below
+        cover ids the map cannot resolve (ARNs, unlisted regional variants).
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
 
@@ -384,9 +384,12 @@ class AmazonAnthropicClaudeMessagesConfig(
         Returns:
             True if the model supports tool search on Bedrock
         """
+        catalog: Final = AnthropicModelInfo._get_provider_resolved_capability(model, "supports_tool_search", "bedrock")
+        if catalog is not None:
+            return catalog
+
         model_lower: Final = model.lower()
 
-        # Supported models for tool search on Bedrock
         supported_patterns: Final = [
             # Opus 4.5
             "opus-4.5",
@@ -408,8 +411,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             "sonnet_4.6",
             "sonnet-4-6",
             "sonnet_4_6",
-            # Opus 4.7 (unsupported at its 2026-04-16 launch; verified live
-            # 2026-08-11 that Bedrock now accepts the beta on it)
+            # Opus 4.7
             "opus-4.7",
             "opus_4.7",
             "opus-4-7",
