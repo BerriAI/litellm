@@ -597,6 +597,11 @@ def build_issue_prompt(*, title: str, body: str) -> str:
             that it does not today).
           - Motivation / use case with a concrete example (config, API call,
             UI flow, or scenario showing what's blocked today).
+          - END-TO-END EVIDENCE OF THE DEAD-END: a video, a screenshot, or the
+            exact command(s) actually run paired with their real output,
+            showing the point where the flow stops today. Mocked or stubbed
+            dependencies do NOT count, and an unfilled template scaffold
+            (bare headings, empty numbered lists) counts as absent.
 
         For an issue that is neither a bug report nor a feature request (a
         question, support request, or discussion), PASS as long as it has a
