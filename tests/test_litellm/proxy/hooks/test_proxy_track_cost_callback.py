@@ -363,6 +363,7 @@ async def test_update_database_and_spend_counters_releases_reservation_when_db_u
                 end_user_id=None,
                 team_id="test_team_id",
                 org_id="test_org_id",
+                project_id=None,
                 kwargs={},
                 completion_response=None,
                 start_time=datetime.now(),
@@ -412,6 +413,7 @@ async def test_update_database_and_spend_counters_preserves_db_exception_when_re
                 end_user_id=None,
                 team_id="test_team_id",
                 org_id="test_org_id",
+                project_id=None,
                 kwargs={},
                 completion_response=None,
                 start_time=datetime.now(),
@@ -453,6 +455,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         end_user_id="test_end_user_id",
         team_id="test_team_id",
         org_id="test_org_id",
+        project_id=None,
         kwargs={},
         completion_response=None,
         start_time=datetime.now(),
@@ -472,6 +475,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         budget_reservation=budget_reservation,
         end_user_id="test_end_user_id",
         tags=["tag-a"],
+        project_id=None,
     )
 
 
@@ -498,6 +502,7 @@ async def test_update_database_and_spend_counters_invalidates_reservation_when_c
                 end_user_id=None,
                 team_id="test_team_id",
                 org_id="test_org_id",
+                project_id=None,
                 kwargs={},
                 completion_response=None,
                 start_time=datetime.now(),
@@ -544,6 +549,7 @@ async def test_update_database_and_spend_counters_preserves_counter_exception_wh
                 end_user_id=None,
                 team_id="test_team_id",
                 org_id="test_org_id",
+                project_id=None,
                 kwargs={},
                 completion_response=None,
                 start_time=datetime.now(),

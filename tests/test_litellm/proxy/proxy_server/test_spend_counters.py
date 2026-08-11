@@ -1270,3 +1270,50 @@ async def test_update_cache_user_cache_failure_invalid_state_is_swallowed(monkey
     )
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_increments_project_counter(monkeypatch):
+    """A request attributed to a project must increment spend:project:{id} so
+    concurrent project-scoped requests see near-real-time project spend."""
+    fake_cache = _make_spend_counter_cache(
+        redis_get_value=None, redis_increment_value=5.0
+    )
+    fake_user_cache = _make_user_api_key_cache(get_value=None)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    async def _fake_coalesced(**kwargs):
+        return None
+
+    monkeypatch.setattr(
+        ps.SpendCounterReseed, "coalesced", AsyncMock(side_effect=_fake_coalesced)
+    )
+
+    await ps.increment_spend_counters(
+        token="hashed-tok",
+        team_id="t1",
+        user_id="u1",
+        response_cost=5.0,
+        project_id="p1",
+    )
+
+    incremented_keys = {
+        call.kwargs["key"]
+        for call in fake_cache.redis_cache.async_increment.call_args_list
+    }
+    assert "spend:project:p1" in incremented_keys
+
+    fake_cache.redis_cache.async_increment.reset_mock()
+    await ps.increment_spend_counters(
+        token="hashed-tok",
+        team_id="t1",
+        user_id="u1",
+        response_cost=5.0,
+    )
+    incremented_keys = {
+        call.kwargs["key"]
+        for call in fake_cache.redis_cache.async_increment.call_args_list
+    }
+    assert not any(key.startswith("spend:project:") for key in incremented_keys)
