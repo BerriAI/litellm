@@ -179,6 +179,47 @@ class TestSuccessHookSkipPaths:
         # 0% sampling: request seen but never shadowed.
         assert logger._pending_seen == {"j1": 1}
 
+    @staticmethod
+    def _routed_kwargs(router_model_name: str):
+        return {
+            "standard_logging_object": {
+                "id": "req-1",
+                "model": "gpt-4o-mini",
+                "call_type": "acompletion",
+                "metadata": {"user_api_key_hash": "key-hash"},
+            },
+            "litellm_params": {"metadata": {"routing_decision": {"router_model_name": router_model_name}}},
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+    async def test_skips_requests_already_served_by_the_shadowed_router(self):
+        """Duplicating the router's own traffic compares it to itself: paid ties, no signal."""
+        job = ActiveShadowEvalJob(
+            id="j1", router_name="claude-auto", shadow_percentage=100.0, judge_model="m", status="running"
+        )
+        logger, _, router = _logger_with_mocks(job)
+        logger._run_shadow_eval = AsyncMock()
+
+        await logger.async_log_success_event(self._routed_kwargs("claude-auto"), MagicMock(), None, None)
+        seen_before_flush = dict(logger._pending_seen)
+        await asyncio.sleep(0)
+
+        logger._run_shadow_eval.assert_not_awaited()
+        router.acompletion.assert_not_called()
+        assert seen_before_flush == {"j1": 1}, "skipped for judging, but still counted toward requests seen"
+
+    async def test_traffic_from_a_different_router_still_samples(self):
+        job = ActiveShadowEvalJob(
+            id="j1", router_name="claude-auto", shadow_percentage=100.0, judge_model="m", status="running"
+        )
+        logger, _, _ = _logger_with_mocks(job)
+        logger._run_shadow_eval = AsyncMock()
+
+        await logger.async_log_success_event(self._routed_kwargs("other-router"), MagicMock(), None, None)
+        await asyncio.sleep(0.01)
+
+        logger._run_shadow_eval.assert_awaited_once()
+
 
 @pytest.mark.asyncio
 class TestCallRouterShadowForwardsParameters:
