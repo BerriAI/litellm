@@ -85,7 +85,7 @@ def _make_guardrail(**kwargs) -> HeadroomGuardrail:
     return HeadroomGuardrail(**defaults)
 
 
-def _make_compress_response(messages: list, status: int = 200) -> MagicMock:
+def _make_compress_response(messages: list, status: int = 200, ccr_hashes: list | None = None) -> MagicMock:
     mock = MagicMock()
     mock.status_code = status
     mock.json.return_value = {
@@ -94,6 +94,7 @@ def _make_compress_response(messages: list, status: int = 200) -> MagicMock:
         "tokens_after": 100,
         "compression_ratio": 0.1,
         "transforms_applied": ["router:smart_crusher:0.35"],
+        "ccr_hashes": ccr_hashes if ccr_hashes is not None else [],
     }
     mock.text = ""
     return mock
@@ -317,6 +318,105 @@ async def test_apply_guardrail_injects_retrieve_tool_when_hashes_present(
     tools = result.get("tools")
     assert tools is not None
     assert has_headroom_retrieve_tool(tools)
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_injects_retrieve_tool_for_ccr_marker(
+    guardrail: HeadroomGuardrail,
+):
+    """`<<ccr:HASH,type,size>>` is what Headroom writes in CCR mode. Missing it
+    left the marker in the prompt with no tool to redeem it."""
+    inputs = GenericGuardrailAPIInputs(
+        texts=["A" * 5000],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+    mock_response = _make_compress_response([{"role": "user", "content": "<<ccr:f3b3d2ef3049,string,22.8KB>>"}])
+    request_data = {"model": "gpt-4o", "litellm_call_id": "call-ccr"}
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    assert has_headroom_retrieve_tool(result.get("tools"))
+    assert "f3b3d2ef3049" in guardrail._issued_hashes_by_call_id["call-ccr"][0]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_trusts_ccr_hashes_from_compress_response(
+    guardrail: HeadroomGuardrail,
+):
+    """The service reports the hashes it stored in `ccr_hashes`, so retrieval
+    keeps working when it words a marker in a way this guardrail cannot parse."""
+    inputs = GenericGuardrailAPIInputs(
+        texts=["A" * 5000],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+    mock_response = _make_compress_response(
+        [{"role": "user", "content": "[22.8KB elided, ask for {f3b3d2ef3049}]"}],
+        ccr_hashes=["f3b3d2ef3049"],
+    )
+    request_data = {"model": "gpt-4o", "litellm_call_id": "call-ccr"}
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    assert has_headroom_retrieve_tool(result.get("tools"))
+
+    original_content = "the original tool output"
+    with patch.object(
+        guardrail.async_handler,
+        "get",
+        new_callable=AsyncMock,
+        return_value=_make_retrieve_response(original_content),
+    ) as mock_get:
+        plan = await guardrail.async_build_agentic_loop_plan(
+            tools={
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "name": HEADROOM_RETRIEVE_TOOL_NAME,
+                        "arguments": {"hash": "f3b3d2ef3049"},
+                    }
+                ]
+            },
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "what did it say?"}],
+            response=_make_openai_response_with_tool_call(
+                tool_name=HEADROOM_RETRIEVE_TOOL_NAME,
+                arguments={"hash": "f3b3d2ef3049"},
+                tool_id="call_1",
+            ),
+            anthropic_messages_provider_config=None,
+            anthropic_messages_optional_request_params={},
+            logging_obj=None,
+            stream=False,
+            kwargs={"litellm_call_id": "call-ccr"},
+        )
+
+    mock_get.assert_called_once()
+    assert plan.request_patch is not None
+    follow_up = plan.request_patch.messages
+    assert follow_up is not None
+    tool_result = next(m for m in follow_up if m.get("role") == "tool")
+    assert tool_result["content"] == original_content
 
 
 @pytest.mark.asyncio
@@ -816,6 +916,25 @@ def test_extract_hashes_from_messages_finds_hashes():
     hashes = extract_hashes_from_messages(messages)
     assert "b573993006976af767214fac" in hashes
     assert "aabbccdd001122334455aabb" in hashes
+
+
+def test_extract_hashes_from_messages_finds_ccr_markers():
+    """Headroom's own marker form. Its row-drop path emits SHA-256[:12], so a
+    12 hex hash counts just as much as the 24 hex one."""
+    messages = [
+        {"role": "tool", "content": "<<ccr:f3b3d2ef3049,string,22.8KB>>"},
+        {"role": "user", "content": "<<ccr:b573993006976af767214fac>>"},
+    ]
+    hashes = extract_hashes_from_messages(messages)
+    assert "f3b3d2ef3049" in hashes
+    assert "b573993006976af767214fac" in hashes
+
+
+def test_extract_hashes_from_messages_ignores_overlong_hashes():
+    """A longer hex run is some other identifier, not a Headroom hash. Matching
+    its first 24 chars would issue a hash that retrieval can never resolve."""
+    messages = [{"role": "user", "content": "hash=" + "a" * 32}]
+    assert not extract_hashes_from_messages(messages)
 
 
 def test_extract_hashes_from_messages_ignores_short_hashes():

@@ -5,6 +5,7 @@ import re
 import time
 import uuid
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypeGuard
 
 import httpx
@@ -46,7 +47,10 @@ if TYPE_CHECKING:
 
 BYPASS_HEADER: Final = "x-headroom-bypass"
 HEADROOM_RETRIEVE_TOOL_NAME: Final = "headroom_retrieve"
-_HASH_PATTERN: Final = re.compile(r"hash=([a-f0-9]{24})")
+# Headroom writes a retrieval hash as either `<<ccr:HASH,type,size>>` or
+# `Retrieve more: hash=HASH`, and its own reader accepts 12 to 24 hex chars
+# (the row-drop path emits SHA-256[:12]).
+_HASH_PATTERN: Final = re.compile(r"(?:<<ccr:|hash=)([a-f0-9]{12,24})(?![a-f0-9])")
 _HASH_CACHE_TTL_SECONDS: Final = 15 * 60
 
 
@@ -56,6 +60,14 @@ def _is_str_object_dict(value: object) -> TypeGuard[dict[str, object]]:  # guard
 
 def _is_object_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
     return isinstance(value, list)
+
+
+@dataclass(frozen=True, slots=True)
+class _CompressResult:
+    messages: list[dict[str, object]]
+    succeeded: bool
+    stats: dict[str, object]
+    ccr_hashes: tuple[str, ...] = ()
 
 
 def _flatten_messages_for_compression(messages: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -169,6 +181,17 @@ def _build_compress_failure_detail(status_code: int, body: str) -> dict[str, obj
     return {"status_code": status_code, "body": body}
 
 
+def _read_ccr_hashes(body: Mapping[str, object]) -> tuple[str, ...]:
+    """Hashes the compression service says it stored, from the documented
+    ``ccr_hashes`` response field. Scanning the returned text is a fallback:
+    the service knows exactly which markers it wrote, and marker wording is
+    its own to change."""
+    raw: Final = body.get("ccr_hashes")
+    if not _is_object_list(raw):
+        return ()
+    return tuple(item for item in raw if isinstance(item, str) and item)
+
+
 def extract_hashes_from_messages(messages: list[dict[str, object]]) -> list[str]:
     hashes: Final[list[str]] = []
     for msg in messages:
@@ -191,14 +214,15 @@ def _build_headroom_retrieve_tool() -> dict[str, object]:
             "name": HEADROOM_RETRIEVE_TOOL_NAME,
             "description": (
                 "Retrieve original content that was compressed by Headroom. "
-                "Call this when you encounter a compression marker containing a hash."
+                "Call this when you encounter a compression marker such as "
+                "`<<ccr:HASH,type,size>>` or `Retrieve more: hash=HASH`."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "hash": {
                         "type": "string",
-                        "description": "The 24-character hex hash from the compression marker.",
+                        "description": "The hex hash from the compression marker.",
                     },
                     "query": {
                         "type": "string",
@@ -422,7 +446,7 @@ class HeadroomGuardrail(CustomGuardrail):
         self,
         messages: list[dict[str, object]],
         model: str | None,
-    ) -> tuple[list[dict[str, object]], bool, dict[str, object]]:
+    ) -> _CompressResult:
         payload: Final[dict[str, object]] = {"messages": messages}
         if model:
             payload["model"] = model
@@ -434,7 +458,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 headers=self._request_headers(),
             )
         except httpx.HTTPStatusError as e:
-            return (
+            return _CompressResult(
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service returned an error",
@@ -444,7 +468,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 {},
             )
         except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError, litellm.Timeout) as e:
-            return (
+            return _CompressResult(
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service unreachable",
@@ -454,7 +478,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 {},
             )
         if raw_response is None:
-            return (
+            return _CompressResult(
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service returned no response",
@@ -466,7 +490,7 @@ class HeadroomGuardrail(CustomGuardrail):
         response: Final[HttpxResponse] = raw_response
 
         if response.status_code != 200:
-            return (
+            return _CompressResult(
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service returned an error",
@@ -479,7 +503,7 @@ class HeadroomGuardrail(CustomGuardrail):
         try:
             body: Final[object] = response.json()
         except ValueError:
-            return (
+            return _CompressResult(
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service returned non-JSON response",
@@ -489,7 +513,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 {},
             )
         if not _is_str_object_dict(body):
-            return (
+            return _CompressResult(
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service returned unexpected response shape",
@@ -501,7 +525,7 @@ class HeadroomGuardrail(CustomGuardrail):
 
         compressed_messages: Final = body.get("messages")
         if not _is_object_list(compressed_messages):
-            return (
+            return _CompressResult(
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service response missing 'messages'",
@@ -513,7 +537,7 @@ class HeadroomGuardrail(CustomGuardrail):
 
         filtered: Final = [item for item in compressed_messages if _is_str_object_dict(item)]
         if not filtered:
-            return (
+            return _CompressResult(
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service returned empty message list",
@@ -526,7 +550,7 @@ class HeadroomGuardrail(CustomGuardrail):
         if len(filtered) != len(messages):
             # Rows are matched positionally when the never-compressed messages
             # are put back, so a reshaped conversation cannot be applied at all.
-            return (
+            return _CompressResult(
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service changed the message count",
@@ -567,7 +591,7 @@ class HeadroomGuardrail(CustomGuardrail):
             # tokens_saved, which the live compression service omits; derive it
             # so savings are counted, but let a service-sent value win.
             stats["tokens_saved"] = tokens_before - tokens_after
-        return filtered, True, stats
+        return _CompressResult(filtered, True, stats, _read_ccr_hashes(body))
 
     async def _call_retrieve(self, hash_value: str, query: str | None = None) -> str:
         params: Final[dict[str, str]] = {}
@@ -646,7 +670,7 @@ class HeadroomGuardrail(CustomGuardrail):
 
         model: Final = self.headroom_model or request_data.get("model")
         start_time: Final = time.time()
-        returned, compression_succeeded, stats = await self._call_compress(
+        result: Final = await self._call_compress(
             messages=_flatten_messages_for_compression(compressible),
             model=model if isinstance(model, str) else None,
         )
@@ -656,7 +680,7 @@ class HeadroomGuardrail(CustomGuardrail):
             add_guardrail_to_applied_guardrails_header,
         )
 
-        if not compression_succeeded:
+        if not result.succeeded:
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_json_response={"error": "headroom compression unavailable; request forwarded uncompressed"},
                 request_data=request_data,
@@ -675,12 +699,12 @@ class HeadroomGuardrail(CustomGuardrail):
 
         compressed: Final = _restore_protected_messages(
             messages=messages,
-            compressed=_restore_content_shapes(originals=compressible, returned=returned),
+            compressed=_restore_content_shapes(originals=compressible, returned=result.messages),
             protected_indices=protected_indices,
         )
 
         self.add_standard_logging_guardrail_information_to_request_data(
-            guardrail_json_response=stats,
+            guardrail_json_response=result.stats,
             request_data=request_data,
             guardrail_status="success",
             guardrail_provider=HEADROOM_GUARDRAIL_PROVIDER,
@@ -690,7 +714,7 @@ class HeadroomGuardrail(CustomGuardrail):
         )
         add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
 
-        hashes: Final = extract_hashes_from_messages(compressed)
+        hashes: Final = frozenset(result.ccr_hashes) | frozenset(extract_hashes_from_messages(compressed))
         if not hashes:
             return {**inputs, "structured_messages": compressed}  # pyright: ignore[reportReturnType]
 
@@ -699,7 +723,7 @@ class HeadroomGuardrail(CustomGuardrail):
         if not call_id:
             call_id = str(uuid.uuid4())
             request_data["litellm_call_id"] = call_id
-        self._issued_hashes_by_call_id[call_id] = (frozenset(hashes), time.monotonic() + _HASH_CACHE_TTL_SECONDS)
+        self._issued_hashes_by_call_id[call_id] = (hashes, time.monotonic() + _HASH_CACHE_TTL_SECONDS)
 
         existing_tools: Final = inputs.get("tools")
         retrieve_tool: Final = _build_headroom_retrieve_tool()
