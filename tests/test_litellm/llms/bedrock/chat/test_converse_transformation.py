@@ -410,6 +410,33 @@ def test_output_config_supported_param_for_arn_models_converse():
     assert "output_config" in config.get_supported_openai_params(arn_model)
 
 
+def test_output_config_effort_forwarded_for_application_inference_profile_arn():
+    """Regression: opaque application inference profile ARNs cannot resolve a
+    base model, so the anthropic-only serialization gate dropped ``output_config``
+    while still sending ``thinking``: adaptive thinking with no effort tier, and
+    Bedrock streams zero ``reasoningContent`` blocks. The effort must be forwarded
+    verbatim (ceilings and capability gates are unknowable behind the alias) for
+    Bedrock to enforce."""
+    config = AmazonConverseConfig()
+    arn_model = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abcdef123456"
+
+    result = config._transform_request(
+        model=arn_model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={
+            "maxTokens": 256,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "max"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert additional.get("thinking") == {"type": "adaptive"}
+    assert additional.get("output_config") == {"effort": "max"}
+
+
 def test_output_config_format_translated_to_native_output_config_converse():
     """``output_config.format`` becomes Bedrock ``outputConfig`` and is not forwarded raw."""
     config = AmazonConverseConfig()

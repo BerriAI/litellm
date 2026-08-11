@@ -80,6 +80,7 @@ from ..common_utils import (
     bedrock_converse_supports_parallel_tool_use_config,
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
+    is_bedrock_application_inference_profile_arn,
     is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
 )
@@ -1318,7 +1319,12 @@ class AmazonConverseConfig(BaseConfig):
         additional_request_params = filter_exceptions_from_params(additional_request_params)
 
         if anthropic_output_config is not None and isinstance(anthropic_output_config, dict):
-            if base_model.startswith("anthropic"):
+            # Application inference profile ARNs hide the underlying model, so the
+            # effort ceiling and capability gates below cannot run; forward
+            # verbatim (like ``thinking``) and let Bedrock enforce.
+            if is_bedrock_application_inference_profile_arn(model):
+                additional_request_params["output_config"] = anthropic_output_config
+            elif base_model.startswith("anthropic"):
                 if litellm.drop_params is True and not AnthropicConfig._model_supports_effort_param(model, "bedrock"):
                     litellm.verbose_logger.warning(
                         DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
