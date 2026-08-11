@@ -17,6 +17,7 @@ beforeAll(() => {
 vi.mock("@/components/networking", () => ({
   tagDailyActivityCall: vi.fn(),
   teamDailyActivityCall: vi.fn(),
+  teamDailyActivityAggregatedCall: vi.fn(),
   organizationDailyActivityCall: vi.fn(),
   customerDailyActivityCall: vi.fn(),
   agentDailyActivityCall: vi.fn(),
@@ -79,6 +80,7 @@ vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
 describe("EntityUsage", () => {
   const mockTagDailyActivityCall = vi.mocked(networking.tagDailyActivityCall);
   const mockTeamDailyActivityCall = vi.mocked(networking.teamDailyActivityCall);
+  const mockTeamDailyActivityAggregatedCall = vi.mocked(networking.teamDailyActivityAggregatedCall);
   const mockOrganizationDailyActivityCall = vi.mocked(networking.organizationDailyActivityCall);
   const mockCustomerDailyActivityCall = vi.mocked(networking.customerDailyActivityCall);
   const mockAgentDailyActivityCall = vi.mocked(networking.agentDailyActivityCall);
@@ -370,12 +372,14 @@ describe("EntityUsage", () => {
   beforeEach(() => {
     mockTagDailyActivityCall.mockClear();
     mockTeamDailyActivityCall.mockClear();
+    mockTeamDailyActivityAggregatedCall.mockClear();
     mockOrganizationDailyActivityCall.mockClear();
     mockCustomerDailyActivityCall.mockClear();
     mockAgentDailyActivityCall.mockClear();
     mockUserDailyActivityCall.mockClear();
     mockTagDailyActivityCall.mockResolvedValue(mockSpendData);
     mockTeamDailyActivityCall.mockResolvedValue(mockSpendData);
+    mockTeamDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);
     mockOrganizationDailyActivityCall.mockResolvedValue(mockSpendData);
     mockCustomerDailyActivityCall.mockResolvedValue(mockSpendData);
     mockAgentDailyActivityCall.mockResolvedValue(mockAgentSpendData);
@@ -404,7 +408,7 @@ describe("EntityUsage", () => {
     render(<EntityUsage {...defaultProps} entityType="team" />);
 
     await waitFor(() => {
-      expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+      expect(mockTeamDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     // Check that it shows team-specific label
@@ -536,7 +540,7 @@ describe("EntityUsage", () => {
     const { container } = render(<EntityUsage {...defaultProps} entityType="team" />);
 
     await waitFor(() => {
-      expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+      expect(mockTeamDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     act(() => {
@@ -688,7 +692,7 @@ describe("EntityUsage", () => {
     render(<EntityUsage {...defaultProps} entityType="team" />);
 
     await waitFor(() => {
-      expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+      expect(mockTeamDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     expect(screen.getByText("Agent Activity")).toBeInTheDocument();
@@ -708,7 +712,7 @@ describe("EntityUsage", () => {
     render(<EntityUsage {...defaultProps} entityType="team" />);
 
     await waitFor(() => {
-      expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+      expect(mockTeamDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     expect(screen.getByText("Top Agents Driving Spend")).toBeInTheDocument();
@@ -752,7 +756,7 @@ describe("EntityUsage", () => {
     render(<EntityUsage {...defaultProps} entityType="team" />);
 
     await waitFor(() => {
-      expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+      expect(mockTeamDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     const agentActivityTab = screen.getByText("Agent Activity");
@@ -888,7 +892,7 @@ describe("EntityUsage", () => {
       render(<EntityUsage {...defaultProps} entityType="team" userRole="Internal User" />);
 
       await waitFor(() => {
-        expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+        expect(mockTeamDailyActivityAggregatedCall).toHaveBeenCalled();
       });
       expect(screen.getByText("Team Spend Overview")).toBeInTheDocument();
 
@@ -945,7 +949,7 @@ describe("EntityUsage", () => {
       cache_read_input_tokens: 0,
       cache_creation_input_tokens: 0,
     };
-    mockTeamDailyActivityCall.mockResolvedValue({
+    mockTeamDailyActivityAggregatedCall.mockResolvedValue({
       ...mockSpendData,
       results: [
         {
@@ -966,5 +970,32 @@ describe("EntityUsage", () => {
     });
     expect(screen.getByText("top-models:gpt-4o=70.25")).toBeInTheDocument();
     expect(screen.getByText(/^top-models:Code Review Agent=/)).toBeInTheDocument();
+  });
+
+  it("uses the aggregated team endpoint and never drains paginated pages for teams", async () => {
+    render(<EntityUsage {...defaultProps} entityType="team" />);
+
+    await waitFor(() => {
+      expect(mockTeamDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+    expect(mockTeamDailyActivityCall).not.toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(screen.getAllByText("$100.50").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("falls back to the paginated team endpoint when the aggregated call fails", async () => {
+    mockTeamDailyActivityAggregatedCall.mockRejectedValue(new Error("aggregated unavailable"));
+
+    render(<EntityUsage {...defaultProps} entityType="team" />);
+
+    await waitFor(() => {
+      expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("$100.50").length).toBeGreaterThan(0);
+    });
   });
 });

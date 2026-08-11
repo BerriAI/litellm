@@ -1719,3 +1719,133 @@ class TestFlagIsNotReadOnTheHotPath:
 
         reads = self._count_flag_reads([_spend_record(PTU_SENTINEL_API_KEY, spend=0.0, ptu_flat_cost=240.0)])
         assert reads > 0
+
+
+def test_build_aggregated_sql_query_entity_breakdown_and_api_key_list():
+    """entity_breakdown_field adds the two entity rollup sets with the entity
+    column as the most-significant GROUPING bit; a list api_key filter becomes
+    a parameterized IN, and an empty list must match nothing (not everything)."""
+    sql, params = _build_aggregated_sql_query(
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id=None,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        model=None,
+        api_key=["key-1", "key-2"],
+        entity_breakdown_field="team_id",
+    )
+    assert '"team_id" AS entity_id' in sql
+    assert 'GROUPING("team_id", date' in sql
+    assert '(date, "team_id"), (date, "team_id", api_key),' in sql
+    assert "api_key IN ($3, $4)" in sql
+    assert params == ["2024-01-01", "2024-01-31", "key-1", "key-2"]
+
+    plain_sql, _ = _build_aggregated_sql_query(
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id=None,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        model=None,
+        api_key=None,
+    )
+    assert "entity_id" not in plain_sql
+    assert "GROUPING(date" in plain_sql
+
+    empty_sql, empty_params = _build_aggregated_sql_query(
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id=None,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        model=None,
+        api_key=[],
+    )
+    assert "FALSE" in empty_sql
+    assert empty_params == ["2024-01-01", "2024-01-31"]
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_with_entity_breakdown():
+    """include_entity_breakdown must populate breakdown.entities from the
+    (date, entity) / (date, entity, api_key) rollups while every pre-existing
+    rollup still dispatches correctly with the entity bit (128) set."""
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+
+    base = {
+        "entity_id": None,
+        "model": None,
+        "model_group": None,
+        "custom_llm_provider": None,
+        "mcp_namespaced_tool_name": None,
+        "endpoint": None,
+        "api_key": None,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "compression_saved_tokens": 0,
+        "compression_savings_spend": 0.0,
+        "prompt_caching_savings_spend": 0.0,
+        "autorouter_savings_spend": 0.0,
+        "failed_requests": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "api_requests": 0,
+        "successful_requests": 0,
+    }
+    mock_rows = [
+        # () grand total: 127 + entity bit
+        {**base, "date": None, "group_level": 255, "spend": 18.0},
+        # (date): 63 + entity bit
+        {**base, "date": "2024-01-01", "group_level": 191, "spend": 18.0},
+        # (date, entity): entity bit clear
+        {**base, "date": "2024-01-01", "entity_id": "team-a", "group_level": 63, "spend": 12.0},
+        {**base, "date": "2024-01-01", "entity_id": "team-b", "group_level": 63, "spend": 6.0},
+        # (date, entity, api_key): entity bit clear
+        {**base, "date": "2024-01-01", "entity_id": "team-a", "api_key": "key-1", "group_level": 31, "spend": 12.0},
+        {**base, "date": "2024-01-01", "entity_id": "team-b", "api_key": "key-2", "group_level": 31, "spend": 6.0},
+        # (date, model): 47 + entity bit
+        {**base, "date": "2024-01-01", "model": "gpt-4o", "group_level": 175, "spend": 18.0},
+        # (date, api_key): 31 + entity bit
+        {**base, "date": "2024-01-01", "api_key": "key-1", "group_level": 159, "spend": 12.0},
+    ]
+
+    mock_prisma.db.query_raw = AsyncMock(return_value=mock_rows)
+    mock_prisma.db.litellm_verificationtoken = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    result = await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id=None,
+        entity_metadata_field={"team-a": {"team_alias": "Alpha"}},
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+        include_entity_breakdown=True,
+    )
+
+    sql = mock_prisma.db.query_raw.call_args[0][0]
+    assert '"team_id" AS entity_id' in sql
+    assert '(date, "team_id"), (date, "team_id", api_key),' in sql
+
+    assert result.metadata.total_spend == 18.0
+    assert len(result.results) == 1
+    daily = result.results[0]
+    assert daily.metrics.spend == 18.0
+
+    entities = daily.breakdown.entities
+    assert set(entities) == {"team-a", "team-b"}
+    assert entities["team-a"].metrics.spend == 12.0
+    assert entities["team-a"].metadata == {"team_alias": "Alpha"}
+    assert entities["team-a"].api_key_breakdown["key-1"].metrics.spend == 12.0
+    assert entities["team-b"].metrics.spend == 6.0
+    assert entities["team-b"].metadata == {}
+    assert entities["team-b"].api_key_breakdown["key-2"].metrics.spend == 6.0
+
+    # Rollups with the entity bit set must still land in their usual buckets
+    assert daily.breakdown.models["gpt-4o"].metrics.spend == 18.0
+    assert daily.breakdown.api_keys["key-1"].metrics.spend == 12.0

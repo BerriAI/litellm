@@ -121,6 +121,7 @@ class _AggregatedSpendData(TypedDict):
 
 class _GroupingSetsRow(SimpleNamespace):
     date: str
+    entity_id: str | None = None
     api_key: str | None
     model: str | None
     model_group: str | None
@@ -563,9 +564,10 @@ def _build_aggregated_sql_query(
     start_date: str,
     end_date: str,
     model: str | None,
-    api_key: str | None,
+    api_key: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
     exclude_entity_ids: list[str] | None = None,
     timezone_offset_minutes: int | None = None,
+    entity_breakdown_field: str | None = None,
 ) -> tuple[str, list[str]]:
     """Build a parameterized SQL GROUP BY query for aggregated daily activity.
 
@@ -573,6 +575,11 @@ def _build_aggregated_sql_query(
     mcp_namespaced_tool_name, endpoint) with SUMs on all metric columns.
     The entity_id column is intentionally omitted from GROUP BY to collapse
     rows across entities — this is where the biggest row reduction comes from.
+
+    When entity_breakdown_field is set (e.g. "team_id"), two extra rollup
+    levels are added — (date, entity) and (date, entity, api_key) — and the
+    entity column joins the GROUPING() call as the most-significant bit, so
+    every pre-existing rollup keeps its bitmask value plus that bit set.
 
     Returns:
         Tuple of (sql_query, params_list) ready for prisma_client.db.query_raw().
@@ -621,8 +628,16 @@ def _build_aggregated_sql_query(
         sql_params.append(model)
         p += 1
 
-    # Optional api_key filter
-    if api_key:
+    # Optional api_key filter; an empty list must match nothing, not everything
+    if isinstance(api_key, list):
+        if api_key:
+            placeholders = ", ".join(f"${p + i}" for i in range(len(api_key)))
+            sql_conditions.append(f"api_key IN ({placeholders})")
+            sql_params.extend(api_key)
+            p += len(api_key)
+        else:
+            sql_conditions.append("FALSE")
+    elif api_key:
         sql_conditions.append(f"api_key = ${p}")
         sql_params.append(api_key)
         p += 1
@@ -649,8 +664,16 @@ def _build_aggregated_sql_query(
         if table_name == "litellm_dailyteamspend"
         else "0::float AS ptu_flat_cost"
     )
+    entity_select: Final = f'"{entity_breakdown_field}" AS entity_id,' if entity_breakdown_field else ""
+    entity_grouping_arg: Final = f'"{entity_breakdown_field}", ' if entity_breakdown_field else ""
+    entity_grouping_sets: Final = (
+        f'(date, "{entity_breakdown_field}"), (date, "{entity_breakdown_field}", api_key),'
+        if entity_breakdown_field
+        else ""
+    )
     sql_query: Final = f"""
         SELECT
+            {entity_select}
             date,
             api_key,
             model,
@@ -658,7 +681,7 @@ def _build_aggregated_sql_query(
             custom_llm_provider,
             mcp_namespaced_tool_name,
             endpoint,
-            GROUPING(date, api_key, model, COALESCE(NULLIF(model_group, ''), model),
+            GROUPING({entity_grouping_arg}date, api_key, model, COALESCE(NULLIF(model_group, ''), model),
                      custom_llm_provider, mcp_namespaced_tool_name,
                      endpoint) AS group_level,
             SUM(spend)::float AS spend,
@@ -677,6 +700,7 @@ def _build_aggregated_sql_query(
         FROM "{pg_table}"
         WHERE {where_clause}
         GROUP BY GROUPING SETS (
+            {entity_grouping_sets}
             (date),
             (date, api_key),
             (date, model),
@@ -796,6 +820,13 @@ _GROUP_DATE_MCP_API_KEY: Final = 29  # 0b0011101
 _GROUP_DATE_ENDPOINT: Final = 62  # 0b0111110
 _GROUP_DATE_ENDPOINT_API_KEY: Final = 30  # 0b0011110
 
+# When entity breakdown is on, the entity column is prepended to the GROUPING()
+# arguments as the most-significant bit. Every pre-existing rollup then carries
+# this bit (entity rolled up) on top of its value above, while the two new
+# entity rollup sets keep the bit clear: (date, entity) -> _GROUP_DATE and
+# (date, entity, api_key) -> _GROUP_DATE_API_KEY.
+_ENTITY_ROLLED_BIT: Final = 128  # 0b10000000
+
 
 def _record_to_spend_metrics(record: _GroupingSetsRow) -> SpendMetrics:
     """Build a SpendMetrics directly from one already-aggregated rollup row.
@@ -832,6 +863,9 @@ def _aggregate_grouping_sets_records_sync(
     *,
     records: Sequence[_GroupingSetsRow],
     api_key_metadata: Mapping[str, _KeyMetadataDict],
+    entity_breakdown: bool = False,
+    entity_metadata_field: Mapping[str, dict[str, object]]
+    | None = None,  # mutable-ok: matches every entity_metadata_field signature in this file
 ) -> _AggregatedSpendData:
     """Build the response from rollup rows produced by the GROUPING SETS query.
 
@@ -871,10 +905,37 @@ def _aggregate_grouping_sets_records_sync(
             metrics=metrics, metadata=_key_metadata(api_key_metadata, api_key)
         )
 
+    def ensure_entity(entities: dict[str, MetricWithMetadata], entity_id: str) -> MetricWithMetadata:
+        existing: MetricWithMetadata | None = entities.get(entity_id)
+        if existing is not None:
+            return existing
+        created: Final = MetricWithMetadata(
+            metrics=SpendMetrics(),
+            metadata=(entity_metadata_field.get(entity_id, {}) if entity_metadata_field else {}),
+        )
+        entities[entity_id] = created
+        return created
+
+    def assign_entity_rollup(record: _GroupingSetsRow, metrics: SpendMetrics) -> None:
+        entity_id: Final = record.entity_id or "Unassigned"
+        entity_bucket: Final = ensure_entity(ensure_date(record.date)["breakdown"].entities, entity_id)
+        if record.group_level == _GROUP_DATE:
+            entity_bucket.metrics = metrics
+            return
+        if record.api_key and record.api_key != PTU_SENTINEL_API_KEY:
+            entity_bucket.api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
+                metrics=metrics, metadata=_key_metadata(api_key_metadata, record.api_key)
+            )
+
     for record in records:
-        level = record.group_level
+        level = record.group_level & ~_ENTITY_ROLLED_BIT if entity_breakdown else record.group_level
         metrics = _record_to_spend_metrics(record)
         is_ptu_sentinel = record.api_key == PTU_SENTINEL_API_KEY
+
+        if entity_breakdown and not (record.group_level & _ENTITY_ROLLED_BIT):
+            if level in (_GROUP_DATE, _GROUP_DATE_API_KEY):
+                assign_entity_rollup(record, metrics)
+            continue
 
         if level == _GROUP_GRAND_TOTAL:
             total_metrics = metrics
@@ -958,6 +1019,9 @@ async def _aggregate_grouping_sets_records(
     *,
     prisma_client: PrismaClient,
     records: Sequence[_GroupingSetsRow],
+    entity_breakdown: bool = False,
+    entity_metadata_field: Mapping[str, dict[str, object]]
+    | None = None,  # mutable-ok: matches every entity_metadata_field signature in this file
 ) -> _AggregatedSpendData:
     """Async wrapper: fetch api_key_metadata, then dispatch on a worker thread."""
     api_keys: Final[set[str]] = {r.api_key for r in records if r.api_key and r.api_key != PTU_SENTINEL_API_KEY}
@@ -970,6 +1034,8 @@ async def _aggregate_grouping_sets_records(
         _aggregate_grouping_sets_records_sync,
         records=records,
         api_key_metadata=api_key_metadata,
+        entity_breakdown=entity_breakdown,
+        entity_metadata_field=entity_metadata_field,
     )
 
 
@@ -1106,15 +1172,21 @@ async def get_daily_activity_aggregated(
     start_date: str | None,
     end_date: str | None,
     model: str | None,
-    api_key: str | None,
+    api_key: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
     exclude_entity_ids: list[str] | None = None,
     timezone_offset_minutes: int | None = None,
+    include_entity_breakdown: bool = False,
 ) -> SpendAnalyticsPaginatedResponse:
     """Aggregated variant that returns the full result set (no pagination).
 
     Uses SQL GROUP BY to aggregate rows in the database rather than fetching
     all individual rows into Python. This collapses rows across entities
     (users/teams/orgs), reducing ~150k rows to ~2-3k grouped rows.
+
+    include_entity_breakdown adds per-entity rollup levels to the GROUPING SETS
+    so `breakdown.entities` is populated (with entity_metadata_field metadata),
+    as entity-scoped views like Team Usage need — still one SQL pass, without
+    reverting to the per-leaf-row explosion that plain GROUP BY entity causes.
 
     Matches the response model of the paginated endpoint so the UI does not need to transform.
     """
@@ -1141,6 +1213,7 @@ async def get_daily_activity_aggregated(
             api_key=api_key,
             exclude_entity_ids=exclude_entity_ids,
             timezone_offset_minutes=timezone_offset_minutes,
+            entity_breakdown_field=entity_id_field if include_entity_breakdown else None,
         )
 
         # Execute GROUPING SETS query — returns one row per rollup level.
@@ -1155,6 +1228,8 @@ async def get_daily_activity_aggregated(
         aggregated: Final = await _aggregate_grouping_sets_records(
             prisma_client=prisma_client,
             records=records,
+            entity_breakdown=include_entity_breakdown,
+            entity_metadata_field=entity_metadata_field,
         )
 
         return SpendAnalyticsPaginatedResponse(
