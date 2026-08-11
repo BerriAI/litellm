@@ -903,19 +903,20 @@ def test_routing_group_has_alternatives_resolves_aliases():
     assert router.routing_group_has_alternatives("quality") is True
 
 
-def test_failure_callback_reads_model_group_from_litellm_metadata_bucket():
+def test_group_rows_cache_invalidated_on_model_list_change():
+    from litellm.types.router import Deployment
+
     router = _build_router(routing_groups=_quality_group())
-    kwargs = {
-        "exception": Exception("boom"),
-        "litellm_params": {
-            "model_info": {"id": "deploy-1"},
-            "litellm_metadata": {"model_group": "quality"},
-            "metadata": {"user_api_key": "hashed"},
-        },
-    }
-    with patch("litellm.router._set_cooldown_deployments", return_value=True) as cooldown_spy:
-        router.deployment_callback_on_failure(kwargs, None, 0, 1)
-    assert cooldown_spy.call_args.kwargs["requested_model_group"] == "quality"
+    assert sum(1 for row in router.get_model_list() if row["model_name"] == "quality") == 3
+
+    router.add_deployment(
+        Deployment(
+            model_name="filtered-model",
+            litellm_params={"model": "openai/gpt-4o", "api_key": "sk-test-5", "api_base": "https://example.invalid"},
+            model_info={"id": "deploy-4"},
+        )
+    )
+    assert sum(1 for row in router.get_model_list() if row["model_name"] == "quality") == 4
 
 
 def _pin_choice_to(deployment_id):

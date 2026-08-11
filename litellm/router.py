@@ -620,6 +620,7 @@ class Router:
         # ``id()``-reuse risk after GC). See
         # ``litellm.proxy.auth.auth_checks._is_model_cost_zero``.
         self._zero_cost_cache: dict[str, bool] = {}
+        self._routing_group_rows: tuple[DeploymentTypedDict, ...] | None = None
         self._init_routing_groups(None)
 
         self.deployment_affinity_ttl_seconds = deployment_affinity_ttl_seconds
@@ -10079,11 +10080,23 @@ class Router:
         `/v1/models` discovery, `get_model_group_usage`, and the
         blocked/unhealthy hiding that all read `get_model_list`.
         """
-        groups: Final = (
-            tuple(group for group in (self.get_routing_group(model_name),) if group is not None)
-            if model_name is not None
-            else tuple(group for name in self._routing_groups if (group := self.get_routing_group(name)) is not None)
+        if model_name is not None:
+            group: Final = self.get_routing_group(model_name)
+            return self._materialize_routing_group_rows((group,)) if group is not None else ()
+        cached: Final = self._routing_group_rows
+        if cached is not None:
+            return cached
+        rows: Final = self._materialize_routing_group_rows(
+            tuple(
+                callable_group
+                for name in self._routing_groups
+                if (callable_group := self.get_routing_group(name)) is not None
+            )
         )
+        self._routing_group_rows = rows
+        return rows
+
+    def _materialize_routing_group_rows(self, groups: tuple[RoutingGroup, ...]) -> tuple[DeploymentTypedDict, ...]:
         return tuple(
             self._as_routing_group_row(deployment)
             for group in groups
@@ -10152,6 +10165,7 @@ class Router:
         """
         self._cached_get_model_group_info.cache_clear()
         self._zero_cost_cache.clear()
+        self._routing_group_rows = None
 
     def _invalidate_access_groups_cache(self) -> None:
         """Invalidate the cached access groups.
