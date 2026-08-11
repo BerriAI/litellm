@@ -2463,25 +2463,58 @@ class TestConfigBaseForHealthCheck:
 class TestNoRedisWarning:
     """`show_no_redis_warning` drives the Admin UI's default-on "no Redis" banner."""
 
-    def test_warns_when_no_coordination_redis_is_configured(self, monkeypatch):
+    @staticmethod
+    def _router(redis_cache):
+        return SimpleNamespace(cache=SimpleNamespace(redis_cache=redis_cache))
+
+    def test_warns_when_no_redis_is_configured(self, monkeypatch):
         monkeypatch.delenv("LITELLM_DISABLE_NO_REDIS_WARNING", raising=False)
-        with patch("litellm.proxy.proxy_server.redis_usage_cache", None):
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+            patch("litellm.proxy.proxy_server.llm_router", self._router(None)),
+        ):
+            assert _show_no_redis_warning() is True
+
+    def test_warns_when_there_is_no_router_at_all(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_DISABLE_NO_REDIS_WARNING", raising=False)
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+            patch("litellm.proxy.proxy_server.llm_router", None),
+        ):
             assert _show_no_redis_warning() is True
 
     def test_stays_quiet_when_a_coordination_redis_is_configured(self, monkeypatch):
         monkeypatch.delenv("LITELLM_DISABLE_NO_REDIS_WARNING", raising=False)
-        with patch("litellm.proxy.proxy_server.redis_usage_cache", MagicMock()):
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", MagicMock()),
+            patch("litellm.proxy.proxy_server.llm_router", self._router(None)),
+        ):
+            assert _show_no_redis_warning() is False
+
+    def test_stays_quiet_when_only_the_router_has_redis(self, monkeypatch):
+        """router_settings.redis_host alone backs cooldowns and usage-based routing."""
+        monkeypatch.delenv("LITELLM_DISABLE_NO_REDIS_WARNING", raising=False)
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+            patch("litellm.proxy.proxy_server.llm_router", self._router(MagicMock())),
+        ):
             assert _show_no_redis_warning() is False
 
     @pytest.mark.parametrize("value", ["true", "True"])
     def test_env_var_suppresses_the_warning(self, monkeypatch, value):
         monkeypatch.setenv("LITELLM_DISABLE_NO_REDIS_WARNING", value)
-        with patch("litellm.proxy.proxy_server.redis_usage_cache", None):
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+            patch("litellm.proxy.proxy_server.llm_router", self._router(None)),
+        ):
             assert _show_no_redis_warning() is False
 
     def test_env_var_set_false_keeps_the_warning(self, monkeypatch):
         monkeypatch.setenv("LITELLM_DISABLE_NO_REDIS_WARNING", "false")
-        with patch("litellm.proxy.proxy_server.redis_usage_cache", None):
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+            patch("litellm.proxy.proxy_server.llm_router", self._router(None)),
+        ):
             assert _show_no_redis_warning() is True
 
     @pytest.mark.asyncio
@@ -2492,6 +2525,7 @@ class TestNoRedisWarning:
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+            patch("litellm.proxy.proxy_server.llm_router", self._router(None)),
             patch.object(
                 _health_endpoints_module,
                 "_db_health_readiness_check",
