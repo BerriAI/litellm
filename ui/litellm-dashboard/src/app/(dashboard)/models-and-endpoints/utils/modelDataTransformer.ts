@@ -70,6 +70,7 @@ export const transformModelData = (rawModelData: any, getProviderFromModel: (mod
     transformedData[i].max_input_tokens = max_input_tokens;
     transformedData[i].api_base = curr_model?.litellm_params?.api_base;
     transformedData[i].cleanedLitellmParams = cleanedLitellmParams;
+    transformedData[i].tags = curr_model?.litellm_params?.tags ?? null;
   }
 
   return { data: transformedData };
