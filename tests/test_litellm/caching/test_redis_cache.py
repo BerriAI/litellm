@@ -1,6 +1,8 @@
 import asyncio
+import logging
 import os
 import sys
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,6 +13,8 @@ sys.path.insert(
 from unittest.mock import AsyncMock
 
 from litellm.caching.redis_cache import RedisCache
+
+_MASTER_KEY: Final = "sk-1234567890abcdefghijklmnopqrstuvwxyz"
 
 
 @pytest.fixture
@@ -608,3 +612,79 @@ async def test_only_connectivity_failures_open_the_breaker(error, opens_breaker)
             await _run_under_circuit_breaker(breaker, "op", failing_call)
 
     assert breaker.is_open() is opens_breaker
+
+
+class _RedisWritesTimeOut:
+    """Injected async client whose writes fail like a real 'Timeout connecting to server'."""
+
+    async def set(self, name: str, value: str, nx: bool = False, ex: object = None) -> None:
+        from redis.exceptions import TimeoutError as RedisTimeoutError
+
+        raise RedisTimeoutError("Timeout connecting to server")
+
+    async def sadd(self, key: str, *members: object) -> None:
+        from redis.exceptions import TimeoutError as RedisTimeoutError
+
+        raise RedisTimeoutError("Timeout connecting to server")
+
+
+class _CaptureRecords(logging.Filter):
+    """Logger-level filter that records each formatted message.
+
+    Attached to the logger (not a handler), so it runs before the handler-level
+    SecretRedactionFilter can mutate the record. That isolates this test to the
+    redaction done at the log call site, independent of the logging config.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.messages: tuple[str, ...] = ()
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        self.messages = (*self.messages, record.getMessage())
+        return True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_cache",
+    (
+        pytest.param(
+            lambda c: c.async_set_cache(
+                key="litellm_config:param:general_settings",
+                value={"param_name": "general_settings", "param_value": {"master_key": _MASTER_KEY}},
+            ),
+            id="async_set_cache",
+        ),
+        pytest.param(
+            lambda c: c.async_set_cache_sadd(key="k", value=[_MASTER_KEY], ttl=60),
+            id="async_set_cache_sadd",
+        ),
+    ),
+)
+async def test_redis_write_failure_does_not_log_master_key(redis_no_ping, call_cache):
+    """A Redis write timeout must not spill the cached value's secrets into logs.
+
+    The proxy caches its own general_settings row, whose value holds the master key. When a
+    write to Redis fails, the error path logged that value verbatim, leaking the master key
+    in plaintext. Redacting at the call site keeps the leak out regardless of the logging
+    config, so this asserts on the record before any handler-level redaction filter runs.
+    """
+    from litellm._logging import verbose_logger
+
+    cache: Final = RedisCache(host="127.0.0.1", port=6379, socket_timeout=0.5)
+    capture: Final = _CaptureRecords()
+    verbose_logger.addFilter(capture)
+    try:
+        with patch.object(cache, "init_async_client", return_value=_RedisWritesTimeOut()):
+            try:
+                await call_cache(cache)
+            except Exception:
+                pass
+    finally:
+        verbose_logger.removeFilter(capture)
+
+    joined: Final = "\n".join(capture.messages)
+    assert "Got exception from REDIS" in joined, "the write-failure path must have logged"
+    assert _MASTER_KEY not in joined, f"master key leaked in plaintext: {joined!r}"
+    assert "REDACTED" in joined, "the secret must be redacted, not silently dropped"
