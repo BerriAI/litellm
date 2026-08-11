@@ -617,6 +617,7 @@ class Router:
         # ``id()``-reuse risk after GC). See
         # ``litellm.proxy.auth.auth_checks._is_model_cost_zero``.
         self._zero_cost_cache: dict[str, bool] = {}
+        self._init_routing_groups(None)
 
         self.deployment_affinity_ttl_seconds = deployment_affinity_ttl_seconds
         self.model_group_affinity_config = model_group_affinity_config
@@ -1053,6 +1054,15 @@ class Router:
                 raise ValueError("routing_groups: group_name must be non-empty.")
             if group.group_name == "default":
                 raise ValueError("routing_groups: 'default' is reserved for the implicit fallback group.")
+            if group.group_name in known_model_names:
+                raise ValueError(
+                    f"routing_groups: group_name '{group.group_name}' collides with an existing model_name; "
+                    "group names are callable models and must not shadow one."
+                )
+            if group.group_name in self.model_group_alias:
+                raise ValueError(
+                    f"routing_groups: group_name '{group.group_name}' collides with a model_group_alias entry."
+                )
             if group.group_name in seen_group_names:
                 raise ValueError(
                     f"routing_groups: group names must be unique, duplicate group_name '{group.group_name}'."
@@ -1088,6 +1098,63 @@ class Router:
             self._group_selectors[group.group_name] = (
                 {strategy_value: group_selector} if group_selector is not None else {}
             )
+
+    def get_routing_group(self, model_name: str) -> RoutingGroup | None:
+        """
+        The routing group callable as `model_name`, or None. A real deployment
+        `model_name` added after init shadows a same-named group (mirroring
+        `_try_early_resolve_deployments_for_model_not_in_names`, where concrete
+        models win over indirection); config-time collisions are rejected by
+        `_init_routing_groups`.
+        """
+        group: Final = self._routing_groups.get(model_name)
+        if group is None or model_name in self.model_names:
+            return None
+        return group
+
+    def _get_routing_group_deployments(
+        self, model: str, team_id: str | None = None
+    ) -> list[DeploymentTypedDict] | None:  # mutable-ok: list matches _get_all_deployments' contract for callers
+        """
+        The union of member deployments for a routing group called as `model`,
+        or None when `model` is not a callable group. The requested name stays
+        the group name so strategy selectors key their state by it.
+
+        `_common_checks_available_deployment` consults this BEFORE its
+        early-resolve step so a wildcard `default_deployment` or pattern route
+        cannot hijack a group call. Overall resolution precedence there:
+        specific deployment > model id > model_group_alias > routing group >
+        model_name > team/pattern/default fallbacks.
+        """
+        routing_group: Final = self.get_routing_group(model)
+        if routing_group is None:
+            return None
+        return [  # mutable-ok: matches _get_all_deployments' list contract expected by downstream filters
+            deployment
+            for member in routing_group.models
+            for deployment in self._get_all_deployments(model_name=member, team_id=team_id)
+        ]
+
+    def deployment_has_routing_group_alternatives(self, deployment_id: str) -> bool:
+        """
+        True when the deployment's model_name belongs to a routing group whose
+        member union spans more than one deployment. Cooldown handling uses
+        this so a 429 on one member of a multi-deployment group cools it down
+        and lets selection move to the alternatives, instead of the
+        single-deployment-model-group exemption pinning the group to one
+        failing backend. Direct calls to that member share the cooldown; the
+        group's availability wins over the exemption.
+        """
+        deployment: Final = self.get_deployment(model_id=deployment_id)
+        if deployment is None:
+            return False
+        group_name: Final = self._model_to_group.get(deployment.model_name)
+        if group_name is None:
+            return False
+        group: Final = self._routing_groups.get(group_name)
+        if group is None:
+            return False
+        return sum(len(self.model_name_to_deployment_indices.get(member) or ()) for member in group.models) > 1
 
     _OVERRIDABLE_ROUTING_STRATEGIES: frozenset[str] = frozenset({"simple-shuffle", *_DEFAULT_SELECTOR_ATTR_BY_STRATEGY})
 
@@ -1149,8 +1216,10 @@ class Router:
         the most specific expression of caller intent.
 
         Otherwise every model belongs to exactly one group: an explicit entry
-        from `routing_groups`, or the implicit `"default"` group driven by the
-        router's top-level `routing_strategy` / `routing_strategy_args`.
+        from `routing_groups` (either because `model` IS a callable group name,
+        or because it is a member of one), or the implicit `"default"` group
+        driven by the router's top-level `routing_strategy` /
+        `routing_strategy_args`.
 
         `self.routing_strategy` may be either a string or a `RoutingStrategy`
         enum member (the constructor accepts both), so it is normalized to a
@@ -1162,7 +1231,7 @@ class Router:
             verbose_router_logger.debug("routing_group=request-override model=%s strategy=%s", model, override)
             return override, self._get_override_strategy_selector(override)
 
-        group_name: Final = self._model_to_group.get(model)
+        group_name: Final = model if self.get_routing_group(model) is not None else self._model_to_group.get(model)
         if group_name is None:
             strategy = self._normalize_strategy(self.routing_strategy)
             attr: Final = self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.get(strategy or "")
@@ -9981,6 +10050,27 @@ class Router:
 
         return returned_models
 
+    def get_model_list_from_routing_groups(self, model_name: str | None = None) -> Sequence[DeploymentTypedDict]:
+        """
+        Callable routing groups materialized as model-list rows, mirroring
+        `get_model_list_from_model_alias`: each member deployment is emitted
+        under the group's name (via `_get_all_deployments`' `model_alias`
+        rewrite), which is what surfaces groups in `get_model_names`,
+        `/v1/models` discovery, `get_model_group_usage`, and the
+        blocked/unhealthy hiding that all read `get_model_list`.
+        """
+        groups: Final = (
+            tuple(group for group in (self.get_routing_group(model_name),) if group is not None)
+            if model_name is not None
+            else tuple(group for name in self._routing_groups if (group := self.get_routing_group(name)) is not None)
+        )
+        return tuple(
+            deployment
+            for group in groups
+            for member in group.models
+            for deployment in self._get_all_deployments(model_name=member, model_alias=group.group_name)
+        )
+
     def get_model_list(
         self, model_name: str | None = None, team_id: str | None = None
     ) -> list[DeploymentTypedDict] | None:
@@ -9997,6 +10087,7 @@ class Router:
             returned_models.extend(self._get_all_deployments(model_name=model_name, team_id=team_id))
 
         returned_models.extend(self.get_model_list_from_model_alias(model_name=model_name))
+        returned_models.extend(self.get_model_list_from_routing_groups(model_name=model_name))
 
         if len(returned_models) == 0:  # check if wildcard route
             potential_wildcard_models: Final = self.pattern_router.route(model_name) or []
@@ -10598,17 +10689,23 @@ class Router:
         if _model_from_alias is not None:
             model = _model_from_alias
 
-        early: Final = self._try_early_resolve_deployments_for_model_not_in_names(
-            model=model,
-            request_team_id=request_team_id,
-            include_team_models=_is_proxy_admin_request(request_kwargs),
-        )
-        if early is not None:
-            return early
+        _routing_group_deployments: Final = self._get_routing_group_deployments(model=model, team_id=request_team_id)
+        if _routing_group_deployments is None:
+            early: Final = self._try_early_resolve_deployments_for_model_not_in_names(
+                model=model,
+                request_team_id=request_team_id,
+                include_team_models=_is_proxy_admin_request(request_kwargs),
+            )
+            if early is not None:
+                return early
 
         ## get healthy deployments
         ### get all deployments
-        healthy_deployments = self._get_all_deployments(model_name=model, team_id=request_team_id)
+        healthy_deployments = (
+            _routing_group_deployments
+            if _routing_group_deployments is not None
+            else self._get_all_deployments(model_name=model, team_id=request_team_id)
+        )
         _pre_model_access_group_filter_len: Final = len(healthy_deployments)
         healthy_deployments = self._filter_deployments_by_model_access_groups(
             model=model,

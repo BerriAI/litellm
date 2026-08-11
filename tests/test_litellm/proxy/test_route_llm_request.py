@@ -1091,3 +1091,27 @@ async def test_route_request_rejects_chat_completion_without_messages():
     assert exc_info.value.status_code == 400
     assert exc_info.value.param == "messages"
     llm_router.acompletion.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_route_request_routing_group_name_passes_model_gate():
+    from unittest.mock import AsyncMock, patch
+
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "member-a", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"}},
+            {"model_name": "member-b", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}},
+        ],
+        routing_groups=[
+            {"group_name": "grouped-quality", "models": ["member-a", "member-b"], "routing_strategy": "simple-shuffle"}
+        ],
+    )
+    data = {"model": "grouped-quality", "messages": [{"role": "user", "content": "hi"}]}
+
+    with patch.object(router, "acompletion", new=AsyncMock(return_value="group_response")) as spy:
+        response = await (await route_request(data, router, None, "acompletion"))
+
+    assert response == "group_response"
+    spy.assert_called_once_with(**data)

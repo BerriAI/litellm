@@ -296,3 +296,60 @@ class TestShouldCooldownBasedOnAllowedFailsPolicy:
         assert set_cache_call[1]["ttl"] == 0.0, (
             "cooldown_time_override=0 should be used as TTL, not the router-level 60.0"
         )
+
+
+class TestRoutingGroupCooldownAlternatives:
+    def _router(self, routing_groups=None):
+        from litellm import Router
+
+        return Router(
+            model_list=[
+                {
+                    "model_name": "solo-member",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+                    "model_info": {"id": "cg-deploy-1"},
+                },
+                {
+                    "model_name": "other-member",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                    "model_info": {"id": "cg-deploy-2"},
+                },
+            ],
+            routing_groups=routing_groups,
+        )
+
+    def test_429_cools_down_single_deployment_member_of_multi_deployment_group(self):
+        from litellm.router_utils.cooldown_handlers import _should_cooldown_deployment
+
+        router = self._router(
+            routing_groups=[
+                {
+                    "group_name": "grouped",
+                    "models": ["solo-member", "other-member"],
+                    "routing_strategy": "simple-shuffle",
+                }
+            ]
+        )
+        assert (
+            _should_cooldown_deployment(
+                litellm_router_instance=router,
+                deployment="cg-deploy-1",
+                exception_status=429,
+                original_exception=Exception("rate limited"),
+            )
+            is True
+        )
+
+    def test_429_keeps_exemption_for_ungrouped_single_deployment_model(self):
+        from litellm.router_utils.cooldown_handlers import _should_cooldown_deployment
+
+        router = self._router(routing_groups=None)
+        assert (
+            _should_cooldown_deployment(
+                litellm_router_instance=router,
+                deployment="cg-deploy-1",
+                exception_status=429,
+                original_exception=Exception("rate limited"),
+            )
+            is False
+        )

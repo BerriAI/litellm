@@ -726,3 +726,132 @@ def test_strategy_reinit_unregisters_override_selectors():
     assert router._override_selectors == {}
     assert not any(id(cb) == id(override_selector) for cb in litellm.callbacks)
     assert router._get_override_strategy_selector("latency-based-routing") is router.lowestlatency_logger
+
+
+def _quality_group(strategy="latency-based-routing"):
+    return [{"group_name": "quality", "models": ["filtered-model", "other-model"], "routing_strategy": strategy}]
+
+
+def test_group_name_is_callable_and_unions_member_deployments():
+    router = _build_router(routing_groups=_quality_group())
+    model, deployments = router._common_checks_available_deployment(model="quality")
+    assert model == "quality"
+    assert sorted(d["model_info"]["id"] for d in deployments) == ["deploy-1", "deploy-2", "deploy-3"]
+
+
+def test_group_name_appears_in_model_names_and_model_list():
+    router = _build_router(routing_groups=_quality_group())
+    assert "quality" in router.get_model_names()
+    rows = router.get_model_list(model_name="quality")
+    assert {r["model_name"] for r in rows} == {"quality"}
+    assert sorted(r["model_info"]["id"] for r in rows) == ["deploy-1", "deploy-2", "deploy-3"]
+
+
+def test_get_routing_context_for_group_name_uses_group_strategy():
+    router = _build_router(routing_groups=_quality_group())
+    strategy, selector = router._get_routing_context("quality")
+    assert strategy == "latency-based-routing"
+    assert selector is router._group_selectors["quality"]["latency-based-routing"]
+
+
+@pytest.mark.asyncio
+async def test_group_call_dispatches_via_group_selector():
+    router = _build_router(routing_groups=_quality_group())
+    group_selector = router._group_selectors["quality"]["latency-based-routing"]
+
+    with (
+        patch.object(
+            group_selector,
+            "async_get_available_deployments",
+            wraps=group_selector.async_get_available_deployments,
+        ) as latency_spy,
+        patch("litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle) as shuffle_spy,
+    ):
+        deployment = await router.async_get_available_deployment(model="quality", request_kwargs={})
+
+        assert latency_spy.called
+        assert not shuffle_spy.called
+        assert deployment["model_name"] in {"filtered-model", "other-model"}
+
+
+def test_group_name_collision_with_model_name_raises():
+    with pytest.raises(ValueError, match="collides with an existing model_name"):
+        _build_router(
+            routing_groups=[
+                {"group_name": "filtered-model", "models": ["other-model"], "routing_strategy": "simple-shuffle"}
+            ]
+        )
+
+
+def test_group_name_collision_with_model_group_alias_raises():
+    with pytest.raises(ValueError, match="collides with a model_group_alias"):
+        Router(
+            model_list=_model_list(),
+            model_group_alias={"quality": "filtered-model"},
+            routing_groups=_quality_group(),
+        )
+
+
+def test_real_model_added_later_shadows_group():
+    router = _build_router(routing_groups=_quality_group())
+    assert router.get_routing_group("quality") is not None
+
+    from litellm.types.router import Deployment
+
+    router.add_deployment(
+        Deployment(
+            model_name="quality",
+            litellm_params={"model": "openai/gpt-4o", "api_key": "sk-test-4", "api_base": "https://example.invalid"},
+            model_info={"id": "deploy-shadow"},
+        )
+    )
+    assert router.get_routing_group("quality") is None
+    model, deployments = router._common_checks_available_deployment(model="quality")
+    assert [d["model_info"]["id"] for d in deployments] == ["deploy-shadow"]
+
+
+def test_group_with_no_member_deployments_raises_no_healthy():
+    router = Router(
+        model_list=_model_list(),
+        routing_groups=[{"group_name": "empty-group", "models": ["ghost-model"], "routing_strategy": "simple-shuffle"}],
+    )
+    with pytest.raises(litellm.BadRequestError):
+        router._common_checks_available_deployment(model="empty-group")
+
+
+def test_alias_pointing_at_group_composes():
+    router = Router(
+        model_list=_model_list(),
+        model_group_alias={"quality-alias": "quality"},
+        routing_groups=_quality_group(),
+    )
+    model, deployments = router._common_checks_available_deployment(model="quality-alias")
+    assert model == "quality"
+    assert sorted(d["model_info"]["id"] for d in deployments) == ["deploy-1", "deploy-2", "deploy-3"]
+
+
+def test_model_group_info_reports_group():
+    router = _build_router(routing_groups=_quality_group())
+    info = router.get_model_group_info("quality")
+    assert info is not None
+    assert info.model_group == "quality"
+    assert "openai" in info.providers
+
+
+def test_deployment_has_routing_group_alternatives():
+    router = _build_router(routing_groups=_quality_group())
+    assert router.deployment_has_routing_group_alternatives("deploy-1") is True
+    assert router.deployment_has_routing_group_alternatives("missing-id") is False
+
+    solo_router = Router(
+        model_list=_model_list(),
+        routing_groups=[{"group_name": "solo-group", "models": ["other-model"], "routing_strategy": "simple-shuffle"}],
+    )
+    assert solo_router.deployment_has_routing_group_alternatives("deploy-3") is False
+
+
+def test_member_direct_call_unchanged_by_callable_groups():
+    router = _build_router(routing_groups=_quality_group())
+    model, deployments = router._common_checks_available_deployment(model="other-model")
+    assert model == "other-model"
+    assert [d["model_info"]["id"] for d in deployments] == ["deploy-3"]

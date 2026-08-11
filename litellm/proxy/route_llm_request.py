@@ -596,6 +596,7 @@ async def route_request(
             or llm_router.has_model_id(data["model"])
             or llm_router.model_group_alias is not None
             and data["model"] in llm_router.model_group_alias
+            or llm_router.get_routing_group(data["model"]) is not None
         ):
             return getattr(llm_router, f"{route_type}")(**data)
 

@@ -341,7 +341,9 @@ def _should_cooldown_deployment(
     model_group: Final = litellm_router_instance.get_model_group(id=deployment)
     is_single_deployment_model_group = False
     if model_group is not None and len(model_group) == 1:
-        is_single_deployment_model_group = True
+        is_single_deployment_model_group = not litellm_router_instance.deployment_has_routing_group_alternatives(
+            deployment_id=deployment
+        )
 
     ## CHECK DEPLOYMENT-LEVEL POLICY FIRST (overrides router-level)
     dep_policy, dep_allowed_fails = _get_deployment_cooldown_policy(litellm_router_instance, deployment)
