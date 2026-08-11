@@ -597,11 +597,13 @@ def build_issue_prompt(*, title: str, body: str) -> str:
             that it does not today).
           - Motivation / use case with a concrete example (config, API call,
             UI flow, or scenario showing what's blocked today).
-          - END-TO-END EVIDENCE OF THE DEAD-END: a video, a screenshot, or the
-            exact command(s) actually run paired with their real output,
-            showing the point where the flow stops today. Mocked or stubbed
-            dependencies do NOT count, and an unfilled template scaffold
-            (bare headings, empty numbered lists) counts as absent.
+          - END-TO-END EVIDENCE OF THE DEAD-END (set
+            `has_dead_end_evidence=true` only when this is present): a video,
+            a screenshot, or the exact command(s) actually run paired with
+            their real output, showing the point where the flow stops today.
+            Mocked or stubbed dependencies do NOT count, and an unfilled
+            template scaffold (bare headings, empty numbered lists) counts as
+            absent.
 
         For an issue that is neither a bug report nor a feature request (a
         question, support request, or discussion), PASS as long as it has a
@@ -615,6 +617,7 @@ def build_issue_prompt(*, title: str, body: str) -> str:
           "has_repro": boolean,
           "has_expected_vs_actual": boolean,
           "has_motivation_example": boolean,
+          "has_dead_end_evidence": boolean,
           "missing": ["plain-english strings naming what is missing"],
           "explanation": "1-2 sentence reasoning for the team to skim"
         }}
@@ -712,6 +715,10 @@ _ISSUE_BUG_LABELS: tuple[tuple[str, str], ...] = (
 )
 _ISSUE_FEATURE_LABELS: tuple[tuple[str, str], ...] = (
     ("has_motivation_example", "Motivation and concrete example"),
+    (
+        "has_dead_end_evidence",
+        "End-to-end evidence of the dead-end (video, screenshot, or command + real output)",
+    ),
 )
 
 
