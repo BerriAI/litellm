@@ -1453,16 +1453,22 @@ DISABLE_NO_REDIS_WARNING_ENV_VAR: Final = "LITELLM_DISABLE_NO_REDIS_WARNING"
 
 def _show_no_redis_warning() -> bool:
     """
-    Whether the UI should warn that no coordination Redis is configured.
+    Whether the UI should warn that no Redis is configured.
 
     Redis is what makes rate limits, budgets, router state, and cache
     invalidation consistent across workers, so a proxy running without it is
-    only safe as a single worker. Operators who know that can silence the
+    only safe as a single worker. Both places a Redis can land count: the
+    coordination cache (from a Redis response cache, general_settings.
+    coordination_redis, or the REDIS_* env fallback) and the router's own
+    Redis (router_settings.redis_host), which backs cooldowns and usage-based
+    routing on its own. Operators who know they run one worker can silence the
     warning with LITELLM_DISABLE_NO_REDIS_WARNING=true.
     """
-    from litellm.proxy.proxy_server import redis_usage_cache
+    from litellm.proxy.proxy_server import llm_router, redis_usage_cache
 
     if redis_usage_cache is not None:
+        return False
+    if llm_router is not None and llm_router.cache.redis_cache is not None:
         return False
     return get_secret_bool(DISABLE_NO_REDIS_WARNING_ENV_VAR, False) is not True
 
