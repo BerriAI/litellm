@@ -73,7 +73,7 @@ async def make_call(
     timeout: float | httpx.Timeout | None,
     json_mode: bool,
     speed: str | None = None,
-    inference_geo: str | None = None
+    inference_geo: str | None = None,
     tool_name_reverse_map: dict[str, str] | None = None,
 ) -> tuple[Any, httpx.Headers]:
     if client is None:
@@ -135,7 +135,7 @@ def make_sync_call(
     timeout: float | httpx.Timeout | None,
     json_mode: bool,
     speed: str | None = None,
-    inference_geo: str | None = None
+    inference_geo: str | None = None,
     tool_name_reverse_map: dict[str, str] | None = None,
 ) -> tuple[Any, httpx.Headers]:
     if client is None:
@@ -531,7 +531,7 @@ class ModelResponseIterator:
         sync_stream: bool,
         json_mode: bool | None = False,
         speed: str | None = None,
-        inference_geo: str | None = None
+        inference_geo: str | None = None,
         tool_name_reverse_map: dict[str, str] | None = None,
     ):
         self.streaming_response = streaming_response
