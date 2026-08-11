@@ -2586,9 +2586,9 @@ async def test_streaming_slow_path_processes_and_yields_chunk(spend_counter_stat
 
 
 @pytest.mark.asyncio
-async def test_team_member_budget_counter_skipped_for_project_scoped_key():
-    """Project-scoped keys are governed by the project budget, so no team
-    member budget counter should be reserved for them."""
+async def test_team_member_budget_counter_reserved_for_project_scoped_key():
+    """Project-scoped keys enforce the project budget in addition to the team
+    member budget, so both counters must be reserved for them."""
     from litellm.proxy.spend_tracking.budget_reservation import (
         _get_team_member_budget_counter,
     )
@@ -2625,7 +2625,8 @@ async def test_team_member_budget_counter_skipped_for_project_scoped_key():
         user_object=user_object,
         user_api_key_cache=cache,
     )
-    assert counter is None
+    assert counter is not None
+    assert counter.counter_key == "spend:team_member:member-user:member-team"
 
 
 @pytest.mark.asyncio

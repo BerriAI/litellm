@@ -3900,7 +3900,6 @@ async def _check_team_member_budget(
         and team_object.team_id is not None
         and valid_token is not None
         and valid_token.user_id is not None
-        and valid_token.project_id is None
     ):
         team_membership: Final = await get_team_membership(
             user_id=valid_token.user_id,

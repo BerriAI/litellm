@@ -439,11 +439,11 @@ async def test_team_member_budget_check_personal_key_not_team():
 
 
 @pytest.mark.asyncio
-async def test_team_member_budget_check_skipped_for_project_scoped_key():
+async def test_team_member_budget_check_enforced_for_project_scoped_key():
     """
-    Regression for project-scoped keys being blocked by the team member budget:
-    when a key carries a project_id, the project budget governs and the team
-    member budget check must not raise, even if the member is over budget.
+    When a key carries a project_id, the project budget is enforced in addition
+    to, not instead of, the team member budget: an over-budget member must
+    still be blocked on a project-scoped key.
     """
     request_body = {
         "model": "gpt-3.5-turbo",
@@ -494,18 +494,21 @@ async def test_team_member_budget_check_skipped_for_project_scoped_key():
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
         patch("litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache),
     ):
-        result = await common_checks(
-            request_body=request_body,
-            team_object=team_object,
-            user_object=user_object,
-            end_user_object=None,
-            global_proxy_spend=None,
-            general_settings={},
-            route="/chat/completions",
-            llm_router=None,
-            proxy_logging_obj=mock_proxy_logging_obj,
-            valid_token=valid_token,
-            request=mock_request,
-        )
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await common_checks(
+                request_body=request_body,
+                team_object=team_object,
+                user_object=user_object,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route="/chat/completions",
+                llm_router=None,
+                proxy_logging_obj=mock_proxy_logging_obj,
+                valid_token=valid_token,
+                request=mock_request,
+            )
 
-        assert result is True
+        assert "Budget has been exceeded" in str(exc_info.value)
+        assert "test-user-1" in str(exc_info.value)
+        assert "test-team-1" in str(exc_info.value)

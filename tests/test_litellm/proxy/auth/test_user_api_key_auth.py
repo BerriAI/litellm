@@ -5762,8 +5762,8 @@ async def test_temp_budget_increase_applied_for_cached_key():
 
 class TestTeamMemberBudgetCheckForKey:
     """Tests for _team_member_budget_check_for_key: virtual keys with a
-    team member budget must be blocked once over budget, except project-scoped
-    keys, which are governed by the project budget instead."""
+    team member budget must be blocked once over budget, including
+    project-scoped keys, which enforce the project budget in addition."""
 
     def _valid_token(self, project_id=None) -> UserAPIKeyAuth:
         return UserAPIKeyAuth(
@@ -5806,24 +5806,22 @@ class TestTeamMemberBudgetCheckForKey:
                 )
 
     @pytest.mark.asyncio
-    async def test_skips_for_project_scoped_key(self):
+    async def test_raises_for_project_scoped_key(self):
         from litellm.proxy.auth.user_api_key_auth import (
             _team_member_budget_check_for_key,
         )
 
-        cache = self._cache_with_membership()
         with patch(
             "litellm.proxy.proxy_server.get_current_spend",
             new_callable=AsyncMock,
             return_value=0.03,
         ):
-            await _team_member_budget_check_for_key(
-                valid_token=self._valid_token(project_id="project-1"),
-                prisma_client=MagicMock(),
-                user_api_key_cache=cache,
-            )
-
-        cache.async_get_cache.assert_not_called()
+            with pytest.raises(litellm.BudgetExceededError):
+                await _team_member_budget_check_for_key(
+                    valid_token=self._valid_token(project_id="project-1"),
+                    prisma_client=MagicMock(),
+                    user_api_key_cache=self._cache_with_membership(),
+                )
 
 
 async def _proxy_exception_for_key(

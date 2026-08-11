@@ -1049,7 +1049,7 @@ async def _team_member_budget_check_for_key(
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
 ) -> None:
-    if valid_token.team_member_spend is None or valid_token.project_id is not None:
+    if valid_token.team_member_spend is None:
         return
     if prisma_client is None:
         return

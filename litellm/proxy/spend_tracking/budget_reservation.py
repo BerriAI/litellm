@@ -540,9 +540,6 @@ async def _get_team_member_budget_counter(
     if team_object is None or team_object.team_id is None or user_object is None or valid_token.user_id is None:
         return None
 
-    if valid_token.project_id is not None:
-        return None
-
     membership_cache_key: Final = f"team_membership:{valid_token.user_id}:{team_object.team_id}"
     cached_team_membership: Final = await user_api_key_cache.async_get_cache(key=membership_cache_key)
     team_membership: LiteLLM_TeamMembership | None = None
