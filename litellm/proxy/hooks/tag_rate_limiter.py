@@ -5,7 +5,7 @@ import contextvars
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
@@ -30,9 +30,9 @@ from litellm.types.utils import StandardLoggingPayload
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span | Any
+    Span = _Span
 else:
-    Span = Any
+    Span = object
 
 _LimitUnit = Literal["tokens", "requests", "dollars", "concurrency"]
 _LIMIT_UNITS: tuple[_LimitUnit, ...] = ("tokens", "requests", "dollars", "concurrency")
@@ -414,7 +414,7 @@ class _PROXY_TagRateLimiter(CustomLogger):
         self,
         internal_usage_cache: DualCache,
         time_provider: Callable[[], datetime] | None = None,
-    ):
+    ) -> None:
         self.internal_usage_cache = InternalUsageCache(dual_cache=internal_usage_cache)
         self._v3 = _PROXY_MaxParallelRequestsHandler_v3(self.internal_usage_cache, time_provider=time_provider)
         self._time_provider = time_provider or datetime.now

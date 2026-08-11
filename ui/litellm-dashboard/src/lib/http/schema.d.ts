@@ -36244,25 +36244,7 @@ export interface components {
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
-        /**
-         * TagRateLimitEntry
-         * @description One tag-scoped limit: a caller-supplied tag value (identified by `tag_id`,
-         *     e.g. `end_user_id` in a request tag like `end_user_id:user-123`) is capped
-         *     at `limit` units per rolling `period_seconds`-second window. Bucketing is
-         *     `epoch_second // period_seconds`, so `period_seconds=86400` resets at UTC
-         *     midnight and `period_seconds=60` resets on real clock-minute boundaries.
-         *
-         *     For a `concurrency_limits` entry specifically, `period_seconds` is not a
-         *     window: it is a floor under the safety TTL a reserved in-flight slot
-         *     self-heals after, in case a worker crashes before releasing it (the
-         *     counter, not a window). The effective TTL is at least one hour regardless
-         *     of this value, so a slow but genuinely still-running request never has
-         *     its reservation expire out from under it; set this higher only if an
-         *     even longer self-heal window is wanted. `concurrency_limits` also only
-         *     supports chain-wide entries (declared identically by every deployment
-         *     sharing a `model_name`) -- a divergent per-deployment value is dropped
-         *     with a warning, not silently scoped to a subset of deployments.
-         */
+        /** TagRateLimitEntry */
         TagRateLimitEntry: {
             /** Limit */
             limit: number;
@@ -36286,12 +36268,7 @@ export interface components {
             /** Limits */
             limits?: components["schemas"]["TagRateLimitEntry"][];
         };
-        /**
-         * TagRateLimits
-         * @description Per-chain/model-group tag rate limits, set under a deployment's
-         *     `model_info.tag_rate_limits`. Each entry carries its own `tag_id`, so two
-         *     entries of the same unit on the same chain can key by different tags.
-         */
+        /** TagRateLimits */
         TagRateLimits: {
             concurrency_limits?: components["schemas"]["TagRateLimitGroup"] | null;
             dollar_limits?: components["schemas"]["TagRateLimitGroup"] | null;
