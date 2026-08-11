@@ -25,7 +25,7 @@ from litellm.proxy.guardrails._content_utils import (
     has_non_string_content,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.guardrails import GuardrailEventHooks, Mode
+from litellm.types.guardrails import GuardrailEventHooks, LitellmParams, Mode
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIBreakdownItem,
@@ -152,6 +152,22 @@ class LakeraAIGuardrail(CustomGuardrail):
         self.dev_info: bool | None = dev_info
         self.on_flagged = on_flagged or "block"
         self.advisory_system_message = advisory_system_message
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        super().__init__(**kwargs)
+        self._validate_advisory_config()
+
+    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+        """
+        The base implementation blindly ``setattr``s every field on ``litellm_params``
+        (including ``on_flagged``/``advisory_system_message``) onto this live instance
+        with no revalidation, so an in-place config update (via the DB/UI, without a
+        restart) could otherwise reintroduce the exact invalid on_flagged/event_hook
+        combinations __init__ rejects. Re-run the same validation after every update.
+        """
+        super().update_in_memory_litellm_params(litellm_params=litellm_params)
+        self._validate_advisory_config()
+
+    def _validate_advisory_config(self) -> None:
         if self.advisory_system_message is not None:
             if not _template_uses_reason_placeholder(self.advisory_system_message):
                 raise ValueError(
@@ -165,8 +181,6 @@ class LakeraAIGuardrail(CustomGuardrail):
                     f"Invalid advisory_system_message template: {e}. The template must be a valid "
                     "str.format() string using only the {reason} placeholder."
                 ) from e
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
-        super().__init__(**kwargs)
         if self.on_flagged == "inject_system_message" and _event_hook_includes_during_call(self.event_hook):
             raise ValueError(
                 "on_flagged='inject_system_message' is not supported for mode='during_call': during_call "

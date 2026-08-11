@@ -15,7 +15,7 @@ from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIGuardrail,
     humanize_lakera_block_reasons,
 )
-from litellm.types.guardrails import Mode
+from litellm.types.guardrails import LitellmParams, Mode
 from litellm.types.utils import ModelResponse
 
 
@@ -178,6 +178,17 @@ class TestAdvisoryModeDuringCallUnsupported:
 
     def test_during_call_with_block_mode_constructs_without_error(self):
         LakeraAIGuardrail(api_key="test_key", on_flagged="block", event_hook="during_call")
+
+    def test_in_memory_update_reintroducing_the_combo_raises(self):
+        """update_in_memory_litellm_params (the DB/UI hot-reload path) setattrs
+        every LitellmParams field onto a live instance with no revalidation, so
+        an update that flips on_flagged to inject_system_message on an instance
+        already running as during_call must be rejected too, not just the
+        combination formed at construction time."""
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block", event_hook="during_call")
+        updated_params = LitellmParams(guardrail="lakera_v2", mode="during_call", on_flagged="inject_system_message")
+        with pytest.raises(ValueError, match="not supported for mode='during_call'"):
+            guardrail.update_in_memory_litellm_params(litellm_params=updated_params)
 
 
 class TestAdvisoryModeWiring:
