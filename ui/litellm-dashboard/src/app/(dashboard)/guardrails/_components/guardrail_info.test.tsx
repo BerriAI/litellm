@@ -1,7 +1,34 @@
 import * as networking from "@/components/networking";
 import { fireEvent, render, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import GuardrailInfoView from "./guardrail_info";
+
+const localization = vi.hoisted(() => ({ language: "en" as "en" | "ru" }));
+
+vi.mock("react-i18next", async () => {
+  const { resources } = await import("@/i18n/catalog");
+  const t = (key: string, values?: Record<string, unknown>) => {
+    const copy = key.split(".").reduce<unknown>((value, segment) => {
+      if (typeof value !== "object" || value === null) return undefined;
+      return (value as Record<string, unknown>)[segment];
+    }, resources[localization.language].gateway);
+    if (typeof copy !== "string") return key;
+    return Object.entries(values ?? {}).reduce(
+      (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+      copy,
+    );
+  };
+  return {
+    useTranslation: () => ({
+      t,
+      i18n: {
+        get resolvedLanguage() {
+          return localization.language;
+        },
+      },
+    }),
+  };
+});
 
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
@@ -36,6 +63,10 @@ vi.mock("./content_filter/ContentFilterManager", () => ({
 }));
 
 describe("Guardrail Info", () => {
+  beforeEach(() => {
+    localization.language = "en";
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -79,6 +110,40 @@ describe("Guardrail Info", () => {
     expect(getByText("Back to Guardrails")).toBeInTheDocument();
     expect(getByText("Overview")).toBeInTheDocument();
     expect(getByText("Settings")).toBeInTheDocument();
+  });
+
+  it("renders guardrail details in Russian", async () => {
+    localization.language = "ru";
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue({
+      guardrail_id: "123",
+      guardrail_name: "Тестовый ограничитель",
+      litellm_params: {
+        guardrail: "presidio",
+        mode: "pre_call",
+        default_on: true,
+      },
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+      guardrail_definition_location: "database",
+    });
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
+      supported_entities: [],
+      supported_actions: [],
+      pii_entity_categories: [],
+      supported_modes: ["pre_call", "post_call"],
+    });
+    vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
+
+    const { findAllByText, getAllByText, getByText } = render(
+      <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />,
+    );
+
+    await findAllByText("Тестовый ограничитель");
+    expect(getByText("Назад к ограничителям")).toBeInTheDocument();
+    expect(getByText("Обзор")).toBeInTheDocument();
+    expect(getByText("Настройки")).toBeInTheDocument();
+    expect(getAllByText("Провайдер").length).toBeGreaterThan(0);
+    expect(getByText("Включён по умолчанию")).toBeInTheDocument();
   });
 
   it("should render the provider logo from the bundled guardrail logo map", async () => {
