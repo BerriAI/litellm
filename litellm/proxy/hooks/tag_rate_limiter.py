@@ -355,7 +355,7 @@ def _bucket_key(
 ) -> str:
     scope = _scope_suffix(configured.deployment_scope)
     key_suffix = f":key:{key_hash}" if key_hash is not None else ""
-    hash_tag = f"tag_rl:{model_group}:{configured.unit}:{configured.entry.name}:{scope}:{tag_value}{key_suffix}"
+    hash_tag = f"tag_rl:{model_group}:{configured.unit}:{configured.entry.name}:{configured.entry.tag_id}:{scope}:{tag_value}{key_suffix}"
     return f"{{{hash_tag}}}:{bucket_id}"
 
 
@@ -370,7 +370,7 @@ def _inflight_key(
     on completion, with a TTL fallback only for a leaked (crashed) reservation."""
     scope = _scope_suffix(configured.deployment_scope)
     key_suffix = f":key:{key_hash}" if key_hash is not None else ""
-    hash_tag = f"tag_rl:{model_group}:{configured.unit}:{configured.entry.name}:{scope}:{tag_value}{key_suffix}"
+    hash_tag = f"tag_rl:{model_group}:{configured.unit}:{configured.entry.name}:{configured.entry.tag_id}:{scope}:{tag_value}{key_suffix}"
     return f"{{{hash_tag}}}:inflight"
 
 

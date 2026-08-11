@@ -224,8 +224,63 @@ async def test_filter_deployments_per_entry_fail_open_when_tag_absent(time_contr
 
     now = time_controller.now().timestamp()
     team_bucket_id = int(now) // 2592000
-    team_key = f"{{tag_rl:grp:requests:monthly:chain:whatever}}:{team_bucket_id}"
+    team_key = f"{{tag_rl:grp:requests:monthly:team_id:chain:whatever}}:{team_bucket_id}"
     assert await limiter.internal_usage_cache.async_get_cache(key=team_key, litellm_parent_otel_span=None) is None
+
+
+@pytest.mark.asyncio
+async def test_different_tag_ids_with_same_name_do_not_share_a_counter(time_controller):
+    """
+    Regression test: the key format used to omit `tag_id`, so two
+    independently configured entries sharing the same unit/name (here both
+    named "daily") but keyed on different tag_ids would collide whenever a
+    caller's value for one tag_id happened to equal another caller's value
+    for the other tag_id. With equal limits of 1, a colliding shared counter
+    would make team_id "u1"'s very first request get wrongly rejected right
+    after end_user_id "u1"'s own first (and separately limited) request --
+    the failure mode a higher team_id limit would have masked.
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "request_limits": {
+                        "limits": [
+                            {"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400},
+                            {"name": "daily", "tag_id": "team_id", "limit": 1, "period_seconds": 86400},
+                        ]
+                    }
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    # end_user_id "u1" makes its one allowed request.
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+    )
+
+    # team_id "u1" -- identical value, different tag_id, its own untouched
+    # limit of 1 -- must still admit its first request.
+    result = await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["team_id:u1"]}}
+    )
+    assert result == healthy
+
+    # Both identities are now genuinely at their own limit of 1.
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+        )
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["team_id:u1"]}}
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +318,7 @@ async def test_load_balanced_group_per_deployment_breach_rejects_whole_hop(time_
 
     now = time_controller.now().timestamp()
     bucket_id = int(now) // 86400
-    dep1_key = f"{{tag_rl:grp:requests:daily:dep:dep-1:u1}}:{bucket_id}"
+    dep1_key = f"{{tag_rl:grp:requests:daily:end_user_id:dep:dep-1:u1}}:{bucket_id}"
     await limiter.internal_usage_cache.async_set_cache(key=dep1_key, value=1, ttl=86400, litellm_parent_otel_span=None)
 
     with pytest.raises(ProxyRateLimitError):
@@ -309,15 +364,15 @@ async def test_log_success_event_increments_configured_units(time_controller):
     await asyncio.sleep(0)
 
     now = time_controller.now().timestamp()
-    token_key = f"{{tag_rl:grp:tokens:daily:chain:u1}}:{int(now) // 86400}"
-    dollar_key = f"{{tag_rl:grp:dollars:monthly:chain:u1}}:{int(now) // 2592000}"
+    token_key = f"{{tag_rl:grp:tokens:daily:end_user_id:chain:u1}}:{int(now) // 86400}"
+    dollar_key = f"{{tag_rl:grp:dollars:monthly:end_user_id:chain:u1}}:{int(now) // 2592000}"
 
     assert float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
     assert float(await limiter.internal_usage_cache.async_get_cache(key=dollar_key, litellm_parent_otel_span=None)) == 0.01
 
     # "requests" is accounted atomically at admission (async_filter_deployments),
     # not here -- async_log_success_event must not touch its bucket at all.
-    request_key = f"{{tag_rl:grp:requests:daily:chain:u1}}:{int(now) // 86400}"
+    request_key = f"{{tag_rl:grp:requests:daily:end_user_id:chain:u1}}:{int(now) // 86400}"
     assert await limiter.internal_usage_cache.async_get_cache(key=request_key, litellm_parent_otel_span=None) is None
 
 
@@ -395,7 +450,7 @@ async def test_cross_unit_rejection_does_not_leave_a_phantom_increment(time_cont
     assert exc_info.value.detail["type"] == "concurrency"
 
     now = time_controller.now().timestamp()
-    request_key = f"{{tag_rl:grp:requests:per_minute:chain:u1}}:{int(now) // 60}"
+    request_key = f"{{tag_rl:grp:requests:per_minute:end_user_id:chain:u1}}:{int(now) // 60}"
     requests_value = await limiter.internal_usage_cache.async_get_cache(key=request_key, litellm_parent_otel_span=None)
     assert (float(requests_value) if requests_value is not None else 0.0) == 1.0
 
@@ -751,7 +806,7 @@ async def test_token_limit_rejects_once_bucket_is_seeded_at_limit(time_controlle
     healthy = router.model_list
 
     now = time_controller.now().timestamp()
-    key = f"{{tag_rl:grp:tokens:daily:chain:u1}}:{int(now) // 86400}"
+    key = f"{{tag_rl:grp:tokens:daily:end_user_id:chain:u1}}:{int(now) // 86400}"
     await limiter.internal_usage_cache.async_set_cache(key=key, value=1000, ttl=86400, litellm_parent_otel_span=None)
 
     with pytest.raises(ProxyRateLimitError) as exc_info:
@@ -778,7 +833,7 @@ async def test_dollar_limit_rejects_once_bucket_is_seeded_at_limit(time_controll
     healthy = router.model_list
 
     now = time_controller.now().timestamp()
-    key = f"{{tag_rl:grp:dollars:monthly:chain:t1}}:{int(now) // 2592000}"
+    key = f"{{tag_rl:grp:dollars:monthly:team_id:chain:t1}}:{int(now) // 2592000}"
     await limiter.internal_usage_cache.async_set_cache(key=key, value=50.0, ttl=2592000, litellm_parent_otel_span=None)
 
     with pytest.raises(ProxyRateLimitError) as exc_info:
@@ -887,7 +942,7 @@ async def test_redis_backed_cross_unit_rejection_does_not_leave_a_phantom_increm
     assert exc_info.value.detail["type"] == "concurrency"
 
     now = time_controller.now().timestamp()
-    request_key = f"{{tag_rl:grp:requests:per_minute:chain:{tag}}}:{int(now) // 60}"
+    request_key = f"{{tag_rl:grp:requests:per_minute:end_user_id:chain:{tag}}}:{int(now) // 60}"
     requests_value = await limiter.internal_usage_cache.async_get_cache(key=request_key, litellm_parent_otel_span=None)
     assert (float(requests_value) if requests_value is not None else 0.0) == 1.0
 
@@ -1100,7 +1155,7 @@ async def test_cross_unit_refund_leaves_no_phantom_increment_in_memory(time_cont
         )
 
     now = time_controller.now().timestamp()
-    request_key = f"{{tag_rl:grp:requests:per_minute:chain:refund-check}}:{int(now) // 60}"
+    request_key = f"{{tag_rl:grp:requests:per_minute:end_user_id:chain:refund-check}}:{int(now) // 60}"
     value = await limiter.internal_usage_cache.async_get_cache(key=request_key, litellm_parent_otel_span=None)
     assert (float(value) if value is not None else 0.0) == 1.0
 
