@@ -13,9 +13,11 @@ from typing_extensions import TypedDict
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
+from litellm.types.utils import ModelResponse
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -495,7 +497,13 @@ async def _process_tool_call(
     chat_messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
 
 
-async def _acompletion(model: str, **kwargs: Any) -> Any:
+async def _acompletion(
+    model: str,
+    messages: list[dict[str, Any]],
+    temperature: float,
+    tools: list[dict[str, Any]] | None = None,
+    stream: bool = False,
+) -> ModelResponse | CustomStreamWrapper:
     """Route through llm_router for proxy model names, bare litellm otherwise.
 
     The Ask AI dropdown is populated from the proxy's model_list, so the model
@@ -506,8 +514,12 @@ async def _acompletion(model: str, **kwargs: Any) -> Any:
     from litellm.proxy.proxy_server import llm_router
 
     if llm_router is not None and model in llm_router.get_model_names():
-        return await llm_router.acompletion(model=model, **kwargs)
-    return await litellm.acompletion(model=model, **kwargs)
+        return await llm_router.acompletion(
+            model=model, messages=messages, temperature=temperature, tools=tools, stream=stream
+        )
+    return await litellm.acompletion(
+        model=model, messages=messages, temperature=temperature, tools=tools, stream=stream
+    )
 
 
 async def _stream_final_response(model: str, chat_messages: list[dict[str, Any]]) -> AsyncIterator[str]:
