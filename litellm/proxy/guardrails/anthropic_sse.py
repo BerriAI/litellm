@@ -92,16 +92,17 @@ def model_response_text(response: ModelResponse) -> str:
     )
 
 
-def anthropic_sse_error_frames(message: str) -> tuple[bytes, ...]:
+def anthropic_sse_error_frames(message: str | Mapping[str, object]) -> tuple[bytes, ...]:
     """Anthropic error event, for a failure discovered after the response headers were flushed.
 
     Once a keepalive ping has been sent a raise cannot reach the client, so the failure has to
-    travel as a frame.
+    travel as a frame. A structured message is emitted as JSON rather than stringified, so the
+    guardrail's own detail stays machine readable.
     """
-    detail: Final = json.dumps(message)
+    body: Final = json.dumps(message, default=str)
     return (
         f'event: error\ndata: {{"type": "error", "error": {{"type": "guardrail_error", '
-        f'"message": {detail}}}}}\n\n'.encode(),
+        f'"message": {body}}}}}\n\n'.encode(),
     )
 
 

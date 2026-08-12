@@ -2625,7 +2625,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     raise
                 # A keepalive ping may already have flushed the response headers, so a raise
                 # cannot reach the client; deliver the block as an error frame instead
-                for error_frame in anthropic_sse_error_frames(str(block_exc.detail)):
+                block_detail: Final = block_exc.detail
+                for error_frame in anthropic_sse_error_frames(
+                    block_detail if isinstance(block_detail, Mapping) else str(block_detail)
+                ):
                     yield error_frame
                 return
             except ModifyResponseException as e:
