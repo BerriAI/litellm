@@ -216,6 +216,9 @@
             "minimum": 0
           }
         },
+        "health_check_voice": {
+          "type": "string"
+        },
         "input_cost_per_audio_per_second": {
           "type": "number",
           "minimum": 0

@@ -24903,7 +24903,9 @@
         "supports_audio_input": false,
         "supports_audio_output": true,
         "supports_function_calling": false,
-        "supports_prompt_caching": false
+        "supports_prompt_caching": false,
+        "tpm": 4000000,
+        "rpm": 10
     },
     "gemini/gemini-2.5-pro": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -45328,7 +45330,9 @@
         "supports_audio_input": false,
         "supports_audio_output": true,
         "supports_function_calling": false,
-        "supports_prompt_caching": false
+        "supports_prompt_caching": false,
+        "tpm": 4000000,
+        "rpm": 10
     },
     "vertex_ai/gemini-3.1-flash-lite": {
         "deprecation_date": "2027-05-07",
@@ -52601,7 +52605,9 @@
         "supports_audio_input": false,
         "supports_audio_output": true,
         "supports_function_calling": false,
-        "supports_prompt_caching": false
+        "supports_prompt_caching": false,
+        "tpm": 4000000,
+        "rpm": 10
     },
     "gemini-flash-latest": {
         "cache_read_input_token_cost": 3e-08,

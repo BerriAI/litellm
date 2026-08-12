@@ -699,7 +699,7 @@ def is_gemini_tts_model(model: str, custom_llm_provider: str | None = None) -> b
             model=model,
             custom_llm_provider=custom_llm_provider,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001  # model lookup failures intentionally fall back to the bundled registry
         provider_model: Final = (
             f"{custom_llm_provider}/{model}"
             if custom_llm_provider is not None and not model.startswith(f"{custom_llm_provider}/")

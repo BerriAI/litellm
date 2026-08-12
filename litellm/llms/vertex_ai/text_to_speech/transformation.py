@@ -8,7 +8,7 @@ Reference: https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text/s
 import base64
 from collections.abc import Coroutine
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Union
 
 import httpx
 
@@ -65,7 +65,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
     }
 
     # Response format mappings from OpenAI to Google Cloud audio encoding
-    FORMAT_MAPPINGS = {
+    FORMAT_MAPPINGS: ClassVar[dict[str, str]] = {
         "mp3": "MP3",
         "opus": "OGG_OPUS",
         "aac": "MP3",  # Google doesn't have AAC, use MP3
@@ -73,7 +73,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         "wav": "LINEAR16",
         "pcm": "LINEAR16",
     }
-    GEMINI_FORMAT_MAPPINGS = {
+    GEMINI_FORMAT_MAPPINGS: ClassVar[dict[str, str]] = {
         **FORMAT_MAPPINGS,
         "alaw": "ALAW",
         "mulaw": "MULAW",

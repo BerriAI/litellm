@@ -231,6 +231,7 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
         },
         "comment": STRING,
         "audio_transcription_config": STRING,
+        "health_check_voice": STRING,
     }
 
 

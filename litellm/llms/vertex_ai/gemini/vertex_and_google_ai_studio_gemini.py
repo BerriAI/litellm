@@ -120,14 +120,44 @@ _GEMINI_SPEECH_CONFIG_KEY_MAP: dict[str, str] = {
 
 def _normalize_gemini_speech_config_item(value: object) -> object:
     if isinstance(value, Mapping):
-        return {
-            _GEMINI_SPEECH_CONFIG_KEY_MAP.get(key, key): _normalize_gemini_speech_config_item(item)
-            for key, item in value.items()
-            if isinstance(key, str)
-        }
-    if isinstance(value, list):
-        return [_normalize_gemini_speech_config_item(item) for item in value]
-    return value
+        normalized: dict[str, object] | list[object] = {}  # mutable-ok: the iterative walk fills the normalized tree
+    elif isinstance(value, list):
+        normalized = []  # mutable-ok: the iterative walk fills the normalized tree
+    else:
+        return value
+
+    pending: list[tuple[dict[str, object] | list[object], Mapping[object, object] | list[object]]] = [
+        (normalized, value)
+    ]  # mutable-ok: explicit worklist avoids recursive traversal
+    while pending:
+        target, source = pending.pop()
+        items = source.items() if isinstance(source, Mapping) else enumerate(source)
+        for key, item in items:
+            if isinstance(source, Mapping):
+                if not isinstance(key, str) or not isinstance(target, dict):
+                    continue
+                normalized_key: str | int = _GEMINI_SPEECH_CONFIG_KEY_MAP.get(key, key)
+            else:
+                if not isinstance(target, list):
+                    continue
+                normalized_key = len(target)
+
+            child: object
+            if isinstance(item, Mapping):
+                child = {}  # mutable-ok: nested mappings are filled by the worklist
+            elif isinstance(item, list):
+                child = []  # mutable-ok: nested lists are filled by the worklist
+            else:
+                child = item
+
+            if isinstance(target, dict) and isinstance(normalized_key, str):
+                target[normalized_key] = child
+            elif isinstance(target, list):
+                target.append(child)
+
+            if isinstance(child, (dict, list)) and isinstance(item, (Mapping, list)):
+                pending.append((child, item))
+    return normalized
 
 
 def normalize_gemini_speech_config(value: Mapping[str, object]) -> dict[str, object]:
