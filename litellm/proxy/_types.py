@@ -2478,9 +2478,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     config_source_of_truth: ConfigSourceOfTruth = Field(
         ConfigSourceOfTruth.DATABASE,
         description=(
-            "Controls precedence when store_model_in_db is enabled. 'database' preserves the default behavior where "
-            "LiteLLM_Config values override the deployed config. 'config_file' makes explicit deployed config values "
-            "override database values while still loading database-only values. Set this in the deployed config file."
+            "Controls precedence between the deployed config and settings stored in the LiteLLM_Config table. "
+            "'database' preserves the default behavior where LiteLLM_Config values override the deployed config. "
+            "'config_file' makes explicit deployed config values override LiteLLM_Config values while still loading "
+            "database-only settings. Models and objects stored in other database tables retain their existing behavior. "
+            "Set this in the deployed config file."
         ),
     )
     forward_client_headers_to_llm_api: bool | None = Field(
