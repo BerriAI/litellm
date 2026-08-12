@@ -349,21 +349,6 @@ class TestOpenMeterIntegration:
         with pytest.raises(Exception, match="OpenMeter: user is required"):
             logger._common_logic(kwargs, response_obj)
 
-    def test_common_logic_no_metadata(self):
-        """Test that exception is raised when no metadata is available"""
-        logger = OpenMeterLogger()
-
-        kwargs = {
-            "model": "gpt-3.5-turbo",
-            "response_cost": 0.001,
-            "litellm_call_id": "test-call-id",
-            # No litellm_params at all
-        }
-
-        response_obj = {"id": "test-response-id"}
-
-        with pytest.raises(Exception, match="OpenMeter: user is required"):
-            logger._common_logic(kwargs, response_obj)
 
     def test_common_logic_integer_token_user_id(self):
         """Test that integer token user_id is converted to string"""

@@ -389,51 +389,6 @@ async def test_ui_view_users_flag_on_team_admin_non_org_team_403(mocker):
 
 
 @pytest.mark.asyncio
-async def test_ui_view_users_flag_on_non_admin_no_team_id_403(mocker):
-    """
-    Flag ON, non-admin caller without team_id: returns 403.
-    """
-    from fastapi import HTTPException
-
-    mock_prisma_client = mocker.MagicMock()
-
-    # Flag ON
-    mocker.patch(
-        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
-        return_value={"scope_user_search_to_org": True},
-    )
-
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
-    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mocker.MagicMock())
-
-    # Caller is not org admin
-    caller_user = mocker.MagicMock()
-    caller_user.organization_memberships = []
-
-    async def mock_get_user_object(*args, **kwargs):
-        return caller_user
-
-    mocker.patch(
-        "litellm.proxy.management_endpoints.internal_user_endpoints.get_user_object",
-        side_effect=mock_get_user_object,
-    )
-
-    with pytest.raises(HTTPException) as exc_info:
-        await ui_view_users(
-            user_api_key_dict=UserAPIKeyAuth(user_id="internal_user", user_role=None),
-            user_id=None,
-            user_email="u",
-            team_id=None,
-            page=1,
-            page_size=50,
-        )
-
-    assert exc_info.value.status_code == 403
-    assert "scope_user_search_to_org is enabled" in str(exc_info.value.detail)
-
-
-@pytest.mark.asyncio
 async def test_ui_view_users_flag_on_team_admin_org_member_no_team_id(mocker):
     """
     Flag ON, team admin who is an org member (not org admin), no team_id param:

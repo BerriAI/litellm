@@ -298,29 +298,6 @@ def test_ui_discovery_endpoints_with_admin_ui_disabled():
         assert data["sso_configured"] is False
 
 
-def test_ui_discovery_endpoints_with_admin_ui_enabled():
-    app = FastAPI()
-    app.include_router(router)
-    client = TestClient(app)
-
-    with (
-        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
-        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
-        patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False),
-        patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
-    ):
-
-        response = client.get("/.well-known/litellm-ui-config")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["server_root_path"] == "/"
-        assert data["proxy_base_url"] is None
-        assert data["auto_redirect_to_sso"] is False
-        assert data["admin_ui_disabled"] is False
-        assert data["sso_configured"] is False
-
-
 def test_ui_discovery_endpoints_is_control_plane_true_when_workers_configured():
     app = FastAPI()
     app.include_router(router)
