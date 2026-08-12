@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -83,6 +83,30 @@ describe("PriceDataReload", () => {
 
     await waitFor(() => expect(scheduleModelCostMapReload).toHaveBeenCalledWith("sk-test", 12));
     expect(NotificationsManager.success).toHaveBeenCalledWith("Periodic reload scheduled for every 12 hours");
+  });
+
+  it.each(["-1", "1.5", "169"])("should reject an invalid periodic reload interval of %s hours", async (interval) => {
+    const user = userEvent.setup();
+    render(<PriceDataReload accessToken="sk-test" />);
+
+    await user.click(screen.getByRole("button", { name: /Set Up Periodic Reload/ }));
+    fireEvent.change(screen.getByRole("spinbutton"), { target: { value: interval } });
+    await user.click(screen.getByRole("button", { name: "Schedule" }));
+
+    expect(scheduleModelCostMapReload).not.toHaveBeenCalled();
+    expect(NotificationsManager.fromBackend).toHaveBeenCalledWith("Hours must be a whole number between 1 and 168");
+  });
+
+  it.each([1, 168])("should schedule a periodic reload at the inclusive %s-hour boundary", async (interval) => {
+    const user = userEvent.setup();
+    vi.mocked(scheduleModelCostMapReload).mockResolvedValue({ status: "success" } as never);
+    render(<PriceDataReload accessToken="sk-test" />);
+
+    await user.click(screen.getByRole("button", { name: /Set Up Periodic Reload/ }));
+    fireEvent.change(screen.getByRole("spinbutton"), { target: { value: String(interval) } });
+    await user.click(screen.getByRole("button", { name: "Schedule" }));
+
+    await waitFor(() => expect(scheduleModelCostMapReload).toHaveBeenCalledWith("sk-test", interval));
   });
 
   it("cancels an active periodic reload", async () => {

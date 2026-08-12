@@ -36,6 +36,8 @@ const retryPolicyMap: Record<string, string> = {
   "InternalServerError (500)": "InternalServerErrorRetries",
 };
 
+const isValidRetryCount = (value: number) => Number.isFinite(value) && Number.isInteger(value) && value >= 0;
+
 const ModelRetrySettingsTab = ({
   selectedModelGroup,
   setSelectedModelGroup,
@@ -65,6 +67,13 @@ const ModelRetrySettingsTab = ({
       }
       return { ...(prev ?? {}), [selectedModelGroup!]: groupPolicy };
     });
+  };
+
+  const handleRetryCountChange = (retryPolicyKey: string, rawValue: string) => {
+    const value = rawValue === "" ? null : Number(rawValue);
+    if (value !== null && !isValidRetryCount(value)) return;
+    if (isGlobalScope) setGlobalValue(retryPolicyKey, value);
+    else setModelOverride(retryPolicyKey, value);
   };
 
   return (
@@ -124,17 +133,12 @@ const ModelRetrySettingsTab = ({
                 <td className="flex items-center gap-2">
                   <Input
                     className="w-28"
-                    type="text"
-                    role="spinbutton"
-                    inputMode="numeric"
+                    type="number"
+                    min={0}
+                    step={1}
                     value={isGlobalScope ? inheritedValue : hasOverride ? override : ""}
                     placeholder={isGlobalScope ? undefined : String(inheritedValue)}
-                    aria-valuemin={0}
-                    onChange={(event) => {
-                      const value = event.currentTarget.value === "" ? null : Number(event.currentTarget.value);
-                      if (isGlobalScope) setGlobalValue(retryPolicyKey, value);
-                      else setModelOverride(retryPolicyKey, value);
-                    }}
+                    onChange={(event) => handleRetryCountChange(retryPolicyKey, event.currentTarget.value)}
                   />
                   {!isGlobalScope && hasOverride && (
                     <Button variant="ghost" size="xs" onClick={() => setModelOverride(retryPolicyKey, null)}>

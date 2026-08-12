@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import ModelRetrySettingsTab from "./ModelRetrySettingsTab";
@@ -51,7 +51,17 @@ describe("ModelRetrySettingsTab", () => {
     // All 6 spinbutton inputs should show the defaultRetry value
     const inputs = screen.getAllByRole("spinbutton");
     inputs.forEach((input) => {
-      expect(input).toHaveValue("3");
+      expect(input).toHaveValue(3);
+    });
+  });
+
+  it("should expose retry counts as nonnegative integer spinbuttons", () => {
+    render(<ModelRetrySettingsTab {...buildProps()} />);
+
+    screen.getAllByRole("spinbutton").forEach((input) => {
+      expect(input).toHaveAttribute("type", "number");
+      expect(input).toHaveAttribute("min", "0");
+      expect(input).toHaveAttribute("step", "1");
     });
   });
 
@@ -64,10 +74,10 @@ describe("ModelRetrySettingsTab", () => {
     // The RateLimitError row is the 4th entry in the map
     const inputs = screen.getAllByRole("spinbutton");
     const rateLimitInput = inputs[3]; // 0-indexed: Bad(0), Auth(1), Timeout(2), Rate(3)
-    expect(rateLimitInput).toHaveValue("5");
+    expect(rateLimitInput).toHaveValue(5);
 
     // Unset entries fall back to defaultRetry (0)
-    expect(inputs[0]).toHaveValue("0");
+    expect(inputs[0]).toHaveValue(0);
   });
 
   it("should leave model-scope rows empty with the inherited value as placeholder when there is no override", () => {
@@ -89,9 +99,9 @@ describe("ModelRetrySettingsTab", () => {
     // a placeholder -- this is what keeps 0 ("zero retries") distinct from
     // "inherit the global value".
     const inputs = screen.getAllByRole("spinbutton");
-    expect(inputs[2]).toHaveValue(""); // TimeoutError row
+    expect(inputs[2]).toHaveValue(null); // TimeoutError row
     expect(inputs[2]).toHaveAttribute("placeholder", "7"); // inherited from global
-    expect(inputs[0]).toHaveValue(""); // BadRequestError row (no global)
+    expect(inputs[0]).toHaveValue(null); // BadRequestError row (no global)
     expect(inputs[0]).toHaveAttribute("placeholder", "1"); // inherited from defaultRetry
   });
 
@@ -120,6 +130,61 @@ describe("ModelRetrySettingsTab", () => {
     expect(result["gpt-4"]).not.toHaveProperty("BadRequestErrorRetries");
   });
 
+  it("should clear a model-group override when its input is emptied", async () => {
+    const user = userEvent.setup();
+    const setModelGroupRetryPolicy = vi.fn();
+    const overrides = {
+      selectedModelGroup: "gpt-4",
+      modelGroupRetryPolicy: { "gpt-4": { BadRequestErrorRetries: 5 } },
+      setModelGroupRetryPolicy,
+      defaultRetry: 0,
+    };
+    render(<ModelRetrySettingsTab {...buildProps(overrides)} />);
+
+    await user.clear(screen.getAllByRole("spinbutton")[0]);
+
+    const updater = setModelGroupRetryPolicy.mock.calls.at(-1)![0];
+    const result = updater({ "gpt-4": { BadRequestErrorRetries: 5 } });
+    expect(result["gpt-4"]).not.toHaveProperty("BadRequestErrorRetries");
+  });
+
+  it.each(["abc", "-1", "1.5"])("should reject an invalid retry count of %s", (invalidValue) => {
+    const setGlobalRetryPolicy = vi.fn();
+    render(
+      <ModelRetrySettingsTab
+        {...buildProps({
+          selectedModelGroup: "global",
+          globalRetryPolicy: { BadRequestErrorRetries: 0 },
+          setGlobalRetryPolicy,
+        })}
+      />,
+    );
+
+    const input = screen.getAllByRole("spinbutton")[0];
+    input.setAttribute("type", "text");
+    fireEvent.change(input, { target: { value: invalidValue } });
+
+    expect(setGlobalRetryPolicy).not.toHaveBeenCalled();
+  });
+
+  it("should accept zero as a retry count", () => {
+    const setGlobalRetryPolicy = vi.fn();
+    render(
+      <ModelRetrySettingsTab
+        {...buildProps({
+          selectedModelGroup: "global",
+          globalRetryPolicy: { BadRequestErrorRetries: 3 },
+          setGlobalRetryPolicy,
+        })}
+      />,
+    );
+
+    fireEvent.change(screen.getAllByRole("spinbutton")[0], { target: { value: "0" } });
+
+    const updater = setGlobalRetryPolicy.mock.calls.at(-1)![0];
+    expect(updater({ BadRequestErrorRetries: 3 })).toMatchObject({ BadRequestErrorRetries: 0 });
+  });
+
   it("should disable the Save button while a save is in flight", () => {
     render(<ModelRetrySettingsTab {...buildProps({ isSaving: true })} />);
 
@@ -146,7 +211,7 @@ describe("ModelRetrySettingsTab", () => {
 
     // The model-specific value (9) should win over global (3)
     const inputs = screen.getAllByRole("spinbutton");
-    expect(inputs[3]).toHaveValue("9");
+    expect(inputs[3]).toHaveValue(9);
   });
 
   it("should show the global reference value text for each row in model-specific scope", () => {

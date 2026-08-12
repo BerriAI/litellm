@@ -83,6 +83,12 @@ const buttonSizes = {
   large: "lg",
 } as const;
 
+const isValidReloadInterval = (value: number) => {
+  if (!Number.isFinite(value)) return false;
+  if (!Number.isInteger(value)) return false;
+  return value >= 1 && value <= 168;
+};
+
 const PriceDataReload: React.FC<PriceDataReloadProps> = ({
   accessToken,
   onReloadSuccess,
@@ -173,8 +179,8 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
     }
 
     const intervalHours = Number(hours);
-    if (intervalHours <= 0) {
-      NotificationsManager.fromBackend("Hours must be greater than 0");
+    if (!isValidReloadInterval(intervalHours)) {
+      NotificationsManager.fromBackend("Hours must be a whole number between 1 and 168");
       return;
     }
 
