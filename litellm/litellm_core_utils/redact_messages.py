@@ -22,7 +22,7 @@ from litellm.llms.vertex_ai.common_utils import (
     redact_vertex_ai_metadata_from_logged_object,
 )
 from litellm.secret_managers.main import str_to_bool
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingMetadata
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -158,7 +158,9 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
             output_item["arguments"] = redacted_str
 
 
-def redacted_mcp_tool_call_metadata(metadata: object, redacted_str: str) -> object:
+def redacted_mcp_tool_call_metadata(
+    metadata: StandardLoggingMetadata | None, redacted_str: str
+) -> StandardLoggingMetadata | None:
     """MCP tool arguments and results are user content, and they ride in
     `metadata.mcp_tool_call_metadata` rather than in `messages` / `response`,
     so every integration that logs metadata exports them unless redacted here.
