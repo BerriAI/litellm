@@ -3,8 +3,19 @@ import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import anyio
 import httpx
 import pytest
+from mcp import McpError
+from mcp.shared.message import SessionMessage
+from mcp.types import (
+    LATEST_PROTOCOL_VERSION,
+    Implementation,
+    InitializeResult,
+    JSONRPCMessage,
+    JSONRPCResponse,
+    ServerCapabilities,
+)
 
 # Add the parent directory to the path so we can import litellm
 sys.path.insert(0, "../../../")
@@ -701,3 +712,70 @@ async def test_run_with_session_quiet_on_error_demotes_warning_to_debug():
                 assert any("run_with_session failed" in m for m in warning_msgs), (
                     "the default path must keep the operator-visible warning"
                 )
+
+
+class _DroppedResponseTransport:
+    """An upstream that answers ``initialize`` and then never answers anything else.
+
+    This is the shape the MCP SDK leaves behind when a streamable-HTTP response stream ends without a
+    JSON-RPC reply: it logs "SSE stream ended" at debug and returns, so the pending request is never
+    resolved and never fails.
+    """
+
+    def __init__(self) -> None:
+        self._to_client_tx, self._to_client_rx = anyio.create_memory_object_stream(10)
+        self._from_client_tx, self._from_client_rx = anyio.create_memory_object_stream(10)
+        self._task_group = None
+
+    async def __aenter__(self):
+        self._task_group = anyio.create_task_group()
+        await self._task_group.__aenter__()
+        self._task_group.start_soon(self._serve)
+        return self._to_client_rx, self._from_client_tx
+
+    async def __aexit__(self, *exc_info):
+        self._task_group.cancel_scope.cancel()
+        return await self._task_group.__aexit__(None, None, None)
+
+    async def _serve(self) -> None:
+        async for session_message in self._from_client_rx:
+            request = session_message.message.root
+            if getattr(request, "method", None) != "initialize":
+                continue
+            result = InitializeResult(
+                protocolVersion=LATEST_PROTOCOL_VERSION,
+                capabilities=ServerCapabilities(),
+                serverInfo=Implementation(name="dropped-response-upstream", version="1.0.0"),
+            )
+            await self._to_client_tx.send(
+                SessionMessage(
+                    JSONRPCMessage(
+                        JSONRPCResponse(
+                            jsonrpc="2.0",
+                            id=request.id,
+                            result=result.model_dump(by_alias=True, mode="json", exclude_none=True),
+                        )
+                    )
+                )
+            )
+
+
+class _DroppedResponseClient(MCPClient):
+    def _create_transport_context(self):
+        return _DroppedResponseTransport(), None
+
+
+@pytest.mark.asyncio
+async def test_list_tools_times_out_instead_of_hanging_when_upstream_drops_the_response():
+    """An upstream that accepts the request and never answers must fail the client's own timeout.
+
+    Without a session read timeout the request waits forever, so tool discovery only ends when an outer
+    cancel scope kills it. That surfaces as a cancelled list_tools with no tools and no truthful fault,
+    and it wedges the paths that have no outer guard at all (prompts, resources).
+    """
+    client = _DroppedResponseClient(server_url="http://upstream.local/mcp", timeout=0.5)
+
+    with pytest.raises(McpError) as exc_info:
+        await asyncio.wait_for(client.list_tools(raise_on_error=True), timeout=10)
+
+    assert exc_info.value.error.code == httpx.codes.REQUEST_TIMEOUT

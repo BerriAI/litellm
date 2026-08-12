@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from typing import Final, Literal, NamedTuple, NoReturn, TypeAlias
 
 import httpx
+from mcp import McpError
 from mcp.types import Tool as MCPTool
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import assert_never
@@ -123,6 +124,8 @@ def classify_list_exception(exc: BaseException) -> ServerListFault:
         tag: Final = "forbidden" if exc.status_code == 403 else "auth_required"
         return ServerListFault(tag=tag, status_code=exc.status_code)
     if isinstance(exc, TimeoutError):
+        return ServerListFault(tag="timeout")
+    if isinstance(exc, McpError) and exc.error.code == httpx.codes.REQUEST_TIMEOUT:
         return ServerListFault(tag="timeout")
     if isinstance(exc, ConnectionError):
         return ServerListFault(tag="unreachable")

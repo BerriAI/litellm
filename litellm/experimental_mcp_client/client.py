@@ -6,6 +6,7 @@ import asyncio
 import base64
 import os
 from collections.abc import Awaitable, Callable, Generator
+from datetime import timedelta
 from typing import Any, Final, TypeVar
 
 import httpx
@@ -347,7 +348,14 @@ class MCPClient:
                 session_kwargs["elicitation_callback"] = self._elicitation_callback
             if self._logging_callback is not None:
                 session_kwargs["logging_callback"] = self._logging_callback
-            session_ctx: Final = ClientSession(read_stream, write_stream, **session_kwargs)
+            # A streamable-HTTP response stream that ends without a JSON-RPC reply is dropped by the
+            # SDK, leaving the request pending forever; the read timeout is what bounds it.
+            session_ctx: Final = ClientSession(
+                read_stream,
+                write_stream,
+                read_timeout_seconds=timedelta(seconds=self.timeout),
+                **session_kwargs,
+            )
             session: Final = await session_ctx.__aenter__()
             try:
                 init_result: Final = await session.initialize()

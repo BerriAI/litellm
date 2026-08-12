@@ -4,6 +4,8 @@ stay truthful to who failed."""
 
 import httpx
 import pytest
+from mcp import McpError
+from mcp.types import INTERNAL_ERROR, ErrorData
 
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
@@ -31,6 +33,19 @@ def test_upstream_auth_error_maps_to_auth_required_and_forbidden():
 def test_timeout_and_connection_errors_classify_without_status():
     assert classify_list_exception(TimeoutError()).tag == "timeout"
     assert classify_list_exception(ConnectionError()).tag == "unreachable"
+
+
+def test_sdk_request_timeout_classifies_as_timeout_not_internal():
+    """The MCP SDK reports an unanswered request as McpError(408), the shape an upstream that drops
+    the response stream produces; classifying it as internal would blame the gateway."""
+    exc = McpError(ErrorData(code=httpx.codes.REQUEST_TIMEOUT, message="Timed out while waiting for response"))
+    assert classify_list_exception(exc).tag == "timeout"
+    assert list_fault_http_status(classify_list_exception(exc)) == 504
+
+
+def test_other_sdk_errors_still_classify_as_internal():
+    exc = McpError(ErrorData(code=INTERNAL_ERROR, message="boom"))
+    assert classify_list_exception(exc).tag == "internal"
 
 
 def test_embedded_upstream_response_status_wins():
