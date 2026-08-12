@@ -1,5 +1,5 @@
 import React from "react";
-import { RobotOutlined, UserOutlined } from "@ant-design/icons";
+import { Bot, User } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -28,14 +28,14 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
             }}
           >
             {message.role === "user" ? (
-              <UserOutlined style={{ fontSize: "12px", color: "#2563eb" }} />
+              <User className="size-3 text-primary" aria-hidden="true" />
             ) : (
-              <RobotOutlined style={{ fontSize: "12px", color: "#4b5563" }} />
+              <Bot className="size-3 text-muted-foreground" aria-hidden="true" />
             )}
           </div>
           <strong className="text-sm capitalize">{message.role}</strong>
           {message.role === "assistant" && message.model && (
-            <span className="text-xs px-2 py-0.5 rounded-sm bg-gray-100 text-gray-600 font-normal">
+            <span className="text-xs px-2 py-0.5 rounded-sm bg-muted text-muted-foreground font-normal">
               {message.model}
             </span>
           )}
@@ -78,7 +78,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
                     </SyntaxHighlighter>
                   ) : (
                     <code
-                      className={`${className} px-1.5 py-0.5 rounded-sm bg-gray-100 text-sm font-mono`}
+                      className={`${className} px-1.5 py-0.5 rounded-sm bg-muted text-sm font-mono`}
                       style={{ wordBreak: "break-word" }}
                       {...props}
                     >

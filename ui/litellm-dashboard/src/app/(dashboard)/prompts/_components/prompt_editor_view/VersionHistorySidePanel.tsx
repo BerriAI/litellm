@@ -1,8 +1,10 @@
-import { Drawer, List, Skeleton, Tag, Typography } from "antd";
 import React, { useEffect, useState } from "react";
 import { getPromptVersions, PromptSpec } from "@/components/networking";
-
-const { Text } = Typography;
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Sheet, SheetClose, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
+import { XIcon } from "lucide-react";
 
 interface VersionHistorySidePanelProps {
   isOpen: boolean;
@@ -67,75 +69,75 @@ const VersionHistorySidePanel: React.FC<VersionHistorySidePanelProps> = ({
   };
 
   return (
-    <Drawer
-      title="Version History"
-      placement="right"
-      onClose={onClose}
-      open={isOpen}
-      width={400}
-      mask={false} // Allow interacting with the main editor while drawer is open
-      maskClosable={false}
-    >
-      {loading ? (
-        <Skeleton active paragraph={{ rows: 4 }} />
-      ) : versions.length === 0 ? (
-        <div className="text-center py-8 text-gray-500">No version history available.</div>
-      ) : (
-        <List
-          dataSource={versions}
-          renderItem={(item, index) => {
-            // Use version field for comparison since all items have the same prompt_id
-            const itemVersionNum = item.version || parseInt(getVersionNumber(item).replace("v", ""));
+    <Sheet open={isOpen} onOpenChange={(open) => !open && onClose()} modal={false}>
+      <SheetContent side="right" showCloseButton={false} className="w-[400px] sm:max-w-[400px]">
+        <SheetClose render={<Button variant="ghost" size="icon-sm" className="absolute top-4 right-4" />}>
+          <XIcon />
+          <span className="sr-only">Close</span>
+        </SheetClose>
+        <SheetHeader>
+          <SheetTitle>Version History</SheetTitle>
+        </SheetHeader>
+        <div className="overflow-y-auto px-4 pb-4">
+          {loading ? (
+            <div className="space-y-3" aria-label="Loading version history">
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-24 w-full" />
+            </div>
+          ) : versions.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">No version history available.</div>
+          ) : (
+            <div className="space-y-4">
+              {versions.map((item, index) => {
+                // Use version field for comparison since all items have the same prompt_id
+                const itemVersionNum = item.version || parseInt(getVersionNumber(item).replace("v", ""));
 
-            // Extract version number from activeVersionId (may have .vX suffix)
-            let activeVersionNum: number | null = null;
-            if (activeVersionId) {
-              if (activeVersionId.includes(".v")) {
-                activeVersionNum = parseInt(activeVersionId.split(".v")[1]);
-              } else if (activeVersionId.includes("_v")) {
-                activeVersionNum = parseInt(activeVersionId.split("_v")[1]);
-              }
-            }
+                // Extract version number from activeVersionId (may have .vX suffix)
+                let activeVersionNum: number | null = null;
+                if (activeVersionId) {
+                  if (activeVersionId.includes(".v")) {
+                    activeVersionNum = parseInt(activeVersionId.split(".v")[1]);
+                  } else if (activeVersionId.includes("_v")) {
+                    activeVersionNum = parseInt(activeVersionId.split("_v")[1]);
+                  }
+                }
 
-            // Default to latest (first item) if no activeVersionId
-            const isSelected = activeVersionNum ? itemVersionNum === activeVersionNum : index === 0;
+                // Default to latest (first item) if no activeVersionId
+                const isSelected = activeVersionNum ? itemVersionNum === activeVersionNum : index === 0;
 
-            return (
-              <div
-                key={`${item.prompt_id}-v${item.version || itemVersionNum}`}
-                className={`mb-4 p-4 rounded-lg border cursor-pointer transition-all hover:shadow-md ${
-                  isSelected ? "border-blue-500 bg-blue-50" : "border-gray-200 bg-white hover:border-blue-300"
-                }`}
-                onClick={() => onSelectVersion?.(item)}
-              >
-                <div className="flex justify-between items-start mb-2">
-                  <div className="flex items-center gap-2">
-                    <Tag className="m-0">{getVersionNumber(item)}</Tag>
-                    {index === 0 && (
-                      <Tag color="blue" className="m-0">
-                        Latest
-                      </Tag>
-                    )}
-                  </div>
-                  {isSelected && (
-                    <Tag color="green" className="m-0">
-                      Active
-                    </Tag>
-                  )}
-                </div>
+                return (
+                  <button
+                    type="button"
+                    key={`${item.prompt_id}-v${item.version || itemVersionNum}`}
+                    className={`w-full p-4 rounded-lg border cursor-pointer text-left transition-all hover:shadow-md ${
+                      isSelected ? "border-primary bg-accent" : "border-border bg-background hover:border-primary"
+                    }`}
+                    onClick={() => onSelectVersion?.(item)}
+                  >
+                    <div className="flex justify-between items-start mb-2">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="secondary">{getVersionNumber(item)}</Badge>
+                        {index === 0 && <Badge>Latest</Badge>}
+                      </div>
+                      {isSelected && <Badge variant="secondary">Active</Badge>}
+                    </div>
 
-                <div className="flex flex-col gap-1">
-                  <Text className="text-sm text-gray-600 font-medium">{formatDate(item.created_at)}</Text>
-                  <Text type="secondary" className="text-xs">
-                    {item.prompt_info?.prompt_type === "db" ? "Saved to Database" : "Config Prompt"}
-                  </Text>
-                </div>
-              </div>
-            );
-          }}
-        />
-      )}
-    </Drawer>
+                    <div className="flex flex-col gap-1">
+                      <span className="text-sm text-muted-foreground font-medium">{formatDate(item.created_at)}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {item.prompt_info?.prompt_type === "db" ? "Saved to Database" : "Config Prompt"}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 };
 
