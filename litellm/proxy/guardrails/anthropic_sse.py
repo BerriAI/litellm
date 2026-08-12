@@ -47,11 +47,15 @@ def _anthropic_message_start(sse_stream: str) -> Mapping[str, object] | None:
     )
 
 
-def assemble_anthropic_sse_stream(all_chunks: Sequence[object]) -> ModelResponse | None:
-    """Assemble raw Anthropic SSE frames into a ModelResponse, restoring the upstream id and model.
+def assemble_anthropic_sse_stream(
+    all_chunks: Sequence[object], *, restore_identity: bool = False
+) -> ModelResponse | None:
+    """Assemble raw Anthropic SSE frames into a ModelResponse.
 
-    The assembler does not carry either through, and they are written onto the freshly built object
-    rather than copied into a new one because it is unreachable from caller state until returned.
+    ``restore_identity`` stamps the upstream message id and model onto the result, which the
+    assembler does not carry through. It is off by default so callers that re-emit the assembled
+    response keep the wire shape they had before this helper was shared. The writes land on a
+    freshly built object that is unreachable from caller state until returned.
     """
     from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
         AnthropicPassthroughLoggingHandler,
@@ -63,7 +67,7 @@ def assemble_anthropic_sse_stream(all_chunks: Sequence[object]) -> ModelResponse
     message_start: Final = _anthropic_message_start(sse_stream)
     if message_start is None:
         return None
-    model: Final = message_start.get("model")
+    model: Final = message_start.get("model") if restore_identity else None
     try:
         assembled: Final = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(  # pyright: ignore[reportPrivateUsage]  # the only SSE-to-ModelResponse assembler; reimplementing it here would fork the parser
             all_chunks=(sse_stream,),
@@ -74,6 +78,8 @@ def assemble_anthropic_sse_stream(all_chunks: Sequence[object]) -> ModelResponse
         return None
     if not isinstance(assembled, ModelResponse):
         return None
+    if not restore_identity:
+        return assembled
     message_id: Final = message_start.get("id")
     if isinstance(message_id, str):
         assembled.id = message_id

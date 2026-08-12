@@ -1215,6 +1215,25 @@ class TestToolPermissionGuardrailAnthropicMessages:
         )
         assert '"stop_reason": "tool_use"' not in body
 
+    @pytest.mark.asyncio
+    async def test_rewrite_mode_keeps_the_stream_identity_it_had_before_the_shared_helper(self):
+        """The SSE helpers moved to litellm/proxy/guardrails/anthropic_sse.py must be a pure move.
+
+        That module can stamp the upstream message id and model onto the assembled response for
+        callers that ask for it; this path never did, and a client reads those bytes.
+        """
+        with patch.object(self.rewriting, "should_run_guardrail", return_value=True):
+            out = await self._drain(self.rewriting, self._sse_chunks("Read"))
+
+        body = b"".join(c if isinstance(c, bytes) else str(c).encode() for c in out).decode()
+        message_start = next(
+            json.loads(line[6:])
+            for line in body.splitlines()
+            if line.startswith("data: ") and json.loads(line[6:]).get("type") == "message_start"
+        )["message"]
+        assert message_start["id"].startswith("chatcmpl-"), "the rewritten stream must not adopt the upstream message id"
+        assert message_start["model"] == "unknown-model", "the rewritten stream must not adopt the upstream model"
+
     def _resplit(self, chunks, size=7):
         joined = b"".join(chunks)
         return [joined[i : i + size] for i in range(0, len(joined), size)]

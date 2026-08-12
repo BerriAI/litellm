@@ -2593,7 +2593,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # /v1/messages arrives as SSE frames, which stream_chunk_builder cannot assemble
         raw_sse: Final = is_raw_sse_stream(all_chunks)
         assembled_model_response: ModelResponse | TextCompletionResponse | None = (
-            assemble_anthropic_sse_stream(all_chunks) if raw_sse else stream_chunk_builder(chunks=all_chunks)
+            assemble_anthropic_sse_stream(all_chunks, restore_identity=True)
+            if raw_sse
+            else stream_chunk_builder(chunks=all_chunks)
         )
         if isinstance(assembled_model_response, ModelResponse):
             pre_guardrail_text: Final = model_response_text(assembled_model_response)
