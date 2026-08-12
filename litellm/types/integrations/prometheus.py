@@ -285,6 +285,9 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     # MCP tool call metrics
     "litellm_mcp_tool_calls_total",
     "litellm_mcp_tool_call_spend_metric",
+    # Per-pod request pressure
+    "litellm_requests_shed_total",
+    "litellm_global_max_parallel_requests_limit",
     # Scheduled background jobs
     "litellm_scheduled_job_runs_total",
     "litellm_scheduled_job_duration_seconds",
@@ -794,8 +797,16 @@ class PrometheusMetricLabels:
 
     litellm_check_batch_cost_last_run_timestamp: list[str] = []
 
-    # No pod label: pod identity is unbounded, and the lock result already
-    # identifies the owner.
+    # Per-pod request pressure. status is a fixed set of shed codes; the limit
+    # gauge is unlabelled because it describes this worker.
+    litellm_requests_shed_total: tuple[str, ...] = ()
+    litellm_global_max_parallel_requests_limit: tuple[str, ...] = ()
+
+    # Scheduled background jobs. Labels are closed sets fixed at startup: job ids
+    # come from the scheduler registration, cronjob ids from the lock call sites,
+    # and results from an enum. No pod label: pod identity is unbounded, and the
+    # lock result already distinguishes the pod that owns a job from the ones
+    # that skipped it.
     litellm_scheduled_job_runs_total: tuple[str, ...] = ()
     litellm_scheduled_job_duration_seconds: tuple[str, ...] = ()
     litellm_scheduled_job_last_run_timestamp: tuple[str, ...] = ()

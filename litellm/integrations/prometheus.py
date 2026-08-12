@@ -718,6 +718,29 @@ class PrometheusLogger(CustomLogger):
             )
 
             ########################################
+            # Per-pod request pressure
+            ########################################
+            self.litellm_requests_shed_total = self._counter_factory(
+                name="litellm_requests_shed_total",
+                documentation=(
+                    "Responses where the proxy declined to serve rather than failed to, by status. "
+                    "429 is a rate or concurrency limit, 503 is the database being unavailable"
+                ),
+                labelnames=("status",),
+            )
+
+            self.litellm_global_max_parallel_requests_limit = self._gauge_factory(
+                "litellm_global_max_parallel_requests_limit",
+                (
+                    "Concurrency ceiling actually applied on this worker. +Inf means nothing bounds "
+                    "concurrency, either because global_max_parallel_requests is unset or because the "
+                    "active limiter does not enforce it"
+                ),
+                labelnames=(),
+                multiprocess_mode="livemax",
+            )
+
+            ########################################
             # Scheduled background jobs
             ########################################
             self.litellm_scheduled_job_runs_total = self._counter_factory(
@@ -3203,6 +3226,14 @@ class PrometheusLogger(CustomLogger):
                     ).inc()
         except Exception as e:
             verbose_logger.warning("Error recording check batch cost metrics: %s", e)
+
+    def record_request_shed(self, status: int) -> None:
+        """Count one response where the proxy declined to serve."""
+        self.litellm_requests_shed_total.labels(status=str(status)).inc()
+
+    def set_global_max_parallel_requests_limit(self, limit: float) -> None:
+        """Publish the per-pod concurrency ceiling actually in force."""
+        self.litellm_global_max_parallel_requests_limit.set(limit)
 
     def record_scheduled_job_run(self, run: JobRun) -> None:
         """Publish one completed run of a scheduled background job."""
