@@ -2256,36 +2256,50 @@ async def clear_cache() -> ReconcileOutcome:
                     # This is a config model, preserved by the reconcile below
                     config_models.append(model)
 
-            # NOTE: deployments are deliberately NOT wiped here. This used to
+            # ORDINARY db deployments are deliberately NOT wiped. This used to
             # delete_deployment() every db model before the reload put them back, which
             # left the router serving ZERO db models for the whole width of the reload
             # -- a real data-plane hole that every inference request landing in it fell
-            # into. It was also redundant: the reload's _delete_deployment evicts exactly
-            # the ids the db no longer lists, and upsert_deployment pops-and-re-adds a
-            # deployment whose params changed and no-ops one that did not (router.py
-            # upsert_deployment), so the reconcile converges to the same state on its
-            # own. Every mutation is visible to that comparison -- `blocked` and (for
-            # premium) `updated_at` are written into model_info.
+            # into. It was also redundant for them: the reload's _delete_deployment
+            # evicts exactly the ids the db no longer lists, and upsert_deployment
+            # pops-and-re-adds a deployment whose params changed while no-opping one
+            # that did not, so the reconcile converges on its own. Every mutation is
+            # visible to that comparison -- `blocked` and (for premium) `updated_at`
+            # are written into model_info.
             #
-            # The auto-router pops below are NOT redundant and stay: they are keyed by
-            # model_name, which no deployment-id reconcile touches.
-
-            # Clear only DB-backed auto-router-family entries, keyed by model_name, so the
-            # reload below rebuilds them fresh. A blanket .clear() would also drop config-defined
-            # routers, which are never re-added below (add_deployment only reloads DB models),
-            # leaving them permanently unroutable until a full proxy restart for every tenant.
-            # Restrict to deployments whose model is actually an auto_router/* so a config
-            # router that merely shares a model_name with a regular DB model isn't evicted. The
-            # auto_router/ prefix also covers quality_router/ and adaptive_router/, so pop the
-            # name from every router registry (no-op where absent); missing quality/adaptive
-            # entries would otherwise make init raise "already exists" on reload and abort it.
-            db_router_names: Final = {
-                model.get("model_name")
+            # AUTO-ROUTER db deployments are the exception and ARE wiped, below,
+            # together with their strategy entries. Their strategy registries are keyed
+            # by model_name, which no deployment-id reconcile touches, so they have to
+            # be popped and rebuilt here. But the rebuild only happens on the ADD path:
+            # Router.upsert_deployment returns early when a deployment is unchanged and
+            # never reaches add_deployment -> _add_deployment ->
+            # init_auto_router_deployment, which is what repopulates the registries.
+            # Popping without deleting would therefore strip every db-backed auto,
+            # complexity, adaptive and quality router on this pod and never put it back,
+            # so ANY unrelated model write would leave them unroutable until a restart.
+            # Deleting the deployment forces upsert down the add path, which rebuilds
+            # both the deployment and its strategy entry.
+            #
+            # Restrict to deployments whose model is actually an auto_router/* so a
+            # config router that merely shares a model_name with a regular db model
+            # isn't evicted -- config routers are never re-added by the reload (it only
+            # reloads db models) and would be permanently unroutable for every tenant.
+            # The auto_router/ prefix also covers quality_router/ and adaptive_router/,
+            # so pop the name from every registry (no-op where absent); a missing
+            # quality/adaptive entry would otherwise make init raise "already exists"
+            # on reload and abort it.
+            db_router_deployments: Final = [
+                model
                 for model in current_models
                 if model.get("model_name") is not None
                 and model.get("model_info", {}).get("db_model", False)
                 and str(model.get("litellm_params", {}).get("model", "")).startswith("auto_router/")
-            }
+            ]
+            db_router_names: Final = {model["model_name"] for model in db_router_deployments}
+            for model in db_router_deployments:
+                router_model_id = model.get("model_info", {}).get("id")
+                if router_model_id is not None:
+                    llm_router.delete_deployment(id=router_model_id)
             for model_name in db_router_names:
                 llm_router.auto_routers.pop(model_name, None)
                 llm_router.complexity_routers.pop(model_name, None)

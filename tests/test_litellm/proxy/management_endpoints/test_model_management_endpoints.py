@@ -485,12 +485,13 @@ class TestClearCache:
         ):
             await clear_cache()
 
-            # clear_cache must NOT wipe deployments. It used to delete_deployment()
-            # every db model before the reload restored them, which left the router
-            # serving zero db models for the width of the reload. The reload's own
-            # _delete_deployment/upsert_deployment pair converges to the same state
-            # without that hole, so the wipe was a pure data-plane outage.
-            mock_router.delete_deployment.assert_not_called()
+            # clear_cache must wipe ONLY the db auto-router deployments -- the ones whose
+            # strategy entries are popped below and can only be rebuilt via the add path.
+            # Ordinary db models are left alone: wiping them un-served every db model for
+            # the width of the reload, and the reconcile converges without it.
+            assert mock_router.delete_deployment.call_count == 2
+            mock_router.delete_deployment.assert_any_call(id="db-model-1")
+            mock_router.delete_deployment.assert_any_call(id="db-model-2")
 
             # DB-backed router entries are cleared so they can be re-populated by the
             # reload below; the config-backed router must survive, since add_deployment()
@@ -505,6 +506,65 @@ class TestClearCache:
             mock_config._add_deployment_locked.assert_called_once_with(
                 prisma_client=mock_prisma, proxy_logging_obj=mock_logging
             )
+
+    @pytest.mark.asyncio
+    async def test_clear_cache_wipes_auto_routers_but_leaves_ordinary_db_models(self):
+        """An ordinary db model must survive clear_cache; a db auto-router must not.
+
+        Two separate hazards meet here, and fixing one naively breaks the other:
+
+        - Wiping ordinary db models un-serves EVERY db model for the width of the
+          reload. The reconcile converges without that, so the wipe is a pure
+          data-plane hole.
+        - NOT wiping a db auto-router strands it. Its strategy registries are keyed by
+          model_name and are popped here, but Router.upsert_deployment returns early
+          for an unchanged deployment and never reaches the add path that rebuilds
+          them. Any unrelated model write would then leave every db-backed auto,
+          complexity, adaptive and quality router unroutable until a restart.
+
+        So the wipe is scoped to exactly the auto-router deployments.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            clear_cache,
+        )
+
+        mock_router = MagicMock()
+        mock_router.model_list = [
+            {
+                "model_name": "ordinary-db-model",
+                "model_info": {"id": "db-ordinary-1", "db_model": True},
+                "litellm_params": {"model": "openai/gpt-4o"},
+            },
+            {
+                "model_name": "db-auto-router",
+                "model_info": {"id": "db-auto-1", "db_model": True},
+                "litellm_params": {"model": "auto_router/db-auto-router"},
+            },
+        ]
+        mock_router.delete_deployment = MagicMock(return_value=True)
+        mock_router.auto_routers = {"db-auto-router": MagicMock()}
+        mock_router.complexity_routers = {}
+        mock_router.adaptive_routers = {}
+        mock_router.quality_routers = {}
+
+        mock_config = MagicMock()
+        mock_config._add_deployment_locked = AsyncMock(
+            return_value=ReconcileOutcome(still_desired=frozenset(), live_after=frozenset())
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_config),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.verbose_proxy_logger"),
+        ):
+            await clear_cache()
+
+        # The auto-router deployment is wiped so the reload takes the add path and
+        # rebuilds its strategy entry; the ordinary db model is never touched.
+        mock_router.delete_deployment.assert_called_once_with(id="db-auto-1")
+        assert "db-auto-router" not in mock_router.auto_routers
 
 
 class TestClearCachePreservesConfigRouters:
