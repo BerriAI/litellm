@@ -10701,7 +10701,6 @@ class Router:
 
     @staticmethod
     def _is_strategy_marker_deployment(deployment: Mapping[str, object]) -> bool:
-        """True when the deployment is a strategy-router pseudo-model (`auto_router/` prefixed)."""
         litellm_params: Final = deployment.get("litellm_params")
         if not isinstance(litellm_params, Mapping):
             return False
@@ -11354,7 +11353,6 @@ class Router:
         return filtered
 
     def _model_name_has_plain_deployments(self, model: str) -> bool:
-        """True when `model` also names regular (non strategy-router) deployments in the model_list."""
         indices: Final = self.model_name_to_deployment_indices.get(model) or ()
         return any(not self._is_strategy_marker_deployment(self.model_list[idx]) for idx in indices)
 

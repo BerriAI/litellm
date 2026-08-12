@@ -7608,6 +7608,9 @@ class TestTaggedAutoRouterOnSharedModelName:
             )
             assert deployment["litellm_params"]["model"] == "openai/gpt-4o"
 
+    def test_deployment_without_litellm_params_mapping_is_not_a_marker(self):
+        assert litellm.Router._is_strategy_marker_deployment({"model_name": "gpt4o"}) is False
+
 
 class TestGetAllowedFailsFromPolicy:
     def _make_router(self, **policy_kwargs) -> litellm.Router:
