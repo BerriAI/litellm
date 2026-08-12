@@ -410,9 +410,11 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="users">{usersTable}</TabsContent>
+          <TabsContent value="users" keepMounted>
+            {usersTable}
+          </TabsContent>
 
-          <TabsContent value="default-settings">
+          <TabsContent value="default-settings" keepMounted>
             {!userID || !userRole || !accessToken ? (
               <div
                 className="flex h-64 items-center justify-center"

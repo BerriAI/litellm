@@ -39,7 +39,15 @@ vi.mock("./view_users/user_info_view", () => ({
 
 vi.mock("./default-user-settings/DefaultUserSettingsForm", () => ({
   DefaultUserSettingsForm: function DefaultUserSettingsFormMock() {
-    return <section aria-label="Default user settings panel">Default settings content</section>;
+    const [value, setValue] = React.useState("");
+    return (
+      <section aria-label="Default user settings panel">
+        <label>
+          Default setting
+          <input value={value} onChange={(event) => setValue(event.target.value)} />
+        </label>
+      </section>
+    );
   },
 }));
 
@@ -128,11 +136,16 @@ describe("ViewUserDashboard", () => {
     expect(settingsTab).toHaveAttribute("aria-selected", "true");
     expect(usersTab).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("region", { name: "Default user settings panel" })).toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "Default setting" }), "unsaved change");
 
     await user.click(usersTab);
 
     expect(usersTab).toHaveAttribute("aria-selected", "true");
     expect(settingsTab).toHaveAttribute("aria-selected", "false");
+
+    await user.click(settingsTab);
+
+    expect(screen.getByRole("textbox", { name: "Default setting" })).toHaveValue("unsaved change");
   });
 
   it("shows the users table without admin controls for non-proxy admins", async () => {
