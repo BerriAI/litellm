@@ -587,16 +587,10 @@ async def route_request(
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif (
-            (
-                is_proxy_admin_without_team
-                and data["model"] not in router_model_names
-                and data["model"] in llm_router.team_public_model_names
-            )
-            or data["model"] in router_model_names
-            or llm_router.has_model_id(data["model"])
-            or llm_router.model_group_alias is not None
-            and data["model"] in llm_router.model_group_alias
-        ):
+            is_proxy_admin_without_team
+            and data["model"] not in router_model_names
+            and data["model"] in llm_router.team_public_model_names
+        ) or llm_router.is_recognized_model(data["model"]):
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif data["model"] not in router_model_names:
