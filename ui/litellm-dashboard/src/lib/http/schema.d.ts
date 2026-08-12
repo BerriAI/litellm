@@ -23451,6 +23451,11 @@ export interface components {
              * @description proxy level default model for all chat completion calls
              */
             completion_model?: string | null;
+            /**
+             * @description Controls precedence between the deployed config and settings stored in the LiteLLM_Config table. 'database' preserves the default behavior where LiteLLM_Config values override the deployed config. 'config_file' makes explicit deployed config values override LiteLLM_Config values while still loading database-only settings. Models and objects stored in other database tables retain their existing behavior. Set this in the deployed config file.
+             * @default database
+             */
+            config_source_of_truth: components["schemas"]["ConfigSourceOfTruth"];
             /** @description standalone Redis for cross-pod coordination (tpm/rpm rate limits, spend tracking, pod lock manager, shared health checks), configured independently of the response-cache backend; takes precedence over borrowing the `cache_params` Redis and over the REDIS_* env fallback */
             coordination_redis?: components["schemas"]["CoordinationRedisParams"] | null;
             /**
@@ -23755,6 +23760,11 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * ConfigSourceOfTruth
+         * @enum {string}
+         */
+        ConfigSourceOfTruth: "database" | "config_file";
         /**
          * ConfigYAML
          * @description Documents all the fields supported by the config.yaml
