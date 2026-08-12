@@ -253,9 +253,7 @@ def _has_pre_call_deployment_hook(logging_obj: LiteLLMLoggingObj) -> bool:
     return False
 
 
-def _aws_signing_overrides(
-    optional_params: Mapping[str, Any], litellm_params: Mapping[str, Any]
-) -> Mapping[str, Any]:
+def _aws_signing_overrides(optional_params: Mapping[str, Any], litellm_params: Mapping[str, Any]) -> Mapping[str, Any]:
     """AWS credential params for SigV4 signers that read them off optional_params.
 
     Only `bedrock`/`sagemaker` keep `aws_*` in optional_params: every other provider
