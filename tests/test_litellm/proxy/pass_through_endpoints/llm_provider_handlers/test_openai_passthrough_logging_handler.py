@@ -594,6 +594,77 @@ class TestOpenAIPassthroughLoggingHandler:
         )
 
     @patch(f"{OpenAIPassthroughLoggingHandler.__module__}.get_standard_logging_object_payload")
+    @patch("litellm.completion_cost", return_value=2.1e-06)
+    def test_streaming_responses_incomplete_event_is_billed(self, mock_completion_cost, mock_get_standard_logging):
+        response_id = "resp_INCOMPLETESENTINEL0123456789ab"
+        incomplete_event = {
+            "type": "response.incomplete",
+            "sequence_number": 5,
+            "response": {
+                "id": response_id,
+                "object": "response",
+                "created_at": 1786374786,
+                "status": "incomplete",
+                "model": "gpt-4o-mini-2024-07-18",
+                "output": [
+                    {
+                        "id": "msg_abc",
+                        "type": "message",
+                        "status": "incomplete",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "OK",
+                                "annotations": [],
+                            }
+                        ],
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 14,
+                    "input_tokens_details": {"cached_tokens": 0},
+                    "output_tokens": 32,
+                    "output_tokens_details": {"reasoning_tokens": 0},
+                    "total_tokens": 46,
+                },
+                "error": None,
+                "incomplete_details": {"reason": "max_output_tokens"},
+                "instructions": None,
+                "metadata": {},
+                "parallel_tool_calls": True,
+                "temperature": 1.0,
+                "tool_choice": "auto",
+                "tools": [],
+                "top_p": 1.0,
+            },
+        }
+        logging_obj = self._create_mock_logging_obj()
+
+        result = OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="https://api.openai.com/v1/responses",
+            request_body={"model": "gpt-4o-mini", "stream": True},
+            endpoint_type=MagicMock(),
+            start_time=self.start_time,
+            all_chunks=[f"data: {json.dumps(incomplete_event)}"],
+            end_time=self.end_time,
+        )
+
+        response = result["result"]
+        assert response.id == response_id
+        assert response.status == "incomplete"
+        assert response.usage.output_tokens == 32
+        assert result["kwargs"]["response_cost"] == 2.1e-06
+        mock_completion_cost.assert_called_once_with(
+            completion_response=response,
+            model="gpt-4o-mini",
+            custom_llm_provider="openai",
+            call_type="responses",
+        )
+
+    @patch(f"{OpenAIPassthroughLoggingHandler.__module__}.get_standard_logging_object_payload")
     @patch("litellm.completion_cost")
     def test_streaming_responses_without_completed_event_returns_none(
         self, mock_completion_cost, mock_get_standard_logging
