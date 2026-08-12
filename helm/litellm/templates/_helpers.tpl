@@ -139,6 +139,59 @@ is false the chart uses the provided name, or the namespace `default` SA.
 {{- end -}}
 
 {{/*
+ServiceAccount name for the migrations Job.
+
+The Job is a pre-install / pre-upgrade hook, so it is created before the
+chart's ordinary resources. A ServiceAccount the chart creates is one of
+those ordinary resources, which makes borrowing the backend name a cycle:
+the hook pod is rejected because the account does not exist yet. So when
+`serviceAccounts.backend.create` is true the Job falls back to the namespace
+`default` account unless the operator names one that already exists. With
+`create` false the backend name is either an operator-supplied existing
+account or `default`, both of which are safe for the hook, so the Job keeps
+sharing it.
+
+`migrationJob.serviceAccountName` always wins when set, which is how a Job
+that needs credentials of its own (IRSA / Workload Identity for IAM database
+auth) gets them.
+*/}}
+{{- define "litellm.migrations.serviceAccountName" -}}
+{{- if .Values.migrationJob.serviceAccountName -}}
+{{ .Values.migrationJob.serviceAccountName }}
+{{- else if .Values.serviceAccounts.backend.create -}}
+default
+{{- else -}}
+{{ include "litellm.backend.serviceAccountName" . }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Extra pod labels for a component's Deployment, validated against its selector.
+
+Invoke with a dict:
+  (dict "podLabels" .Values.gateway.podLabels "componentName" "gateway")
+
+The three selector keys are also emitted on the pod template, so a podLabels
+entry reusing one renders a duplicate YAML key whose later value wins. That
+leaves the pod template no longer matching the (immutable) selector and the
+apiserver rejects the Deployment. Fail at template time naming the key
+instead, so the operator gets the reason here rather than an opaque
+`selector does not match template labels` from the apiserver.
+
+The migrations Job takes podLabels unvalidated: a Job's selector is generated
+by the controller rather than declared, so nothing there can collide.
+*/}}
+{{- define "litellm.podLabels" -}}
+{{- $componentName := .componentName -}}
+{{- range $key, $value := .podLabels }}
+{{- if has $key (list "app.kubernetes.io/name" "app.kubernetes.io/instance" "app.kubernetes.io/component") }}
+{{- fail (printf "%s.podLabels cannot set %s: it is part of the Deployment's immutable selector" $componentName $key) }}
+{{- end }}
+{{- end }}
+{{- toYaml .podLabels }}
+{{- end -}}
+
+{{/*
 Master-key + database + redis env block — shared by gateway, backend, and the
 migrations Job.
 
@@ -292,6 +345,52 @@ harmless no-op for the Job and authoritative for the app pods.
 {{- end }}
 {{- with $component.extraEnv }}
 {{ toYaml . }}
+{{- end }}
+{{- end -}}
+
+{{/*
+PodDisruptionBudget shared by gateway, backend, and ui.
+
+Invoke with a dict:
+  (dict "root" $ "component" .Values.gateway "componentName" "gateway"
+        "fullname" (include "litellm.gateway.fullname" .)
+        "selectorLabels" (include "litellm.gateway.selectorLabels" .))
+
+Renders nothing unless both the component and its `pdb.enabled` are on.
+Only one of minAvailable / maxUnavailable should be set; if both are,
+minAvailable wins. If neither is set, falls back to `maxUnavailable: 1` so
+an enabled-but-unconfigured PDB still permits node drains.
+
+"Set" means non-nil and non-empty-string, so an explicit 0 (e.g.
+`maxUnavailable: 0` to forbid all voluntary disruptions) is honored rather
+than silently replaced by the fallback.
+*/}}
+{{- define "litellm.pdb" -}}
+{{- $root := .root -}}
+{{- $component := .component -}}
+{{- $min := $component.pdb.minAvailable -}}
+{{- $max := $component.pdb.maxUnavailable -}}
+{{- $minSet := not (or (kindIs "invalid" $min) (eq (printf "%v" $min) "")) -}}
+{{- $maxSet := not (or (kindIs "invalid" $max) (eq (printf "%v" $max) "")) -}}
+{{- if and $component.enabled $component.pdb $component.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .fullname }}
+  labels:
+    {{- include "litellm.commonLabels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ .componentName }}
+spec:
+  selector:
+    matchLabels:
+      {{- .selectorLabels | nindent 6 }}
+  {{- if $minSet }}
+  minAvailable: {{ $min }}
+  {{- else if $maxSet }}
+  maxUnavailable: {{ $max }}
+  {{- else }}
+  maxUnavailable: 1
+  {{- end }}
 {{- end }}
 {{- end -}}
 

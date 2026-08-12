@@ -54,19 +54,16 @@ them unset.
 
 from __future__ import annotations
 
-import os
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
 import pytest
 
+from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
     failure_diagnostic,
     run_claude_models_parallel,
 )
-
-PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
-PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
 
 ANTHROPIC_PASSTHROUGH_BASE_PATH = "/anthropic"
 
@@ -140,32 +137,15 @@ def run_passthrough_cell(
     the trailing-slash-normalized proxy base URL and returns the
     provider-mode env for the CLI subprocess.
     """
-    environ = env if env is not None else os.environ
-    base_url = environ.get(PROXY_BASE_URL_ENV)
-    api_key = environ.get(PROXY_API_KEY_ENV)
-    if not base_url or not api_key:
-        compat_result.set(
-            {
-                "status": "fail",
-                "error": (
-                    f"missing required env: set {PROXY_BASE_URL_ENV} and "
-                    f"{PROXY_API_KEY_ENV} to point at a running LiteLLM proxy"
-                ),
-            }
-        )
-        pytest.fail(
-            f"{PROXY_BASE_URL_ENV} / {PROXY_API_KEY_ENV} not configured",
-            pytrace=False,
-        )
-
-    proxy_base = base_url.rstrip("/")
+    proxy = require_proxy(compat_result, env=env)
+    proxy_base = proxy.base_url.rstrip("/")
     extra_env = dict(build_extra_env(proxy_base)) if build_extra_env else None
 
     outcomes = run_models(
         models=models,
         prompt=prompt,
         base_url=proxy_base + passthrough_base_path,
-        api_key=api_key,
+        api_key=proxy.api_key,
         extra_env=extra_env,
     )
 

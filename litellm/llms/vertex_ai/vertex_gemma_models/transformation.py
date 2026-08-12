@@ -8,7 +8,8 @@ Handles the custom request/response format:
 The actual message transformation reuses OpenAIGPTConfig since Gemma uses OpenAI-compatible format.
 """
 
-from typing import Any, Callable, Dict, List, Optional, Union, cast
+from collections.abc import Callable
+from typing import Any, Final, cast
 
 import httpx
 
@@ -36,9 +37,9 @@ class VertexGemmaConfig(OpenAIGPTConfig):
 
     def should_fake_stream(
         self,
-        model: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Optional[str] = None,
+        model: str | None,
+        stream: bool | None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         """
         Vertex AI Gemma models do not support streaming.
@@ -50,7 +51,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         self,
         model_response: ModelResponse,
         stream: bool,
-    ) -> Union[ModelResponse, Any]:
+    ) -> ModelResponse | Any:
         """
         Helper method to return fake stream iterator if streaming is requested.
 
@@ -70,7 +71,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -82,7 +83,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         in the Vertex Gemma instances format.
         """
         # Get the base OpenAI request from parent class
-        openai_request = super().transform_request(
+        openai_request: Final = super().transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -111,8 +112,8 @@ class VertexGemmaConfig(OpenAIGPTConfig):
 
     def _unwrap_predictions_response(
         self,
-        response_json: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        response_json: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Unwrap the Vertex Gemma predictions format to OpenAI format.
 
@@ -131,8 +132,8 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     def _sync_post(
         client: HTTPHandler | httpx.Client | None,
         api_base: str,
-        headers: dict,
-        request_data: dict,
+        headers: dict[str, str],  # mutable-ok: forwarded to post(headers: dict | None)
+        request_data: dict[str, Any],  # mutable-ok: forwarded to post(json: dict | ...)
         timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         if isinstance(client, HTTPHandler):
@@ -166,8 +167,8 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     async def _async_post(
         client: AsyncHTTPHandler | httpx.AsyncClient | None,
         api_base: str,
-        headers: dict,
-        request_data: dict,
+        headers: dict[str, str],  # mutable-ok: forwarded to post(headers: dict | None)
+        request_data: dict[str, Any],  # mutable-ok: forwarded to post(json: dict | ...)
         timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -213,9 +214,9 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         optional_params: dict,
         acompletion: bool,
         litellm_params: dict,
-        logger_fn: Optional[Callable] = None,
+        logger_fn: Callable | None = None,
         client: HTTPHandler | AsyncHTTPHandler | httpx.Client | httpx.AsyncClient | None = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        timeout: float | httpx.Timeout | None = None,
         encoding=None,
         custom_llm_provider: str = "vertex_ai",
     ):
@@ -268,17 +269,17 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         optional_params: dict,
         litellm_params: dict,
         client: HTTPHandler | httpx.Client | None = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        timeout: float | httpx.Timeout | None = None,
         encoding: Any = None,
     ):
         """Synchronous completion request"""
         from litellm.utils import convert_to_model_response_object
 
         # Check if streaming is requested (will be faked)
-        stream = optional_params.get("stream", False)
+        stream: Final = optional_params.get("stream", False)
 
         # Transform the request using parent class methods
-        request_data = self.transform_request(
+        request_data: Final = self.transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params.copy(),
@@ -287,7 +288,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Set up headers
-        headers = {
+        headers: Final = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
@@ -303,7 +304,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Make the HTTP request
-        response = self._sync_post(
+        response: Final = self._sync_post(
             client=client,
             api_base=api_base,
             headers=headers,
@@ -317,10 +318,10 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 message=f"Request failed: {response.text}",
             )
 
-        response_json = response.json()
+        response_json: Final = response.json()
 
         # Unwrap predictions to get OpenAI-compatible response
-        openai_response = self._unwrap_predictions_response(response_json)
+        openai_response: Final = self._unwrap_predictions_response(response_json)
 
         # Use litellm's standard response converter
         model_response = cast(
@@ -357,18 +358,18 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         logging_obj: Any,
         optional_params: dict,
         litellm_params: dict,
-        client: Optional[Union[AsyncHTTPHandler, httpx.AsyncClient]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: AsyncHTTPHandler | httpx.AsyncClient | None = None,
+        timeout: float | httpx.Timeout | None = None,
         encoding: Any = None,
     ):
         """Asynchronous completion request"""
         from litellm.utils import convert_to_model_response_object
 
         # Check if streaming is requested (will be faked)
-        stream = optional_params.get("stream", False)
+        stream: Final = optional_params.get("stream", False)
 
         # Transform the request using parent class async methods
-        request_data = await self.async_transform_request(
+        request_data: Final = await self.async_transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params.copy(),
@@ -377,7 +378,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Set up headers
-        headers = {
+        headers: Final = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
@@ -393,7 +394,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Make the HTTP request
-        response = await self._async_post(
+        response: Final = await self._async_post(
             client=client,
             api_base=api_base,
             headers=headers,
@@ -407,10 +408,10 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 message=f"Request failed: {response.text}",
             )
 
-        response_json = response.json()
+        response_json: Final = response.json()
 
         # Unwrap predictions to get OpenAI-compatible response
-        openai_response = self._unwrap_predictions_response(response_json)
+        openai_response: Final = self._unwrap_predictions_response(response_json)
 
         # Use litellm's standard response converter
         model_response = cast(

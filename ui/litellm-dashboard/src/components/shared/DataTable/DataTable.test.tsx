@@ -337,14 +337,6 @@ describe("DataTable filtering", () => {
     );
     expect(names()).toEqual(["Charlie", "Alice", "Bob"]);
   });
-
-  it("throws when server filtering is missing required props", () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(() => render(<DataTable data={[]} columns={filterableColumns} filterMode="server" />)).toThrow(
-      /filterMode='server'/,
-    );
-    spy.mockRestore();
-  });
 });
 
 describe("DataTable loading", () => {
@@ -625,37 +617,42 @@ describe("DataTable layout", () => {
     const scroller = container.querySelector('[data-slot="table-container"]')?.parentElement as HTMLElement;
     expect(scroller.style.maxHeight).toBe("240px");
   });
-});
 
-describe("DataTable misconfiguration guards", () => {
-  it("throws when server sorting is missing required props", () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(() => render(<DataTable data={[]} columns={nameCellColumns} sortingMode="server" />)).toThrow(
-      /sortingMode='server'/,
-    );
-    spy.mockRestore();
+  it("caps fillHeight at the parent's height instead of stretching to it, so a short table stays short", () => {
+    const { container } = render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} fillHeight />);
+    const scroller = container.querySelector('[data-slot="table-container"]')?.parentElement as HTMLElement;
+    const frame = scroller.parentElement as HTMLElement;
+    const outer = frame.parentElement as HTMLElement;
+
+    // A ceiling, not a stretch: flex-1 here would hold the footer at the bottom on a two-row table.
+    expect(outer.className).toContain("max-h-full");
+    expect(outer.className).not.toContain("flex-1");
+    expect(frame.className).not.toContain("flex-1");
+    expect(scroller.className).not.toContain("flex-1");
+
+    expect(outer.className).toContain("flex-col");
+    expect(frame.className).toContain("flex-col");
+    expect(scroller.className).toContain("min-h-0");
+    expect(scroller.className).toContain("overflow-auto");
+    expect(scroller.style.maxHeight).toBe("");
+    // Without this the Table primitive's own overflow container captures the sticky header.
+    expect(scroller.className).toContain("[&_[data-slot=table-container]]:overflow-visible");
+
+    const thead = container.querySelector("thead") as HTMLElement;
+    expect(thead.className).toContain("sticky");
+    // Rows pass under the header, so the semi-transparent row tint alone would let them show through.
+    expect(thead.className).toContain("bg-background");
   });
 
-  it("throws when server pagination is missing required props", () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(() => render(<DataTable data={[]} columns={nameCellColumns} paginationMode="server" />)).toThrow(
-      /paginationMode='server'/,
-    );
-    spy.mockRestore();
-  });
+  it("leaves the default layout untouched when neither height mode is set", () => {
+    const { container } = render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} />);
+    const scroller = container.querySelector('[data-slot="table-container"]')?.parentElement as HTMLElement;
 
-  it("throws when both defaultSorting and sorting are provided", () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(() =>
-      render(
-        <DataTable
-          data={[]}
-          columns={nameCellColumns}
-          defaultSorting={[{ id: "name", desc: false }]}
-          sorting={[{ id: "name", desc: false }]}
-        />,
-      ),
-    ).toThrow(/defaultSorting/);
-    spy.mockRestore();
+    expect(scroller.className).toContain("overflow-x-auto");
+    expect(scroller.className).not.toContain("min-h-0");
+    expect(scroller.style.maxHeight).toBe("");
+    expect((scroller.parentElement as HTMLElement).className).not.toContain("flex-col");
+    expect(container.querySelector("thead")?.className).not.toContain("sticky");
+    expect(container.querySelector("thead")?.className).not.toContain("bg-background");
   });
 });

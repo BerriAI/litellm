@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from e2e_gateway import Gateway, build_gateway
+from proxy_client import ProxyClient
 from e2e_http import StreamingResponse
 from models import (
     ChatBody,
@@ -21,29 +21,29 @@ ROUTE_NOT_ALLOWED_MARKER = "not allowed to call this route"
 
 @dataclass(frozen=True, slots=True)
 class AccessControlClient:
-    gateway: Gateway
+    proxy: ProxyClient
 
     def llm_only_key(self) -> str:
-        return self.gateway.generate_key(
+        return self.proxy.generate_key(
             KeyGenerateBody(models=[], allowed_routes=["llm_api_routes"])
         )
 
     def delete_key(self, key: str) -> None:
-        self.gateway.delete_key(key)
+        self.proxy.delete_key(key)
 
     def chat_status(self, key: str, model: str, content: str) -> StreamingResponse:
-        return self.gateway.transport.send(
+        return self.proxy.transport.send(
             "/chat/completions",
-            headers=self.gateway.transport.bearer(key),
+            headers=self.proxy.transport.bearer(key),
             json=ChatBody(
                 model=model, messages=[ChatMessage(role="user", content=content)]
             ),
         )
 
     def create_model_status(self, key: str, model_name: str) -> StreamingResponse:
-        return self.gateway.transport.send(
+        return self.proxy.transport.send(
             "/model/new",
-            headers=self.gateway.transport.bearer(key),
+            headers=self.proxy.transport.bearer(key),
             json=ModelNewBody(
                 model_name=model_name,
                 litellm_params=LiteLLMParamsBody(model="openai/gpt-4o-mini"),
@@ -52,5 +52,5 @@ class AccessControlClient:
         )
 
 
-def build_client() -> AccessControlClient:
-    return AccessControlClient(gateway=build_gateway())
+def build_client(proxy: ProxyClient) -> AccessControlClient:
+    return AccessControlClient(proxy=proxy)

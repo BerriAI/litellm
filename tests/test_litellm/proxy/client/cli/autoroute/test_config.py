@@ -3,10 +3,12 @@ from typing import Any, Dict, Tuple
 import pytest
 
 from litellm.proxy.client.cli.commands.autoroute.config import (
+    DEFAULT_KEYWORD_TIER_RULES,
     AutorouteConfig,
     ConfigGenerationError,
     DiscoveredModel,
     HeuristicClassifier,
+    KeywordTierRule,
     LLMClassifier,
     NoSemanticMatching,
     SemanticMatching,
@@ -14,6 +16,7 @@ from litellm.proxy.client.cli.commands.autoroute.config import (
     build_generated_proxy_config,
     chat_models,
     embedding_models,
+    master_key_from_config,
     parse_discovered_models,
     validate_config,
 )
@@ -45,27 +48,22 @@ def _base_config(**overrides: Any) -> AutorouteConfig:
 class TestParseDiscoveredModels:
     def test_parses_valid_raw_list_into_typed_tuple(self):
         raw = [
-            {
-                "model_group": "gpt-4o",
-                "mode": "chat",
-                "input_cost_per_token": 0.01,
-                "output_cost_per_token": 0.02,
-            },
-            {"model_group": "text-embedding-3-small", "mode": "embedding"},
+            {"id": "gpt-4o", "object": "model", "mode": "chat"},
+            {"id": "text-embedding-3-small", "object": "model", "mode": "embedding"},
         ]
         result = parse_discovered_models(raw)
         assert result == (
-            DiscoveredModel(name="gpt-4o", mode="chat", input_cost_per_token=0.01, output_cost_per_token=0.02),
+            DiscoveredModel(name="gpt-4o", mode="chat"),
             DiscoveredModel(name="text-embedding-3-small", mode="embedding"),
         )
 
     def test_ignores_unknown_extra_fields(self):
-        raw = [{"model_group": "gpt-4o", "mode": "chat", "totally_unknown_field": "whatever"}]
+        raw = [{"id": "gpt-4o", "mode": "chat", "created": 123, "owned_by": "openai", "max_input_tokens": 128000}]
         result = parse_discovered_models(raw)
         assert result == (DiscoveredModel(name="gpt-4o", mode="chat"),)
 
     def test_missing_mode_defaults_to_chat(self):
-        raw = [{"model_group": "gpt-4o"}]
+        raw = [{"id": "gpt-4o", "object": "model"}]
         result = parse_discovered_models(raw)
         assert result[0].mode == "chat"
 
@@ -129,6 +127,31 @@ class TestBuildGeneratedModelList:
         assert router_config["keyword_tier_rules"]
         assert "classifier_type" not in router_config
 
+    def test_semantic_matching_defaults_emit_builtin_keyword_rules(self):
+        config = _base_config(semantic_matching=SemanticMatching(embedding_model="text-embedding-3-small"))
+        autorouter = next(m for m in build_generated_model_list(config) if m["model_name"] == "autorouter")
+        router_config = autorouter["litellm_params"]["complexity_router_config"]
+        assert router_config["keyword_tier_rules"] == [
+            {"keywords": list(rule.keywords), "tier": rule.tier} for rule in DEFAULT_KEYWORD_TIER_RULES
+        ]
+
+    def test_semantic_matching_serializes_custom_keyword_rules(self):
+        config = _base_config(
+            semantic_matching=SemanticMatching(
+                embedding_model="text-embedding-3-small",
+                keyword_tier_rules=(
+                    KeywordTierRule(keywords=("yo", "sup"), tier="SIMPLE"),
+                    KeywordTierRule(keywords=("architect", "design a system"), tier="COMPLEX"),
+                ),
+            )
+        )
+        autorouter = next(m for m in build_generated_model_list(config) if m["model_name"] == "autorouter")
+        router_config = autorouter["litellm_params"]["complexity_router_config"]
+        assert router_config["keyword_tier_rules"] == [
+            {"keywords": ["yo", "sup"], "tier": "SIMPLE"},
+            {"keywords": ["architect", "design a system"], "tier": "COMPLEX"},
+        ]
+
     def test_complexity_router_config_reflects_adaptive(self):
         config = _base_config(adaptive=True)
         autorouter = next(m for m in build_generated_model_list(config) if m["model_name"] == "autorouter")
@@ -179,3 +202,24 @@ class TestValidateConfig:
         config = _base_config(semantic_matching=SemanticMatching(embedding_model="unknown-embedding"))
         with pytest.raises(ConfigGenerationError, match="unknown-embedding"):
             validate_config(config, DISCOVERED)
+
+
+class TestMasterKeyFromConfig:
+    def test_returns_a_persisted_key_verbatim(self):
+        assert master_key_from_config({"general_settings": {"master_key": " sk-abc "}}) == " sk-abc "
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {},
+            {"general_settings": None},
+            {"general_settings": "not-a-dict"},
+            {"general_settings": {}},
+            {"general_settings": {"master_key": None}},
+            {"general_settings": {"master_key": 123}},
+            {"general_settings": {"master_key": ""}},
+            {"general_settings": {"master_key": "   "}},
+        ],
+    )
+    def test_returns_none_when_absent_or_unusable(self, config):
+        assert master_key_from_config(config) is None

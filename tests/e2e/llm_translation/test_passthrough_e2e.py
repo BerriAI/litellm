@@ -15,7 +15,8 @@ import pytest
 
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, require_successful_call
-from models import SpendLogRow
+from lifecycle import ResourceManager
+from models import KeyGenerateBody, SpendLogRow
 from passthrough_client import (
     AnthropicTool,
     GeminiFunctionDeclaration,
@@ -35,7 +36,7 @@ def _fetch_cost_breakdown(client: PassthroughClient, result: StreamingResponse) 
     whole point of passthrough spend tracking.
     """
     assert result.call_id, "passthrough response had no x-litellm-call-id header"
-    rows = client.gateway.poll_logs_for_request_id(
+    rows = client.proxy.poll_logs_for_request_id(
         result.call_id,
         predicate=lambda rs: (rs[0].spend or 0) > 0,
     )
@@ -63,6 +64,36 @@ def test_gemini_passthrough_nonstreaming_logs_cost(
     assert row.custom_llm_provider == "gemini"
     assert "gemini" in (row.model or "")
     assert tag in (row.request_tags or []), f"tags not logged: {row.request_tags}"
+
+
+@pytest.mark.skip(reason="stage red: product gap, native passthrough returns no x-litellm-response-cost or x-ratelimit-* headers")
+def test_gemini_passthrough_returns_the_same_header_contract_as_the_managed_route(
+    client: PassthroughClient, scoped_key: str
+) -> None:
+    """Native /gemini/ passthrough must return the same operational headers as
+    /chat/completions: x-litellm-response-cost so the call reconciles against
+    spend, and x-ratelimit-* so a client can pace itself. It returns neither
+    today, which makes native traffic invisible to the same tooling.
+    """
+    result = client.gemini_generate(
+        scoped_key, "gemini-2.5-flash", f"Say hello in one word. {unique_marker()}"
+    )
+    require_successful_call(result)
+
+    assert result.call_id, "passthrough must stamp x-litellm-call-id"
+    assert result.response_cost is not None, (
+        "passthrough generateContent returned no x-litellm-response-cost header, so a "
+        "native call cannot be reconciled against spend the way /chat/completions can"
+    )
+    assert result.response_cost > 0, (
+        f"x-litellm-response-cost must be a real cost, got {result.response_cost}"
+    )
+
+    pacing = tuple(name for name in result.headers if name.startswith("x-ratelimit-"))
+    assert pacing, (
+        "passthrough generateContent returned no x-ratelimit-* headers, so a client "
+        f"cannot pace itself; headers present were {sorted(result.headers)}"
+    )
 
 
 def test_gemini_passthrough_streaming_logs_cost(
@@ -157,3 +188,25 @@ def test_anthropic_passthrough_tool_call_logs_cost(
 
     row = _fetch_cost_breakdown(client, result)
     assert row.custom_llm_provider == "anthropic"
+
+
+class TestPassthroughModelAllowlist:
+    """A passthrough route must honor the calling key's model allow-list.
+
+    The customer fronts native provider calls through the proxy with custom auth,
+    so a key scoped to one model must not reach a different model just because the
+    request goes through the passthrough route rather than /chat/completions.
+    """
+
+    @pytest.mark.covers("other.auth.passthrough.model_allowlist_enforced")
+    def test_passthrough_denies_model_outside_key_allowlist(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        key = client.proxy.generate_key(KeyGenerateBody(models=["gemini-2.5-flash"]))
+        resources.defer(lambda: client.proxy.delete_key(key))
+
+        result = client.anthropic_message(key, "claude-haiku-4-5", f"say hi {unique_marker()}")
+        assert result.status_code == 403, (
+            "a key restricted to gemini-2.5-flash must be denied a claude passthrough call, "
+            f"got {result.status_code}: {result.body[:300]}"
+        )

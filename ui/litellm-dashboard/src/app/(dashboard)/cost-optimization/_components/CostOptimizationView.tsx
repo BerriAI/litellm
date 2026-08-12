@@ -1,0 +1,88 @@
+"use client";
+
+import React from "react";
+import { PiggyBank } from "lucide-react";
+import { Alert, Tabs } from "antd";
+
+import useCan from "@/app/(dashboard)/hooks/useCan";
+import UsageTab from "./UsageTab";
+import PromptCompressionTab from "./PromptCompressionTab";
+import PromptCachingTab from "./PromptCachingTab";
+import AutoRouterBenchmarksTab from "./AutoRouterBenchmarksTab";
+import { useDailyActivityRange } from "./useDailyActivityRange";
+
+interface CostOptimizationViewProps {
+  accessToken: string | null;
+  userId: string | null;
+  userRole: string;
+}
+
+const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken, userId, userRole }) => {
+  const activity = useDailyActivityRange(accessToken, userId, userRole);
+  const canViewProxyWideCostData = useCan("viewProxyWideCostData");
+
+  const items = [
+    {
+      key: "usage",
+      label: "Overall",
+      children: <UsageTab accessToken={accessToken} activity={activity} />,
+    },
+    ...(canViewProxyWideCostData
+      ? [
+          {
+            key: "compression",
+            label: "Prompt Compression",
+            children: <PromptCompressionTab accessToken={accessToken} />,
+          },
+          {
+            key: "caching",
+            label: "Prompt Caching",
+            children: <PromptCachingTab accessToken={accessToken} activity={activity} />,
+          },
+          {
+            key: "autorouter-usage",
+            label: "Auto-Router",
+            children: <AutoRouterBenchmarksTab accessToken={accessToken} />,
+          },
+        ]
+      : []),
+  ];
+
+  return (
+    <div className="w-full space-y-6 p-6">
+      <div>
+        <div className="flex items-center gap-2">
+          <PiggyBank className="size-6 text-emerald-600" strokeWidth={1.75} />
+          <h1 className="text-xl font-semibold text-foreground">Cost Optimization</h1>
+        </div>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Track and configure the mechanisms that save you money: prompt compression and prompt caching. Auto routers
+          live under Models + Endpoints, on the Auto-Routers tab
+        </p>
+      </div>
+
+      <Alert
+        type="info"
+        showIcon
+        message="This is an experimental dashboard"
+        description={
+          <span>
+            Have feedback? Join the discussion{" "}
+            <a
+              href="https://github.com/BerriAI/litellm/discussions/32168"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 underline"
+            >
+              here
+            </a>
+          </span>
+        }
+      />
+
+      <Tabs defaultActiveKey="usage" items={items} />
+    </div>
+  );
+};
+
+export default CostOptimizationView;

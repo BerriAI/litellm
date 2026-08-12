@@ -172,7 +172,7 @@ def anthropic_messages():
             "content": [
                 {
                     "type": "text",
-                    "text": "Here is the full text of a complex legal agreement" * 400,
+                    "text": "Here is the full text of a complex legal agreement" * 500,
                     "cache_control": {"type": "ephemeral"},
                 }
             ],

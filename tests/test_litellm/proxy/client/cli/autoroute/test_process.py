@@ -10,10 +10,11 @@ from litellm.proxy.client.cli.commands.autoroute.process import (
     PidRecord,
     ProcessLaunchError,
     UpError,
-    allocate_free_port,
     clear_pid_record,
+    is_port_available,
     is_running,
     launch_proxy,
+    missing_proxy_runtime_modules,
     poll_liveliness,
     read_pid_record,
     write_pid_record,
@@ -33,10 +34,19 @@ class FakeResponse:
         self.status_code = status_code
 
 
-def test_allocate_free_port_returns_a_bindable_port():
-    port = allocate_free_port()
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", port))
+class TestIsPortAvailable:
+    def test_true_for_a_free_port(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            free_port = sock.getsockname()[1]
+        assert is_port_available(free_port) is True
+
+    def test_false_while_another_socket_holds_the_port(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            sock.listen(1)
+            held_port = sock.getsockname()[1]
+            assert is_port_available(held_port) is False
 
 
 class TestLaunchProxy:
@@ -137,3 +147,21 @@ class TestPollLiveliness:
 
         assert "exited early" in str(exc_info.value)
         assert "crash log line" in str(exc_info.value)
+
+
+class TestMissingProxyRuntimeModules:
+    def test_flags_absent_modules_only(self, monkeypatch):
+        """A thin litellm[cli] install lacks the proxy runtime; the missing ones must be reported
+        (by name, for an actionable error) while modules that are importable are not."""
+        monkeypatch.setattr(
+            process_module,
+            "_PROXY_RUNTIME_MODULES",
+            ("os", "litellm_autoroute_definitely_absent_pkg", "socket"),
+        )
+
+        assert missing_proxy_runtime_modules() == ("litellm_autoroute_definitely_absent_pkg",)
+
+    def test_empty_when_all_present(self, monkeypatch):
+        monkeypatch.setattr(process_module, "_PROXY_RUNTIME_MODULES", ("os", "socket"))
+
+        assert missing_proxy_runtime_modules() == ()
