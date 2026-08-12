@@ -28,7 +28,10 @@ def get_mcp_tool_search_default_top_k(
             if key_top_k is not None:
                 return coerce_top_k(key_top_k, default=DEFAULT_MCP_TOOL_SEARCH_TOP_K)
 
-    global_top_k = (litellm_settings or {}).get("mcp_tool_search_default_top_k")
+    if litellm_settings is None:
+        global_top_k = None
+    else:
+        global_top_k = litellm_settings.get("mcp_tool_search_default_top_k")
     if global_top_k is not None:
         return coerce_top_k(global_top_k, default=DEFAULT_MCP_TOOL_SEARCH_TOP_K)
 

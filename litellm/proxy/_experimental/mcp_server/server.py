@@ -791,12 +791,14 @@ if MCP_AVAILABLE:
                 )
                 from litellm.proxy.proxy_server import proxy_config
 
+                raw_settings = proxy_config.get_config_state().get("litellm_settings")
+                settings = raw_settings if isinstance(raw_settings, Mapping) else None
                 return [
                     Tool.model_validate(d)
                     for d in get_virtual_tool_definitions(
                         default_top_k=get_mcp_tool_search_default_top_k(
                             user_api_key_auth,
-                            proxy_config.get_config_state().get("litellm_settings") or {},
+                            settings,
                         )
                     )
                 ]
@@ -950,12 +952,14 @@ if MCP_AVAILABLE:
         if name == MCP_TOOL_SEARCH_TOOL_NAME:
             from litellm.proxy.proxy_server import proxy_config
 
+            raw_settings = proxy_config.get_config_state().get("litellm_settings")
+            settings = raw_settings if isinstance(raw_settings, Mapping) else None
             return await handle_mcp_tool_search(
                 query=args.get("query", ""),
                 top_k=resolve_mcp_tool_search_top_k(
                     args.get("top_k"),
                     user_api_key_auth,
-                    proxy_config.get_config_state().get("litellm_settings") or {},
+                    settings,
                 ),
                 user_api_key_dict=user_api_key_auth,
                 client_ip=client_ip,
