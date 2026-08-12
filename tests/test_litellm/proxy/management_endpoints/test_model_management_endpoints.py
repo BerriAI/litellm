@@ -18,6 +18,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LitellmUserRoles,
     Member,
+    ReconcileOutcome,
     UserAPIKeyAuth,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
@@ -103,11 +104,11 @@ class MockProxyConfig:
         self.success = success
         self.deployment_called = False
 
-    async def add_deployment(self, prisma_client, proxy_logging_obj):
+    async def _add_deployment_locked(self, prisma_client, proxy_logging_obj):
         self.deployment_called = True
         if not self.success:
             raise Exception("Failed to add deployment")
-        return True
+        return ReconcileOutcome(still_desired=frozenset(), live_after=frozenset())
 
 
 class TestModelManagementAuthChecks:
@@ -409,7 +410,9 @@ class TestClearCache:
         mock_router.model_list = ["openai/gpt-4o", "openai/gpt-4o-mini"]
 
         mock_config = MagicMock()
-        mock_config.add_deployment = AsyncMock(return_value=True)
+        mock_config._add_deployment_locked = AsyncMock(
+            return_value=ReconcileOutcome(still_desired=frozenset(), live_after=frozenset())
+        )
 
         mock_prisma = MagicMock()
         mock_logging = MagicMock()
@@ -463,7 +466,9 @@ class TestClearCache:
         mock_router.complexity_routers = {"db-complexity-router": MagicMock(), "config-router": MagicMock()}
 
         mock_config = MagicMock()
-        mock_config.add_deployment = AsyncMock(return_value=True)
+        mock_config._add_deployment_locked = AsyncMock(
+            return_value=ReconcileOutcome(still_desired=frozenset(), live_after=frozenset())
+        )
 
         mock_prisma = MagicMock()
         mock_logging = MagicMock()
@@ -491,8 +496,8 @@ class TestClearCache:
             assert "config-router" in mock_router.auto_routers
             assert "config-router" in mock_router.complexity_routers
 
-            # Should have called add_deployment to reload DB models
-            mock_config.add_deployment.assert_called_once_with(
+            # Should have called the already-locked reload to restore DB models
+            mock_config._add_deployment_locked.assert_called_once_with(
                 prisma_client=mock_prisma, proxy_logging_obj=mock_logging
             )
 
@@ -534,7 +539,9 @@ class TestClearCachePreservesConfigRouters:
         }
 
         mock_config = MagicMock()
-        mock_config.add_deployment = AsyncMock(return_value=True)
+        mock_config._add_deployment_locked = AsyncMock(
+            return_value=ReconcileOutcome(still_desired=frozenset(), live_after=frozenset())
+        )
 
         with (
             patch("litellm.proxy.proxy_server.llm_router", mock_router),
@@ -574,7 +581,9 @@ class TestClearCachePreservesConfigRouters:
         mock_router.complexity_routers = {"shared-name": MagicMock()}
 
         mock_config = MagicMock()
-        mock_config.add_deployment = AsyncMock(return_value=True)
+        mock_config._add_deployment_locked = AsyncMock(
+            return_value=ReconcileOutcome(still_desired=frozenset(), live_after=frozenset())
+        )
 
         with (
             patch("litellm.proxy.proxy_server.llm_router", mock_router),
@@ -616,7 +625,9 @@ class TestClearCachePreservesConfigRouters:
         mock_router.adaptive_routers = {"a1": MagicMock()}
 
         mock_config = MagicMock()
-        mock_config.add_deployment = AsyncMock(return_value=True)
+        mock_config._add_deployment_locked = AsyncMock(
+            return_value=ReconcileOutcome(still_desired=frozenset(), live_after=frozenset())
+        )
 
         with (
             patch("litellm.proxy.proxy_server.llm_router", mock_router),
@@ -839,7 +850,9 @@ class TestUpdateModel:
             ),
             patch(
                 "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
-                new=AsyncMock(return_value=None),
+                new=AsyncMock(
+                    return_value=ReconcileOutcome(still_desired=None, live_after=None)
+                ),
             ) as mock_clear_cache,
         ):
             await update_model(
@@ -1885,7 +1898,9 @@ class TestAddAndDeleteModelLifecycle:
         mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
 
         mock_proxy_config = MagicMock()
-        mock_proxy_config.add_deployment = AsyncMock()
+        mock_proxy_config._add_deployment_locked = AsyncMock(
+            return_value=ReconcileOutcome(still_desired=frozenset(), live_after=frozenset())
+        )
 
         mock_router = MagicMock()
         mock_router.delete_deployment = MagicMock()
@@ -3223,7 +3238,9 @@ class TestPatchModelBlockedAuthGate:
             ),
             patch(
                 "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
-                new=AsyncMock(return_value=None),
+                new=AsyncMock(
+                    return_value=ReconcileOutcome(still_desired=None, live_after=None)
+                ),
             ),
         ):
             result = await patch_model(
@@ -3378,6 +3395,147 @@ class TestWriteSurfacesReloadDrop:
                 written_models=[("m-live", None)],
                 action="create",
                 still_desired=None,
+            )
+
+
+class TestConcurrentModelWritesDoNotEvictEachOther:
+    """Two model writes racing on one pod must not un-serve each other's deployments,
+    and neither may report the other's in-flight reload as damage of its own.
+
+    The reconcile is a read-modify-write of the shared ``llm_router`` global: read the db
+    into a snapshot, then make the router match that snapshot. Unserialized, the request
+    holding the older snapshot deletes the deployment the newer one just added, because
+    _delete_deployment evicts every live id absent from the snapshot it was handed. The
+    row survives in the db, so the damage is invisible there -- the pod just stops
+    serving a model it was told to serve.
+    """
+
+    @pytest.mark.asyncio
+    async def test_reconciles_serialize_so_no_stale_snapshot_can_evict(self, monkeypatch):
+        """MODEL_RECONCILE_LOCK admits one reconcile at a time.
+
+        The fake body awaits, which is the whole point: without the lock the gather below
+        parks all five inside the critical section at that await and observed depth goes
+        to 5. Asserting depth never exceeds 1 is what pins the fix -- deleting the
+        `async with` makes this fail rather than merely getting slower.
+        """
+        import asyncio
+
+        from litellm.proxy._types import ReconcileOutcome
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        depth = 0
+        observed_max = 0
+
+        async def fake_locked(self, **kwargs):
+            nonlocal depth, observed_max
+            depth += 1
+            observed_max = max(observed_max, depth)
+            await asyncio.sleep(0)
+            depth -= 1
+            return ReconcileOutcome(still_desired=frozenset(), live_after=frozenset())
+
+        monkeypatch.setattr(ProxyConfig, "_add_deployment_locked", fake_locked)
+        config = ProxyConfig()
+
+        await asyncio.gather(
+            *[
+                config.add_deployment(prisma_client=MagicMock(), proxy_logging_obj=MagicMock())
+                for _ in range(5)
+            ]
+        )
+
+        assert observed_max == 1
+
+    @pytest.mark.asyncio
+    async def test_clear_cache_reloads_under_the_lock_without_deadlocking(self, monkeypatch):
+        """clear_cache un-serves every db model before reloading, so it has to hold the
+        lock across the pair -- and therefore must call the already-locked reload.
+
+        asyncio.Lock is not reentrant: routing this back through the public
+        add_deployment would block forever on a lock this coroutine already owns, taking
+        every model write on the pod down with it. The timeout is the assertion.
+        """
+        import asyncio
+
+        import litellm
+        from litellm.proxy._types import ReconcileOutcome
+        from litellm.proxy.management_endpoints.model_management_endpoints import clear_cache
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        live_router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {"model": "gpt-4o"},
+                    "model_info": {"id": "m-db", "db_model": True},
+                }
+            ]
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", live_router)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+
+        async def fake_locked(self, **kwargs):
+            return ReconcileOutcome(still_desired=frozenset({"m-db"}), live_after=frozenset({"m-db"}))
+
+        monkeypatch.setattr(ProxyConfig, "_add_deployment_locked", fake_locked)
+
+        outcome = await asyncio.wait_for(clear_cache(), timeout=5)
+
+        assert outcome.still_desired == frozenset({"m-db"})
+        assert outcome.live_after == frozenset({"m-db"})
+
+    def test_verdict_trusts_the_lock_captured_snapshot_over_a_live_reread(self, monkeypatch):
+        """Given live_after, the verdict judges the router as it stood when the reload
+        finished -- not as it stands now.
+
+        Re-reading here would sample the router after the lock was released, which is
+        exactly where the next writer's clear_cache has every db model deleted and not
+        yet re-added. That hole is another request's in-flight state; blaming this
+        request's reload for it is the 500 that made concurrent model creates fail.
+        """
+        import litellm
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            raise_if_reload_degraded_serving,
+            reload_serving_verdict,
+        )
+
+        # The router as another writer's clear_cache leaves it mid-wipe: db models gone.
+        mid_wipe_router = litellm.Router(model_list=[])
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mid_wipe_router)
+
+        healthy_after_reload = frozenset({"m-live", "m-neighbour"})
+
+        _, collateral = reload_serving_verdict(
+            before=frozenset({"m-live", "m-neighbour"}),
+            written_models=[("m-live", None)],
+            written_must_serve=True,
+            still_desired=healthy_after_reload,
+            live_after=healthy_after_reload,
+        )
+        assert collateral == ()
+
+        assert (
+            raise_if_reload_degraded_serving(
+                before=frozenset({"m-live", "m-neighbour"}),
+                written_models=[("m-live", None)],
+                action="create",
+                still_desired=healthy_after_reload,
+                live_after=healthy_after_reload,
+            )
+            is None
+        )
+
+        # Same inputs, no lock-captured snapshot: the mid-wipe router is read live and
+        # the neighbour looks like collateral. This is the pre-fix behaviour, kept to
+        # show the parameter is what carries the difference.
+        with pytest.raises(ProxyException, match="m-neighbour"):
+            raise_if_reload_degraded_serving(
+                before=frozenset({"m-live", "m-neighbour"}),
+                written_models=[("m-live", None)],
+                action="create",
+                still_desired=healthy_after_reload,
             )
 
 
