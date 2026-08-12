@@ -94,6 +94,16 @@ describe("provider_info_helpers", () => {
       expect(result.displayName).toBe(Providers.ZAI);
     });
 
+    it("should resolve the nano-gpt provider value to the NanoGPT display name", () => {
+      // Regression test for https://github.com/BerriAI/litellm/issues/34499 —
+      // the backend already supports the `nano-gpt/` route and the docs have a
+      // dedicated page, but the UI dropdown was missing an entry, so
+      // `getProviderLogoAndName("nano-gpt")` previously returned the raw slug
+      // as the display name (no mapping).
+      const result = getProviderLogoAndName("nano-gpt");
+      expect(result.displayName).toBe(Providers.NANO_GPT);
+    });
+
     it("should return provider value as display name when no mapping exists", () => {
       const unknownProvider = "unknown_provider";
       const result = getProviderLogoAndName(unknownProvider);
@@ -130,6 +140,7 @@ describe("provider_info_helpers", () => {
         Providers.LEMONADE,
         Providers.LLAMAFILE,
         Providers.MARITALK,
+        Providers.NANO_GPT,
         Providers.NLP_CLOUD,
         Providers.NSCALE,
         Providers.OVHCLOUD,
