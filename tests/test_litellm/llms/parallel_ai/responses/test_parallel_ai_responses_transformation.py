@@ -117,3 +117,26 @@ class TestParallelAIResponsesConfig:
 
     def test_no_native_websocket(self):
         assert ParallelAIResponsesConfig().supports_native_websocket() is False
+
+    def test_untrusted_api_base_refuses_server_key(self, monkeypatch):
+        monkeypatch.setenv("PARALLEL_AI_API_KEY", "pk-server-secret")
+        monkeypatch.delenv("PARALLEL_AI_API_BASE", raising=False)
+        config = ParallelAIResponsesConfig()
+
+        with pytest.raises(ValueError, match="Refusing to send"):
+            config.validate_environment(
+                headers={},
+                model="parallel",
+                litellm_params=GenericLiteLLMParams(api_base="https://attacker.example.com"),
+            )
+
+    def test_untrusted_api_base_with_explicit_key_is_allowed(self, monkeypatch):
+        monkeypatch.setenv("PARALLEL_AI_API_KEY", "pk-server-secret")
+        config = ParallelAIResponsesConfig()
+
+        headers = config.validate_environment(
+            headers={},
+            model="parallel",
+            litellm_params=GenericLiteLLMParams(api_base="https://proxy.example.com", api_key="pk-caller"),
+        )
+        assert headers["Authorization"] == "Bearer pk-caller"

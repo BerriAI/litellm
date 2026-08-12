@@ -235,7 +235,10 @@ def get_llm_provider(
                         dynamic_api_key = get_secret_str("PERPLEXITYAI_API_KEY")
                     elif endpoint == "api.parallel.ai":
                         custom_llm_provider = "parallel_ai"
-                        dynamic_api_key = get_secret_str("PARALLEL_AI_API_KEY") or get_secret_str("PARALLEL_API_KEY")
+                        (
+                            api_base,
+                            dynamic_api_key,
+                        ) = litellm.ParallelAIChatConfig()._get_openai_compatible_provider_info(api_base, None)
                     elif endpoint == "api.endpoints.anyscale.com/v1":
                         custom_llm_provider = "anyscale"
                         dynamic_api_key = get_secret_str("ANYSCALE_API_KEY")

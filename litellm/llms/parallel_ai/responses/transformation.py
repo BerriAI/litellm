@@ -11,6 +11,7 @@ Ref: https://docs.parallel.ai/responses-api/responses-quickstart
 from typing import Final
 
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.parallel_ai.common_utils import resolve_parallel_ai_credentials
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
@@ -44,9 +45,7 @@ class ParallelAIResponsesConfig(OpenAIResponsesAPIConfig):
 
     def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
         resolved_params: Final = litellm_params or GenericLiteLLMParams()
-        api_key: Final = (
-            resolved_params.api_key or get_secret_str("PARALLEL_AI_API_KEY") or get_secret_str("PARALLEL_API_KEY")
-        )
+        _, api_key = resolve_parallel_ai_credentials(api_base=resolved_params.api_base, api_key=resolved_params.api_key)
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
