@@ -143,6 +143,7 @@ def test_azure_ai_fw_model_info(use_local_model_cost_map, model_key, expected):
     )
     assert model_info["max_input_tokens"] == expected["max_input_tokens"]
     assert model_info["max_output_tokens"] == expected["max_output_tokens"]
+    assert model_info["max_tokens"] == expected["max_output_tokens"]
     assert model_info["supports_function_calling"] is True
     assert model_info["supports_reasoning"] is True
     assert model_info["supports_tool_choice"] is True
