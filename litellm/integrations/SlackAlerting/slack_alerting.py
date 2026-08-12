@@ -43,7 +43,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.types.integrations.slack_alerting import *
 from litellm.types.proxy.model_deprecation import (
     DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
-    DEPRECATION_ROUTER_WAIT_SECONDS,
+    DEPRECATION_IDLE_POLL_SECONDS,
 )
 
 from ..email_templates.templates import *
@@ -1049,9 +1049,12 @@ Model Info:
     async def model_removed_alert(self, model_name: str):
         pass
 
+    def _deprecation_alerts_enabled(self) -> bool:
+        return self.alerting is not None and AlertType.model_deprecation_warnings in self.alert_types
+
     async def send_model_deprecation_alert(self, llm_router: Router | None = None) -> bool:
         """Alert on the router's deprecated and imminent models, True when one was sent"""
-        if self.alerting is None or AlertType.model_deprecation_warnings not in self.alert_types:
+        if not self._deprecation_alerts_enabled():
             return False
 
         from litellm.proxy.common_utils.model_deprecation import (
@@ -1081,10 +1084,10 @@ Model Info:
     async def _run_scheduled_deprecation_check(
         self, get_llm_router: Callable[[], Router | None] = _proxy_llm_router
     ) -> None:
-        """Alert once the router is loaded, then daily, re-reading the router and alert types each pass"""
+        """Alert once the router is loaded and the alert is on, then daily, re-reading both each pass"""
         while True:
-            if (llm_router := get_llm_router()) is None:
-                await asyncio.sleep(DEPRECATION_ROUTER_WAIT_SECONDS)
+            if (llm_router := get_llm_router()) is None or not self._deprecation_alerts_enabled():
+                await asyncio.sleep(DEPRECATION_IDLE_POLL_SECONDS)
                 continue
             try:
                 await self.send_model_deprecation_alert(llm_router=llm_router)

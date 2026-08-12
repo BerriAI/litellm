@@ -15,7 +15,7 @@ from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.proxy._types import AlertType
 from litellm.types.proxy.model_deprecation import (
     DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
-    DEPRECATION_ROUTER_WAIT_SECONDS,
+    DEPRECATION_IDLE_POLL_SECONDS,
 )
 
 
@@ -110,7 +110,7 @@ async def test_should_dispatch_high_severity_when_deprecated(monkeypatch):
 async def test_should_alert_once_the_alert_type_and_router_arrive_after_startup(
     monkeypatch,
 ):
-    """The daily loop starts before config reload, so it must re-read both each pass"""
+    """The loop starts before config reload, so a disabled pass must not cost a day of alerts"""
     monkeypatch.setattr(
         litellm,
         "model_cost",
@@ -127,7 +127,10 @@ async def test_should_alert_once_the_alert_type_and_router_arrive_after_startup(
         ]
     )
 
-    async def stop_after_second_pass(_seconds):
+    slept: list[float] = []
+
+    async def stop_after_second_pass(seconds):
+        slept.append(seconds)
         if alerting.alert_types == [AlertType.llm_exceptions]:
             alerting.update_values(
                 alert_types=[AlertType.model_deprecation_warnings]
@@ -145,6 +148,10 @@ async def test_should_alert_once_the_alert_type_and_router_arrive_after_startup(
     ):
         await alerting._run_scheduled_deprecation_check(get_llm_router=lambda: router)
 
+    assert slept == [
+        DEPRECATION_IDLE_POLL_SECONDS,
+        DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
+    ]
     mock_send_alert.assert_awaited_once()
     assert "dead-alias" in mock_send_alert.await_args.kwargs["message"]
 
@@ -190,7 +197,7 @@ async def test_should_wait_for_the_router_instead_of_sleeping_a_full_day(monkeyp
             get_llm_router=lambda: next(routers)
         )
 
-    assert slept == [DEPRECATION_ROUTER_WAIT_SECONDS] * router_absent_passes + [
+    assert slept == [DEPRECATION_IDLE_POLL_SECONDS] * router_absent_passes + [
         DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS
     ]
     mock_send_alert.assert_awaited_once()
