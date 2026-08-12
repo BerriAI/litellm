@@ -3331,9 +3331,6 @@
   "src/components/search_tools/SearchToolSelector.tsx": {
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/settings.test.tsx": {
@@ -3501,11 +3498,6 @@
   "src/components/team/LoggingSettings.tsx": {
     "no-restricted-imports": {
       "count": 2
-    }
-  },
-  "src/components/team/MyUserTab.tsx": {
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/team/TeamInfo.tsx": {
