@@ -132,11 +132,12 @@ describe("TeamSSOSettings", () => {
 
   // --- Loading & Error States ---
 
-  it("should hide settings while fetching", () => {
+  it("should show an accessible loading state while fetching settings", () => {
     mockGetDefaultTeamSettings.mockImplementation(() => new Promise(() => {}));
 
-    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+    const { container } = renderWithProviders(<TeamSSOSettings {...defaultProps} />);
 
+    expect(container.querySelector('[aria-busy="true"]')).toBeInTheDocument();
     expect(screen.queryByText("Default Team Settings")).not.toBeInTheDocument();
   });
 
@@ -349,8 +350,14 @@ describe("TeamSSOSettings", () => {
     });
   });
 
-  it("should keep selected permissions visible in edit mode", async () => {
+  it("should let users add a permission and persist it", async () => {
     mockGetDefaultTeamSettings.mockResolvedValue(mockSettingsResponse);
+    mockUpdateDefaultTeamSettings.mockResolvedValue({
+      settings: {
+        ...mockSettingsResponse.values,
+        team_member_permissions: ["/key/generate", "/key/update", "/key/delete"],
+      },
+    });
 
     renderWithProviders(<TeamSSOSettings {...defaultProps} />);
 
@@ -359,9 +366,24 @@ describe("TeamSSOSettings", () => {
     });
 
     await userEvent.click(screen.getByRole("button", { name: /Edit Settings/i }));
+    const permissionComboboxes = screen.getAllByRole("combobox");
+    const permissionCombobox = permissionComboboxes[permissionComboboxes.length - 1];
+    expect(permissionCombobox).toBeDefined();
+    await userEvent.click(permissionCombobox!);
+    const deletePermissionOptions = await screen.findAllByText("/key/delete");
+    await userEvent.click(deletePermissionOptions[deletePermissionOptions.length - 1]);
+    await userEvent.keyboard("{Escape}");
 
-    expect(screen.getByText("/key/generate")).toBeInTheDocument();
-    expect(screen.getByText("/key/update")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Save Changes/i }));
+
+    await waitFor(() => {
+      expect(mockUpdateDefaultTeamSettings).toHaveBeenCalledWith("test-token", {
+        ...mockSettingsResponse.values,
+        organization_id: null,
+        team_member_permissions: ["/key/generate", "/key/update", "/key/delete"],
+      });
+    });
+    expect(screen.getByText("/key/delete")).toBeInTheDocument();
   });
 
   // --- Save ---
