@@ -7611,6 +7611,13 @@ class TestTaggedAutoRouterOnSharedModelName:
     def test_deployment_without_litellm_params_mapping_is_not_a_marker(self):
         assert litellm.Router._is_strategy_marker_deployment({"model_name": "gpt4o"}) is False
 
+    def test_model_name_has_plain_deployments_reflects_the_pool(self):
+        mixed = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=True)
+        marker_only = self._router(marker_tags=["route"], include_plain_sibling=False, enable_tag_filtering=True)
+
+        assert mixed._model_name_has_plain_deployments("gpt4o") is True
+        assert marker_only._model_name_has_plain_deployments("gpt4o") is False
+
 
 class TestGetAllowedFailsFromPolicy:
     def _make_router(self, **policy_kwargs) -> litellm.Router:
