@@ -10699,6 +10699,15 @@ class Router:
 
         return None
 
+    @staticmethod
+    def _is_strategy_marker_deployment(deployment: Mapping[str, object]) -> bool:
+        """True when the deployment is a strategy-router pseudo-model (`auto_router/` prefixed)."""
+        litellm_params: Final = deployment.get("litellm_params")
+        if not isinstance(litellm_params, Mapping):
+            return False
+        deployment_model: Final = litellm_params.get("model")
+        return isinstance(deployment_model, str) and classify_strategy_router_model(deployment_model) is not None
+
     def _common_checks_available_deployment(
         self,
         model: str,
@@ -10826,7 +10835,12 @@ class Router:
                 model
             ]  # update the model to the actual value if an alias has been passed in
 
-        return model, healthy_deployments
+        marker_flags: Final = tuple(self._is_strategy_marker_deployment(d) for d in healthy_deployments)
+        if all(marker_flags) or not any(marker_flags):
+            return model, healthy_deployments
+        return model, [  # mutable-ok: matches this function's list contract expected by downstream filters
+            d for d, is_marker in zip(healthy_deployments, marker_flags, strict=True) if not is_marker
+        ]
 
     def _filter_deployments_by_model_access_groups(
         self,
@@ -11342,11 +11356,7 @@ class Router:
     def _model_name_has_plain_deployments(self, model: str) -> bool:
         """True when `model` also names regular (non strategy-router) deployments in the model_list."""
         indices: Final = self.model_name_to_deployment_indices.get(model) or ()
-        return any(
-            classify_strategy_router_model(lp.get("model") or "") is None
-            for idx in indices
-            if (lp := self.model_list[idx].get("litellm_params"))
-        )
+        return any(not self._is_strategy_marker_deployment(self.model_list[idx]) for idx in indices)
 
     def _select_pre_routing_strategy(self, model: str, request_kwargs: dict) -> "PreRoutingStrategy | None":
         """
