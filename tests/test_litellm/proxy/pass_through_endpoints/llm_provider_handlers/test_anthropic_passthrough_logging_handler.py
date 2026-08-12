@@ -2309,3 +2309,116 @@ class TestAnthropicResponseCostRecordedOnModelCallDetails:
             logging_obj.model_call_details["response_cost"] == kwargs["response_cost"]
         )
         assert logging_obj.model_call_details["response_cost"] > 0
+
+
+class TestAnthropicPassthroughFastMode:
+    """Anthropic charges a provider-specific multiplier for ``speed=fast``, and the
+    multiplier is applied off ``usage.speed``. The pass-through handler only sees the
+    speed in the request body, so it has to thread it into every usage-building path or
+    fast-mode pass-through spend is under-reported."""
+
+    MODEL = "claude-opus-4-8"
+    STREAM_CHUNKS = [
+        'event: message_start',
+        'data: {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant",'
+        ' "model": "claude-opus-4-8", "content": [], "stop_reason": null,'
+        ' "usage": {"input_tokens": 1000, "cache_read_input_tokens": 200, "output_tokens": 0}}}',
+        'event: content_block_start',
+        'data: {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}',
+        'event: content_block_delta',
+        'data: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ok"}}',
+        'event: content_block_stop',
+        'data: {"type": "content_block_stop", "index": 0}',
+        'event: message_delta',
+        'data: {"type": "message_delta", "delta": {"stop_reason": "end_turn"},'
+        ' "usage": {"input_tokens": 1000, "cache_read_input_tokens": 200, "output_tokens": 100}}',
+        'event: message_stop',
+        'data: {"type": "message_stop"}',
+    ]
+
+    def _logging_obj(self) -> LiteLLMLoggingObj:
+        return LiteLLMLoggingObj(
+            model=self.MODEL,
+            messages=[],
+            stream=True,
+            call_type="pass_through_endpoint",
+            start_time=datetime.now(),
+            litellm_call_id="fast-mode",
+            function_id="fast-mode",
+        )
+
+    def _cost(self, response) -> float:
+        import litellm
+
+        return litellm.completion_cost(completion_response=response, model=f"anthropic/{self.MODEL}")
+
+    def _expected_fast_cost(self, standard_cost: float) -> float:
+        import litellm
+
+        model_info = litellm.get_model_info(model=self.MODEL, custom_llm_provider="anthropic")
+        cache_read_cost = 200 * (model_info.get("cache_read_input_token_cost") or 0.0)
+        return (standard_cost - cache_read_cost) * 2.0 + cache_read_cost
+
+    def test_non_streaming_applies_fast_multiplier(self):
+        import httpx
+
+        response_body = {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": self.MODEL,
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1000, "cache_read_input_tokens": 200, "output_tokens": 100},
+        }
+
+        def _handle(request_body):
+            logging_obj = self._logging_obj()
+            logging_obj.model_call_details["stream"] = False
+            return AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
+                httpx_response=httpx.Response(status_code=200, json=response_body),
+                response_body=response_body,
+                logging_obj=logging_obj,
+                url_route="https://api.anthropic.com/v1/messages",
+                result="",
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+                cache_hit=False,
+                request_body=request_body,
+            )
+
+        fast = _handle({"model": self.MODEL, "speed": "fast"})
+        standard = _handle({"model": self.MODEL})
+
+        assert fast["result"].usage.speed == "fast"
+        assert self._cost(fast["result"]) == pytest.approx(self._expected_fast_cost(self._cost(standard["result"])))
+
+    def test_streaming_reconstruction_applies_fast_multiplier(self):
+        fast = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+            all_chunks=self.STREAM_CHUNKS,
+            litellm_logging_obj=self._logging_obj(),
+            model=self.MODEL,
+            speed="fast",
+        )
+        standard = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+            all_chunks=self.STREAM_CHUNKS,
+            litellm_logging_obj=self._logging_obj(),
+            model=self.MODEL,
+        )
+
+        assert fast.usage.speed == "fast"
+        assert self._cost(fast) == pytest.approx(self._expected_fast_cost(self._cost(standard)))
+
+    def test_usage_only_fallback_applies_fast_multiplier(self):
+        fast = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            all_chunks=self.STREAM_CHUNKS,
+            model=self.MODEL,
+            speed="fast",
+        )
+        standard = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            all_chunks=self.STREAM_CHUNKS,
+            model=self.MODEL,
+        )
+
+        assert fast.usage.speed == "fast"
+        assert self._cost(fast) == pytest.approx(self._expected_fast_cost(self._cost(standard)))
