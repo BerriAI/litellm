@@ -1099,7 +1099,16 @@ class ResponseAPILoggingUtils:
         extra_usage_fields: Final = {
             key: value
             for key, value in (response_api_usage.model_extra or {}).items()
-            if key not in ("input_token_details", "output_token_details")
+            if key
+            not in (
+                "input_token_details",
+                "output_token_details",
+                "prompt_tokens",
+                "completion_tokens",
+                "total_tokens",
+                "prompt_tokens_details",
+                "completion_tokens_details",
+            )
         }
         chat_usage: Final = Usage(
             prompt_tokens=prompt_tokens,
