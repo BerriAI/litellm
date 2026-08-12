@@ -3194,10 +3194,12 @@ def test_get_file_content_model_routed_attaches_trusted_model_credentials(monkey
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
 
-    captured_kwargs: dict = {}
+    # One frozen snapshot per call rather than one dict merged across calls, so a second
+    # invocation is visible instead of silently overwriting the first.
+    calls: list[MappingProxyType] = []
 
     async def _mock_router_afile_content(**kwargs):
-        captured_kwargs.update(kwargs)
+        calls.append(MappingProxyType(dict(kwargs)))
         return HttpxBinaryResponseContent(
             response=httpx.Response(
                 status_code=200,
@@ -3231,7 +3233,8 @@ def test_get_file_content_model_routed_attaches_trusted_model_credentials(monkey
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
     assert response.status_code == 200, response.text
-    snapshot = captured_kwargs.get("_litellm_internal_model_credentials")
+    assert len(calls) == 1, f"expected exactly one routed retrieval, got {len(calls)}"
+    snapshot = calls[0].get("_litellm_internal_model_credentials")
     assert snapshot is not None, "model-routed branch must attach the trusted credential snapshot"
     assert isinstance(
         snapshot, MappingProxyType
