@@ -5,6 +5,7 @@ Tests for the Content Filter Guardrail
 import json
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -231,6 +232,27 @@ class TestContentFilterGuardrail:
         assert len(result) == 1
         assert "[EMAIL_REDACTED]" in result[0]
         assert "test@example.com" not in result[0]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_syncs_information_to_logging_obj(self):
+        guardrail = ContentFilterGuardrail(guardrail_name="test-logging-sync")
+        request_data = {"metadata": {}}
+        logging_obj = SimpleNamespace(
+            litellm_params={"metadata": {}},
+            model_call_details={},
+        )
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["A normal request"]},
+            request_data=request_data,
+            input_type="request",
+            logging_obj=logging_obj,
+        )
+
+        entries = logging_obj.litellm_params["metadata"]["standard_logging_guardrail_information"]
+        assert len(entries) == 1
+        assert entries[0]["guardrail_name"] == "test-logging-sync"
+        assert entries[0]["guardrail_status"] == "success"
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_blocked_word_mask(self):

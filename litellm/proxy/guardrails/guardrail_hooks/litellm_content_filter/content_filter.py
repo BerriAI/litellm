@@ -20,7 +20,7 @@ from fastapi import HTTPException
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import CustomGuardrail, log_guardrail_information
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import (
     CallTypes,
@@ -1864,6 +1864,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             if filtered_arguments != arguments:
                 self._set_tool_call_arguments(tool_call, filtered_arguments)
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
