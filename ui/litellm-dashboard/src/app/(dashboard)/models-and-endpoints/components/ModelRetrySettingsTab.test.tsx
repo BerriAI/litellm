@@ -62,6 +62,7 @@ describe("ModelRetrySettingsTab", () => {
       expect(input).toHaveAttribute("type", "number");
       expect(input).toHaveAttribute("min", "0");
       expect(input).toHaveAttribute("step", "1");
+      expect(input).toHaveAccessibleName(/retry count$/);
     });
   });
 

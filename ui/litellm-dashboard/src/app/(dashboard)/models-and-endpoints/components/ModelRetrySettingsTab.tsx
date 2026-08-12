@@ -134,6 +134,7 @@ const ModelRetrySettingsTab = ({
                   <Input
                     className="w-28"
                     type="number"
+                    aria-label={`${exceptionType} retry count`}
                     min={0}
                     step={1}
                     value={isGlobalScope ? inheritedValue : hasOverride ? override : ""}

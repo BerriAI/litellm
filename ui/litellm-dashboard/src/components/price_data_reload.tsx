@@ -401,6 +401,7 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
               <InputGroup>
                 <InputGroupInput
                   type="number"
+                  aria-label="Reload interval in hours"
                   min={1}
                   max={168}
                   value={hours}

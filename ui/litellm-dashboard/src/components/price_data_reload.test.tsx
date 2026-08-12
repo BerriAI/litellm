@@ -76,7 +76,7 @@ describe("PriceDataReload", () => {
 
     await user.click(screen.getByRole("button", { name: /Set Up Periodic Reload/ }));
     expect(screen.getByRole("dialog", { name: "Set Up Periodic Reload" })).toBeInTheDocument();
-    const hours = screen.getByRole("spinbutton");
+    const hours = screen.getByRole("spinbutton", { name: "Reload interval in hours" });
     await user.clear(hours);
     await user.type(hours, "12");
     await user.click(screen.getByRole("button", { name: "Schedule" }));
