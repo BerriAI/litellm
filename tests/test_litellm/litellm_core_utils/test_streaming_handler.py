@@ -6,7 +6,7 @@ import pytest
 
 import asyncio
 import traceback
-from typing import Optional
+from typing import Final, Optional
 
 import litellm
 from litellm import verbose_logger
@@ -4771,3 +4771,102 @@ class TestStableStreamingResponseId:
         )
         wrapper.response_id = "chatcmpl-from-provider"
         assert wrapper.model_response_creator().id == "chatcmpl-from-provider"
+
+
+def _final_chunk_with_dict_usage(choices) -> ModelResponseStream:
+    """A stream chunk whose ``usage`` is a plain dict.
+
+    ``ModelResponseStream.__init__`` coerces a dict ``usage`` kwarg into
+    ``litellm.Usage``, so the dict is attached after construction — the same
+    shape a custom ``streaming_decoder`` (or any third-party iterator that
+    bypasses litellm chunk construction) delivers to ``chunk_creator``.
+    """
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-dict-usage-test",
+        created=1754900000,
+        model="gpt-4o",
+        object="chat.completion.chunk",
+        choices=choices,
+    )
+    chunk.usage = {  # mutable-ok: wire-shaped usage payload under test
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+        "total_tokens": 110,
+        "prompt_tokens_details": {"cached_tokens": 80},  # mutable-ok: wire payload
+        "completion_tokens_details": {"reasoning_tokens": 5},  # mutable-ok: wire payload
+        "cache_creation_input_tokens": 42,
+    }
+    return chunk
+
+
+def test_dispatch_provider_chunk_dict_usage_preserves_token_details(
+    logging_obj: Logging,
+):
+    """The openai else-branch of ``_dispatch_provider_chunk`` handles three
+    usage shapes: ``Usage`` (passed through), ``BaseModel``
+    (``Usage(**model_dump())``), and plain ``dict``. The dict arm used to
+    rebuild ``litellm.Usage`` from only prompt/completion/total tokens,
+    silently dropping ``prompt_tokens_details`` (cached_tokens),
+    ``completion_tokens_details`` (reasoning_tokens), and cache token counts
+    that both sibling arms preserve.
+    """
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-4o",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        stream_options={"include_usage": True},  # mutable-ok: constructor payload
+    )
+    chunk: Final = _final_chunk_with_dict_usage(
+        choices=[
+            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=None))
+        ]  # mutable-ok: chunk payload
+    )
+    model_response: Final = wrapper.model_response_creator()
+    wrapper._dispatch_provider_chunk(
+        chunk=chunk,
+        model_response=model_response,
+        completion_obj={"content": ""},  # mutable-ok: dispatch scratch dict
+    )
+
+    usage: Final = model_response.usage
+    assert isinstance(usage, Usage)
+    assert usage.prompt_tokens == 100
+    assert usage.completion_tokens == 10
+    assert usage.total_tokens == 110
+    assert usage.prompt_tokens_details is not None, (
+        "dict-usage arm dropped prompt_tokens_details (its Usage/BaseModel sibling arms preserve it)"
+    )
+    assert usage.prompt_tokens_details.cached_tokens == 80
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 5
+    assert getattr(usage, "cache_creation_input_tokens", None) == 42
+
+
+def test_chunk_creator_usage_only_chunk_with_dict_usage_keeps_details(
+    logging_obj: Logging,
+):
+    """End-to-end through ``chunk_creator``: a usage-only final chunk (empty
+    ``choices``, ``stream_options.include_usage`` set) takes the early-return
+    path, so whatever the dict-usage arm wrote is exactly what the consumer
+    receives — there is no later aggregation to repair it.
+    """
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-4o",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        stream_options={"include_usage": True},  # mutable-ok: constructor payload
+    )
+    chunk: Final = _final_chunk_with_dict_usage(choices=[])  # mutable-ok: empty choices list
+    result: Final = wrapper.chunk_creator(chunk=chunk)
+
+    assert result is not None
+    usage: Final = result.usage
+    assert isinstance(usage, Usage)
+    assert usage.prompt_tokens_details is not None, (
+        "usage-only early return delivered a Usage stripped of prompt_tokens_details to the stream consumer"
+    )
+    assert usage.prompt_tokens_details.cached_tokens == 80
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 5
