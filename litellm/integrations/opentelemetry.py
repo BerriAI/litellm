@@ -246,6 +246,14 @@ def _shutdown_tracer_provider(provider: "_SDKTracerProvider") -> None:
         verbose_logger.debug("OpenTelemetry: error shutting down dropped tracer provider: %s", e)
 
 
+@dataclass(frozen=True, slots=True)
+class _CachedTracerProvider:
+    """A cached credential-scoped provider plus whether it may be shut down when dropped."""
+
+    provider: "_SDKTracerProvider"
+    owns_exporter: bool
+
+
 def _provider_owns_exporter(exporter: "str | _SpanExporter") -> bool:
     """Whether a provider built for ``exporter`` may be shut down when it is dropped.
 
@@ -379,7 +387,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         self.OTEL_EXPORTER = self.config.exporter
         self.OTEL_ENDPOINT = self.config.endpoint
         self.OTEL_HEADERS = self.config.headers
-        self._tracer_provider_cache: OrderedDict[str, _SDKTracerProvider] = OrderedDict()
+        self._tracer_provider_cache: OrderedDict[str, _CachedTracerProvider] = OrderedDict()
         self._tracer_provider_cache_lock: Final = threading.Lock()
         self._max_dynamic_tracer_providers: Final = max(1, max_dynamic_tracer_providers)
         self._init_tracing(tracer_provider)
@@ -1062,9 +1070,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         return self.construct_dynamic_otel_config(standard_callback_dynamic_params=standard_callback_dynamic_params)
 
     def _insert_or_drop(
-        self, cache_key: str, built: "_SDKTracerProvider"
-    ) -> "tuple[_SDKTracerProvider, _SDKTracerProvider | None]":
-        """Cache ``built`` under ``cache_key``, returning the tracer to use and what to drop.
+        self, cache_key: str, built: "_CachedTracerProvider"
+    ) -> "tuple[_CachedTracerProvider, _CachedTracerProvider | None]":
+        """Cache ``built`` under ``cache_key``, returning the entry to use and what to drop.
 
         Caller holds ``_tracer_provider_cache_lock``. The drop is either the loser of a
         concurrent build for this key or the LRU victim its insertion pushed out.
@@ -1083,7 +1091,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         self,
         cache_key: str,
         build: Callable[[], "_SDKTracerProvider"],
-        shutdown_dropped: bool,
+        owns_exporter: bool,
     ) -> "_Tracer":
         """Return the tracer for ``cache_key``, building and caching a provider on miss.
 
@@ -1091,25 +1099,30 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         that only stops on ``shutdown()``, so the cache is a bounded LRU and whatever it
         drops is shut down. Without both, a proxy serving key-scoped credentials accumulates
         one live thread per credential set for the life of the process.
+
+        ``owns_exporter`` describes the provider being built, and is cached with it, because
+        the two dynamic entry points share this cache and can disagree: whether the LRU
+        victim may be shut down is a property of the victim, never of the request that
+        happened to evict it.
         """
         with self._tracer_provider_cache_lock:
             cached: Final = self._tracer_provider_cache.get(cache_key)
             if cached is not None:
                 self._tracer_provider_cache.move_to_end(cache_key)
-                return cached.get_tracer(LITELLM_TRACER_NAME)
+                return cached.provider.get_tracer(LITELLM_TRACER_NAME)
 
         # Built outside the lock: constructing an exporter can block on DNS/TLS setup,
         # which would otherwise stall every other tenant's spans.
-        built: Final = build()
+        built: Final = _CachedTracerProvider(provider=build(), owns_exporter=owns_exporter)
 
         with self._tracer_provider_cache_lock:
             winner, dropped = self._insert_or_drop(cache_key, built)
 
-        if dropped is not None and shutdown_dropped:
+        if dropped is not None and dropped.owns_exporter:
             # Off the caller's thread: shutdown joins the exporter worker, which flushes
             # with the OTLP retry budget and would otherwise stall the event loop.
-            _PROVIDER_SHUTDOWN_EXECUTOR.submit(_shutdown_tracer_provider, dropped)
-        return winner.get_tracer(LITELLM_TRACER_NAME)
+            _PROVIDER_SHUTDOWN_EXECUTOR.submit(_shutdown_tracer_provider, dropped.provider)
+        return winner.provider.get_tracer(LITELLM_TRACER_NAME)
 
     def _get_tracer_with_dynamic_config(self, dynamic_config: OpenTelemetryConfig) -> "_Tracer":
         """Create (or reuse) a tracer whose exporter target comes from a per-request config."""
@@ -1131,7 +1144,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         def _build() -> "_SDKTracerProvider":
             provider: Final = TracerProvider(resource=self._get_litellm_resource(self.config))
-            provider.add_span_processor(self._get_span_processor(dynamic_headers=dict(dynamic_headers)))
+            provider.add_span_processor(self._get_span_processor(dynamic_headers=dynamic_headers))
             return provider
 
         cache_key: Final = str(sorted(dynamic_headers.items()))
@@ -2909,7 +2922,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     def _get_span_processor(
         self,
-        dynamic_headers: dict | None = None,
+        dynamic_headers: Mapping[str, str] | None = None,
         config_override: OpenTelemetryConfig | None = None,
     ):
         from opentelemetry.sdk.trace.export import (
@@ -3221,7 +3234,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     @staticmethod
     def _get_headers_dictionary(
-        headers: str | dict | None,
+        headers: "str | Mapping[str, str] | None",
     ) -> dict[str, str]:
         """
         Convert a string or dictionary of headers into a dictionary of headers.

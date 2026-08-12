@@ -6030,8 +6030,8 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
         return logger
 
     def _drain(self, logger):
-        for provider in list(logger._tracer_provider_cache.values()):
-            provider.shutdown()
+        for entry in list(logger._tracer_provider_cache.values()):
+            entry.provider.shutdown()
         logger._tracer_provider_cache.clear()
 
     def _live_exporter_threads(self):
@@ -6073,7 +6073,7 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
 
             self.assertNotIn(evicted, logger._tracer_provider_cache.values())
             self._wait_for_call(mock_shutdown)
-            mock_shutdown.assert_called_once_with(evicted)
+            mock_shutdown.assert_called_once_with(evicted.provider)
 
     def _wait_for_call(self, mock_fn, timeout=10.0):
         """The shutdown runs on a worker thread, so give it a moment to land."""
@@ -6116,3 +6116,45 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
         self.assertEqual(
             [span.name for span in shared.get_finished_spans()], ["before", "after"]
         )
+
+    def test_mixed_ownership_cache_shuts_down_only_the_victims_that_own_their_exporter(self):
+        """Both dynamic entry points share one cache, so it can hold providers of mixed
+        ownership. Whether an evicted provider may be shut down is a property of that
+        provider, not of the request that evicted it."""
+        shared = InMemorySpanExporter()
+        logger = self._logger(cap=1, exporter=shared)
+        with logger.tracer.start_as_current_span("before"):
+            pass
+
+        # Cached by the headers path, so its processor wraps the SHARED exporter.
+        logger._get_tracer_with_dynamic_headers({"authorization": "Basic shared-owner"})
+        # Evicted by the config path, which builds its OWN exporter from a named kind.
+        logger._get_tracer_with_dynamic_config(
+            OpenTelemetryConfig(exporter="console", skip_set_global=True)
+        )
+
+        with logger.tracer.start_as_current_span("after"):
+            pass
+
+        self.assertFalse(shared._stopped)
+        self.assertEqual(
+            [span.name for span in shared.get_finished_spans()], ["before", "after"]
+        )
+
+    def test_mixed_ownership_cache_still_reclaims_a_thread_owning_victim(self):
+        """The other direction of the same defect: a victim that owns a real exporter
+        thread must still be shut down even when the evicting request does not."""
+        shared = InMemorySpanExporter()
+        logger = self._logger(cap=1, exporter=shared)
+        before = len(self._live_exporter_threads())
+
+        # Cached by the config path with a named kind, so it owns a BatchSpanProcessor thread.
+        logger._get_tracer_with_dynamic_config(
+            OpenTelemetryConfig(exporter="console", skip_set_global=True)
+        )
+        self.assertEqual(len(self._live_exporter_threads()) - before, 1)
+
+        # Evicted by the headers path, whose own exporter is the shared instance.
+        logger._get_tracer_with_dynamic_headers({"authorization": "Basic shared-owner"})
+
+        self.assertEqual(self._wait_for_exporter_threads(before) - before, 0)
