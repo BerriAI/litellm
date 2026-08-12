@@ -3299,7 +3299,7 @@ def get_optional_params_transcription(
         openai_params=OPENAI_TRANSCRIPTION_PARAMS,
         additional_drop_params=kwargs.get("additional_drop_params", None),
     )
-    extra_body = optional_params.get("extra_body")
+    extra_body: Final = optional_params.get("extra_body")
     if isinstance(extra_body, dict) and not extra_body:
         optional_params.pop("extra_body")
 

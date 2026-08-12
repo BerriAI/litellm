@@ -246,8 +246,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_creation_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost: float | None
-    cache_read_input_audio_token_cost: float | None
-    cache_read_input_image_token_cost: float | None
+    cache_read_input_audio_token_cost: ReadOnly[float | None]
+    cache_read_input_image_token_cost: ReadOnly[float | None]
     cache_read_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_read_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
@@ -2623,7 +2623,7 @@ class TranscriptionResponse(OpenAIObject):
     _hidden_params: dict = {}
     _response_headers: dict | None = None
 
-    def __init__(self, text=None, usage=None, languages=None, **kwargs) -> None:  # noqa: ANN003
+    def __init__(self, text=None, usage=None, languages=None, **kwargs) -> None:  # noqa: ANN003  # OpenAI-compatible response accepts provider extension fields
         super().__init__(text=text, usage=usage, languages=languages, **kwargs)
 
     def __contains__(self, key) -> bool:

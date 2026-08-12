@@ -148,13 +148,13 @@ def _get_realtime_http_extra_headers(
     resolved_api_key: str,
     extra_headers: Mapping[str, object] | None,
 ) -> Mapping[str, object] | None:
-    resolved_headers = {  # mutable-ok: Azure authentication may extend caller-supplied headers
+    resolved_headers: Final = {  # mutable-ok: Azure authentication may extend caller-supplied headers
         **(extra_headers or {})
     }
     if custom_llm_provider == "azure" and not resolved_api_key:
         from litellm.llms.azure.common_utils import get_azure_ad_token
 
-        azure_ad_token = get_azure_ad_token(litellm_params)
+        azure_ad_token: Final = get_azure_ad_token(litellm_params)
         if azure_ad_token:
             resolved_headers["Authorization"] = f"Bearer {azure_ad_token}"
     return resolved_headers or None
@@ -188,7 +188,7 @@ async def acreate_realtime_client_secret(
         and req.model.split("/", 1)[0] in LlmProviders._member_map_.values()
         else None
     )
-    model_name: Final = (
+    requested_model_name: Final = (
         provider_qualified_model
         or transcription_model
         or (req.session.model if req.session is not None else None)
@@ -199,7 +199,7 @@ async def acreate_realtime_client_secret(
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
     model_name, custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
-        model=model_name,
+        model=requested_model_name,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
@@ -209,7 +209,7 @@ async def acreate_realtime_client_secret(
         dynamic_api_key=dynamic_api_key,
         litellm_params=litellm_params,
     )
-    resolved_extra_headers = _get_realtime_http_extra_headers(
+    resolved_extra_headers: Final = _get_realtime_http_extra_headers(
         custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
         resolved_api_key=resolved_api_key,
@@ -251,28 +251,28 @@ async def acreate_realtime_translation_client_secret(
     session: Mapping[str, Any] | None = None,
     expires_after: Mapping[str, Any] | None = None,
     timeout: float | None = None,
-    **kwargs,  # noqa: ANN003
+    **kwargs,  # noqa: ANN003  # public client wrapper forwards provider-specific options
 ):
-    model_name = model or (session or {}).get("model") or "gpt-realtime-translate"
-    session_config = RealtimeSessionConfig(
+    requested_model_name: Final = model or (session or {}).get("model") or "gpt-realtime-translate"
+    session_config: Final = RealtimeSessionConfig(
         **{  # mutable-ok: Pydantic validates this request-scoped translation session payload
             **(session or {}),
             "type": "translation",
-            "model": model_name,
+            "model": requested_model_name,
         }
     )
-    req = RealtimeClientSecretRequest(
-        model=model_name,
+    req: Final = RealtimeClientSecretRequest(
+        model=requested_model_name,
         session=session_config,
         expires_after=RealtimeExpiresAfter(**expires_after) if expires_after else None,
     )
-    litellm_logging_obj = kwargs.get("litellm_logging_obj")
+    litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
     if not isinstance(litellm_logging_obj, LiteLLMLogging):
         raise TypeError("litellm_logging_obj must be a LiteLLM Logging instance")
-    litellm_params = GenericLiteLLMParams(**kwargs)
+    litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
     model_name, custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
-        model=model_name,
+        model=requested_model_name,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
@@ -282,7 +282,7 @@ async def acreate_realtime_translation_client_secret(
         dynamic_api_key=dynamic_api_key,
         litellm_params=litellm_params,
     )
-    resolved_extra_headers = _get_realtime_http_extra_headers(
+    resolved_extra_headers: Final = _get_realtime_http_extra_headers(
         custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
         resolved_api_key=resolved_api_key,
@@ -300,7 +300,7 @@ async def acreate_realtime_translation_client_secret(
         },
         custom_llm_provider=custom_llm_provider,
     )
-    request_data = req.model_dump(
+    request_data: Final = req.model_dump(
         exclude_none=True,
         exclude={"model"},  # mutable-ok: Pydantic requires a mutable field-exclusion set
     )
@@ -365,7 +365,7 @@ async def acreate_realtime_transcription_session(
         dynamic_api_key=dynamic_api_key,
         litellm_params=litellm_params,
     )
-    resolved_extra_headers = _get_realtime_http_extra_headers(
+    resolved_extra_headers: Final = _get_realtime_http_extra_headers(
         custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
         resolved_api_key=resolved_api_key,
@@ -460,16 +460,16 @@ async def arealtime_translation_calls(
     model: str | None = None,
     session: Mapping[str, Any] | None = None,
     timeout: float | None = None,
-    **kwargs,  # noqa: ANN003
+    **kwargs,  # noqa: ANN003  # public client wrapper forwards provider-specific options
 ):
-    model_name = model or "gpt-realtime-translate"
-    litellm_logging_obj = kwargs.get("litellm_logging_obj")
+    requested_model_name: Final = model or "gpt-realtime-translate"
+    litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
     if not isinstance(litellm_logging_obj, LiteLLMLogging):
         raise TypeError("litellm_logging_obj must be a LiteLLM Logging instance")
-    litellm_params = GenericLiteLLMParams(**kwargs)
+    litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
     model_name, custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
-        model=model_name,
+        model=requested_model_name,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
@@ -479,7 +479,7 @@ async def arealtime_translation_calls(
         dynamic_api_key=dynamic_api_key,
         litellm_params=litellm_params,
     )
-    session_config = _with_resolved_session_model(
+    session_config: Final = _with_resolved_session_model(
         {  # mutable-ok: provider routing requires an independently mutable session payload
             **(session or {}),
             "type": "translation",

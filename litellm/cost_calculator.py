@@ -960,15 +960,19 @@ def _get_usage_object(
 
 
 def _get_transcription_usage_duration(completion_response: object) -> float | None:
-    usage_object = (
+    usage_object: Final = (
         completion_response.get("usage")
         if isinstance(completion_response, dict)
         else getattr(completion_response, "usage", None)
     )
-    usage_type = usage_object.get("type") if isinstance(usage_object, dict) else getattr(usage_object, "type", None)
+    usage_type: Final = (
+        usage_object.get("type") if isinstance(usage_object, dict) else getattr(usage_object, "type", None)
+    )
     if usage_type != "duration":
         return None
-    seconds = usage_object.get("seconds") if isinstance(usage_object, dict) else getattr(usage_object, "seconds", None)
+    seconds: Final = (
+        usage_object.get("seconds") if isinstance(usage_object, dict) else getattr(usage_object, "seconds", None)
+    )
     if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or seconds < 0:
         return None
     return float(seconds)
@@ -2546,7 +2550,7 @@ def handle_realtime_stream_cost_calculation(
     )
     total_cost: Final = input_cost_per_token + output_cost_per_token + transcription_cost + translation_cost
 
-    additional_costs = {  # mutable-ok: logging stores a mutable per-request cost breakdown
+    additional_costs: Final = {  # mutable-ok: logging stores a mutable per-request cost breakdown
         key: value
         for key, value in (
             ("transcription_cost", transcription_cost),
@@ -2583,13 +2587,13 @@ def handle_realtime_translation_cost_calculation(
     if output_seconds <= 0:
         return 0.0
     try:
-        model_info = litellm.get_model_info(
+        model_info: Final = litellm.get_model_info(
             model=litellm_model_name,
             custom_llm_provider=custom_llm_provider,
         )
     except Exception:  # noqa: BLE001  # unknown model metadata should yield zero translation cost
         return 0.0
-    output_cost_per_second = model_info.get("output_cost_per_second")
+    output_cost_per_second: Final = model_info.get("output_cost_per_second")
     if not isinstance(output_cost_per_second, (int, float)):
         return 0.0
     return output_seconds * output_cost_per_second

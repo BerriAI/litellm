@@ -58,7 +58,7 @@ class OpenAIGPTTranscribeAudioTranscriptionConfig(OpenAIGPTAudioTranscriptionCon
         optional_params: dict,  # mutable-ok: base transformation interface supplies a mutable request payload
         litellm_params: dict,  # mutable-ok: base transformation interface supplies mutable provider parameters
     ) -> AudioTranscriptionRequestData:
-        data = {  # mutable-ok: OpenAI SDK consumes this multipart request mapping
+        data: Final = {  # mutable-ok: OpenAI SDK consumes this multipart request mapping
             "model": model,
             "file": audio_file,
             "response_format": "json",

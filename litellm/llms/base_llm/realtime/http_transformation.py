@@ -66,7 +66,7 @@ class BaseRealtimeHTTPConfig(ABC):
     def get_translation_client_secret_url(
         self, api_base: str | None, model: str, api_version: str | None = None
     ) -> str:
-        base = (api_base or "").rstrip("/")
+        base: Final = (api_base or "").rstrip("/")
         return f"{base}/v1/realtime/translations/client_secrets"
 
     @abstractmethod
@@ -93,7 +93,7 @@ class BaseRealtimeHTTPConfig(ABC):
         return f"{base}/v1/realtime/calls"
 
     def get_translation_calls_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
-        base = (api_base or "").rstrip("/")
+        base: Final = (api_base or "").rstrip("/")
         return f"{base}/v1/realtime/translations/calls"
 
     def get_realtime_calls_headers(self, ephemeral_key: str) -> dict:

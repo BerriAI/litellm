@@ -7617,7 +7617,7 @@ async def amoderation(
 
 
 @client
-async def atranscription(*args, **kwargs) -> TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]:  # noqa: ANN002, ANN003
+async def atranscription(*args, **kwargs) -> TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]:  # noqa: ANN002, ANN003  # public SDK wrapper preserves variadic call compatibility
     """
     Calls openai + azure whisper endpoints.
 
@@ -7668,9 +7668,9 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse | AsyncStream
         if response is not None and not isinstance(response, Coroutine) and file is not None:
             existing_duration: Final = getattr(response, "duration", None)
             if existing_duration is None:
-                calculated_duration: Final = calculate_request_duration(file)
-                if calculated_duration is not None:
-                    response._hidden_params["audio_transcription_duration"] = calculated_duration
+                sync_calculated_duration: Final = calculate_request_duration(file)
+                if sync_calculated_duration is not None:
+                    response._hidden_params["audio_transcription_duration"] = sync_calculated_duration
 
         return response
     except Exception as e:
@@ -7781,7 +7781,7 @@ def transcription(
 
     api_key = dynamic_api_key if dynamic_api_key is not None else api_key
 
-    api_version = _validate_gpt_transcription_request(
+    validated_api_version: Final = _validate_gpt_transcription_request(
         model=model,
         custom_llm_provider=custom_llm_provider,
         language=language,
@@ -7839,7 +7839,7 @@ def transcription(
         # azure configs
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
-        api_version = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
+        azure_api_version: Final = validated_api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
 
         azure_ad_token: Final = kwargs.pop("azure_ad_token", None) or get_secret_str("AZURE_AD_TOKEN")
 
@@ -7858,7 +7858,7 @@ def transcription(
             logging_obj=litellm_logging_obj,
             api_base=api_base,
             api_key=api_key,
-            api_version=api_version,
+            api_version=azure_api_version,
             azure_ad_token=azure_ad_token,
             max_retries=max_retries,
             litellm_params=litellm_params_dict,

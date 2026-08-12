@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import ReadOnly, TypedDict
@@ -11,7 +11,7 @@ from .llms.openai import (
 )
 
 ALL_DELTA_TYPES = Literal["text", "audio"]
-RealtimeSessionType = Literal["realtime", "transcription", "translation"]
+RealtimeSessionType: Final = Literal["realtime", "transcription", "translation"]
 
 
 class RealtimeResponseTransformInput(TypedDict):

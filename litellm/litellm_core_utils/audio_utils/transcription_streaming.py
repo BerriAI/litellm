@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime
 import traceback
 from collections.abc import AsyncIterator, Iterator
-from typing import Protocol
+from typing import Final, Protocol
 
 from openai import AsyncStream, Stream
 from openai.types.audio import (
@@ -67,15 +67,12 @@ class _TranscriptionEventCollector:
             self.done_event = event
 
     def response(self) -> TranscriptionResponse:
-        done_event = self.done_event
-        response = TranscriptionResponse(
+        done_event: Final = self.done_event
+        done_languages: Final = getattr(done_event, "languages", None) if done_event is not None else None
+        response: Final = TranscriptionResponse(
             text=done_event.text if done_event is not None else "".join(self.text_deltas),
             usage=done_event.usage.model_dump() if done_event is not None and done_event.usage is not None else None,
-            languages=(
-                [language.model_dump() for language in done_event.languages]
-                if done_event is not None and done_event.languages is not None
-                else None
-            ),
+            languages=([language.model_dump() for language in done_languages] if done_languages is not None else None),
         )
         if self.duration is not None:
             response._hidden_params["audio_transcription_duration"] = self.duration
@@ -95,7 +92,7 @@ class LoggingTranscriptionStream(Stream[TranscriptionStreamEvent]):
         self._collector = _TranscriptionEventCollector(getattr(stream, "_litellm_audio_duration", None))
         self._finalized = False
         self._failed = False
-        source_iterator = self._iterator
+        source_iterator: Final = self._iterator
         self._iterator = self._logging_iterator(source_iterator)
 
     def _logging_iterator(
@@ -107,7 +104,7 @@ class LoggingTranscriptionStream(Stream[TranscriptionStreamEvent]):
                 yield event
         except Exception as exception:
             self._failed = True
-            end_time = datetime.datetime.now()  # noqa: DTZ005  # callback timestamps use the legacy naive contract
+            end_time: Final = datetime.datetime.now()  # noqa: DTZ005  # callback timestamps use the legacy naive contract
             self._logging_obj.failure_handler(exception, traceback.format_exc(), self._start_time, end_time)
             raise
         finally:
@@ -143,7 +140,7 @@ class LoggingAsyncTranscriptionStream(AsyncStream[TranscriptionStreamEvent]):
         self._collector = _TranscriptionEventCollector(getattr(stream, "_litellm_audio_duration", None))
         self._finalized = False
         self._failed = False
-        source_iterator = self._iterator
+        source_iterator: Final = self._iterator
         self._iterator = self._logging_iterator(source_iterator)
 
     async def _logging_iterator(
@@ -155,7 +152,7 @@ class LoggingAsyncTranscriptionStream(AsyncStream[TranscriptionStreamEvent]):
                 yield event
         except Exception as exception:
             self._failed = True
-            end_time = datetime.datetime.now()  # noqa: DTZ005  # callback timestamps use the legacy naive contract
+            end_time: Final = datetime.datetime.now()  # noqa: DTZ005  # callback timestamps use the legacy naive contract
             self._logging_obj.failure_handler(exception, traceback.format_exc(), self._start_time, end_time)
             await self._logging_obj.async_failure_handler(
                 exception,
@@ -171,8 +168,8 @@ class LoggingAsyncTranscriptionStream(AsyncStream[TranscriptionStreamEvent]):
         if self._finalized or self._failed:
             return
         self._finalized = True
-        response = self._collector.response()
-        end_time = datetime.datetime.now()  # noqa: DTZ005  # callback timestamps use the legacy naive contract
+        response: Final = self._collector.response()
+        end_time: Final = datetime.datetime.now()  # noqa: DTZ005  # callback timestamps use the legacy naive contract
         self._logging_obj.handle_sync_success_callbacks_for_async_calls(
             result=response,
             start_time=self._start_time,

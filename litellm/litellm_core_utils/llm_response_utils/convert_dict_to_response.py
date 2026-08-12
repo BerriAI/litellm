@@ -816,7 +816,8 @@ def convert_to_model_response_object(
                     setattr(model_response_object, key, response_object[key])
 
             if "languages" in response_object and response_object["languages"] is not None:
-                model_response_object.languages = tuple(
+                transcription_response: Final = model_response_object
+                transcription_response.languages = tuple(
                     TranscriptionDetectedLanguage.model_validate(language) for language in response_object["languages"]
                 )
 

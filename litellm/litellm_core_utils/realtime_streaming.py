@@ -407,30 +407,30 @@ class RealTimeStreaming:
         self._capture_translation_output_format(event_obj)
         if event_obj.get("type") != "session.output_audio.delta":
             return
-        delta = event_obj.get("delta")
+        delta: Final = event_obj.get("delta")
         if not isinstance(delta, str):
             return
         try:
-            decoded = base64.b64decode(delta, validate=True)
+            decoded: Final = base64.b64decode(delta, validate=True)
         except (ValueError, TypeError):
             return
         self._translation_output_audio_bytes += len(decoded)
 
     def _capture_translation_output_format(self, event_obj: Mapping[str, object]) -> None:
-        session = event_obj.get("session")
+        session: Final = event_obj.get("session")
         if not isinstance(session, dict):
             return
-        audio = session.get("audio")
-        output = audio.get("output") if isinstance(audio, dict) else None
-        audio_format = output.get("format") if isinstance(output, dict) else None
+        audio: Final = session.get("audio")
+        output: Final = audio.get("output") if isinstance(audio, dict) else None
+        audio_format: Final = output.get("format") if isinstance(output, dict) else None
         if isinstance(audio_format, str):
             if audio_format in ("g711_ulaw", "g711_alaw"):
                 self._translation_output_bytes_per_second = 8000.0
             return
         if not isinstance(audio_format, dict):
             return
-        format_type = audio_format.get("type")
-        rate = audio_format.get("rate")
+        format_type: Final = audio_format.get("type")
+        rate: Final = audio_format.get("rate")
         if not isinstance(rate, (int, float)) or rate <= 0:
             return
         if format_type == "audio/pcm":
@@ -450,7 +450,7 @@ class RealTimeStreaming:
                 return
         if self._translation_output_audio_bytes == 0:
             return
-        output_seconds = self._translation_output_audio_bytes / self._translation_output_bytes_per_second
+        output_seconds: Final = self._translation_output_audio_bytes / self._translation_output_bytes_per_second
         usage = OpenAIRealtimeTranslationDurationUsage(type="duration", output_seconds=output_seconds)
         self.messages.append(OpenAIRealtimeTranslationClosedEvent(type="session.closed", usage=usage))
         self._translation_usage_finalized = True

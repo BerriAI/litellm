@@ -138,9 +138,9 @@ async def _prepare_client_secret_session(
     if forced_session_type is None and requested_session_type == "translation":
         raise HTTPException(status_code=400, detail="Translation sessions require the translations endpoint")
     session_type: Final = forced_session_type or _coerce_realtime_session_type(requested_session_type)
-    session_data: Final[dict | None] = req.session.model_dump(exclude_none=True) if req.session else None
-    if session_data is None and session_type == "translation":
-        session_data = {}  # mutable-ok: endpoint injects the resolved translation session type
+    session_data: Final[dict | None] = (
+        req.session.model_dump(exclude_none=True) if req.session else ({} if session_type == "translation" else None)
+    )
     if session_data is not None:
         session_data["type"] = session_type
 
@@ -312,7 +312,7 @@ async def create_realtime_client_secret(
             proxy_config=proxy_config,
         )
 
-        call_type = (
+        call_type: Final = (
             "acreate_realtime_translation_client_secret" if is_translation_request else "acreate_realtime_client_secret"
         )
         data = await proxy_logging_obj.pre_call_hook(
@@ -475,7 +475,7 @@ async def proxy_realtime_calls(
         model = decoded_payload.get("model_id") or request.query_params.get("model") or _DEFAULT_REALTIME_MODEL
         user_id = decoded_payload.get("user_id") or None
         team_id = decoded_payload.get("team_id") or None
-        raw_session_type = decoded_payload.get("session_type")
+        raw_session_type: Final = decoded_payload.get("session_type")
         session_type = _coerce_realtime_session_type(raw_session_type)
         if is_translation_request != (raw_session_type == "translation"):
             return Response(
@@ -537,7 +537,7 @@ async def proxy_realtime_calls(
             proxy_config=proxy_config,
         )
 
-        call_type = "arealtime_translation_calls" if is_translation_request else "arealtime_calls"
+        call_type: Final = "arealtime_translation_calls" if is_translation_request else "arealtime_calls"
         data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=minimal_auth,
             data=data,

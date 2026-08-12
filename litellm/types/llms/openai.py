@@ -41,6 +41,7 @@ from openai.types.responses.response import (
     ResponseOutputItem,
     Tool,
 )
+from typing_extensions import ReadOnly
 
 # Handle OpenAI SDK version compatibility for Text type
 try:
@@ -2214,13 +2215,13 @@ class OpenAIRealtimeResponseUsage(TypedDict):
 
 
 class OpenAIRealtimeTranslationDurationUsage(TypedDict):
-    type: Literal["duration"]
-    output_seconds: float
+    type: ReadOnly[Literal["duration"]]
+    output_seconds: ReadOnly[float]
 
 
 class OpenAIRealtimeTranslationClosedEvent(TypedDict):
-    type: Literal["session.closed"]
-    usage: OpenAIRealtimeTranslationDurationUsage
+    type: ReadOnly[Literal["session.closed"]]
+    usage: ReadOnly[OpenAIRealtimeTranslationDurationUsage]
 
 
 class OpenAIRealtimeEventTypes(Enum):

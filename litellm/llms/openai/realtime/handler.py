@@ -37,8 +37,8 @@ class OpenAIRealtimeConnectionAdapter:
         await self._connection.send_raw(message)
 
     async def recv(self, decode: bool = True) -> str | bytes:
-        message = await self._connection.recv_bytes()
-        if decode and isinstance(message, bytes):
+        message: Final = await self._connection.recv_bytes()
+        if decode:
             return message.decode("utf-8")
         return message
 
@@ -56,7 +56,7 @@ class OpenAIRealtimeSDKConnectionManager:
         self._owned_client = owned_client
 
     async def __aenter__(self) -> OpenAIRealtimeConnectionAdapter:
-        connection = await self._manager.__aenter__()
+        connection: Final = await self._manager.__aenter__()
         return OpenAIRealtimeConnectionAdapter(connection)
 
     async def __aexit__(
@@ -142,7 +142,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         api_base = api_base.replace("http://", "ws://")
         url = URL(api_base)
         # Set the correct path
-        path = "/v1/realtime/translations" if realtime_mode == "translation" else "/v1/realtime"
+        path: Final = "/v1/realtime/translations" if realtime_mode == "translation" else "/v1/realtime"
         url = url.copy_with(path=path)
         # Include all query parameters including 'model'
         if query_params:
@@ -181,13 +181,13 @@ class OpenAIRealtime(OpenAIChatCompletion):
             )
         if not isinstance(client, AsyncOpenAI):
             raise TypeError("client must be an AsyncOpenAI instance")
-        openai_client = client
-        model_query = query_params.get("model")
-        extra_query = {  # mutable-ok: OpenAI SDK accepts a mutable query-parameter mapping
+        openai_client: Final = client
+        model_query: Final = query_params.get("model")
+        extra_query: Final = {  # mutable-ok: OpenAI SDK accepts a mutable query-parameter mapping
             key: value for key, value in query_params.items() if key != "model"
         }
-        sdk_model = omit if query_params.get("intent") == "transcription" else model_query or model
-        sdk_connection_manager = openai_client.realtime.connect(
+        sdk_model: Final = omit if query_params.get("intent") == "transcription" else model_query or model
+        sdk_connection_manager: Final = openai_client.realtime.connect(
             model=sdk_model,
             extra_query=extra_query,
             extra_headers=headers,

@@ -25,6 +25,23 @@ from ..openai import OpenAIChatCompletion
 
 class OpenAIAudioTranscription(OpenAIChatCompletion):
     # Audio Transcriptions
+    @staticmethod
+    def _sdk_compatible_request_data(data: dict) -> dict:
+        """Route API fields that predate SDK support through ``extra_body``."""
+        extension_keys: Final = ("keywords", "languages")
+        extension_body: Final = {key: data[key] for key in extension_keys if key in data}
+        if not extension_body:
+            return data
+
+        existing_extra_body: Final = data.get("extra_body")
+        return {  # mutable-ok: OpenAI SDK requires a mutable request mapping
+            **{key: value for key, value in data.items() if key not in extension_keys},
+            "extra_body": {
+                **(existing_extra_body if isinstance(existing_extra_body, dict) else {}),
+                **extension_body,
+            },
+        }
+
     async def make_openai_audio_transcriptions_request(
         self,
         openai_aclient: AsyncOpenAI,
@@ -37,14 +54,17 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         - call openai_aclient.audio.transcriptions.create by default
         """
         try:
+            sdk_data: Final = self._sdk_compatible_request_data(data)
             if data.get("stream") is True:
-                response: Final = await openai_aclient.audio.transcriptions.create(**data, timeout=timeout)
-                return {}, response  # mutable-ok: response headers use the existing mutable mapping contract
-            raw_response = await openai_aclient.audio.transcriptions.with_raw_response.create(**data, timeout=timeout)  # type: ignore
+                stream_response: Final = await openai_aclient.audio.transcriptions.create(**sdk_data, timeout=timeout)
+                return {}, stream_response  # mutable-ok: response headers use the existing mutable mapping contract
+            raw_response: Final = await openai_aclient.audio.transcriptions.with_raw_response.create(
+                **sdk_data, timeout=timeout
+            )  # pyright: ignore[reportArgumentType]  # SDK TypedDict lags accepted transcription options
             headers: Final = dict(raw_response.headers)
-            response = raw_response.parse()
+            parsed_response: Final = raw_response.parse()
 
-            return headers, response
+            return headers, parsed_response
         except Exception as e:
             raise e
 
@@ -60,16 +80,17 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         - call openai_aclient.audio.transcriptions.create by default
         """
         try:
+            sdk_data: Final = self._sdk_compatible_request_data(data)
             if data.get("stream") is True:
-                response = openai_client.audio.transcriptions.create(**data, timeout=timeout)
+                response = openai_client.audio.transcriptions.create(**sdk_data, timeout=timeout)
                 return None, response
             if litellm.return_response_headers is True:
-                raw_response = openai_client.audio.transcriptions.with_raw_response.create(**data, timeout=timeout)
+                raw_response = openai_client.audio.transcriptions.with_raw_response.create(**sdk_data, timeout=timeout)
                 headers: Final = dict(raw_response.headers)
                 response = raw_response.parse()
                 return headers, response
             else:
-                response = openai_client.audio.transcriptions.create(**data, timeout=timeout)
+                response = openai_client.audio.transcriptions.create(**sdk_data, timeout=timeout)
                 return None, response
         except Exception as e:
             raise e

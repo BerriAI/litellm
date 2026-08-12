@@ -6212,8 +6212,8 @@ class BaseLLMHTTPHandler:
             normalized_api_base = api_base.rstrip("/")
             if not normalized_api_base.endswith("/v1"):
                 normalized_api_base = f"{normalized_api_base}/v1"
-            owns_client = not isinstance(client, AsyncOpenAI)
-            openai_client = (
+            owns_client: Final = not isinstance(client, AsyncOpenAI)
+            openai_client: Final = (
                 client
                 if isinstance(client, AsyncOpenAI)
                 else AsyncOpenAI(api_key=api_key, base_url=normalized_api_base, max_retries=0)
@@ -6227,12 +6227,12 @@ class BaseLLMHTTPHandler:
                 },
             )
             try:
-                raw_response = await openai_client.realtime.client_secrets.with_raw_response.create(
+                raw_response: Final = await openai_client.realtime.client_secrets.with_raw_response.create(
                     **request_data,
                     extra_headers=extra_headers,
                     timeout=timeout,
                 )
-                response_headers = {
+                response_headers: Final = {
                     key: value
                     for key, value in raw_response.headers.items()
                     if key.lower() not in ("content-encoding", "content-length", "transfer-encoding")
@@ -6306,8 +6306,8 @@ class BaseLLMHTTPHandler:
             normalized_api_base = api_base.rstrip("/")
             if not normalized_api_base.endswith("/v1"):
                 normalized_api_base = f"{normalized_api_base}/v1"
-            owns_client = not isinstance(client, AsyncOpenAI)
-            openai_client = (
+            owns_client: Final = not isinstance(client, AsyncOpenAI)
+            openai_client: Final = (
                 client
                 if isinstance(client, AsyncOpenAI)
                 else AsyncOpenAI(api_key=api_key, base_url=normalized_api_base, max_retries=0)
@@ -6321,7 +6321,7 @@ class BaseLLMHTTPHandler:
                 },
             )
             try:
-                configured_client = openai_client.with_options(
+                configured_client: Final = openai_client.with_options(
                     timeout=timeout,
                     set_default_headers={  # mutable-ok: OpenAI SDK accepts a mutable custom-header mapping
                         key: str(value) for key, value in (extra_headers or {}).items()
@@ -6392,7 +6392,9 @@ class BaseLLMHTTPHandler:
                 headers={}, model=model or "", api_key=api_key
             )
         else:
-            endpoint_path = "translations/client_secrets" if endpoint == "translation_client_secrets" else endpoint
+            endpoint_path: Final = (
+                "translations/client_secrets" if endpoint == "translation_client_secrets" else endpoint
+            )
             url = f"{api_base.rstrip('/')}/v1/realtime/{endpoint_path}"
             headers = {
                 "Authorization": f"Bearer {api_key}",
@@ -6442,8 +6444,8 @@ class BaseLLMHTTPHandler:
         normalized_api_base = api_base.rstrip("/")
         if not normalized_api_base.endswith("/v1"):
             normalized_api_base = f"{normalized_api_base}/v1"
-        owns_client = not isinstance(client, AsyncOpenAI)
-        openai_client = (
+        owns_client: Final = not isinstance(client, AsyncOpenAI)
+        openai_client: Final = (
             client
             if isinstance(client, AsyncOpenAI)
             else AsyncOpenAI(api_key=openai_ephemeral_key, base_url=normalized_api_base, max_retries=0)
@@ -6458,7 +6460,7 @@ class BaseLLMHTTPHandler:
         )
         try:
             if translation:
-                configured_client = openai_client.with_options(
+                configured_client: Final = openai_client.with_options(
                     timeout=timeout,
                     set_default_headers={  # mutable-ok: OpenAI SDK accepts a mutable custom-header mapping
                         "Content-Type": "application/sdp",
@@ -6472,7 +6474,7 @@ class BaseLLMHTTPHandler:
                     cast_to=httpx.Response,
                     content=sdp_text.encode("utf-8"),
                 )
-            raw_response = await openai_client.realtime.calls.with_raw_response.create(
+            raw_response: Final = await openai_client.realtime.calls.with_raw_response.create(
                 sdp=sdp_text,
                 session=session_data,
                 extra_headers=extra_headers,
@@ -6541,7 +6543,7 @@ class BaseLLMHTTPHandler:
                 translation=translation,
             )
 
-        async_httpx_client = self._get_realtime_async_http_client(client)
+        async_httpx_client: Final = self._get_realtime_async_http_client(client)
 
         if provider_config is not None:
             url = (
@@ -6553,7 +6555,7 @@ class BaseLLMHTTPHandler:
             )
             headers: dict[str, object] = provider_config.get_realtime_calls_headers(ephemeral_key=openai_ephemeral_key)
         else:
-            path = "translations/calls" if translation else "calls"
+            path: Final = "translations/calls" if translation else "calls"
             url = f"{api_base.rstrip('/')}/v1/realtime/{path}"
             headers = {
                 "Authorization": f"Bearer {openai_ephemeral_key}",
@@ -6562,14 +6564,6 @@ class BaseLLMHTTPHandler:
         if extra_headers:
             headers.update(extra_headers)
 
-        # Build multipart form data: sdp + session JSON
-        session_data: Final = session_config or {}
-        if "type" not in session_data:
-            session_data["type"] = "realtime"
-        if "model" not in session_data and model:
-            session_data["model"] = model
-
-        sdp_text: Final = sdp_body.decode("utf-8") if isinstance(sdp_body, bytes) else sdp_body
         if translation:
             headers["Content-Type"] = "application/sdp"
 
