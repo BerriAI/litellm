@@ -12,6 +12,7 @@ needing a logger per tenant.
 
 from collections import OrderedDict
 from collections.abc import Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias
 from urllib.parse import quote
@@ -76,6 +77,23 @@ def _encoded_header_string(headers: Mapping[str, str]) -> str:
     return ",".join(f"{key}={quote(value, safe='')}" for key, value in headers.items())
 
 
+@dataclass(frozen=True, slots=True)
+class TenantRoute:
+    """The tracer to create a span on, plus whether it must root its own trace.
+
+    ``detached`` is True when project routing engaged. Phoenix assigns a whole
+    trace to one project by whichever of its spans arrives first, so a
+    project-routed span parented into the request trace gets dragged into the
+    project of the default-exported request spans and the header does nothing.
+    The span must therefore start a fresh trace (with a link back to the
+    request trace for correlation) — which is also how the v1 Phoenix logger
+    behaved, exporting each request under its own Phoenix-local parent span.
+    """
+
+    tracer: Tracer
+    detached: bool
+
+
 class TenantTracerCache:
     """Credential/project-scoped ``TracerProvider`` cache keyed by the routing headers."""
 
@@ -95,13 +113,13 @@ class TenantTracerCache:
         )
         self._warned_project_unroutable = False
 
-    def tracer_for(
+    def route_for(
         self,
         default: Tracer,
         dynamic_params: Any,
         auth_metadata: Mapping[str, str] | None = None,
-    ) -> Tracer:
-        """Return the tracer for this request.
+    ) -> TenantRoute:
+        """Return the tracer (and trace-detachment flag) for this request.
 
         Use ``default`` unless the request's dynamic credentials or its key/team
         project require a scoped tracer, in which case build (or reuse) one. The
@@ -111,7 +129,7 @@ class TenantTracerCache:
         credential_headers: Final = dynamic_otlp_headers(self._callback_name, dynamic_params) or _NO_HEADERS
         project_headers: Final = self._project_headers(auth_metadata)
         if not credential_headers and not project_headers:
-            return default
+            return TenantRoute(tracer=default, detached=False)
         cache_key: Final = (
             tuple(sorted(credential_headers.items())),
             tuple(sorted(project_headers.items())),
@@ -125,7 +143,7 @@ class TenantTracerCache:
             if len(self._providers) > _MAX_CACHED_PROVIDERS:
                 _, evicted = self._providers.popitem(last=False)
                 _shutdown_provider(evicted)
-        return get_tracer(provider, self._tracer_name)
+        return TenantRoute(tracer=get_tracer(provider, self._tracer_name), detached=bool(project_headers))
 
     def _project_headers(self, auth_metadata: Mapping[str, str] | None) -> Mapping[str, str]:
         """The per-request project-routing headers, if this cache can apply them.

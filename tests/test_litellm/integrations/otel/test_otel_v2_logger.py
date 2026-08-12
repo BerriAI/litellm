@@ -2335,6 +2335,7 @@ def test_key_team_auth_metadata_routes_llm_span_to_phoenix_project():
     assert parsed["authorization"] == "Bearer phoenix-key"
     routed_spans = captured[headers].get_finished_spans()
     assert len(routed_spans) == 1
+    assert routed_spans[0].parent is None  # own trace, so Phoenix can route it
 
 
 def test_client_request_metadata_cannot_route_phoenix_project():
@@ -2381,7 +2382,13 @@ def test_project_routing_resolves_at_pre_call_before_payload_exists():
     asyncio.run(logger.async_log_success_event(close_kwargs, None, None, None))
 
     (headers,) = captured
-    assert [s.name for s in captured[headers].get_finished_spans()] == ["chat gpt-4o"]
+    (routed_span,) = captured[headers].get_finished_spans()
+    assert routed_span.name == "chat gpt-4o"
+    # Phoenix pins a whole trace to one project by its first-arriving span, so
+    # the routed span must root its OWN trace, linked back to the request trace.
+    assert routed_span.parent is None
+    (link,) = routed_span.links
+    assert link.context.span_id == server.get_span_context().span_id
     assert all(
         s.name != "chat gpt-4o" for s in default_exporter.get_finished_spans()
     )

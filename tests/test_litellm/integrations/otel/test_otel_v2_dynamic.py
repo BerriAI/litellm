@@ -75,10 +75,10 @@ def test_provider_cached_per_credential_set():
     creds_a = {"arize_space_id": "S", "arize_api_key": "K"}
     creds_b = {"arize_space_id": "S2", "arize_api_key": "K2"}
 
-    cache.tracer_for(default, creds_a)
-    cache.tracer_for(default, creds_a)  # same set → reuse, no new provider
+    cache.route_for(default, creds_a)
+    cache.route_for(default, creds_a)  # same set → reuse, no new provider
     assert len(cache._providers) == 1
-    cache.tracer_for(default, creds_b)  # new set → new provider
+    cache.route_for(default, creds_b)  # new set → new provider
     assert len(cache._providers) == 2
 
 
@@ -101,10 +101,10 @@ def test_provider_cache_is_bounded_and_evicts_lru(monkeypatch):
     def creds(space):
         return {"arize_space_id": space, "arize_api_key": "K"}
 
-    cache.tracer_for(default, creds("1"))
-    cache.tracer_for(default, creds("2"))
-    cache.tracer_for(default, creds("1"))  # touch "1" → "2" is now LRU
-    cache.tracer_for(default, creds("3"))  # overflow → evict "2"
+    cache.route_for(default, creds("1"))
+    cache.route_for(default, creds("2"))
+    cache.route_for(default, creds("1"))  # touch "1" → "2" is now LRU
+    cache.route_for(default, creds("3"))  # overflow → evict "2"
 
     assert len(cache._providers) == 2
     assert len(shut_down) == 1  # exactly the evicted provider was shut down
@@ -113,14 +113,14 @@ def test_provider_cache_is_bounded_and_evicts_lru(monkeypatch):
 def test_no_dynamic_params_uses_default_tracer():
     cache = _cache("arize")
     default = NoOpTracer()
-    assert cache.tracer_for(default, {}) is default
+    assert cache.route_for(default, {}).tracer is default
     assert cache._providers == {}
 
 
 def test_non_participating_callback_uses_default_tracer():
     cache = _cache("arize_phoenix")
     default = NoOpTracer()
-    assert cache.tracer_for(default, {"arize_api_key": "K"}) is default
+    assert cache.route_for(default, {"arize_api_key": "K"}).tracer is default
     assert cache._providers == {}
 
 
@@ -258,11 +258,12 @@ def test_project_header_does_not_touch_other_exporters():
 def test_provider_cached_per_project():
     cache = _phoenix_cache()
     default = NoOpTracer()
-    routed = cache.tracer_for(default, None, {"phoenix_project_name": "proj-a"})
-    assert routed is not default
-    cache.tracer_for(default, None, {"phoenix_project_name": "proj-a"})
+    routed = cache.route_for(default, None, {"phoenix_project_name": "proj-a"})
+    assert routed.tracer is not default
+    assert routed.detached is True  # project spans must root their own trace
+    cache.route_for(default, None, {"phoenix_project_name": "proj-a"})
     assert len(cache._providers) == 1
-    cache.tracer_for(default, None, {"phoenix_project_name": "proj-b"})
+    cache.route_for(default, None, {"phoenix_project_name": "proj-b"})
     assert len(cache._providers) == 2
     for provider in cache._providers.values():
         provider.shutdown()
@@ -274,9 +275,9 @@ def test_client_dynamic_params_cannot_choose_phoenix_project():
     # config (the ``auth_metadata`` argument).
     cache = _phoenix_cache()
     default = NoOpTracer()
-    assert cache.tracer_for(default, {"phoenix_project_name": "attacker"}) is default
+    assert cache.route_for(default, {"phoenix_project_name": "attacker"}).tracer is default
     assert (
-        cache.tracer_for(default, {"phoenix_project_name_override": "attacker"})
+        cache.route_for(default, {"phoenix_project_name_override": "attacker"}).tracer
         is default
     )
     assert cache._providers == {}
@@ -285,7 +286,7 @@ def test_client_dynamic_params_cannot_choose_phoenix_project():
 def test_auth_metadata_without_project_uses_default_tracer():
     cache = _phoenix_cache()
     default = NoOpTracer()
-    assert cache.tracer_for(default, None, {"logging_setting": "x"}) is default
+    assert cache.route_for(default, None, {"logging_setting": "x"}).tracer is default
     assert cache._providers == {}
 
 
@@ -294,6 +295,6 @@ def test_grpc_exporter_gets_no_project_routing():
     # gRPC-only Phoenix exporter stays on the default project (warned once).
     cache = _phoenix_cache(kind="otlp_grpc")
     default = NoOpTracer()
-    assert cache.tracer_for(default, None, {"phoenix_project_name": "proj"}) is default
+    assert cache.route_for(default, None, {"phoenix_project_name": "proj"}).tracer is default
     assert cache._providers == {}
     assert cache._warned_project_unroutable is True
