@@ -632,3 +632,38 @@ def test_response_includes_output_type_reads_dict_output_items():
     assert not StandardBuiltInToolCostTracking.response_includes_output_type(
         response_object=response, output_type="file_search_call"
     )
+
+
+def test_web_search_gate_reads_server_side_tool_usage_details_without_citations():
+    """
+    Regression: xAI chat responses bridged from the Responses API only carry
+    usage.server_side_tool_usage_details; a searched answer with no url_citation
+    annotations must still be billed for its web search calls.
+    """
+    from litellm.llms.xai.cost_calculator import _DEFAULT_WEB_SEARCH_COST_PER_CALL
+    from litellm.types.utils import Usage
+
+    usage = Usage(
+        prompt_tokens=10,
+        completion_tokens=20,
+        total_tokens=30,
+        server_side_tool_usage_details={"web_search_calls": 3},
+    )
+    response = ModelResponse(model="xai/grok-4.5")
+
+    assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+        response_object=response, usage=usage
+    )
+    assert not StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+        response_object=response,
+        usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="xai/grok-4.5",
+        response_object=response,
+        usage=usage,
+        custom_llm_provider="xai",
+        standard_built_in_tools_params=None,
+    )
+    assert cost == 3 * _DEFAULT_WEB_SEARCH_COST_PER_CALL
