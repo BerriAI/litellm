@@ -356,7 +356,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     @staticmethod
     def parse_terminal_response_from_stream_chunks(all_chunks: list[str]) -> ResponsesAPIResponse | None:
         for chunk_str in reversed(all_chunks):
-            for event_model in (ResponseCompletedEvent, ResponseIncompleteEvent):
+            for event_model in (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent):
                 try:
                     return event_model.model_validate_json(chunk_str.removeprefix("data: ")).response
                 except ValueError:
