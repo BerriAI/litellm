@@ -1287,17 +1287,17 @@ class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
 
 
 class CachedTokensDetails(BaseLiteLLMOpenAIResponseObject):
-    audio_tokens: Optional[int] = None
-    image_tokens: Optional[int] = None
-    text_tokens: Optional[int] = None
+    audio_tokens: int | None = None
+    image_tokens: int | None = None
+    text_tokens: int | None = None
 
 
 class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: int | None = None
     cached_tokens: int = 0
     text_tokens: int | None = None
-    cached_tokens_details: Optional[CachedTokensDetails] = None
-    image_tokens: Optional[int] = None
+    cached_tokens_details: CachedTokensDetails | None = None
+    image_tokens: int | None = None
 
     model_config = {"extra": "allow"}
 

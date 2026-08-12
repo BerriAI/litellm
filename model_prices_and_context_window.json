@@ -54850,60 +54850,6 @@
         "supports_response_schema": true,
         "supports_vision": true
     },
-    "gpt-transcribe": {
-        "input_cost_per_second": 7.5e-05,
-        "litellm_provider": "openai",
-        "mode": "audio_transcription",
-        "source": "https://developers.openai.com/api/docs/models/gpt-transcribe",
-        "supported_endpoints": [
-            "/v1/audio/transcriptions",
-            "/v1/realtime/transcription_sessions"
-        ],
-        "supported_modalities": [
-            "text",
-            "audio"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
-        "supports_audio_input": true
-    },
-    "gpt-live-transcribe": {
-        "input_cost_per_second": 0.0002833333333333333,
-        "litellm_provider": "openai",
-        "mode": "audio_transcription",
-        "source": "https://developers.openai.com/api/docs/models/gpt-live-transcribe",
-        "supported_endpoints": [
-            "/v1/realtime",
-            "/v1/realtime/transcription_sessions"
-        ],
-        "supported_modalities": [
-            "text",
-            "audio"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
-        "supports_audio_input": true
-    },
-    "gpt-realtime-translate": {
-        "input_cost_per_second": 0.0005666666666666667,
-        "litellm_provider": "openai",
-        "max_input_tokens": 16000,
-        "max_output_tokens": 2000,
-        "max_tokens": 2000,
-        "mode": "realtime",
-        "source": "https://developers.openai.com/api/docs/models/gpt-realtime-translate",
-        "supported_modalities": [
-            "audio"
-        ],
-        "supported_output_modalities": [
-            "text",
-            "audio"
-        ],
-        "supports_audio_input": true,
-        "supports_audio_output": true
-    },
     "claude-mythos-5": {
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,

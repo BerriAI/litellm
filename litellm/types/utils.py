@@ -2608,7 +2608,7 @@ class TranscriptionUsageTokensObject(BaseModel):
     input_tokens: int
     output_tokens: int
     total_tokens: int
-    input_token_details: Optional[TranscriptionUsageInputTokenDetailsObject] = None
+    input_token_details: TranscriptionUsageInputTokenDetailsObject | None = None
 
 
 class TranscriptionDetectedLanguage(BaseModel):
