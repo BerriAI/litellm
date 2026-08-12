@@ -11339,11 +11339,25 @@ class Router:
 
         return filtered
 
+    def _model_name_has_plain_deployments(self, model: str) -> bool:
+        """True when `model` also names regular (non strategy-router) deployments in the model_list."""
+        indices: Final = self.model_name_to_deployment_indices.get(model) or ()
+        return any(
+            classify_strategy_router_model(lp.get("model") or "") is None
+            for idx in indices
+            if (lp := self.model_list[idx].get("litellm_params"))
+        )
+
     def _select_pre_routing_strategy(self, model: str, request_kwargs: dict) -> "PreRoutingStrategy | None":
         """
         Resolve the pre-routing strategy for `model`, disambiguating deployments
         that share a `model_name` by matching the request's tags against each
         registered strategy's tags before falling back to the first registered.
+
+        With tag filtering enabled, strategies that all carry real tags matching
+        none of the request's do not capture it when the name also has plain
+        deployments: returning None hands the request to ordinary tag-aware
+        deployment selection.
         """
         candidates: Final[list[TaggedPreRoutingStrategy[PreRoutingStrategy]]] = [
             *self.auto_routers.get(model, []),
@@ -11353,8 +11367,6 @@ class Router:
         ]
         if not candidates:
             return None
-        if len(candidates) == 1:
-            return candidates[0].strategy
 
         request_tags: Final = _get_tags_from_request_kwargs(request_kwargs)
         if request_tags:
@@ -11366,6 +11378,12 @@ class Router:
         for tagged in candidates:
             if "default" in tagged.tags:
                 return tagged.strategy
+        if (
+            self.enable_tag_filtering
+            and all(tagged.tags for tagged in candidates)
+            and self._model_name_has_plain_deployments(model)
+        ):
+            return None
         return candidates[0].strategy
 
     async def async_pre_routing_hook(
