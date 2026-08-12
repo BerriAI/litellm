@@ -41,6 +41,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
+    anthropic_sse_error_frames,
     assemble_anthropic_sse_stream,
     is_raw_sse_stream,
     model_response_text,
@@ -2619,6 +2620,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     request_data=request_data,
                     logging_event_type=GuardrailEventHooks.post_call,
                 )
+            except HTTPException as block_exc:
+                if not raw_sse:
+                    raise
+                # A keepalive ping may already have flushed the response headers, so a raise
+                # cannot reach the client; deliver the block as an error frame instead
+                for error_frame in anthropic_sse_error_frames(str(block_exc.detail)):
+                    yield error_frame
+                return
             except ModifyResponseException as e:
                 # Preserve upstream usage from the LLM call we already
                 # consumed. Non-streaming blocks carry it via

@@ -7,6 +7,7 @@ hook scan such a stream, and re-emit it when the guardrail rewrote the response.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from typing import Final
 
@@ -88,6 +89,19 @@ def model_response_text(response: ModelResponse) -> str:
         for choice in response.choices
         if isinstance(choice, Choices)  # pyright: ignore[reportUnnecessaryIsInstance]  # runtime choices can be StreamingChoices
         and isinstance(choice.message.content, str)
+    )
+
+
+def anthropic_sse_error_frames(message: str) -> tuple[bytes, ...]:
+    """Anthropic error event, for a failure discovered after the response headers were flushed.
+
+    Once a keepalive ping has been sent a raise cannot reach the client, so the failure has to
+    travel as a frame.
+    """
+    detail: Final = json.dumps(message)
+    return (
+        f'event: error\ndata: {{"type": "error", "error": {{"type": "guardrail_error", '
+        f'"message": {detail}}}}}\n\n'.encode(),
     )
 
 

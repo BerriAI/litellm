@@ -3025,10 +3025,13 @@ async def test_streaming_hook_blocks_raw_anthropic_sse_on_violation():
 
     with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
         mock_api.side_effect = HTTPException(status_code=400, detail={"error": "Violated guardrail policy"})
-        with pytest.raises(HTTPException) as exc:
-            await _drain_streaming_hook(guardrail)
+        delivered = await _drain_streaming_hook(guardrail)
 
-    assert exc.value.status_code == 400
+    body = b"".join(delivered)
+    # a keepalive ping may already have flushed the headers, so the block has to travel as a frame
+    assert b"event: error" in body
+    assert b"Violated guardrail policy" in body
+    assert b"123-45-6789" not in body
 
 
 @pytest.mark.asyncio
