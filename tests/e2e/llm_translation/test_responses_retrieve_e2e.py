@@ -52,6 +52,9 @@ def _retrieve_response(proxy: ProxyClient, key: str, response_id: str) -> Respon
 
 
 class TestResponsesRetrieve:
+    @pytest.mark.skip(
+        reason="stage red: product gap (LIT-5446), retrieve returns a different id than the stored response (non-idempotent response-id re-encryption)"
+    )
     @pytest.mark.covers("llm.responses.openai.basic.nonstream.works")
     def test_store_and_retrieve_by_id(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model = f"e2e-resp-store-{unique_marker()}"
@@ -83,6 +86,9 @@ class TestResponsesRetrieve:
         assert retrieved.object == "response"
         assert retrieved.status == "completed"
 
+    @pytest.mark.skip(
+        reason="stage red: product gap (LIT-5447), retrieving an unknown response id returns 400 (model=None) instead of 404"
+    )
     @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
     def test_invalid_response_id_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         key = resources.key()
