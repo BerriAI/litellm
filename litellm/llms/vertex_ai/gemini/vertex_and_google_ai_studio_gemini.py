@@ -1093,17 +1093,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 f"Please set audio format to 'pcm16'."
             )
 
-        for speech_config_key in ("speechConfig", "speech_config"):
-            speech_config_value: Final = value.get(speech_config_key)
-            if isinstance(speech_config_value, Mapping):
-                speech_config: Final = normalize_gemini_speech_config(speech_config_value)
-                language_code: Final = value.get("language_code", value.get("languageCode"))
-                if language_code is not None and "languageCode" not in speech_config:
-                    return {  # mutable-ok: provider request serialization requires a concrete dict
-                        **speech_config,
-                        "languageCode": language_code,
-                    }
-                return speech_config
+        camel_speech_config: Final = value.get("speechConfig")
+        snake_speech_config: Final = value.get("speech_config")
+        speech_config_value: Final = (
+            camel_speech_config if isinstance(camel_speech_config, Mapping) else snake_speech_config
+        )
+        language_code: Final = value.get("language_code", value.get("languageCode"))
+        if isinstance(speech_config_value, Mapping):
+            speech_config: Final = normalize_gemini_speech_config(speech_config_value)
+            if language_code is not None and "languageCode" not in speech_config:
+                return {  # mutable-ok: provider request serialization requires a concrete dict
+                    **speech_config,
+                    "languageCode": language_code,
+                }
+            return speech_config
 
         speech_config_without_language: Final[  # mutable-ok: provider request serialization requires a concrete dict
             dict[str, object]  # mutable-ok: provider request serialization requires a concrete dict
@@ -1119,7 +1122,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             else {}  # mutable-ok: provider request serialization requires a concrete empty dict
         )
 
-        language_code: Final = value.get("language_code", value.get("languageCode"))
         if language_code is not None:
             return {  # mutable-ok: provider request serialization requires a concrete dict
                 **speech_config_without_language,
