@@ -532,14 +532,18 @@ class RouterBudgetLimiting(CustomLogger):
 
         Only runs if Redis is initialized
         """
-        increment_operations_to_flush: list[RedisPipelineIncrementOperation] = []
+        increment_operations_to_flush: list[RedisPipelineIncrementOperation] = (  # mutable-ok: Redis pipeline contract requires a list batch
+            []  # mutable-ok: Redis pipeline batches are lists
+        )
         try:
             if not self.dual_cache.redis_cache:
                 return  # Redis is not initialized
 
             async with self._get_redis_increment_queue_lock():
                 increment_operations_to_flush = self.redis_increment_operation_queue
-                self.redis_increment_operation_queue = []
+                self.redis_increment_operation_queue = (
+                    []  # mutable-ok: the emptied queue must remain appendable by logging callbacks
+                )
 
             verbose_router_logger.debug(
                 "Pushing Redis Increment Pipeline for queue: %s",
