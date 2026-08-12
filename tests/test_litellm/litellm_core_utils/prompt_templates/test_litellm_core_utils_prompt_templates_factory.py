@@ -2163,6 +2163,34 @@ def test_anthropic_messages_pt_file_block_without_cache_control():
     assert "cache_control" not in file_block
 
 
+def test_anthropic_messages_pt_maps_pdf_data_uri_to_document_block():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:application/pdf;base64,AAAA"},
+                }
+            ],
+        }
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-sonnet-4-5",
+        llm_provider="anthropic",
+    )
+
+    document = result[0]["content"][0]
+    assert document["type"] == "document"
+    assert document["source"] == {
+        "type": "base64",
+        "media_type": "application/pdf",
+        "data": "AAAA",
+    }
+
+
 # ── _convert_to_bedrock_tool_call_invoke tests ──
 
 
