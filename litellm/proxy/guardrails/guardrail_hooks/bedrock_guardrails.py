@@ -27,7 +27,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
-from litellm.exceptions import ModifyResponseException
+from litellm.exceptions import GuardrailRaisedException, ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
 from litellm.llms.base_llm.guardrail_translation.utils import (
@@ -39,6 +39,12 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.anthropic_sse import (
+    anthropic_sse_chunks_from_response,
+    assemble_anthropic_sse_stream,
+    is_raw_sse_stream,
+    model_response_text,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import BedrockChecksConfigModel, GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
@@ -2582,10 +2588,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         async for chunk in response:
             all_chunks.append(chunk)
 
-        assembled_model_response: ModelResponse | TextCompletionResponse | None = stream_chunk_builder(
-            chunks=all_chunks,
+        # /v1/messages arrives as SSE frames, which stream_chunk_builder cannot assemble
+        raw_sse: Final = is_raw_sse_stream(all_chunks)
+        assembled_model_response: ModelResponse | TextCompletionResponse | None = (
+            assemble_anthropic_sse_stream(all_chunks) if raw_sse else stream_chunk_builder(chunks=all_chunks)
         )
         if isinstance(assembled_model_response, ModelResponse):
+            pre_guardrail_text: Final = model_response_text(assembled_model_response)
             ####################################################################
             ########## 1. Make Bedrock Apply Guardrail API request ##########
             #
@@ -2642,11 +2651,29 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             #########################################################################
             ########## 3. Return the (potentially masked) chunks ##########
             #########################################################################
+            if raw_sse:
+                # Re-encoding cannot reproduce every upstream frame, so the originals are forwarded
+                # whenever the guardrail left the response alone.
+                for sse_chunk in (
+                    anthropic_sse_chunks_from_response(assembled_model_response)
+                    if model_response_text(assembled_model_response) != pre_guardrail_text
+                    else all_chunks
+                ):
+                    yield sse_chunk
+                return
+
             mock_response: Final = MockResponseIterator(model_response=assembled_model_response)
 
             # Return the reconstructed stream
             async for chunk in mock_response:
                 yield chunk
+        elif raw_sse:
+            # Forwarding an unscannable stream would silently disable the guardrail, so fail closed
+            # the way tool_permission does
+            raise GuardrailRaisedException(
+                guardrail_name=self.guardrail_name,
+                message="Streamed response could not be assembled for scanning, blocking it",
+            )
         else:
             for chunk in all_chunks:
                 yield chunk

@@ -17,6 +17,11 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
+from litellm.proxy.guardrails.anthropic_sse import (
+    anthropic_sse_chunks_from_response,
+    assemble_anthropic_sse_stream,
+    is_raw_sse_stream,
+)
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     PermissionError,
@@ -870,7 +875,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             all_chunks.append(chunk)
 
         assembled_model_response: Final[ModelResponse | TextCompletionResponse | None] = (
-            stream_chunk_builder(chunks=all_chunks) if not self._is_raw_sse_stream(all_chunks) else None
+            stream_chunk_builder(chunks=all_chunks) if not is_raw_sse_stream(all_chunks) else None
         )
         if isinstance(assembled_model_response, ModelResponse):
             denied_tools = self._check_assembled_stream(assembled_model_response)
@@ -883,9 +888,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 yield chunk
             return
 
-        anthropic_response: Final = self._assemble_anthropic_stream(all_chunks)
+        anthropic_response: Final = assemble_anthropic_sse_stream(all_chunks)
         if anthropic_response is None:
-            if self._is_raw_sse_stream(all_chunks):
+            if is_raw_sse_stream(all_chunks):
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
                     message=(
@@ -904,12 +909,8 @@ class ToolPermissionGuardrail(CustomGuardrail):
             return
 
         self._modify_response_with_permission_errors(anthropic_response, anthropic_denials)
-        for sse_chunk in self._rewritten_anthropic_sse_chunks(anthropic_response):
+        for sse_chunk in anthropic_sse_chunks_from_response(anthropic_response):
             yield sse_chunk
-
-    @staticmethod
-    def _is_raw_sse_stream(all_chunks: Sequence[Any]) -> bool:
-        return any(isinstance(chunk, (str, bytes)) for chunk in all_chunks)
 
     def _check_assembled_stream(
         self, assembled: ModelResponse
@@ -924,60 +925,3 @@ class ToolPermissionGuardrail(CustomGuardrail):
         if not denied_tools:
             verbose_proxy_logger.debug("Tool Permission Guardrail Post-Call Hook: All tools allowed")
         return denied_tools
-
-    @staticmethod
-    def _joined_sse_stream(all_chunks: Sequence[Any]) -> str | None:
-        raw: Final = b"".join(
-            chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
-            for chunk in all_chunks
-            if isinstance(chunk, (str, bytes))
-        )
-        try:
-            return raw.decode("utf-8")
-        except UnicodeDecodeError:
-            return None
-
-    @staticmethod
-    def _has_anthropic_message_start(sse_stream: str) -> bool:
-        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
-            AnthropicPassthroughLoggingHandler,
-        )
-
-        return any(
-            (event_data := AnthropicPassthroughLoggingHandler._extract_sse_data(event)) is not None  # pyright: ignore[reportPrivateUsage]  # same parser the assembler uses; a private import beats forking SSE parsing
-            and event_data.get("type") == "message_start"
-            for event in AnthropicPassthroughLoggingHandler._split_sse_chunk_into_events(sse_stream)  # pyright: ignore[reportPrivateUsage]  # same parser the assembler uses
-        )
-
-    @staticmethod
-    def _assemble_anthropic_stream(all_chunks: Sequence[Any]) -> ModelResponse | None:
-        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
-            AnthropicPassthroughLoggingHandler,
-        )
-
-        sse_stream: Final = ToolPermissionGuardrail._joined_sse_stream(all_chunks)
-        if sse_stream is None or not ToolPermissionGuardrail._has_anthropic_message_start(sse_stream):
-            return None
-        try:
-            assembled = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(  # pyright: ignore[reportPrivateUsage]  # the only SSE-to-ModelResponse assembler; reimplementing it here would fork the parser
-                all_chunks=(sse_stream,),
-                litellm_logging_obj=None,  # pyright: ignore[reportArgumentType]  # only forwarded to stream_chunk_builder, which accepts None
-                model="",
-            )
-        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
-            return None
-        return assembled if isinstance(assembled, ModelResponse) else None
-
-    @staticmethod
-    def _rewritten_anthropic_sse_chunks(assembled: ModelResponse) -> tuple[bytes, ...]:
-        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
-            LiteLLMAnthropicMessagesAdapter,
-        )
-        from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
-            FakeAnthropicMessagesStreamIterator,
-        )
-
-        anthropic_response: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
-            response=assembled
-        )
-        return tuple(FakeAnthropicMessagesStreamIterator(response=anthropic_response).chunks)

@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.exceptions import ModifyResponseException
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
@@ -2844,6 +2845,187 @@ async def test_apply_guardrail_propagates_modify_response_on_block():
             )
 
     assert exc_info.value.message == "Sorry, the model cannot answer this question."
+
+
+_ANTHROPIC_SSE_CHUNKS = (
+    b'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message",'
+    b'"role":"assistant","model":"claude","content":[],"usage":{"input_tokens":5,"output_tokens":0}}}\n\n',
+    b'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
+    b'"content_block":{"type":"text","text":""}}\n\n',
+    b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+    b'"delta":{"type":"text_delta","text":"my ssn is 123-45-6789"}}\n\n',
+    b'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+    b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
+    b'"usage":{"output_tokens":9}}\n\n',
+    b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+)
+
+
+async def _anthropic_sse_stream():
+    for chunk in _ANTHROPIC_SSE_CHUNKS:
+        yield chunk
+
+
+async def _drain_streaming_hook(guardrail, request_data=None):
+    return [
+        chunk
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_anthropic_sse_stream(),
+            request_data=request_data
+            if request_data is not None
+            else {"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "what is my ssn"}]},
+        )
+    ]
+
+
+def _sse_guardrail(**kwargs):
+    return BedrockGuardrail(
+        guardrail_name="bedrock-sse",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+        **kwargs,
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_scans_raw_anthropic_sse_instead_of_crashing():
+    """A /v1/messages stream arrives as raw SSE frames and must be assembled, then scanned.
+
+    Regression for `500 Error building chunks for logging/streaming usage calculation`:
+    stream_chunk_builder subscripts each chunk, which raises TypeError on bytes.
+    """
+    guardrail = _sse_guardrail()
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.return_value = {"action": "NONE"}
+        delivered = await _drain_streaming_hook(guardrail)
+
+    mock_api.assert_called_once()
+    kwargs = mock_api.call_args.kwargs
+    assert kwargs["source"] == "OUTPUT"
+    assert "my ssn is 123-45-6789" in str(kwargs["response"].choices[0].message.content)
+    assert kwargs["messages"] == [{"role": "user", "content": "what is my ssn"}]
+    assert tuple(delivered) == _ANTHROPIC_SSE_CHUNKS
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_emits_masked_text_for_raw_anthropic_sse():
+    """Masking must reach the client on /v1/messages, with mask_response_content unset.
+
+    The assembled path masks regardless of the flag, so forwarding the original frames here
+    would ship exactly the text the guardrail redacted.
+    """
+    guardrail = _sse_guardrail()
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.return_value = {
+            "action": "GUARDRAIL_INTERVENED",
+            "outputs": [{"text": "my ssn is {SSN}"}],
+        }
+        delivered = await _drain_streaming_hook(guardrail)
+
+    body = b"".join(delivered)
+    assert b"{SSN}" in body
+    assert b"123-45-6789" not in body
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_fails_closed_when_raw_sse_cannot_be_assembled():
+    """An unscannable stream must not be delivered: forwarding it silently disables the guardrail."""
+    from litellm.exceptions import GuardrailRaisedException
+
+    guardrail = _sse_guardrail()
+
+    async def _unparseable_stream():
+        yield b'data: {"type":"content_block_delta"}\n\n'
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        with pytest.raises(GuardrailRaisedException):
+            async for _ in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_unparseable_stream(),
+                request_data={"model": "claude-sonnet-4-5"},
+            ):
+                pass
+
+    mock_api.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_fails_closed_when_assembler_raises_api_error():
+    """stream_chunk_builder re-raises assembly failures as litellm.APIError; it must not escape.
+
+    That exception message is the exact 500 this fix exists to remove.
+    """
+    from litellm.exceptions import GuardrailRaisedException
+
+    guardrail = _sse_guardrail()
+
+    with patch(
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers."
+        "anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler."
+        "_build_complete_streaming_response",
+        side_effect=litellm.APIError(
+            status_code=500,
+            message="Error building chunks for logging/streaming usage calculation",
+            llm_provider="",
+            model="",
+        ),
+    ):
+        with pytest.raises(GuardrailRaisedException):
+            await _drain_streaming_hook(guardrail)
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_preserves_message_id_and_model_when_re_emitting():
+    """A rewritten stream must still look like the upstream Anthropic response."""
+    guardrail = _sse_guardrail()
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.return_value = {
+            "action": "GUARDRAIL_INTERVENED",
+            "outputs": [{"text": "my ssn is {SSN}"}],
+        }
+        delivered = await _drain_streaming_hook(guardrail)
+
+    body = b"".join(delivered)
+    assert b'"id": "msg_1"' in body
+    assert b"unknown-model" not in body
+    assert b'"model": "claude"' in body
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_blocks_raw_anthropic_sse_on_violation():
+    """A block on the extracted text must stop the stream rather than deliver it."""
+    guardrail = _sse_guardrail()
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.side_effect = HTTPException(status_code=400, detail={"error": "Violated guardrail policy"})
+        with pytest.raises(HTTPException) as exc:
+            await _drain_streaming_hook(guardrail)
+
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_yields_synthetic_block_stream_for_raw_anthropic_sse():
+    """disable_exception_on_block must keep behaving as a stream, not an SSE 500 frame."""
+    guardrail = _sse_guardrail(disable_exception_on_block=True)
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.side_effect = ModifyResponseException(
+            message="Sorry, the model cannot answer this question.",
+            model="claude",
+            request_data={},
+        )
+        delivered = await _drain_streaming_hook(guardrail)
+
+    body = b"".join(delivered)
+    assert b"Sorry, the model cannot answer this question." in body
+    assert b"123-45-6789" not in body
 
 
 @pytest.mark.asyncio
