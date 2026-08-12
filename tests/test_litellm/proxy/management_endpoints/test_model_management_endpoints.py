@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -433,7 +434,9 @@ class TestClearCache:
     @pytest.mark.asyncio
     async def test_clear_cache_preserve_config_models(self):
         """
-        Test that clear_cache clears DB models and preserves config models.
+        clear_cache resets DB-backed auto-router entries and delegates every deployment
+        change to the reload, leaving config models untouched. It must not wipe
+        deployments itself -- see the delete_deployment assertion below.
         """
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             clear_cache,
@@ -482,10 +485,12 @@ class TestClearCache:
         ):
             await clear_cache()
 
-            # Should have called delete_deployment for both DB models
-            assert mock_router.delete_deployment.call_count == 2
-            mock_router.delete_deployment.assert_any_call(id="db-model-1")
-            mock_router.delete_deployment.assert_any_call(id="db-model-2")
+            # clear_cache must NOT wipe deployments. It used to delete_deployment()
+            # every db model before the reload restored them, which left the router
+            # serving zero db models for the width of the reload. The reload's own
+            # _delete_deployment/upsert_deployment pair converges to the same state
+            # without that hole, so the wipe was a pure data-plane outage.
+            mock_router.delete_deployment.assert_not_called()
 
             # DB-backed router entries are cleared so they can be re-populated by the
             # reload below; the config-backed router must survive, since add_deployment()
@@ -3537,6 +3542,140 @@ class TestConcurrentModelWritesDoNotEvictEachOther:
                 action="create",
                 still_desired=healthy_after_reload,
             )
+
+
+class TestDeleteEvictionsHoldTheReconcileLock:
+    """A delete evicts from ``llm_router`` directly instead of reconciling, so it must
+    take MODEL_RECONCILE_LOCK to do it.
+
+    The db row is gone by then, but a reconcile that snapshotted the db BEFORE the row
+    was deleted still lists that id as desired, and its ``_add_deployment`` upserts the
+    deployment back. Unserialized, the eviction can land while that reconcile is
+    mid-flight and simply be undone -- the pod keeps serving a model the database no
+    longer has, until the next reconcile happens to notice. Taking the lock orders the
+    eviction after any in-flight reconcile, making it the last word.
+    """
+
+    @staticmethod
+    async def _assert_evicts_under_lock(monkeypatch, call_endpoint, model_id: str) -> None:
+        """Run ``call_endpoint`` with the lock already held and assert it blocks.
+
+        Holding MODEL_RECONCILE_LOCK stands in for a reconcile that is mid-flight. If
+        the eviction takes the lock it cannot run until we release; if it does not, it
+        runs straight through and the deployment is evicted while the "reconcile" is
+        still in its critical section -- exactly the interleaving that resurrects it.
+
+        Each test gets a FRESH lock. asyncio.Lock binds itself to the event loop of its
+        first contended acquire and raises on every other loop afterwards, so a shared
+        module-level lock contended here would poison the next asyncio test in this
+        process. The proxy has one event loop for its lifetime, so this is a test-only
+        concern -- but it means any future test that contends this lock must patch its
+        own, exactly as here.
+        """
+        lock = asyncio.Lock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.MODEL_RECONCILE_LOCK", lock)
+
+        async with lock:
+            task = asyncio.create_task(call_endpoint())
+            # Give the endpoint every chance to reach (and get stuck on) the lock.
+            for _ in range(50):
+                await asyncio.sleep(0)
+            assert not task.done(), (
+                f"deleting {model_id} did not wait for MODEL_RECONCILE_LOCK -- an "
+                f"in-flight reconcile can resurrect the deployment it just evicted"
+            )
+        await asyncio.wait_for(task, timeout=5)
+
+    @pytest.mark.asyncio
+    async def test_delete_model_waits_for_an_in_flight_reconcile(self, monkeypatch):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            ModelInfoDelete,
+            delete_model,
+        )
+
+        model_id = "m-doomed"
+        row = MagicMock()
+        row.model_dump.return_value = {
+            "model_name": "gpt-4o",
+            "litellm_params": {"model": "openai/gpt-4o"},
+            "model_info": {"id": model_id},
+        }
+        table = MagicMock()
+        table.find_unique = AsyncMock(return_value=row)
+        table.delete = AsyncMock(return_value=row)
+
+        prisma = MagicMock()
+        prisma.db.litellm_proxymodeltable = table
+
+        router = MagicMock()
+        router.delete_deployment = MagicMock(return_value=True)
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+        monkeypatch.setattr(
+            "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+            AsyncMock(return_value=True),
+        )
+
+        async def call() -> None:
+            await delete_model(
+                model_info=ModelInfoDelete(id=model_id),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id="admin",
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    api_key="sk-admin",
+                ),
+            )
+
+        await self._assert_evicts_under_lock(monkeypatch, call, model_id)
+        router.delete_deployment.assert_called_once_with(id=model_id)
+
+    @pytest.mark.asyncio
+    async def test_delete_team_models_waits_for_an_in_flight_reconcile(self, monkeypatch):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            delete_team_models,
+        )
+
+        model_id = "m-team-doomed"
+        router = MagicMock()
+        router.delete_deployment = MagicMock(return_value=True)
+
+        # _get_team_deployments filters by the model_name prefix, then confirms
+        # model_info["team_id"] Python-side, so the row must satisfy both.
+        deleted_row = MagicMock()
+        deleted_row.model_id = model_id
+        deleted_row.model_name = "model_name_team-1_gpt-4o"
+        deleted_row.model_info = {"id": model_id, "team_id": "team-1"}
+
+        tx = MagicMock()
+        tx.litellm_proxymodeltable.find_many = AsyncMock(return_value=[deleted_row])
+        tx.litellm_proxymodeltable.delete_many = AsyncMock(return_value=1)
+
+        tx_ctx = MagicMock()
+        tx_ctx.__aenter__ = AsyncMock(return_value=tx)
+        tx_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        prisma = MagicMock()
+        prisma.db.tx = MagicMock(return_value=tx_ctx)
+
+        monkeypatch.setattr(
+            "litellm.proxy.management_endpoints.model_management_endpoints.publish_config_change",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.management_endpoints.model_management_endpoints.coordination_redis_cache",
+            MagicMock(return_value=None),
+        )
+
+        async def call() -> None:
+            await delete_team_models(
+                team_ids=["team-1"], prisma_client=prisma, llm_router=router
+            )
+
+        await self._assert_evicts_under_lock(monkeypatch, call, model_id)
+        router.delete_deployment.assert_called_once_with(id=model_id)
 
 
 class TestModelInfoAsMapping:

@@ -1036,9 +1036,15 @@ async def delete_team_models(
     if deleted_model_ids:
         await publish_config_change(redis_cache=coordination_redis_cache(), object_type="litellm_proxymodeltable")
 
+    # Under MODEL_RECONCILE_LOCK, for the same reason as delete_model: the rows are
+    # gone, but a reconcile holding a pre-delete snapshot would upsert these ids back
+    # onto this pod. The lock orders the eviction after any in-flight reconcile.
     if llm_router is not None:
-        for model_id in deleted_model_ids:
-            llm_router.delete_deployment(id=model_id)
+        from litellm.proxy.proxy_server import MODEL_RECONCILE_LOCK
+
+        async with MODEL_RECONCILE_LOCK:
+            for model_id in deleted_model_ids:
+                llm_router.delete_deployment(id=model_id)
 
     return deleted_model_ids
 
@@ -1358,6 +1364,7 @@ async def delete_model(
         """
 
         from litellm.proxy.proxy_server import (
+            MODEL_RECONCILE_LOCK,
             llm_router,
             premium_user,
             prisma_client,
@@ -1406,8 +1413,15 @@ async def delete_model(
                 )
 
             ## DELETE FROM ROUTER ##
+            # Under MODEL_RECONCILE_LOCK. The db row is already gone, but a reconcile
+            # that snapshotted the db BEFORE that delete still lists this id as desired,
+            # and its _add_deployment upserts the deployment straight back -- leaving
+            # this pod serving a model the database no longer has, until the next
+            # reconcile. Taking the lock orders this eviction after any such in-flight
+            # reconcile's re-add, so the eviction is the last word.
             if llm_router is not None:
-                llm_router.delete_deployment(id=model_info.id)
+                async with MODEL_RECONCILE_LOCK:
+                    llm_router.delete_deployment(id=model_info.id)
 
             # Runs after the row delete so the sibling check sees post-delete state.
             if model_params.model_info.team_id is not None:
@@ -2207,11 +2221,9 @@ async def clear_cache() -> ReconcileOutcome:
     raise_if_reload_degraded_serving.
 
     Runs under MODEL_RECONCILE_LOCK for its whole extent, not just the reload at the
-    end. The wipe below un-serves EVERY db model before add_deployment puts them back,
-    so an unserialized concurrent model write would snapshot the router mid-hole and
-    report every one of them as collateral damage from its own reload. Holding the lock
-    across wipe+reload makes the pair atomic to any other reconcile; the inner call is
-    _add_deployment_locked because add_deployment would re-acquire and deadlock.
+    end, so the auto-router reset and the reload that rebuilds those routers are atomic
+    to any other reconcile. The inner call is _add_deployment_locked because
+    add_deployment would re-acquire the same non-reentrant lock and deadlock.
     """
     from litellm.proxy.proxy_server import (
         MODEL_RECONCILE_LOCK,
@@ -2239,15 +2251,24 @@ async def clear_cache() -> ReconcileOutcome:
             for model in current_models:
                 model_info = model.get("model_info", {})
                 if model_info.get("db_model", False):
-                    # This is a DB model, mark for deletion
                     db_model_ids.append(model_info.get("id"))
                 else:
-                    # This is a config model, preserve it
+                    # This is a config model, preserved by the reconcile below
                     config_models.append(model)
 
-            # Clear only DB models
-            for model_id in db_model_ids:
-                llm_router.delete_deployment(id=model_id)
+            # NOTE: deployments are deliberately NOT wiped here. This used to
+            # delete_deployment() every db model before the reload put them back, which
+            # left the router serving ZERO db models for the whole width of the reload
+            # -- a real data-plane hole that every inference request landing in it fell
+            # into. It was also redundant: the reload's _delete_deployment evicts exactly
+            # the ids the db no longer lists, and upsert_deployment pops-and-re-adds a
+            # deployment whose params changed and no-ops one that did not (router.py
+            # upsert_deployment), so the reconcile converges to the same state on its
+            # own. Every mutation is visible to that comparison -- `blocked` and (for
+            # premium) `updated_at` are written into model_info.
+            #
+            # The auto-router pops below are NOT redundant and stay: they are keyed by
+            # model_name, which no deployment-id reconcile touches.
 
             # Clear only DB-backed auto-router-family entries, keyed by model_name, so the
             # reload below rebuilds them fresh. A blanket .clear() would also drop config-defined
@@ -2279,7 +2300,7 @@ async def clear_cache() -> ReconcileOutcome:
             )
 
             verbose_proxy_logger.debug(
-                "Cleared %s DB models, preserved %s config models", len(db_model_ids), len(config_models)
+                "Reconciled %s DB models, preserved %s config models", len(db_model_ids), len(config_models)
             )
             return outcome
         except Exception as e:
