@@ -4313,6 +4313,38 @@ def test_handle_anthropic_messages_response_logging_preserves_fast_mode_speed():
     assert getattr(result.usage, "speed", None) == "fast"
 
 
+def test_handle_anthropic_messages_parsed_response_logging_preserves_fast_mode_speed():
+    """The Rust messages bridge hands logging a parsed Anthropic response with no
+    httpx_response in model_call_details, which routes through transform_parsed_response;
+    the request's speed has to be threaded there too or rust-served fast-mode calls are
+    logged at the standard rate."""
+    logging_obj = LitellmLogging(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="lit-5115-rust",
+        function_id="lit-5115-rust",
+    )
+    logging_obj.optional_params = {"speed": "fast"}
+
+    result = logging_obj._handle_anthropic_messages_response_logging(
+        result={
+            "id": "msg_2",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-4-8",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1000, "cache_read_input_tokens": 200, "output_tokens": 100},
+        }
+    )
+
+    assert getattr(result.usage, "speed", None) == "fast"
+
+
 def test_logging_init_sets_trace_id():
     """Logging.__init__() must call set_trace_id with self.litellm_trace_id."""
     from litellm.litellm_core_utils.litellm_logging import Logging
