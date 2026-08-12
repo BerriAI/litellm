@@ -1322,7 +1322,7 @@ async def new_team(
             "rpm_limit",
             "team_member_permissions",
         ):
-            if getattr(data, field, None) is None:
+            if field not in data.model_fields_set:
                 default_value = _get_default_team_param(field)
                 if default_value is not None:
                     setattr(data, field, default_value)
