@@ -1,7 +1,4 @@
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
-
-import httpx
+from typing import Any, Final
 
 import litellm
 from litellm._logging import verbose_logger
@@ -9,30 +6,11 @@ from litellm.constants import XAI_API_BASE
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.xai.common_utils import XAIModelInfo
-from litellm.llms.xai.cost_calculator import (
-    apply_server_side_tool_usage_details_to_usage,
-)
-from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import (
-    ResponseAPIUsage,
-    ResponseCompletedEvent,
-    ResponseFailedEvent,
-    ResponseIncompleteEvent,
-    ResponsesAPIOptionalRequestParams,
-    ResponsesAPIResponse,
-    ResponsesAPIStreamingResponse,
-)
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.llms.xai import XAIWebSearchTool, XAIXSearchTool
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import LlmProviders, Usage
-
-if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
-
-    LiteLLMLoggingObj = _LiteLLMLoggingObj
-else:
-    LiteLLMLoggingObj = Any
+from litellm.types.utils import LlmProviders
 
 
 class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -65,87 +43,6 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             supported_params.remove("instructions")
 
         return supported_params
-
-    def transform_response_api_response(
-        self,
-        model: str,
-        raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
-    ) -> ResponsesAPIResponse:
-        """
-        Attach xAI tool usage details onto a chat Usage object.
-
-        Cost calculation normalizes Responses usage via
-        ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage, which
-        drops non-standard fields unless usage is already a chat Usage instance.
-        """
-        response: Final = super().transform_response_api_response(
-            model=model, raw_response=raw_response, logging_obj=logging_obj
-        )
-        self._attach_server_side_tool_usage_details_to_usage(response)
-        return response
-
-    def transform_streaming_response(
-        self,
-        model: str,
-        parsed_chunk: dict,  # mutable-ok: OpenAIResponsesAPIConfig override keeps dict signature
-        logging_obj: LiteLLMLoggingObj,
-    ) -> ResponsesAPIStreamingResponse:
-        """
-        Preserve xAI tool usage on streaming terminal events for cost logging.
-
-        Completed/incomplete/failed events embed a full ResponsesAPIResponse; without
-        attaching server_side_tool_usage_details here, stream=true web_search usage is
-        dropped when usage is normalized for billing.
-        """
-        event: Final = super().transform_streaming_response(
-            model=model, parsed_chunk=parsed_chunk, logging_obj=logging_obj
-        )
-        if isinstance(
-            event,
-            (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent),
-        ):
-            embedded_response: Final = getattr(event, "response", None)
-            if isinstance(embedded_response, ResponsesAPIResponse):
-                self._attach_server_side_tool_usage_details_to_usage(embedded_response)
-        return event
-
-    @staticmethod
-    def _server_side_tool_usage_details_from_usage(
-        usage: Usage | ResponseAPIUsage | Mapping[str, object] | None,
-    ) -> Mapping[str, object] | None:
-        if usage is None:
-            return None
-        if isinstance(usage, Mapping):
-            mapping_details: Final = usage.get("server_side_tool_usage_details")
-            return mapping_details if isinstance(mapping_details, Mapping) else None
-        attr_details: Final = getattr(usage, "server_side_tool_usage_details", None)
-        if isinstance(attr_details, Mapping):
-            return attr_details
-        model_extra: Final = getattr(usage, "model_extra", None) or getattr(usage, "__pydantic_extra__", None)
-        if not isinstance(model_extra, Mapping):
-            return None
-        extra_details: Final = model_extra.get("server_side_tool_usage_details")
-        return extra_details if isinstance(extra_details, Mapping) else None
-
-    @staticmethod
-    def _attach_server_side_tool_usage_details_to_usage(
-        response: ResponsesAPIResponse,
-    ) -> None:
-        if response.usage is None:
-            return
-
-        details: Final = XAIResponsesAPIConfig._server_side_tool_usage_details_from_usage(response.usage)
-        if details is None:
-            return
-
-        if isinstance(response.usage, Usage):
-            apply_server_side_tool_usage_details_to_usage(response.usage, details)
-            return
-
-        chat_usage: Final = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(response.usage)
-        apply_server_side_tool_usage_details_to_usage(chat_usage, details)
-        response.usage = chat_usage  # pyright: ignore[reportAttributeAccessIssue]  # extra  # rebind-ok: chat Usage
 
     def _transform_web_search_tool(self, tool: dict[str, Any]) -> XAIWebSearchTool | dict[str, Any]:
         """
