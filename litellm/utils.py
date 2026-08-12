@@ -1253,6 +1253,35 @@ async def async_post_call_success_deployment_hook(
     return response
 
 
+async def async_post_call_failure_deployment_hook(
+    request_data: Mapping[str, Any], exception: Exception, call_type: str
+) -> None:
+    """
+    Notify CustomLogger callbacks that a deployment attempt failed.
+
+    Unlike its pre-call/post-success siblings, this wraps each callback call
+    in its own try/except: it runs on the wrapper's exception path, so a
+    broken callback must never replace the real exception that's about to be
+    re-raised to the caller.
+    """
+    try:
+        typed_call_type = CallTypes(call_type)
+    except ValueError:
+        typed_call_type = None  # unknown call type
+
+    CustomLogger: Final = _get_cached_custom_logger()
+    for callback in litellm.callbacks:
+        if isinstance(callback, CustomLogger):
+            try:
+                await callback.async_post_call_failure_deployment_hook(request_data, exception, typed_call_type)
+            except Exception as callback_error:  # noqa: BLE001  # a broken callback must not mask the real failure
+                verbose_logger.debug(
+                    "async_post_call_failure_deployment_hook error in %s: %s",
+                    type(callback).__name__,
+                    callback_error,
+                )
+
+
 def post_call_processing(
     original_response,
     model,
@@ -1883,6 +1912,11 @@ def client(original_function):
                     await logging_obj.async_failure_handler(e, traceback_exception, start_time, end_time)
                 except Exception as e:
                     raise e
+                await async_post_call_failure_deployment_hook(
+                    request_data=kwargs,
+                    exception=e,
+                    call_type=call_type,
+                )
 
             call_type = original_function.__name__
             num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)

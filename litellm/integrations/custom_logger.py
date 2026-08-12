@@ -2,7 +2,7 @@
 #    On success, logs events to Promptlayer
 import re
 import traceback
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
 
 from pydantic import BaseModel
@@ -291,6 +291,33 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ) -> LLMResponseTypes | None:
         """
         Allow modifying / reviewing the response just after it's received from the deployment.
+        """
+
+    async def async_post_call_failure_deployment_hook(
+        self,
+        request_data: Mapping[str, Any],
+        exception: Exception,
+        call_type: CallTypes | None,
+    ) -> None:
+        """
+        Called once per failed deployment attempt - attempt 1, every retry, and
+        every fallback chain step - because the router re-invokes the wrapped
+        function on each attempt, re-entering this hook's call site fresh
+        every time.
+
+        This is a DEPLOYMENT-LEVEL signal, distinct from the REQUEST-LEVEL
+        ``async_log_failure_event``, which fires once per logical client
+        request behind a dedup gate. ``request_data`` is this attempt's own
+        kwargs, not a value shared across the fallback chain, so unlike
+        ``async_log_failure_event`` there's nothing stale to watch out for.
+
+        Pairs with ``async_pre_call_deployment_hook`` and
+        ``async_post_call_success_deployment_hook`` to complete the
+        pre-call/success/failure lifecycle for a single deployment attempt.
+
+        Default: no-op. Opt in by overriding. Keep overrides fast - this
+        runs on the request's exception path, so a slow implementation
+        delays error propagation to the caller.
         """
 
     async def async_post_call_streaming_deployment_hook(

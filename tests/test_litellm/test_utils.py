@@ -16,6 +16,7 @@ from litellm._logging import (
     trace_id_var,
     verbose_logger,
 )
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.utils import (
     CallTypes,
@@ -34,6 +35,8 @@ from litellm.utils import (
     _check_provider_match,
     _get_potential_model_names,
     _is_streaming_request,
+    async_post_call_failure_deployment_hook,
+    client,
     get_api_key,
     get_llm_provider,
     get_non_default_completion_params,
@@ -4977,3 +4980,124 @@ def test_completion_does_not_leak_rust_flag_into_provider_request_body():
     create_kwargs = mock_client.chat.completions.with_raw_response.create.call_args.kwargs
     assert "rust" not in create_kwargs
     assert "rust" not in (create_kwargs.get("extra_body") or {})
+
+
+class _RecordingDeploymentFailureLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[tuple[dict, Exception, CallTypes | None]] = []
+
+    async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type):
+        self.calls.append((request_data, exception, call_type))
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_deployment_hook_calls_custom_logger_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The dispatcher must call the CustomLogger hook with the exception it was given
+    and the call_type resolved to its CallTypes enum member."""
+    recorder = _RecordingDeploymentFailureLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    exc = ValueError("deployment failed")
+    await async_post_call_failure_deployment_hook(
+        request_data={"model": "gpt-4o-mini"}, exception=exc, call_type="acompletion"
+    )
+
+    assert len(recorder.calls) == 1
+    request_data, received_exc, call_type = recorder.calls[0]
+    assert request_data == {"model": "gpt-4o-mini"}
+    assert received_exc is exc
+    assert call_type == CallTypes.acompletion
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_deployment_hook_falls_back_to_none_call_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unrecognized call_type string must resolve to None rather than raising."""
+    recorder = _RecordingDeploymentFailureLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    await async_post_call_failure_deployment_hook(
+        request_data={}, exception=ValueError("x"), call_type="not_a_real_call_type"
+    )
+
+    assert recorder.calls[0][2] is None
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_deployment_hook_swallows_callback_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A callback that raises inside the hook must not propagate out of the dispatcher."""
+
+    class ExplodingLogger(CustomLogger):
+        async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type):
+            raise RuntimeError("hook exploded")
+
+    monkeypatch.setattr(litellm, "callbacks", [ExplodingLogger()])
+
+    await async_post_call_failure_deployment_hook(request_data={}, exception=ValueError("x"), call_type="acompletion")
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_deployment_hook_skips_non_custom_logger_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Callable (function-based) callbacks are not CustomLogger instances and must be skipped."""
+    called: list[bool] = []
+
+    async def fn_callback(*args: object, **kwargs: object) -> None:
+        called.append(True)
+
+    monkeypatch.setattr(litellm, "callbacks", [fn_callback])
+
+    await async_post_call_failure_deployment_hook(request_data={}, exception=ValueError("x"), call_type="acompletion")
+
+    assert called == []
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_fires_post_call_failure_deployment_hook_once_per_failed_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: a failed deployment call must reach async_post_call_failure_deployment_hook
+    exactly once, sourced from wrapper_async's own except block rather than the dedup-gated
+    async_log_failure_event path, which would miss retries/fallback chain attempts 2+."""
+    recorder = _RecordingDeploymentFailureLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    with pytest.raises(litellm.AuthenticationError):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
+        )
+
+    assert len(recorder.calls) == 1
+    _, received_exc, call_type = recorder.calls[0]
+    assert isinstance(received_exc, litellm.AuthenticationError)
+    assert call_type == CallTypes.acompletion
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_raises_original_exception_even_if_hook_callback_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A broken async_post_call_failure_deployment_hook override must never shadow the real
+    exception the caller is waiting on."""
+
+    class ExplodingLogger(CustomLogger):
+        async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type):
+            raise RuntimeError("hook exploded")
+
+    monkeypatch.setattr(litellm, "callbacks", [ExplodingLogger()])
+
+    with pytest.raises(litellm.AuthenticationError, match="bad key"):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
+        )
