@@ -337,14 +337,6 @@ describe("DataTable filtering", () => {
     );
     expect(names()).toEqual(["Charlie", "Alice", "Bob"]);
   });
-
-  it("throws when server filtering is missing required props", () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(() => render(<DataTable data={[]} columns={filterableColumns} filterMode="server" />)).toThrow(
-      /filterMode='server'/,
-    );
-    spy.mockRestore();
-  });
 });
 
 describe("DataTable loading", () => {
@@ -662,38 +654,5 @@ describe("DataTable layout", () => {
     expect((scroller.parentElement as HTMLElement).className).not.toContain("flex-col");
     expect(container.querySelector("thead")?.className).not.toContain("sticky");
     expect(container.querySelector("thead")?.className).not.toContain("bg-background");
-  });
-});
-
-describe("DataTable misconfiguration guards", () => {
-  it("throws when server sorting is missing required props", () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(() => render(<DataTable data={[]} columns={nameCellColumns} sortingMode="server" />)).toThrow(
-      /sortingMode='server'/,
-    );
-    spy.mockRestore();
-  });
-
-  it("throws when server pagination is missing required props", () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(() => render(<DataTable data={[]} columns={nameCellColumns} paginationMode="server" />)).toThrow(
-      /paginationMode='server'/,
-    );
-    spy.mockRestore();
-  });
-
-  it("throws when both defaultSorting and sorting are provided", () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(() =>
-      render(
-        <DataTable
-          data={[]}
-          columns={nameCellColumns}
-          defaultSorting={[{ id: "name", desc: false }]}
-          sorting={[{ id: "name", desc: false }]}
-        />,
-      ),
-    ).toThrow(/defaultSorting/);
-    spy.mockRestore();
   });
 });

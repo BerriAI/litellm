@@ -39,13 +39,21 @@ _UNATTRIBUTED_TRACKABLE_CALL_TYPES: Final[frozenset[str]] = frozenset(
         CallTypes.pass_through.value,
         CallTypes.llm_passthrough_route.value,
         CallTypes.allm_passthrough_route.value,
-        # CheckBatchCost's synthetic logging_obj for a completed managed batch only ever
-        # carries user_api_key_user_id (from LiteLLM_ManagedObjectTable.created_by) and
-        # user_api_key_team_id (from .team_id) -- both are None for batches created with
-        # the master key or a team-less key, since the table never stores the raw key
-        # hash. The batch already incurred real provider cost, so track it regardless.
+        # CheckBatchCost's synthetic logging_obj for a completed managed batch carries
+        # whatever LiteLLM_ManagedObjectTable stored at create time, and all of it is
+        # None for a batch created before those columns were persisted, or by the master
+        # key. The batch already incurred real provider cost, so track it regardless.
         CallTypes.aretrieve_batch.value,
     }
+)
+
+# Both spellings, because call_type reaches the callback as str(...) of either the
+# enum member or its value.
+_CAPTURED_IDENTITY_CALL_TYPES: Final[frozenset[str]] = frozenset(
+    (
+        CallTypes.aretrieve_batch.value,
+        str(CallTypes.aretrieve_batch),
+    )
 )
 
 
@@ -212,7 +220,10 @@ class _ProxyDBLogger(CustomLogger):
             # Only fetch key details when user_id wasn't already populated (e.g. direct MCP REST calls).
             # Avoids a cache/DB lookup on every normal LLM request.
             if metadata.get("user_api_key") and not metadata.get("user_api_key_user_id"):
-                metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata=metadata)
+                metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(  # rebind-ok: enriched metadata replaces the original
+                    metadata=metadata,
+                    resolve_missing_key_identity=str(kwargs.get("call_type")) not in _CAPTURED_IDENTITY_CALL_TYPES,
+                )
                 _write_spend_metadata_to_kwargs(kwargs=kwargs, metadata=metadata)
             budget_reservation: Final = _get_budget_reservation_from_metadata(metadata=metadata)
             user_id: Final = cast(str | None, metadata.get("user_api_key_user_id", None))
@@ -337,7 +348,7 @@ class _ProxyDBLogger(CustomLogger):
             spend_log_error("Error in tracking cost callback - %s", str(e), exc=e)
 
     @staticmethod
-    async def _enrich_failure_metadata_with_key_info(metadata: dict) -> dict:
+    async def _enrich_failure_metadata_with_key_info(metadata: dict, resolve_missing_key_identity: bool = True) -> dict:
         """
         Enriches failure spend log metadata by looking up the key object (and team object)
         from cache/DB when key fields are missing.
@@ -349,6 +360,11 @@ class _ProxyDBLogger(CustomLogger):
         2. Post-auth failures (provider errors, rate limits): key fields are populated
            but team_alias is missing because LiteLLM_VerificationTokenView SQL view
            doesn't include it. We look up the team object to fill in team_alias.
+
+        Scenario 1 reads the key's identity as it stands right now, so it is only correct
+        for a log emitted within the request it describes. Callers that log after a delay,
+        against an identity captured earlier, pass resolve_missing_key_identity=False and
+        keep their own user_id, team_id and org_id.
         """
         api_key_hash: Final = metadata.get("user_api_key")
         if not api_key_hash:
@@ -361,7 +377,7 @@ class _ProxyDBLogger(CustomLogger):
         )
 
         # Step 1: If key fields are missing, look up the full key object
-        if metadata.get("user_api_key_alias") is None:
+        if resolve_missing_key_identity and metadata.get("user_api_key_alias") is None:
             try:
                 key_obj: Final = await get_key_object(
                     hashed_token=api_key_hash,

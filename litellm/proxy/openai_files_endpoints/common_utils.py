@@ -4,7 +4,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Optional
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, runtime_checkable
 
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
@@ -20,6 +20,21 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
     from litellm.types.utils import LiteLLMBatch
+
+
+@runtime_checkable
+class ManagedResourceAccessChecker(Protocol):
+    async def can_user_call_unified_file_id(
+        self,
+        unified_file_id: str,
+        user_api_key_dict: "UserAPIKeyAuth",
+    ) -> bool: ...
+
+    async def can_user_call_unified_object_id(
+        self,
+        unified_object_id: str,
+        user_api_key_dict: "UserAPIKeyAuth",
+    ) -> bool: ...
 
 
 def _is_base64_encoded_unified_file_id(b64_uid: str) -> str | Literal[False]:
@@ -879,6 +894,65 @@ def validate_managed_files_requirement(
                 "target_model_names instead of the model parameter."
             ),
         )
+
+
+async def validate_managed_id_requirement(
+    resource_id: str | None,
+    resource_kind: Literal["file", "batch", "fine-tuning job"],
+    user_api_key_dict: "UserAPIKeyAuth",
+    managed_files_obj: object | None,
+) -> None:
+    """
+    Enforce proxy-level managed resources on every route that accepts a provider-issued id
+    when ``litellm.require_managed_files`` is enabled, and authenticate managed ids against
+    the caller's stored ownership record.
+
+    Ownership is only recorded for LiteLLM managed ids, so a raw provider id is forwarded to the
+    provider under shared credentials without any tenant check; knowing another tenant's provider
+    id would be enough to read, reuse, or destroy the object behind it.
+
+    Raises:
+        HTTPException: 400 for a raw id, 403 for an inaccessible managed id, or 500 when
+            ownership validation is unavailable.
+    """
+    from fastapi import HTTPException
+
+    import litellm
+
+    if litellm.require_managed_files is not True:
+        return
+
+    if not resource_id:
+        return
+
+    if not _is_base64_encoded_unified_file_id(resource_id):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Raw provider {resource_kind} ids cannot be used when require_managed_files is enabled in "
+                f"litellm_settings. Use the LiteLLM managed {resource_kind} id returned when the "
+                f"{resource_kind} was created."
+            ),
+        )
+
+    if not isinstance(managed_files_obj, ManagedResourceAccessChecker):
+        raise HTTPException(
+            status_code=500,
+            detail="Managed resource ownership validation is unavailable.",
+        )
+
+    can_access: Final = (
+        await managed_files_obj.can_user_call_unified_file_id(resource_id, user_api_key_dict)
+        if resource_kind == "file"
+        else await managed_files_obj.can_user_call_unified_object_id(resource_id, user_api_key_dict)
+    )
+    if can_access:
+        return
+
+    raise HTTPException(
+        status_code=403,
+        detail=f"The caller does not have access to this managed {resource_kind} id.",
+    )
 
 
 def _extract_model_param(request: "Request", request_body: dict) -> str | None:
