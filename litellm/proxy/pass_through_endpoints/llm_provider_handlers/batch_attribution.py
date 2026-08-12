@@ -10,17 +10,18 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.safe_json_dumps import strip_null_bytes
 
 
 def optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _optional_str_tuple(value: object) -> tuple[str, ...] | None:
+def _sanitized_str_tuple(value: object) -> tuple[str, ...] | None:
     if not isinstance(value, list):
         return None
     items: Final[Sequence[object]] = value
-    return tuple(tag for tag in items if isinstance(tag, str))
+    return tuple(strip_null_bytes(tag) for tag in items if isinstance(tag, str))
 
 
 def is_collection_route(url_route: str, collection_suffix: str) -> bool:
@@ -37,12 +38,12 @@ def request_tags_from_metadata(request_metadata: Mapping[str, object]) -> tuple[
     tagged key does not put its tags in the top-level metadata "tags" on the
     passthrough path)
     """
-    tags: Final = _optional_str_tuple(request_metadata.get("tags"))
+    tags: Final = _sanitized_str_tuple(request_metadata.get("tags"))
     if tags:
         return tags
     key_auth_metadata: Final = request_metadata.get("user_api_key_auth_metadata")
     if isinstance(key_auth_metadata, dict):
-        return _optional_str_tuple(key_auth_metadata.get("tags"))
+        return _sanitized_str_tuple(key_auth_metadata.get("tags"))
     return None
 
 
