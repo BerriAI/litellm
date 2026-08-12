@@ -3234,7 +3234,7 @@ class Router:
         self._merge_tools_from_deployment(deployment=deployment, kwargs=kwargs)
 
         model_info = deployment.get("model_info", {}).copy()
-        dep_litellm_params = deployment.get("litellm_params", {})
+        dep_litellm_params = deployment["litellm_params"]
         if not isinstance(dep_litellm_params, dict):
             dep_litellm_params = dep_litellm_params.model_dump(exclude_none=True)
         for field in CustomPricingLiteLLMParams.model_fields:
