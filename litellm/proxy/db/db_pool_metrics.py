@@ -1,15 +1,7 @@
 """Bridges the Prisma query engine's connection-pool counters into Prometheus.
 
-The query engine tracks pool occupancy and, separately, how long a query spent
-waiting for a pool slot versus executing against the database. That split is the
-only way to tell "the database is slow" apart from "we ran out of connections",
-so it is sampled here and re-published under ``litellm_db_pool_*`` names.
-
-Sampling is driven from the DB call path rather than from a scheduled job: an
-exporter that runs on a timer stops reporting exactly when the event loop is
-saturated, which is the window an operator most needs. Requests are what stall
-during pool exhaustion, and they keep arriving, so a throttled sample taken
-alongside real DB work stays alive through the incident.
+Sampled from the DB call path, not a timer: an exporter on a timer stops
+reporting exactly when the event loop is saturated.
 """
 
 from __future__ import annotations
@@ -40,26 +32,17 @@ _QUERY_DURATION_HISTOGRAM_KEY: Final = "prisma_datasource_queries_duration_histo
 
 
 class SupportsPoolSample(Protocol):
-    """The one method this module needs from a Prisma client wrapper.
-
-    Deliberately not ``runtime_checkable``: ``PrismaWrapper`` resolves most of
-    its surface through an instance-level ``__getattr__``, which an
-    ``isinstance`` check against a protocol does not see, so a runtime check
-    here would reject the very object it exists to accept.
-    """
+    """Not ``runtime_checkable``: ``PrismaWrapper`` resolves through an
+    instance-level ``__getattr__``, which ``isinstance`` does not see."""
 
     async def get_pool_sample(self) -> DBPoolSample: ...
 
 
 @dataclass(frozen=True, slots=True)
 class DBPoolSample:
-    """One reading of the engine's pool counters.
-
-    ``max_connections`` is derived as ``busy + idle`` rather than parsed out of
-    ``DATABASE_URL``. The engine reports ``idle`` as remaining capacity, so the
-    sum is the configured ``connection_limit``, and deriving it here keeps the
-    database credentials out of this path entirely.
-    """
+    """One reading of the engine's pool counters. ``max_connections`` is
+    ``busy + idle`` because the engine reports idle as remaining capacity, which
+    also keeps ``DATABASE_URL`` out of this path."""
 
     busy_connections: float
     idle_connections: float
@@ -77,13 +60,8 @@ class DBPoolSample:
 
 @dataclass(frozen=True, slots=True)
 class DBPoolMetricsUpdate:
-    """A sample plus the cumulative movement since the previous sample.
-
-    The engine reports totals; Prometheus counters take increments. The deltas
-    are the difference between consecutive samples, and are omitted entirely
-    when the engine's totals move backwards, which happens when the query engine
-    restarts and its counters reset.
-    """
+    """A sample plus the movement since the previous one. Deltas are zeroed when
+    the engine's totals move backwards, which means it restarted."""
 
     sample: DBPoolSample
     pending_acquirers: float
@@ -123,12 +101,8 @@ def parse_pool_sample(metrics: Metrics) -> DBPoolSample:
 
 
 class DBPoolMetricsSampler:
-    """Throttled reader of the engine's pool counters.
-
-    One instance per process. ``maybe_sample`` is safe to call on every DB
-    operation: it returns ``None`` without touching the engine until
-    ``min_interval_seconds`` has elapsed since the last reading.
-    """
+    """Throttled reader of the engine's pool counters. Safe to call on every DB
+    operation: it touches nothing until ``min_interval_seconds`` has elapsed."""
 
     def __init__(
         self,
@@ -149,19 +123,11 @@ class DBPoolMetricsSampler:
         return (self._monotonic() - self._last_sampled_at) >= self._min_interval_seconds
 
     async def maybe_sample(self, resolve_client: Callable[[], SupportsPoolSample | None]) -> DBPoolMetricsUpdate | None:
-        """Read the engine's counters, or return ``None`` if not yet due.
+        """Read the engine's counters, or ``None`` if not yet due.
 
-        The interval is consumed as soon as an attempt starts, before the client
-        is resolved, so a deployment that has no client to sample throttles the
-        same as one that does rather than retrying on every database call.
-
-        Never raises, and never blocks for long: a wedged query engine costs a
-        bounded wait. A pool sample is diagnostic, and an engine that cannot
-        answer one is already the subject of a louder alarm.
-
-        The client is resolved through a callable rather than passed in so that
-        resolution, which reads proxy module state, happens under the same
-        throttle and the same exception guard as the read itself.
+        The interval is consumed before the client is resolved, so a deployment
+        with nothing to sample throttles the same as one that does. Never raises
+        and never blocks for long; a pool sample is diagnostic.
         """
         if not self.is_due():
             return None
@@ -185,16 +151,10 @@ class DBPoolMetricsSampler:
     def _corrected_pending_acquirers(self, sample: DBPoolSample) -> float:
         """The engine's waiter gauge, corrected for waiters that timed out.
 
-        ``prisma_client_queries_wait`` is decremented when a waiter acquires a
-        connection but not when it gives up, so every pool timeout latches the
-        gauge one higher for the life of the process. Observed directly against
-        a live engine at ``connection_limit=2``: after two bursts that produced
-        seven P2024s, a fully drained pool still reported seven waiters.
-
-        Free capacity is proof that nobody is queued, so any reading taken while
-        a connection is idle is exactly the accumulated latch, and subtracting it
-        recovers the real depth. The baseline re-arms on every idle sample, so
-        repeated exhaustion stays accurate rather than drifting further each time.
+        ``prisma_client_queries_wait`` decrements on acquisition but not on
+        timeout, so each P2024 latches it one higher for the life of the process.
+        Free capacity proves nobody is queued, so an idle reading is exactly the
+        accumulated latch; subtracting it recovers the real depth.
         """
         if sample.idle_connections > 0:
             self._pending_baseline = sample.pending_acquirers

@@ -800,14 +800,9 @@ class PrismaWrapper:
         return seconds_left > self.TOKEN_REFRESH_BUFFER_SECONDS
 
     async def get_pool_sample(self) -> DBPoolSample:
-        """This connection pool's current occupancy, as the query engine sees it.
-
-        Declared rather than left to ``__getattr__``, which resolves through an
-        untyped delegation and so cannot satisfy a typed caller, and which also
-        makes the underlying client's identity easy to lose track of. Keeping
-        the engine's raw counter names behind this boundary means the metrics
-        layer never has to know them.
-        """
+        """This pool's occupancy, as the query engine sees it. Declared rather
+        than left to ``__getattr__`` so a typed caller can reach it, and so the
+        engine's counter names stay out of the metrics layer."""
         return parse_pool_sample(await self._original_prisma.get_metrics())
 
     def __getattr__(self, name: str):

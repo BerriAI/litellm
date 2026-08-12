@@ -160,3 +160,29 @@ async def test_two_separate_pool_timeouts_are_counted_separately():
                 await failing(table_name="x")
 
     assert logger.record_db_pool_timeout.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_a_proxy_without_prometheus_never_reads_the_query_engine():
+    """The sample is worthless with no collector configured, so the engine read
+    must be skipped rather than taken and discarded every interval."""
+    from litellm.proxy.db.log_db_metrics import _pool_metrics_sampler, _sample_db_pool_metrics
+
+    reads = []
+    prisma_client = MagicMock()
+
+    async def _sample():
+        reads.append(1)
+        raise AssertionError("the engine must not be read when prometheus is off")
+
+    prisma_client.db.get_pool_sample = _sample
+    _pool_metrics_sampler._last_sampled_at = None
+
+    with (
+        patch("litellm.proxy.db.log_db_metrics._prometheus_logger", return_value=None),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+    ):
+        await _sample_db_pool_metrics()
+
+    assert reads == []
+    assert _pool_metrics_sampler.is_due() is False, "the interval must still be consumed"

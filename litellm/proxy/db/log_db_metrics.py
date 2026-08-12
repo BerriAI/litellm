@@ -30,33 +30,31 @@ _pool_metrics_sampler: Final = DBPoolMetricsSampler()
 
 
 def _prometheus_logger() -> "PrometheusLogger | None":
-    """The active PrometheusLogger, or None when prometheus is not configured.
-
-    Imports lazily. Bare ``import litellm`` does not load the prometheus
-    integration, so hoisting this would make every proxy pay for a module that
-    only prometheus deployments use.
-    """
+    """The active PrometheusLogger, or None. Imported lazily so a proxy without
+    prometheus never loads the integration."""
     from litellm.integrations.prometheus import PrometheusLogger
 
     return PrometheusLogger.get_instance()
 
 
 def _resolve_pool_client() -> "SupportsPoolSample | None":
+    """The client to sample, or None when there is nothing to sample for.
+
+    Checks for a metrics consumer before returning a client, so a proxy without
+    prometheus never pays for the engine read.
+    """
     from litellm.proxy.proxy_server import prisma_client
 
-    return None if prisma_client is None else prisma_client.db
+    if prisma_client is None or _prometheus_logger() is None:
+        return None
+    return prisma_client.db
 
 
 async def _sample_db_pool_metrics() -> None:
-    """Publish a throttled reading of the connection pool, if one is due.
+    """Publish a throttled pool reading, if one is due.
 
-    Runs alongside real database work rather than on a timer: a scheduled
-    exporter goes quiet exactly when the event loop is saturated, which is the
-    window this metric exists to cover.
-
-    Every step is inside the guard, including resolving the client and locating
-    the logger. This runs off a database call that has already succeeded, so
-    nothing here may turn a working query into a failed one.
+    Every step is inside the guard: this runs off a database call that already
+    succeeded, so nothing here may turn a working query into a failed one.
     """
     try:
         update: Final = await _pool_metrics_sampler.maybe_sample(_resolve_pool_client)
@@ -70,16 +68,11 @@ async def _sample_db_pool_metrics() -> None:
 
 
 def _record_db_pool_timeout_if_exhausted(e: Exception) -> None:
-    """Count a pool exhaustion once, without ever displacing the error itself.
+    """Count a pool exhaustion once, without displacing the error itself.
 
-    Decorated database helpers nest: ``get_object_permission`` is called from
-    inside ``get_key_object``, and both carry this decorator. One P2024 therefore
-    passes through several ``except`` blocks on its way up, so the exception is
-    marked the first time it is counted and skipped afterwards.
-
-    The caller re-raises after this returns. Anything escaping here would replace
-    a P2024 with a metrics error, during the incident this counter exists to
-    record.
+    Decorated helpers nest (``get_object_permission`` inside ``get_key_object``),
+    so one P2024 passes through several ``except`` blocks; the exception is
+    marked the first time it is counted.
     """
     try:
         if not PrismaDBExceptionHandler.is_connection_pool_timeout_error(e):
