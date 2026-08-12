@@ -1157,8 +1157,8 @@ class TestPreRoutingStrategyRegistry:
                 TaggedPreRoutingStrategy(tags=("us",), strategy=us),
             ]
         }
-        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["us"]}}) is us
-        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["cn"]}}) is cn
+        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["us"]}}).strategy is us
+        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["cn"]}}).strategy is cn
         assert router._select_pre_routing_strategy("missing", {"metadata": {"tags": ["cn"]}}) is None
 
         router.complexity_routers = {
@@ -1167,14 +1167,14 @@ class TestPreRoutingStrategyRegistry:
                 TaggedPreRoutingStrategy(tags=("default",), strategy=fallback),
             ]
         }
-        assert router._select_pre_routing_strategy("smart", {}) is fallback
+        assert router._select_pre_routing_strategy("smart", {}).strategy is fallback
         router.complexity_routers = {
             "smart": [
                 TaggedPreRoutingStrategy(tags=("cn",), strategy=cn),
                 TaggedPreRoutingStrategy(tags=("us",), strategy=us),
             ]
         }
-        assert router._select_pre_routing_strategy("smart", {}) is cn
+        assert router._select_pre_routing_strategy("smart", {}).strategy is cn
 
 
 class TestAsyncPreRoutingHookMultiFormat:

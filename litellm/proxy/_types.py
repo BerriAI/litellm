@@ -18,7 +18,7 @@ from pydantic import (
 from typing_extensions import NotRequired, Required, TypedDict
 
 from litellm._uuid import uuid
-from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
+from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_no_callback_env_reference,
 )
@@ -2256,6 +2256,39 @@ class CoordinationRedisParams(LiteLLMPydanticObjectBase):
         return any(value is not None for value in (self.host, self.url, self.startup_nodes, self.sentinel_nodes))
 
 
+class ScheduledJobStaggerSettings(LiteLLMPydanticObjectBase):
+    """
+    Spreads the proxy's scheduled background jobs across a window instead of firing them
+    all on one instant, on every replica, forever.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", protected_namespaces=())
+
+    enabled: bool = Field(default=True, description="apply deterministic phase offsets to scheduled background jobs")
+    window_seconds: int = Field(
+        default=DEFAULT_STAGGER_WINDOW_SECONDS,
+        ge=0,
+        description=(
+            "width of the window jobs are spread over. An interval job is never offset by "
+            "more than one of its own periods, so it is not delayed past the wait it already has"
+        ),
+    )
+    identity: str | None = Field(
+        default=None,
+        description=(
+            "replaces the POD_NAME/HOSTNAME-derived component of the offset hash. Set this "
+            "when replicas share a hostname and would otherwise land on the same offset"
+        ),
+    )
+    offsets: Mapping[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "explicit offset in seconds per scheduler job id, overriding the derived value. "
+            "0 pins a job to its unshifted schedule"
+        ),
+    )
+
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -2441,6 +2474,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     disable_auto_add_proxy_admin_to_teams: bool | None = Field(
         None,
         description="By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.",
+    )
+    scheduled_job_stagger: ScheduledJobStaggerSettings | None = Field(
+        None,
+        description=(
+            "Spreads the proxy's scheduled background jobs (spend flushes, budget resets, "
+            "config reloads, exports) across a window instead of firing them together on "
+            "every replica. On by default; set to tune the window, pin a job, or turn it off."
+        ),
     )
     maximum_spend_logs_retention_period: str | None = Field(
         None,

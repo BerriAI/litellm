@@ -43,6 +43,7 @@ from litellm.caching.caching import (
     RedisClusterCache,
 )
 from litellm.constants import (
+    CONSUMED_REQUEST_TAGS_METADATA_KEY,
     DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
@@ -171,6 +172,7 @@ from litellm.types.router import (
     AlertingConfig,
     AllowedFailsPolicy,
     AssistantsTypedDict,
+    ConsumedRequestTagsStamp,
     CredentialLiteLLMParams,
     CustomRoutingStrategyBase,
     Deployment,
@@ -11339,11 +11341,15 @@ class Router:
 
         return filtered
 
-    def _select_pre_routing_strategy(self, model: str, request_kwargs: dict) -> "PreRoutingStrategy | None":
+    def _select_pre_routing_strategy(
+        self, model: str, request_kwargs: dict
+    ) -> "TaggedPreRoutingStrategy[PreRoutingStrategy] | None":
         """
         Resolve the pre-routing strategy for `model`, disambiguating deployments
         that share a `model_name` by matching the request's tags against each
         registered strategy's tags before falling back to the first registered.
+        Returns the tagged registry entry so the caller can tell whether the
+        request's tags were what selected it.
         """
         candidates: Final[list[TaggedPreRoutingStrategy[PreRoutingStrategy]]] = [
             *self.auto_routers.get(model, []),
@@ -11354,7 +11360,7 @@ class Router:
         if not candidates:
             return None
         if len(candidates) == 1:
-            return candidates[0].strategy
+            return candidates[0]
 
         request_tags: Final = _get_tags_from_request_kwargs(request_kwargs)
         if request_tags:
@@ -11362,11 +11368,11 @@ class Router:
                 if tagged.tags and is_valid_deployment_tag(
                     list(tagged.tags), request_tags, self.tag_filtering_match_any
                 ):
-                    return tagged.strategy
+                    return tagged
         for tagged in candidates:
             if "default" in tagged.tags:
-                return tagged.strategy
-        return candidates[0].strategy
+                return tagged
+        return candidates[0]
 
     async def async_pre_routing_hook(
         self,
@@ -11390,15 +11396,18 @@ class Router:
         if self.routing_plugins:
             await self._run_routing_plugins(model=model, request_kwargs=request_kwargs, messages=messages)
 
-        router_strategy: Final = self._select_pre_routing_strategy(model=model, request_kwargs=request_kwargs)
-        if router_strategy is None:
+        selected_strategy: Final = self._select_pre_routing_strategy(model=model, request_kwargs=request_kwargs)
+        if selected_strategy is None:
             self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
             self._stamp_or_clear_metadata_key(
                 request_kwargs=request_kwargs, key=SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, value=None
             )
+            self._stamp_or_clear_metadata_key(
+                request_kwargs=request_kwargs, key=CONSUMED_REQUEST_TAGS_METADATA_KEY, value=None
+            )
             return None
 
-        pre_routing_hook_response: Final = await router_strategy.async_pre_routing_hook(
+        pre_routing_hook_response: Final = await selected_strategy.strategy.async_pre_routing_hook(
             model=model,
             request_kwargs=request_kwargs,
             messages=messages,
@@ -11413,6 +11422,15 @@ class Router:
             request_kwargs=request_kwargs,
             key=SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
             value=(pre_routing_hook_response.session_affinity_ttl_seconds if pre_routing_hook_response else None),
+        )
+        self._stamp_or_clear_metadata_key(
+            request_kwargs=request_kwargs,
+            key=CONSUMED_REQUEST_TAGS_METADATA_KEY,
+            value=self._consumed_request_tags_stamp(
+                selected_strategy=selected_strategy,
+                pre_routing_hook_response=pre_routing_hook_response,
+                request_tags=_get_tags_from_request_kwargs(request_kwargs),
+            ),
         )
 
         # `model` (the alias, e.g. "smart-router") is never the deployment actually
@@ -11431,6 +11449,28 @@ class Router:
                         request_kwargs.setdefault(key, value)
 
         return pre_routing_hook_response
+
+    def _consumed_request_tags_stamp(
+        self,
+        selected_strategy: "TaggedPreRoutingStrategy[PreRoutingStrategy]",
+        pre_routing_hook_response: PreRoutingHookResponse | None,
+        request_tags: Sequence[str],
+    ) -> ConsumedRequestTagsStamp | None:
+        """Record which tags picked the router and which model group it rewrote to, or None.
+
+        A request whose tags matched the selected strategy's tags has already spent those
+        tags on picking the router; re-applying them to the routed tier's model group would
+        empty the pool unless every tier deployment repeats the marker's tag. Only the
+        strategy's own tags are spent: the request's other tags keep constraining
+        deployment selection inside the routed group, and key/team policy tags are
+        untouched because tag filtering separately re-applies whatever
+        `metadata.inherited_tags` carries for the stamped group.
+        """
+        if pre_routing_hook_response is None or not selected_strategy.tags or not request_tags:
+            return None
+        if not is_valid_deployment_tag(selected_strategy.tags, request_tags, self.tag_filtering_match_any):
+            return None
+        return ConsumedRequestTagsStamp(model_group=pre_routing_hook_response.model, tags=selected_strategy.tags)
 
     @staticmethod
     def _record_routing_decision(
