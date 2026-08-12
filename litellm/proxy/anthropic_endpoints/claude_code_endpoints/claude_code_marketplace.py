@@ -27,6 +27,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Annotated, Final, Protocol, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -90,6 +91,12 @@ class _MarketplaceEntry(TypedDict, total=False):
 def published_skill_filter() -> dict[str, object]:  # mutable-ok: prisma query arguments must be plain dicts
     """Where-clause for the skills served to users: admin-approved and enabled."""
     return {"enabled": True, "approval_status": SKILL_ACTIVE}  # mutable-ok: prisma query arguments are dicts
+
+
+def _submitter_edit_resets_review(*, is_admin: bool) -> Mapping[str, object]:
+    if is_admin:
+        return MappingProxyType({})
+    return MappingProxyType({"approval_status": SKILL_PENDING_REVIEW, "enabled": False})
 
 
 def _as_approval_status(raw: str | None) -> SkillApprovalStatus:
@@ -630,9 +637,7 @@ async def update_plugin(
                 "manifest_json": json.dumps(manifest),
                 "files_json": "{}",
                 "updated_at": datetime.now(timezone.utc),
-                **(
-                    {} if is_admin else {"approval_status": SKILL_PENDING_REVIEW, "enabled": False}
-                ),  # mutable-ok: prisma query arguments must be plain dicts
+                **_submitter_edit_resets_review(is_admin=is_admin),
             },
         )
 
@@ -709,8 +714,8 @@ async def _record_review(
 
 @router.post(
     "/claude-code/plugins/{plugin_name}/approve",
-    tags=["Claude Code Marketplace"],
-    dependencies=[Depends(user_api_key_auth)],
+    tags=["Claude Code Marketplace"],  # mutable-ok: FastAPI route decorators take lists
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI route decorators take lists
     response_model=ReviewPluginResponse,
 )
 async def approve_plugin(
@@ -739,8 +744,8 @@ async def approve_plugin(
 
 @router.post(
     "/claude-code/plugins/{plugin_name}/reject",
-    tags=["Claude Code Marketplace"],
-    dependencies=[Depends(user_api_key_auth)],
+    tags=["Claude Code Marketplace"],  # mutable-ok: FastAPI route decorators take lists
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI route decorators take lists
     response_model=ReviewPluginResponse,
 )
 async def reject_plugin(
