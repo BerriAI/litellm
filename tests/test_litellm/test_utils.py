@@ -761,6 +761,22 @@ def test_embedding_dimensions_drop_params_for_openai_compatible_provider(provide
             dimensions=512,
         )
         assert preserved["dimensions"] == 512
+
+        litellm.drop_params = True
+        model_supported = litellm.utils.get_optional_params_embeddings(
+            model=f"{provider}/text-embedding-3-small",
+            custom_llm_provider=provider,
+            dimensions=512,
+        )
+        assert model_supported["dimensions"] == 512
+
+        explicitly_allowed = litellm.utils.get_optional_params_embeddings(
+            model=f"{provider}/legacy-model",
+            custom_llm_provider=provider,
+            dimensions=512,
+            allowed_openai_params=["dimensions"],
+        )
+        assert explicitly_allowed["dimensions"] == 512
     finally:
         litellm.drop_params = previous_drop_params
 
