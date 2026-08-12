@@ -8,10 +8,78 @@ import asyncio
 from collections.abc import Callable
 from datetime import datetime
 from functools import wraps
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
+from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceTypes
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.proxy.db.db_pool_metrics import DBPoolMetricsSampler
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+
+if TYPE_CHECKING:
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy.db.db_pool_metrics import SupportsPoolSample
+
+# One sampler per process. The pool it reads is per-process too, so there is
+# nothing to key this by.
+_pool_metrics_sampler: Final = DBPoolMetricsSampler()
+
+
+def _prometheus_logger() -> "PrometheusLogger | None":
+    """The active PrometheusLogger, or None when prometheus is not configured.
+
+    Imports lazily. Bare ``import litellm`` does not load the prometheus
+    integration, so hoisting this would make every proxy pay for a module that
+    only prometheus deployments use.
+    """
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    return PrometheusLogger.get_instance()
+
+
+def _resolve_pool_client() -> "SupportsPoolSample | None":
+    from litellm.proxy.proxy_server import prisma_client
+
+    return None if prisma_client is None else prisma_client.db
+
+
+async def _sample_db_pool_metrics() -> None:
+    """Publish a throttled reading of the connection pool, if one is due.
+
+    Runs alongside real database work rather than on a timer: a scheduled
+    exporter goes quiet exactly when the event loop is saturated, which is the
+    window this metric exists to cover.
+
+    Every step is inside the guard, including resolving the client and locating
+    the logger. This runs off a database call that has already succeeded, so
+    nothing here may turn a working query into a failed one.
+    """
+    try:
+        update: Final = await _pool_metrics_sampler.maybe_sample(_resolve_pool_client)
+        if update is None:
+            return
+        logger: Final = _prometheus_logger()
+        if logger is not None:
+            logger.record_db_pool_sample(update)
+    except Exception as e:  # noqa: BLE001  # a metrics failure must never fail the database call it rides on
+        verbose_proxy_logger.debug("db pool metrics publish failed: %s", e)
+
+
+def _record_db_pool_timeout_if_exhausted(e: Exception) -> None:
+    """Count a pool exhaustion, without ever displacing the error that caused it.
+
+    The caller re-raises the original exception after this returns. Anything
+    that escaped here would replace a P2024 with a metrics error, during the
+    incident this counter exists to record.
+    """
+    try:
+        if not PrismaDBExceptionHandler.is_connection_pool_timeout_error(e):
+            return
+        logger: Final = _prometheus_logger()
+        if logger is not None:
+            logger.record_db_pool_timeout()
+    except Exception as metrics_error:  # noqa: BLE001  # counting an exhaustion must not mask the exhaustion itself
+        verbose_proxy_logger.debug("db pool timeout metric failed: %s", metrics_error)
 
 
 def _safe_db_event_metadata(kwargs: dict) -> dict[str, str] | None:
@@ -51,6 +119,13 @@ def log_db_metrics(func):
             result: Final = await func(*args, **kwargs)
             end_time: datetime = datetime.now()
             from litellm.proxy.proxy_server import proxy_logging_obj
+
+            # Dispatched, never awaited. Awaiting here would add a suspension
+            # point after the query already succeeded, so a client disconnect in
+            # that window would discard a completed result and skip the success
+            # hook below. `is_due` keeps this to one task per sample interval.
+            if _pool_metrics_sampler.is_due():
+                asyncio.create_task(_sample_db_pool_metrics())
 
             if "PROXY" not in func.__name__:
                 asyncio.create_task(
@@ -123,6 +198,11 @@ async def _handle_logging_db_exception(
     end_time: datetime,
 ) -> None:
     from litellm.proxy.proxy_server import proxy_logging_obj
+
+    # Counted before the DB-relatedness gate below: a pool timeout is the proxy
+    # running out of connections, so it must be recorded whether or not the
+    # failure is classified as a DB service failure.
+    _record_db_pool_timeout_if_exhausted(e)
 
     # don't log this as a DB Service Failure, if the DB did not raise an exception
     if _is_exception_related_to_db(e) is not True:

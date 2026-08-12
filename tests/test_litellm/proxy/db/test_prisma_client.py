@@ -215,3 +215,50 @@ def test_db_push_applies_replica_identity_full_when_requested(monkeypatch):
 
     assert mock_run.call_args[0][0][:3] == ["prisma", "db", "push"]
     assert applied == [True]
+
+
+@pytest.mark.asyncio
+async def test_get_pool_sample_parses_the_engines_counters():
+    """The wrapper owns the engine, so it owns the engine's counter names. This
+    pins the delegation and keeps those six key strings out of the metrics
+    layer."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+
+    class _Value:
+        def __init__(self, key, value):
+            self.key = key
+            self.value = value
+
+    class _Hist:
+        def __init__(self, total, count):
+            self.sum = total
+            self.count = count
+
+    class _Metrics:
+        gauges = [
+            _Value("prisma_pool_connections_busy", 3.0),
+            _Value("prisma_pool_connections_idle", 0.0),
+            _Value("prisma_pool_connections_open", 3.0),
+            _Value("prisma_client_queries_wait", 5.0),
+        ]
+        histograms = [
+            _Value("prisma_client_queries_wait_histogram_ms", _Hist(2000.0, 8)),
+            _Value("prisma_datasource_queries_duration_histogram_ms", _Hist(500.0, 20)),
+        ]
+        counters = []
+
+    original = MagicMock()
+    original.get_metrics = AsyncMock(return_value=_Metrics())
+    wrapper = PrismaWrapper(original_prisma=original, iam_token_db_auth=False)
+
+    sample = await wrapper.get_pool_sample()
+
+    original.get_metrics.assert_awaited_once()
+    assert sample.busy_connections == 3.0
+    assert sample.max_connections == 3.0
+    assert sample.pending_acquirers == 5.0
+    assert sample.acquire_wait_seconds_total == 2.0
+    assert sample.query_duration_seconds_total == 0.5
+    assert sample.query_count_total == 20

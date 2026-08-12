@@ -58,6 +58,8 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from prometheus_client.metrics import MetricWrapperBase
+
+    from litellm.proxy.db.db_pool_metrics import DBPoolMetricsUpdate
 else:
     AsyncIOScheduler = Any
 
@@ -689,6 +691,83 @@ class PrometheusLogger(CustomLogger):
                 "litellm_check_batch_cost_last_run_timestamp",
                 "Unix timestamp of the last CheckBatchCost job run",
                 labelnames=[],
+            )
+
+            ########################################
+            # Database connection pool saturation
+            ########################################
+            self.litellm_db_pool_connections_max = self._gauge_factory(
+                "litellm_db_pool_connections_max",
+                "Configured maximum size of the Prisma connection pool, summed across live workers",
+                labelnames=(),
+                multiprocess_mode="livesum",
+            )
+
+            self.litellm_db_pool_connections_busy = self._gauge_factory(
+                "litellm_db_pool_connections_busy",
+                "Pool connections currently checked out by a query, summed across live workers",
+                labelnames=(),
+                multiprocess_mode="livesum",
+            )
+
+            self.litellm_db_pool_connections_idle = self._gauge_factory(
+                "litellm_db_pool_connections_idle",
+                "Pool capacity not currently checked out, summed across live workers",
+                labelnames=(),
+                multiprocess_mode="livesum",
+            )
+
+            self.litellm_db_pool_connections_open = self._gauge_factory(
+                "litellm_db_pool_connections_open",
+                "Connections actually opened to the database, summed across live workers",
+                labelnames=(),
+                multiprocess_mode="livesum",
+            )
+
+            self.litellm_db_pool_pending_acquirers = self._gauge_factory(
+                "litellm_db_pool_pending_acquirers",
+                "Queries waiting for a free pool connection, summed across live workers",
+                labelnames=(),
+                multiprocess_mode="livesum",
+            )
+
+            self.litellm_db_pool_acquire_wait_seconds_total = self._counter_factory(
+                name="litellm_db_pool_acquire_wait_seconds_total",
+                documentation=(
+                    "Cumulative seconds spent waiting for a pool connection, excluding query execution. "
+                    "Divide by litellm_db_pool_acquire_total for mean acquire latency. Counts only waits that ended in an acquisition, so it understates during exhaustion; pair it with litellm_db_pool_timeouts_total"
+                ),
+                labelnames=(),
+            )
+
+            self.litellm_db_pool_acquire_total = self._counter_factory(
+                name="litellm_db_pool_acquire_total",
+                documentation="Total pool connection acquisitions on this worker",
+                labelnames=(),
+            )
+
+            self.litellm_db_query_duration_seconds_total = self._counter_factory(
+                name="litellm_db_query_duration_seconds_total",
+                documentation=(
+                    "Cumulative seconds spent executing queries against the database, excluding pool wait. "
+                    "Divide by litellm_db_query_total for mean query latency"
+                ),
+                labelnames=(),
+            )
+
+            self.litellm_db_query_total = self._counter_factory(
+                name="litellm_db_query_total",
+                documentation="Total queries executed against the database by this worker",
+                labelnames=(),
+            )
+
+            self.litellm_db_pool_timeouts_total = self._counter_factory(
+                name="litellm_db_pool_timeouts_total",
+                documentation=(
+                    "Total queries that gave up waiting for a pool connection (prisma P2024). "
+                    "Any nonzero rate means the pool is exhausted"
+                ),
+                labelnames=(),
             )
 
             ########################################
@@ -3055,6 +3134,25 @@ class PrometheusLogger(CustomLogger):
                     ).inc()
         except Exception as e:
             verbose_logger.warning("Error recording check batch cost metrics: %s", e)
+
+    def record_db_pool_sample(self, update: DBPoolMetricsUpdate) -> None:
+        """Publish one reading of this worker's Prisma connection pool."""
+        sample: Final = update.sample
+        self.litellm_db_pool_connections_max.set(sample.max_connections)
+        self.litellm_db_pool_connections_busy.set(sample.busy_connections)
+        self.litellm_db_pool_connections_idle.set(sample.idle_connections)
+        self.litellm_db_pool_connections_open.set(sample.open_connections)
+        self.litellm_db_pool_pending_acquirers.set(update.pending_acquirers)
+        # Deltas are non-negative by construction: DBPoolMetricsSampler zeroes
+        # them when the engine's totals move backwards.
+        self.litellm_db_pool_acquire_total.inc(update.acquire_count_delta)
+        self.litellm_db_pool_acquire_wait_seconds_total.inc(update.acquire_wait_seconds_delta)
+        self.litellm_db_query_total.inc(update.query_count_delta)
+        self.litellm_db_query_duration_seconds_total.inc(update.query_duration_seconds_delta)
+
+    def record_db_pool_timeout(self) -> None:
+        """Count one query that gave up waiting for a free pool connection."""
+        self.litellm_db_pool_timeouts_total.inc()
 
     def record_check_batch_cost_error(self, error_type: str):
         try:

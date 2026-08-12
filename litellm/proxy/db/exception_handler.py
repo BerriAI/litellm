@@ -124,6 +124,23 @@ class PrismaDBExceptionHandler:
         return type(e) is prisma.errors.DataError
 
     @staticmethod
+    def is_connection_pool_timeout_error(e: Exception) -> bool:
+        """True iff the query engine gave up waiting for a free pool slot (P2024).
+
+        Matched on the prisma error code rather than the message, because the
+        message is also keyword-matched as a generic transport timeout elsewhere
+        in this class. The distinction matters to an operator: the database
+        answered fine, the proxy simply had no connection left to ask with, so
+        the fix is pool sizing or shedding load rather than anything database
+        side.
+
+        The ``P####`` codes are prisma's own namespace and only prisma populates
+        ``code`` with one, so no type check is needed. Skipping it also keeps
+        this callable on the DB failure path when prisma itself is stubbed.
+        """
+        return getattr(e, "code", None) == "P2024"
+
+    @staticmethod
     def is_database_transport_error(e: Exception) -> bool:
         """
         Returns True only for transport/connectivity failures where a reconnect

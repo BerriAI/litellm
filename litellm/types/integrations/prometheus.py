@@ -119,7 +119,7 @@ EXCEPTION_CLASS: Final = "exception_class"
 RATE_LIMIT_CATEGORY: Final = "rate_limit_category"
 RATE_LIMIT_TYPE: Final = "rate_limit_type"
 STATUS_CODE: Final = "status_code"
-EXCEPTION_LABELS: Final = [EXCEPTION_STATUS, EXCEPTION_CLASS]
+EXCEPTION_LABELS: Final = (EXCEPTION_STATUS, EXCEPTION_CLASS)
 LATENCY_BUCKETS: Final = (
     0.005,
     0.01,
@@ -273,6 +273,17 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     # MCP tool call metrics
     "litellm_mcp_tool_calls_total",
     "litellm_mcp_tool_call_spend_metric",
+    # Database connection pool saturation
+    "litellm_db_pool_connections_max",
+    "litellm_db_pool_connections_busy",
+    "litellm_db_pool_connections_idle",
+    "litellm_db_pool_connections_open",
+    "litellm_db_pool_pending_acquirers",
+    "litellm_db_pool_acquire_wait_seconds_total",
+    "litellm_db_pool_acquire_total",
+    "litellm_db_query_duration_seconds_total",
+    "litellm_db_query_total",
+    "litellm_db_pool_timeouts_total",
 ]
 
 
@@ -765,6 +776,20 @@ class PrometheusMetricLabels:
 
     litellm_check_batch_cost_last_run_timestamp: list[str] = []
 
+    # Database connection pool saturation. Deliberately unlabelled: the pool is a
+    # per-worker resource, and any key/team/user label would both be meaningless
+    # here and blow up cardinality on a metric scraped from every pod.
+    litellm_db_pool_connections_max: tuple[str, ...] = ()
+    litellm_db_pool_connections_busy: tuple[str, ...] = ()
+    litellm_db_pool_connections_idle: tuple[str, ...] = ()
+    litellm_db_pool_connections_open: tuple[str, ...] = ()
+    litellm_db_pool_pending_acquirers: tuple[str, ...] = ()
+    litellm_db_pool_acquire_wait_seconds_total: tuple[str, ...] = ()
+    litellm_db_pool_acquire_total: tuple[str, ...] = ()
+    litellm_db_query_duration_seconds_total: tuple[str, ...] = ()
+    litellm_db_query_total: tuple[str, ...] = ()
+    litellm_db_pool_timeouts_total: tuple[str, ...] = ()
+
     # MCP tool call metrics
     litellm_mcp_tool_calls_total: list[str] = [
         UserAPIKeyLabelNames.MCP_TOOL_NAME.value,
@@ -834,7 +859,7 @@ class PrometheusMetricLabels:
                 if label not in default_labels and label not in custom_labels:
                     custom_labels.append(label)
 
-        return default_labels + custom_labels
+        return [*default_labels, *custom_labels]
 
 
 _USER_API_KEY_LABEL_VALUE_INIT_ALIASES: Final[Mapping[str, str]] = MappingProxyType(
