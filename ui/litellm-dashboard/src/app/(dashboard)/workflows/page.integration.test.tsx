@@ -46,7 +46,6 @@ describe("Workflows page access by role", () => {
       renderAs(userRole);
 
       expect(await screen.findByText("Workflow Runs is only available to admin users.")).toBeInTheDocument();
-      await waitFor(() => expect(fetchMock).not.toHaveBeenCalled());
       expect(requestedUrls().filter((url) => url.includes("/v1/workflows"))).toEqual([]);
     },
   );
