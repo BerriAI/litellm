@@ -300,3 +300,32 @@ def test_resolved_names_keep_every_grant_sharing_one_target(monkeypatch):
         ],
     )
     assert resolved_logging_exporter_names("t1", None) == ("dup-one", "dup-two", "distinct")
+
+
+
+@pytest.mark.asyncio
+async def test_disclosure_agrees_with_the_resolver_on_a_shared_target(monkeypatch):
+    """Regression: the disclosed names and the resolver's selection are derived from the
+    same grants, so no credential is disclosed that the resolver dropped entirely.
+
+    Pins the two sides together: the resolver collapses the duplicate target to a single
+    export, and every name it kept a destination for is disclosed."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    same = "http://collector.example/shared/v1/traces"
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            _cred("dup-one", access={"global": True}, endpoint=same),
+            _cred("dup-two", access={"global": True}, endpoint=same),
+        ],
+    )
+
+    destinations, _backends = await _resolve_logging_exporters(UserAPIKeyAuth(api_key="k"))
+
+    assert len(destinations) == 1
+    assert resolved_logging_exporter_names(None, None) == ("dup-one", "dup-two")
