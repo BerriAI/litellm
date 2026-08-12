@@ -156,6 +156,40 @@ describe("LogDetailContent", () => {
     expect(screen.getByText("Request/Response Data Not Available")).toBeInTheDocument();
   });
 
+  it("should show the enable-storage config hint when payload is missing and prompt storage is disabled", () => {
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({
+          messages: [],
+          response: {},
+          metadata: {},
+        })}
+        promptStorageEnabled={false}
+      />,
+    );
+
+    expect(screen.getByText("Request/Response Data Not Available")).toBeInTheDocument();
+    expect(screen.getByText(/store_prompts_in_spend_logs: true/)).toBeInTheDocument();
+    expect(screen.queryByText(/Prompt storage is enabled/)).not.toBeInTheDocument();
+  });
+
+  it("should show a per-request explanation (not the config hint) when payload is missing but prompt storage is enabled", () => {
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({
+          messages: [],
+          response: {},
+          metadata: {},
+        })}
+        promptStorageEnabled={true}
+      />,
+    );
+
+    expect(screen.getByText("Request/Response Data Not Available")).toBeInTheDocument();
+    expect(screen.getByText(/Prompt storage is enabled/)).toBeInTheDocument();
+    expect(screen.queryByText(/store_prompts_in_spend_logs: true/)).not.toBeInTheDocument();
+  });
+
   it("should not display ConfigInfoMessage when isLoadingDetails is true even without data", () => {
     render(
       <LogDetailContent
