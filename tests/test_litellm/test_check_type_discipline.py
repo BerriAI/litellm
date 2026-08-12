@@ -117,6 +117,17 @@ def test_typing_alias_and_forward_ref_annotations_are_flagged(tmp_path):
     assert "LIT001" in _codes(tmp_path, 'x: "dict[str, int]"\n')
 
 
+def test_literal_string_args_are_values_not_forward_refs(tmp_path):
+    assert "LIT001" not in _codes(tmp_path, 'from typing import Literal\nx: Literal["list"] = "list"\n')
+    assert "LIT001" not in _codes(
+        tmp_path,
+        'from typing import Literal\ndef f(op: Literal["create", "list"] = "create") -> None:\n    return None\n',
+    )
+    assert "LIT001" not in _codes(tmp_path, 'import typing\nx: typing.Literal["dict"] = "dict"\n')
+    assert "LIT001" in _codes(tmp_path, 'from typing import Literal\nx: dict[str, Literal["a"]]\n')
+    assert "LIT001" in _codes(tmp_path, "x: \"Literal['x'] | list[int]\"\n")
+
+
 def test_readonly_annotations_are_clean(tmp_path):
     for ann in ("Mapping[str, int]", "Sequence[int]", "tuple[int, ...]", "frozenset[int]"):
         assert "LIT001" not in _codes(tmp_path, f"from typing import Mapping, Sequence\nx: {ann}\n")

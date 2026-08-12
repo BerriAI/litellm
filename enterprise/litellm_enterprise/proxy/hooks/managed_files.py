@@ -1287,9 +1287,26 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     user_created_file_ids = await self.get_user_created_file_ids(user_api_key_dict, file_ids)
                     ## Filter the response to only include the files created by the user
                     response.data = user_created_file_ids  # type: ignore
+                    self._scope_list_page_cursors(response, user_created_file_ids)
                     return response
             return response
         return response
+
+    @staticmethod
+    def _scope_list_page_cursors(response: AsyncCursorPage, data: List[OpenAIFileObject]) -> None:
+        """Rebuild ``first_id`` / ``last_id`` from the caller-scoped page.
+
+        The upstream cursors point at rows that were just filtered out, so
+        leaving them in place discloses other callers' file ids. ``has_more``
+        is always cleared because ``after`` is never forwarded upstream, so
+        no further page is reachable through the proxy.
+        """
+        if hasattr(response, "first_id"):
+            response.first_id = data[0].id if data else None
+        if hasattr(response, "last_id"):
+            response.last_id = data[-1].id if data else None
+        if hasattr(response, "has_more"):
+            response.has_more = False
 
     async def afile_retrieve(
         self, file_id: str, litellm_parent_otel_span: Optional[Span], llm_router: Optional[Router] = None

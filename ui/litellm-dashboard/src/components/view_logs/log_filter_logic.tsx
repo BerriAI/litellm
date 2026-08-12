@@ -4,6 +4,7 @@ import type { ColumnFiltersState, PaginationState, SortingState } from "@tanstac
 import { uiSpendLogsCall } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
 import { fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";
+import { teamListScopeUserId } from "../../utils/roles";
 import { defaultPageSize } from "../constants";
 import { LOGS_SORT_FIELD_MAP, type LogEntry, type LogsSortField } from "./columns";
 
@@ -194,11 +195,13 @@ export function useLogFilterLogic({
     total_pages: 0,
   };
 
+  const teamListUserID = teamListScopeUserId(userRole, userID);
+
   const allTeamsQueryOptions: UseQueryOptions<Team[], Error> = {
-    queryKey: ["allTeamsForLogFilters", accessToken],
+    queryKey: ["allTeamsForLogFilters", accessToken, teamListUserID],
     queryFn: async () => {
       if (!accessToken) return [];
-      const teamsData = await fetchAllTeams(accessToken);
+      const teamsData = await fetchAllTeams(accessToken, null, teamListUserID);
       return teamsData || [];
     },
     enabled: !!accessToken,

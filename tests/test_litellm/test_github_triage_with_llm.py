@@ -207,6 +207,23 @@ class TestCloseCommentText:
         assert "end-to-end qa proof" in body.lower()
         assert "mock" in body.lower()
 
+    def test_issue_recovery_comments_should_name_feature_dead_end_evidence(
+        self, triage_module
+    ):
+        # The feature-request pass bar demands end-to-end evidence of the
+        # dead-end, so the close and grace-warning recovery bullets must ask
+        # for it too — otherwise a requester follows those exact instructions
+        # (description + use case only) and fails `reconsider` again with no
+        # hint of what else was needed.
+        verdict = {"verdict": "fail", "missing": [], "explanation": ""}
+        for body in (
+            triage_module.format_issue_close_comment(verdict),
+            triage_module.format_grace_warning_issue_comment(verdict),
+        ):
+            normalized = " ".join(body.split())
+            assert "end-to-end evidence of the dead-end" in normalized
+            assert "showing where the flow stops today" in normalized
+
     def test_all_agent_shin_comments_should_use_bullet_train_emoji(self, triage_module):
         # The bullet train (🚅) is Agent Shin's symbol, matching the LiteLLM
         # logo; the previous wave (👋) was generic and didn't match the bot's
@@ -288,6 +305,27 @@ class TestCloseCommentText:
         assert "What you got right" in body
         assert "Expected vs. actual behavior" in body
         assert "- ✅ End-to-end evidence of the bug" not in body
+
+    def test_issue_close_comment_should_credit_feature_dead_end_evidence(
+        self, triage_module
+    ):
+        # A feature requester who pasted their dead-end run but skipped the
+        # motivation must see the evidence credited and only the motivation
+        # listed as a gap — without a dedicated verdict field the praise
+        # block could never acknowledge the work they did do.
+        body = triage_module.format_issue_close_comment(
+            {
+                "verdict": "fail",
+                "kind": "feature",
+                "has_motivation_example": False,
+                "has_dead_end_evidence": True,
+                "missing": ["motivation / use case"],
+                "explanation": "no use case given",
+            }
+        )
+        assert "What you got right" in body
+        assert "- ✅ End-to-end evidence of the dead-end" in body
+        assert "- ✅ Motivation and concrete example" not in body
 
     def test_close_comments_should_use_softer_park_for_later_framing(
         self, triage_module
@@ -672,6 +710,29 @@ class TestBuildPrompts:
         assert "mocked or stubbed" in normalized
         # Prose-only steps are explicitly insufficient now.
         assert "steps to reproduce" in normalized
+        # An unedited issue-form scaffold must not read as evidence: the proof
+        # field ships with visible headings, so the judge has to be told that
+        # bare headings with nothing under them count as absent.
+        assert "unfilled template scaffold" in normalized
+        assert "counts as absent, not as evidence" in normalized
+
+    def test_issue_feature_rubric_requires_evidence_of_the_dead_end(
+        self, triage_module
+    ):
+        # The feature form asks the requester to walk the ideal flow against a
+        # live proxy and paste output up to the step that dead-ends, so the
+        # judge has to demand that evidence, and must not accept an unedited
+        # scaffold of bare headings as if it were a real attempt.
+        prompt = triage_module.build_issue_prompt(title="t", body="x")
+        normalized = " ".join(prompt.split())
+        assert "END-TO-END EVIDENCE OF THE DEAD-END" in normalized
+        assert "showing the point where the flow stops today" in normalized
+        assert "unfilled template scaffold" in normalized
+        # The evidence has its own verdict field so feature requesters who
+        # provided it get credited in "What you got right", exactly like
+        # `has_repro` credits bug evidence.
+        assert "`has_dead_end_evidence=true` only when this is present" in normalized
+        assert '"has_dead_end_evidence": boolean' in normalized
 
     def test_should_not_crash_when_pr_body_contains_curly_braces(self, triage_module):
         """User-supplied content with `{` / `}` must NOT be re-parsed by
