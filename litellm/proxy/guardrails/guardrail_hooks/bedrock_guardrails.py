@@ -826,7 +826,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         guardrail call and is logged exactly once here.
         """
         start_time: Final = datetime.now(timezone.utc)
-        credentials, aws_region_name = self._load_credentials()
         bedrock_request_data: Final[dict] = dict(
             self.convert_to_bedrock_format(source=source, messages=messages, response=response)
         )
@@ -850,6 +849,16 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
         content: Final[tuple[BedrockContentItem, ...]] = tuple(bedrock_request_data.get("content") or ())
+        if not content:
+            # ApplyGuardrail rejects an empty content list with a 400, so a turn this extractor
+            # found no text in is skipped rather than turned into a failed request
+            verbose_proxy_logger.debug(
+                "Bedrock Guardrail %s: no %s content to scan, skipping ApplyGuardrail",
+                self.guardrail_name,
+                source,
+            )
+            return BedrockGuardrailResponse()
+        credentials, aws_region_name = self._load_credentials()
         allow_chunking: Final = not self._content_uses_contextual_grounding(content)
 
         try:

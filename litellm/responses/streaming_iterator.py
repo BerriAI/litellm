@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, runtime_checkable
 
 import httpx
 from openai._streaming import SSEDecoder
@@ -313,8 +313,10 @@ class BaseResponsesAPIStreamingIterator:
                             if encrypted_content and isinstance(encrypted_content, str):
                                 model_id: Final = _model_id_from_metadata(self.litellm_metadata)
                                 if model_id:
-                                    wrapped_content = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
-                                        encrypted_content, model_id
+                                    wrapped_content: Final = (
+                                        ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                                            encrypted_content, model_id
+                                        )
                                     )
                                     setattr(item, "encrypted_content", wrapped_content)
 
@@ -336,7 +338,9 @@ class BaseResponsesAPIStreamingIterator:
                             usage_obj: Final[ResponseAPIUsage | None] = getattr(response_obj, "usage", None)
                             if usage_obj is not None:
                                 try:
-                                    cost: float | None = self.logging_obj._response_cost_calculator(result=response_obj)
+                                    cost: Final[float | None] = self.logging_obj._response_cost_calculator(
+                                        result=response_obj
+                                    )
                                     if cost is not None:
                                         setattr(usage_obj, "cost", cost)
                                 except Exception:
@@ -1029,6 +1033,16 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         return evt
 
 
+@runtime_checkable
+class _HasModelDump(Protocol):
+    def model_dump(self, *, exclude_none: bool = ...) -> Mapping[str, object]: ...
+
+
+@runtime_checkable
+class _HasModelDumpJson(Protocol):
+    def model_dump_json(self, *, exclude_none: bool = ...) -> str: ...
+
+
 def _dump_response_object(obj: Any) -> dict[str, Any]:
     if hasattr(obj, "model_dump"):
         return obj.model_dump()
@@ -1358,7 +1372,7 @@ class ResponsesWebSocketStreaming:
         # response.create frame to prevent deployment-substitution attacks.
         self.authorized_model: str | None = authorized_model
 
-    def _should_store_event(self, event_obj: dict[str, object]) -> bool:
+    def _should_store_event(self, event_obj: Mapping[str, object]) -> bool:
         return event_obj.get("type") in RESPONSES_WS_LOGGED_EVENT_TYPES
 
     def _store_event(self, event: str | bytes | dict[str, object]) -> None:
@@ -1636,7 +1650,7 @@ class ResponsesWebSocketStreaming:
 
         metadata: Final = self.request_data.get("metadata")
         raw_pii_tokens: Final = metadata.get("pii_tokens") if _is_json_object(metadata) else None
-        pii_tokens: Final[dict[str, str]] = raw_pii_tokens if _is_str_mapping(raw_pii_tokens) else {}
+        pii_tokens: Final[Mapping[str, str]] = raw_pii_tokens if _is_str_mapping(raw_pii_tokens) else {}
         if not pii_tokens:
             return response_str
 
@@ -1883,11 +1897,11 @@ class ManagedResponsesWebSocketHandler:
     def _serialize_chunk(chunk: Any) -> str | None:
         """Serialize a streaming chunk to a JSON string for WebSocket transmission."""
         try:
-            if hasattr(chunk, "model_dump_json"):
+            if isinstance(chunk, _HasModelDumpJson):
                 return chunk.model_dump_json(exclude_none=True)
-            if hasattr(chunk, "model_dump"):
+            if isinstance(chunk, _HasModelDump):
                 return json.dumps(chunk.model_dump(exclude_none=True), default=str)
-            if isinstance(chunk, dict):
+            if _is_json_object(chunk):
                 return json.dumps(chunk, default=str)
             return json.dumps(str(chunk))
         except Exception as exc:

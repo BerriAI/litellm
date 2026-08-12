@@ -1,5 +1,5 @@
 from collections.abc import Awaitable, Callable
-from typing import Any, Final
+from typing import Any, Final, TypeVar
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -311,14 +311,17 @@ def _coerce_timeout(value: Any, fallback: float) -> float:
     return fallback
 
 
+_ReadResultT: Final = TypeVar("_ReadResultT")
+
+
 async def call_with_db_reconnect_retry(
     prisma_client: Any,
-    coro_factory: Callable[[], Awaitable[Any]],
+    coro_factory: Callable[[], Awaitable[_ReadResultT]],
     *,
     reason: str,
     timeout_seconds: float | None = None,
     lock_timeout_seconds: float | None = None,
-) -> Any:
+) -> _ReadResultT:
     """Run a Prisma read coroutine with one transport-reconnect-and-retry.
 
     The canonical "self-heal a transient DB transport blip" wrapper used by

@@ -1169,3 +1169,25 @@ async def test_prisma_health_check_failure_redacts_database_credentials(caplog):
     assert emitted
     assert all("hunter2" not in message for message in emitted)
     assert any("postgresql://REDACTED@db.internal" in message for message in emitted)
+
+
+@pytest.mark.asyncio
+async def test_update_data_key_branch_stamps_settings_updated_at():
+    """`updated_at` carries Prisma's @updatedAt and is rewritten by every spend
+    flush, so key config edits need their own audit column."""
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.utils import PrismaClient
+
+    client = MagicMock()
+    client.jsonify_object = MagicMock(side_effect=lambda data: dict(data))
+    client.db.litellm_verificationtoken.update = AsyncMock(return_value=None)
+
+    before = datetime.now(timezone.utc)
+    await PrismaClient.update_data(client, token="sk-test-key", data={"models": ["gpt-4"]})
+    after = datetime.now(timezone.utc)
+
+    sent = client.db.litellm_verificationtoken.update.call_args.kwargs["data"]
+    assert sent["models"] == ["gpt-4"]
+    assert before <= sent["settings_updated_at"] <= after
