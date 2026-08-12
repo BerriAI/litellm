@@ -2,6 +2,7 @@
 Handles transforming from Responses API -> LiteLLM completion  (Chat Completion API)
 """
 
+import hashlib
 import json
 import re
 from collections.abc import Iterator, Mapping, Sequence
@@ -1653,9 +1654,13 @@ class LiteLLMCompletionResponsesConfig:
         request_input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams,
         chat_completion_response: ModelResponse | dict,
+        reasoning_item_id: str | None = None,
     ) -> ResponsesAPIResponse:
         """
         Transform a Chat Completion response into a Responses API response
+
+        ``reasoning_item_id`` is the id a streamed reasoning item was already announced with;
+        passing it keeps the item in this response and the item in the stream the same item.
         """
         if isinstance(chat_completion_response, dict):
             chat_completion_response = ModelResponse(**chat_completion_response)
@@ -1678,6 +1683,7 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_response=chat_completion_response,
                 choices=getattr(chat_completion_response, "choices", []),
                 responses_api_request=responses_api_request,
+                reasoning_item_id=reasoning_item_id,
             ),
             parallel_tool_calls=getattr(chat_completion_response, "parallel_tool_calls", False),
             temperature=getattr(chat_completion_response, "temperature", 0),
@@ -1711,6 +1717,7 @@ class LiteLLMCompletionResponsesConfig:
         chat_completion_response: ModelResponse,
         choices: list[Choices],
         responses_api_request: ResponsesAPIOptionalRequestParams | None = None,
+        reasoning_item_id: str | None = None,
     ) -> list[
         GenericResponseOutputItem
         | OutputCodeInterpreterCall
@@ -1729,7 +1736,9 @@ class LiteLLMCompletionResponsesConfig:
         ] = []
 
         responses_output.extend(
-            LiteLLMCompletionResponsesConfig._extract_reasoning_output_items(chat_completion_response, choices)
+            LiteLLMCompletionResponsesConfig._extract_reasoning_output_items(
+                chat_completion_response, choices, reasoning_item_id
+            )
         )
         responses_output.extend(
             LiteLLMCompletionResponsesConfig._extract_message_output_items(chat_completion_response, choices)
@@ -1797,6 +1806,7 @@ class LiteLLMCompletionResponsesConfig:
     def _extract_reasoning_output_items(
         chat_completion_response: ModelResponse,
         choices: list[Choices],
+        reasoning_item_id: str | None = None,
     ) -> list[GenericResponseOutputItem]:
         for choice in choices:
             if hasattr(choice, "message") and choice.message:
@@ -1806,7 +1816,8 @@ class LiteLLMCompletionResponsesConfig:
                     return [
                         GenericResponseOutputItem(
                             type="reasoning",
-                            id=f"rs_{hash(str(message.reasoning_content))}",
+                            id=reasoning_item_id
+                            or LiteLLMCompletionResponsesConfig._reasoning_item_id(message.reasoning_content),
                             status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                                 choice.finish_reason
                             ),
@@ -1821,6 +1832,15 @@ class LiteLLMCompletionResponsesConfig:
                         )
                     ]
         return []
+
+    @staticmethod
+    def _reasoning_item_id(reasoning_content: str | None) -> str:
+        """Derive a reasoning item's id from its content.
+
+        A digest rather than ``hash()``: the value goes on the wire, and ``hash()`` for str is
+        randomised per process, so the same content yields a different id on every worker.
+        """
+        return f"rs_{hashlib.sha256(str(reasoning_content).encode()).hexdigest()[:32]}"
 
     @staticmethod
     def _extract_image_generation_output_items(
@@ -1931,7 +1951,10 @@ class LiteLLMCompletionResponsesConfig:
                     choice=choice,
                 )
                 message_output_items.extend(image_generation_items)
-            else:
+            # A turn that produced no assistant text has no message item. Emitting one anyway
+            # puts an item in the final output that was never streamed, which a client that
+            # reconciles the two reads as an item it missed.
+            elif choice.message.content:
                 # Regular message output
                 message_output_items.append(
                     GenericResponseOutputItem(

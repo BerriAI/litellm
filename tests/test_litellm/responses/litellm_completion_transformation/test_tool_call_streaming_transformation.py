@@ -58,14 +58,14 @@ def test_tool_call_delta_is_emitted_as_responses_events():
     evt1 = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
     assert evt1 is not None
     assert evt1.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
-    assert evt1.output_index == 1
+    assert evt1.output_index == 0
 
     # The arguments are now chunked, so we get the first delta chunk
     evt2 = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
     assert evt2 is not None
     assert evt2.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
     assert evt2.item_id == "call_1"
-    assert evt2.output_index == 1
+    assert evt2.output_index == 0
     # The delta will be a chunk of the arguments, not the full arguments
     assert len(evt2.delta) <= 10  # Chunks are max 10 characters
 
@@ -106,10 +106,11 @@ def test_tool_calls_present_only_in_final_response_are_emitted_before_completed(
     )
     iterator.litellm_model_response = response
 
-    # First common_done_event_logic call should yield tool events, not response.completed.
+    # The turn has no message content, so the tool call is the turn's only item and holds
+    # output_index 0.
     evt1 = iterator.common_done_event_logic(sync_mode=True)
     assert evt1.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
-    assert evt1.output_index == 1
+    assert evt1.output_index == 0
 
     # Now delta events are emitted (arguments split into chunks)
     # Collect all delta events
@@ -130,12 +131,12 @@ def test_tool_calls_present_only_in_final_response_are_emitted_before_completed(
     # The last event should be FUNCTION_CALL_ARGUMENTS_DONE
     assert evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE
     assert evt.item_id == "call_2"
-    assert evt.output_index == 1
+    assert evt.output_index == 0
     assert evt.arguments == '{"y":2}'
 
     evt_final = iterator.common_done_event_logic(sync_mode=True)
     assert evt_final.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
-    assert evt_final.output_index == 1
+    assert evt_final.output_index == 0
 
 
 def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
@@ -190,7 +191,7 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
     # First event should be OUTPUT_ITEM_ADDED
     assert evt is not None
     assert evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
-    assert evt.output_index == 1
+    assert evt.output_index == 0
     assert hasattr(evt, "__dict__") and "sequence_number" in evt.__dict__
 
     # Collect all remaining delta events from the pending queue by creating empty chunks
@@ -224,7 +225,7 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
     for evt in delta_events:
         assert len(evt.delta) <= 10
         assert evt.item_id == "call_test"
-        assert evt.output_index == 1
+        assert evt.output_index == 0
         assert hasattr(evt, "__dict__") and "sequence_number" in evt.__dict__
 
     # Verify all deltas concatenated equal the original arguments
