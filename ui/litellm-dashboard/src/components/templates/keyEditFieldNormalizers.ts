@@ -50,3 +50,45 @@ export const currentValuePlaceholder = (
   if (!premiumUser) return premiumHint;
   return Array.isArray(current) && current.length > 0 ? `Current: ${current.join(", ")}` : emptyHint;
 };
+
+export type KeyEditRoutePayload = {
+  allowed_routes?: string[] | string | null;
+  key_type?: string;
+  [key: string]: unknown;
+};
+
+export const normalizeKeyEditRoutePayload = (
+  values: KeyEditRoutePayload,
+  originalAllowedRoutes: string[] | null | undefined,
+): KeyEditRoutePayload => {
+  const normalized = { ...values };
+
+  if (typeof normalized.allowed_routes === "string") {
+    normalized.allowed_routes = normalized.allowed_routes
+      .split(",")
+      .map((route) => route.trim())
+      .filter(Boolean);
+  }
+
+  const originalRoutes = new Set(originalAllowedRoutes ?? []);
+  const submittedRoutes = new Set(Array.isArray(normalized.allowed_routes) ? normalized.allowed_routes : []);
+  const routesUnchanged =
+    originalRoutes.size === submittedRoutes.size && [...submittedRoutes].every((route) => originalRoutes.has(route));
+
+  if (routesUnchanged) {
+    delete normalized.allowed_routes;
+    return normalized;
+  }
+
+  const preset = exactKeyTypePresetFromRoutes(
+    Array.isArray(normalized.allowed_routes) ? normalized.allowed_routes : undefined,
+  );
+  if (preset) {
+    normalized.key_type = preset;
+    delete normalized.allowed_routes;
+  } else {
+    delete normalized.key_type;
+  }
+
+  return normalized;
+};
