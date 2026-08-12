@@ -30,7 +30,7 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.types.utils import all_litellm_params, bedrock_batch_litellm_params
-from litellm.types.router import GenericLiteLLMParams
+from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
@@ -4767,10 +4767,13 @@ def test_bedrock_batch_params_never_reach_the_provider():
     is extra="allow" and preserves them into litellm_params for the batch and files
     transformations that read them.
     """
-    kwargs = {
-        "a_real_provider_specific_param": 1,
-        **{field: "configured-value" for field in bedrock_batch_litellm_params},
+    # bedrock_tags is a list of {"key", "value"} dicts; the rest are plain strings, so
+    # give each field a value of its real shape rather than one string for all of them.
+    configured = {
+        field: ([{"key": "team", "value": "configured-value"}] if field == "bedrock_tags" else "configured-value")
+        for field in bedrock_batch_litellm_params
     }
+    kwargs = {"a_real_provider_specific_param": 1, **configured}
 
     non_default = get_non_default_completion_params(dict(kwargs))
 
@@ -4781,7 +4784,21 @@ def test_bedrock_batch_params_never_reach_the_provider():
     assert set(bedrock_batch_litellm_params) <= set(all_litellm_params)
 
     batch_params = dict(GenericLiteLLMParams(**kwargs))
-    assert all(batch_params.get(field) == "configured-value" for field in bedrock_batch_litellm_params), (
+    assert all(batch_params.get(field) == configured[field] for field in bedrock_batch_litellm_params), (
         "registering these must not strip them from the batch path: "
-        f"{sorted(f for f in bedrock_batch_litellm_params if batch_params.get(f) != 'configured-value')}"
+        f"{sorted(f for f in bedrock_batch_litellm_params if batch_params.get(f) != configured[f])}"
+    )
+
+    # GenericLiteLLMParams is extra="allow", so the assertion above would hold even for a
+    # field nothing declares. The proxy's files/batch/passthrough callers do not see that
+    # dict: get_deployment_credentials_with_provider round-trips the deployment through
+    # CredentialLiteLLMParams, which is a whitelist, so an undeclared field is dropped
+    # before the batch transformation reads it. Reproduce that round-trip here so the
+    # preservation claim covers the path the proxy actually takes.
+    normalized = CredentialLiteLLMParams.model_validate(
+        GenericLiteLLMParams(**kwargs).model_dump(exclude_none=True)
+    ).model_dump(exclude_none=True)
+    assert all(normalized.get(field) == configured[field] for field in bedrock_batch_litellm_params), (
+        "credential normalization dropped batch params before the transformation: "
+        f"{sorted(f for f in bedrock_batch_litellm_params if normalized.get(f) != configured[f])}"
     )
