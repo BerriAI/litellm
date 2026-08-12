@@ -33,6 +33,7 @@ import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
+import { hasCapability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { all_admin_roles, internalUserRoles } from "@/utils/roles";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
@@ -109,6 +110,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const { data: currentUser } = useCurrentUser();
   const isAdmin = all_admin_roles.includes(userRole || "");
   const canViewTagUsage = isAdmin || internalUserRoles.includes(userRole || "");
+  const canViewOrganizationUsage = hasCapability(userRole, "viewOrganizationUsage");
+  const canViewAgentUsage = hasCapability(userRole, "viewAgentUsage");
 
   // Debounced search for user selector
   const [userSearchInput, setUserSearchInput] = useState("");
@@ -513,7 +516,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             <UsageViewSelect
               value={usageView}
               onChange={(value) => setUsageView(value)}
-              isAdmin={isAdmin}
+              userRole={userRole}
               canViewTagUsage={canViewTagUsage}
             />
             <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
@@ -950,7 +953,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           )}
           {/* Organization Usage Panel */}
 
-          {usageView === "organization" && (
+          {usageView === "organization" && canViewOrganizationUsage && (
             <EntityUsage
               accessToken={accessToken}
               entityType="organization"
@@ -1033,7 +1036,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               />
             </>
           )}
-          {usageView === "agent" && (
+          {usageView === "agent" && canViewAgentUsage && (
             <EntityUsage
               accessToken={accessToken}
               entityType="agent"
@@ -1093,40 +1096,5 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 };
 
 // Add this helper function to process model-specific activity data
-const getModelActivityData = (userSpendData: { results: DailyData[]; metadata: any }) => {
-  const modelData: {
-    [key: string]: {
-      total_requests: number;
-      total_tokens: number;
-      daily_data: Array<{
-        date: string;
-        api_requests: number;
-        total_tokens: number;
-      }>;
-    };
-  } = {};
-
-  userSpendData.results.forEach((day: DailyData) => {
-    Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
-      if (!modelData[model]) {
-        modelData[model] = {
-          total_requests: 0,
-          total_tokens: 0,
-          daily_data: [],
-        };
-      }
-
-      modelData[model].total_requests += metrics.metrics.api_requests;
-      modelData[model].total_tokens += metrics.metrics.total_tokens;
-      modelData[model].daily_data.push({
-        date: day.date,
-        api_requests: metrics.metrics.api_requests,
-        total_tokens: metrics.metrics.total_tokens,
-      });
-    });
-  });
-
-  return modelData;
-};
 
 export default UsagePage;

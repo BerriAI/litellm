@@ -27,6 +27,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     decode_model_from_file_id,
     encode_batch_response_ids,
     encode_file_id_with_model,
+    ensure_batch_response_managed_file_ids,
     get_batch_from_database,
     get_batch_id_from_unified_batch_id,
     get_credentials_for_model,
@@ -34,9 +35,8 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_models_from_unified_file_id,
     get_original_file_id,
     prepare_data_with_credentials,
-    resolve_input_file_id_to_unified,
-    resolve_output_file_ids_to_unified,
     update_batch_in_database,
+    validate_managed_id_requirement,
 )
 from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
 from litellm.repositories.table_repositories import ManagedFileRepository
@@ -177,6 +177,12 @@ async def create_batch(
             }
 
         input_file_id: Final = _create_batch_data.get("input_file_id", None)
+        await validate_managed_id_requirement(
+            resource_id=input_file_id,
+            resource_kind="file",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
         unified_file_id: str | Literal[False] = False
 
         model_from_file_id = None
@@ -265,6 +271,7 @@ async def create_batch(
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
 
+            _create_batch_data.update(disable_fallbacks=True)  # pyright: ignore[reportCallIssue]  # router flag
             response = await llm_router.acreate_batch(**_create_batch_data)
             response.input_file_id = input_file_id
             response._hidden_params["unified_file_id"] = unified_file_id
@@ -392,6 +399,12 @@ async def retrieve_batch(
 
     data: dict = {}
     try:
+        await validate_managed_id_requirement(
+            resource_id=batch_id,
+            resource_kind="batch",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
         model_from_id: Final = decode_model_from_file_id(batch_id)
         _retrieve_batch_request: Final = RetrieveBatchRequest(
             batch_id=batch_id,
@@ -441,10 +454,16 @@ async def retrieve_batch(
             )
 
             # The DB may store raw provider file IDs (before hooks translate them).
-            # Resolve any raw input/output/error file IDs to unified IDs.
+            # Register any missing managed-file rows and return unified IDs.
             if unified_batch_id:
-                await resolve_input_file_id_to_unified(response, prisma_client)
-                await resolve_output_file_ids_to_unified(response, prisma_client)
+                await ensure_batch_response_managed_file_ids(
+                    response=response,
+                    managed_files_obj=managed_files_obj,
+                    prisma_client=prisma_client,
+                    verbose_proxy_logger=verbose_proxy_logger,
+                    db_batch_object=db_batch_object,
+                    unified_batch_id=unified_batch_id,
+                )
 
             asyncio.create_task(
                 proxy_logging_obj.update_request_status(
@@ -562,10 +581,16 @@ async def retrieve_batch(
         )
 
         # Fix: bug_feb14_batch_retrieve_returns_raw_input_file_id
-        # Resolve raw provider file IDs (input, output, error) to unified IDs.
+        # Register any missing managed-file rows and return unified IDs.
         if unified_batch_id:
-            await resolve_input_file_id_to_unified(response, prisma_client)
-            await resolve_output_file_ids_to_unified(response, prisma_client)
+            await ensure_batch_response_managed_file_ids(
+                response=response,
+                managed_files_obj=managed_files_obj,
+                prisma_client=prisma_client,
+                verbose_proxy_logger=verbose_proxy_logger,
+                db_batch_object=db_batch_object,
+                unified_batch_id=unified_batch_id,
+            )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -828,6 +853,13 @@ async def cancel_batch(
 
     data: dict = {}
     try:
+        await validate_managed_id_requirement(
+            resource_id=batch_id,
+            resource_kind="batch",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
+
         # Check for encoded batch ID with model info
         model_from_id: Final = decode_model_from_file_id(batch_id)
 
@@ -950,6 +982,7 @@ async def cancel_batch(
             prisma_client=prisma_client,
             verbose_proxy_logger=verbose_proxy_logger,
             operation="cancel",
+            user_api_key_dict=user_api_key_dict,
         )
 
         ### CALL HOOKS ### - modify outgoing data

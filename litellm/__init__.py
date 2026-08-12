@@ -197,6 +197,7 @@ standard_logging_payload_excluded_fields: Optional[List[str]] = (
     None  # Fields to exclude from StandardLoggingPayload before callbacks receive it
 )
 log_raw_request_response: bool = False
+request_correlation_in_logs: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False
 # When True (default — preserves historical behavior), the Router appends
@@ -244,6 +245,8 @@ use_chat_completions_url_for_anthropic_messages: bool = bool(
 # Or via `litellm_settings.strip_anthropic_total_tokens: true` in
 # config.yaml.
 strip_anthropic_total_tokens: bool = False
+anthropic_sse_ping_interval_seconds: float = 15.0
+sse_keepalive_ping_interval_seconds: float | None = None
 route_all_chat_openai_to_responses: bool = (
     os.getenv("LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES", "false").lower() == "true"
 )  # When True, routes all OpenAI /chat/completions requests through the Responses API bridge
@@ -704,9 +707,8 @@ def is_openai_finetune_model(key: str) -> bool:
     return key.startswith("ft:") and not key.count(":") > 1
 
 
-def add_known_models(model_cost_map: Optional[Dict] = None):
-    _map: Final = model_cost_map if model_cost_map is not None else model_cost
-    for key, value in _map.items():
+def _populate_provider_model_sets(model_cost_map: Dict) -> None:
+    for key, value in model_cost_map.items():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(key):
             open_ai_chat_completion_models.add(key)
         elif value.get("litellm_provider") == "text-completion-openai":
@@ -949,7 +951,16 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             bedrock_mantle_models.add(key)
 
 
-add_known_models()
+def add_known_models(model_cost_map: Optional[Dict] = None):
+    """Fold `model_cost_map` (defaults to `litellm.model_cost`) into the per-provider model sets,
+    then refresh `models_by_provider` from those sets so the additions reach wildcard expansion.
+    The refresh updates the dict in place, so references captured before a reload stay live.
+    """
+    _populate_provider_model_sets(model_cost_map if model_cost_map is not None else model_cost)
+    models_by_provider.update(_build_models_by_provider())
+
+
+_populate_provider_model_sets(model_cost)
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 
 # this is maintained for Exception Mapping
@@ -1071,112 +1082,116 @@ model_list_set = set(model_list)
 # provider_list is lazy-loaded via __getattr__ to avoid importing LlmProviders at import time
 
 
-models_by_provider: dict = {
-    "openai": open_ai_chat_completion_models | open_ai_text_completion_models,
-    "text-completion-openai": open_ai_text_completion_models,
-    "cohere": cohere_models | cohere_chat_models,
-    "cohere_chat": cohere_chat_models,
-    "anthropic": anthropic_models,
-    "replicate": replicate_models,
-    "huggingface": huggingface_models,
-    "together_ai": together_ai_models,
-    "baseten": baseten_models,
-    "openrouter": openrouter_models,
-    "vercel_ai_gateway": vercel_ai_gateway_models,
-    "datarobot": datarobot_models,
-    "vertex_ai": vertex_chat_models
-    | vertex_text_models
-    | vertex_anthropic_models
-    | vertex_vision_models
-    | vertex_language_models
-    | vertex_deepseek_models
-    | vertex_minimax_models
-    | vertex_moonshot_models
-    | vertex_zai_models,
-    "ai21": ai21_models,
-    "bedrock": bedrock_models | bedrock_converse_models,
-    "petals": petals_models,
-    "ollama": ollama_models,
-    "ollama_chat": ollama_models,
-    "deepinfra": deepinfra_models,
-    "perplexity": perplexity_models,
-    "maritalk": maritalk_models,
-    "watsonx": watsonx_models,
-    "gemini": gemini_models,
-    "fireworks_ai": fireworks_ai_models | fireworks_ai_embedding_models,
-    "aleph_alpha": aleph_alpha_models,
-    "text-completion-codestral": text_completion_codestral_models,
-    "text-completion-inception": text_completion_inception_models,
-    "xai": xai_models,
-    "zai": zai_models,
-    "fal_ai": fal_ai_models,
-    "deepseek": deepseek_models,
-    "tencent": tencent_models,
-    "runwayml": runwayml_models,
-    "mistral": mistral_chat_models,
-    "azure_ai": azure_ai_models,
-    "voyage": voyage_models,
-    "infinity": infinity_models,
-    "databricks": databricks_models,
-    "cloudflare": cloudflare_models,
-    "codestral": codestral_models,
-    "nlp_cloud": nlp_cloud_models,
-    "friendliai": friendliai_models,
-    "palm": palm_models,
-    "groq": groq_models,
-    "azure": azure_models | azure_text_models,
-    "azure_anthropic": azure_anthropic_models,
-    "azure_text": azure_text_models,
-    "anyscale": anyscale_models,
-    "cerebras": cerebras_models,
-    "galadriel": galadriel_models,
-    "nvidia_nim": nvidia_nim_models,
-    "nvidia_riva": nvidia_riva_models,
-    "soniox": soniox_models,
-    "sambanova": sambanova_models | sambanova_embedding_models,
-    "novita": novita_models,
-    "nebius": nebius_models | nebius_embedding_models,
-    "aiml": aiml_models,
-    "assemblyai": assemblyai_models,
-    "jina_ai": jina_ai_models,
-    "snowflake": snowflake_models,
-    "gradient_ai": gradient_ai_models,
-    "meta_llama": llama_models,
-    "nscale": nscale_models,
-    "featherless_ai": featherless_ai_models,
-    "deepgram": deepgram_models,
-    "elevenlabs": elevenlabs_models,
-    "heroku": heroku_models,
-    "dashscope": dashscope_models,
-    "modelscope": modelscope_models,
-    "moonshot": moonshot_models,
-    "publicai": publicai_models,
-    "darkbloom": darkbloom_models,
-    "v0": v0_models,
-    "morph": morph_models,
-    "lambda_ai": lambda_ai_models,
-    "inception": inception_models,
-    "hyperbolic": hyperbolic_models,
-    "black_forest_labs": black_forest_labs_models,
-    "recraft": recraft_models,
-    "cometapi": cometapi_models,
-    "oci": oci_models,
-    "volcengine": volcengine_models,
-    "wandb": wandb_models,
-    "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
-    "lemonade": lemonade_models,
-    "clarifai": clarifai_models,
-    "amazon_nova": amazon_nova_models,
-    "stability": stability_models,
-    "github_copilot": github_copilot_models,
-    "chatgpt": chatgpt_models,
-    "minimax": minimax_models,
-    "aws_polly": aws_polly_models,
-    "gigachat": gigachat_models,
-    "llamagate": llamagate_models,
-    "reducto": reducto_models,
-    "bedrock_mantle": bedrock_mantle_models,
-}
+def _build_models_by_provider() -> dict:
+    return {
+        "openai": open_ai_chat_completion_models | open_ai_text_completion_models,
+        "text-completion-openai": open_ai_text_completion_models,
+        "cohere": cohere_models | cohere_chat_models,
+        "cohere_chat": cohere_chat_models,
+        "anthropic": anthropic_models,
+        "replicate": replicate_models,
+        "huggingface": huggingface_models,
+        "together_ai": together_ai_models,
+        "baseten": baseten_models,
+        "openrouter": openrouter_models,
+        "vercel_ai_gateway": vercel_ai_gateway_models,
+        "datarobot": datarobot_models,
+        "vertex_ai": vertex_chat_models
+        | vertex_text_models
+        | vertex_anthropic_models
+        | vertex_vision_models
+        | vertex_language_models
+        | vertex_deepseek_models
+        | vertex_minimax_models
+        | vertex_moonshot_models
+        | vertex_zai_models,
+        "ai21": ai21_models,
+        "bedrock": bedrock_models | bedrock_converse_models,
+        "petals": petals_models,
+        "ollama": ollama_models,
+        "ollama_chat": ollama_models,
+        "deepinfra": deepinfra_models,
+        "perplexity": perplexity_models,
+        "maritalk": maritalk_models,
+        "watsonx": watsonx_models,
+        "gemini": gemini_models,
+        "fireworks_ai": fireworks_ai_models | fireworks_ai_embedding_models,
+        "aleph_alpha": aleph_alpha_models,
+        "text-completion-codestral": text_completion_codestral_models,
+        "text-completion-inception": text_completion_inception_models,
+        "xai": xai_models,
+        "zai": zai_models,
+        "fal_ai": fal_ai_models,
+        "deepseek": deepseek_models,
+        "tencent": tencent_models,
+        "runwayml": runwayml_models,
+        "mistral": mistral_chat_models,
+        "azure_ai": azure_ai_models,
+        "voyage": voyage_models,
+        "infinity": infinity_models,
+        "databricks": databricks_models,
+        "cloudflare": cloudflare_models,
+        "codestral": codestral_models,
+        "nlp_cloud": nlp_cloud_models,
+        "friendliai": friendliai_models,
+        "palm": palm_models,
+        "groq": groq_models,
+        "azure": azure_models | azure_text_models,
+        "azure_anthropic": azure_anthropic_models,
+        "azure_text": azure_text_models,
+        "anyscale": anyscale_models,
+        "cerebras": cerebras_models,
+        "galadriel": galadriel_models,
+        "nvidia_nim": nvidia_nim_models,
+        "nvidia_riva": nvidia_riva_models,
+        "soniox": soniox_models,
+        "sambanova": sambanova_models | sambanova_embedding_models,
+        "novita": novita_models,
+        "nebius": nebius_models | nebius_embedding_models,
+        "aiml": aiml_models,
+        "assemblyai": assemblyai_models,
+        "jina_ai": jina_ai_models,
+        "snowflake": snowflake_models,
+        "gradient_ai": gradient_ai_models,
+        "meta_llama": llama_models,
+        "nscale": nscale_models,
+        "featherless_ai": featherless_ai_models,
+        "deepgram": deepgram_models,
+        "elevenlabs": elevenlabs_models,
+        "heroku": heroku_models,
+        "dashscope": dashscope_models,
+        "modelscope": modelscope_models,
+        "moonshot": moonshot_models,
+        "publicai": publicai_models,
+        "darkbloom": darkbloom_models,
+        "v0": v0_models,
+        "morph": morph_models,
+        "lambda_ai": lambda_ai_models,
+        "inception": inception_models,
+        "hyperbolic": hyperbolic_models,
+        "black_forest_labs": black_forest_labs_models,
+        "recraft": recraft_models,
+        "cometapi": cometapi_models,
+        "oci": oci_models,
+        "volcengine": volcengine_models,
+        "wandb": wandb_models,
+        "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
+        "lemonade": lemonade_models,
+        "clarifai": clarifai_models,
+        "amazon_nova": amazon_nova_models,
+        "stability": stability_models,
+        "github_copilot": github_copilot_models,
+        "chatgpt": chatgpt_models,
+        "minimax": minimax_models,
+        "aws_polly": aws_polly_models,
+        "gigachat": gigachat_models,
+        "llamagate": llamagate_models,
+        "reducto": reducto_models,
+        "bedrock_mantle": bedrock_mantle_models,
+    }
+
+
+models_by_provider: dict = _build_models_by_provider()
 
 # mapping for those models which have larger equivalents
 longer_context_model_fallback_dict: dict = {

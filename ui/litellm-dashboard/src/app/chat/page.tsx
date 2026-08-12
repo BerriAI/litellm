@@ -65,7 +65,6 @@ export default function ChatConversationPage() {
     updateLastAssistantMessage,
     truncateFromMessage,
   } = useChatShell();
-  const hadActiveConversationOnMountRef = useRef(activeConversationId !== null);
 
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [models, setModels] = useState<string[]>([]);

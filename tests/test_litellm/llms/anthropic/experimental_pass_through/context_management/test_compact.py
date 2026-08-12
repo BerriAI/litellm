@@ -2475,3 +2475,57 @@ def test_endpoint_runs_failure_hook_on_500_context_management_error():
     body = response.json()
     assert body["type"] == "error"
     failure_hook.assert_awaited_once()
+
+
+def test_count_effective_tokens_counts_midturn_system_correction():
+    from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
+        _count_effective_tokens,
+    )
+
+    base: List[Dict[str, Any]] = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi"},
+    ]
+    correction = {
+        "role": "system",
+        "content": [{"type": "text", "text": "use the corrected result " * 20}],
+    }
+
+    without_correction = _count_effective_tokens(
+        model=MODEL, effective_messages=base, compaction_block=None, tools=None
+    )
+    with_correction = _count_effective_tokens(
+        model=MODEL,
+        effective_messages=base + [correction],
+        compaction_block=None,
+        tools=None,
+    )
+
+    assert with_correction > without_correction
+
+
+def test_build_summary_messages_keeps_midturn_system_correction_in_place():
+    from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
+        _build_summary_messages,
+    )
+
+    summary_messages = _build_summary_messages(
+        effective_messages=[
+            {"role": "user", "content": "original question"},
+            {"role": "system", "content": "use the corrected result"},
+            {"role": "assistant", "content": "acknowledged"},
+        ],
+        prompt="summarize the conversation",
+        system="caller system prompt",
+    )
+
+    assert [m["role"] for m in summary_messages] == [
+        "system",
+        "user",
+        "system",
+        "assistant",
+        "user",
+    ]
+    assert summary_messages[0]["content"] == "caller system prompt"
+    assert summary_messages[2]["content"] == "use the corrected result"
+    assert summary_messages[-1]["content"] == "summarize the conversation"

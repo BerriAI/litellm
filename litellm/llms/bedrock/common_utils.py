@@ -26,7 +26,7 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.secret_managers.main import get_secret
+from litellm.secret_managers.main import get_secret, get_secret_str
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
@@ -34,6 +34,44 @@ if TYPE_CHECKING:
 
 class BedrockError(BaseLLMException):
     pass
+
+
+_BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "aws_region_name",
+    "aws_session_name",
+    "aws_profile_name",
+    "aws_role_name",
+    "aws_web_identity_token",
+    "aws_sts_endpoint",
+    "aws_external_id",
+)
+
+
+def merge_bedrock_aws_request_params(
+    litellm_params: Mapping[str, Any],
+    optional_params: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Merge deployment and request parameters without allowing auth escalation.
+
+    Deployment configuration is authoritative for AWS authentication. When a
+    deployment supplies static credentials, caller-supplied profile/role/token
+    selectors must not redirect signing to another identity available on the
+    server. Requests may still provide AWS credentials when the deployment has
+    no static credentials configured.
+    """
+    request_params: Final = {**optional_params, **litellm_params}  # mutable-ok: AWS helpers require a plain dict
+    has_static_deployment_credentials: Final = all(
+        isinstance(litellm_params.get(key), str) and bool(litellm_params.get(key))
+        for key in ("aws_access_key_id", "aws_secret_access_key", "aws_region_name")
+    )
+    if has_static_deployment_credentials:
+        for key in _BEDROCK_AWS_AUTH_PARAMETER_KEYS:
+            if key not in litellm_params:
+                request_params.pop(key, None)
+    return request_params
 
 
 # Lazy import cache to avoid circular imports and performance impact
@@ -1302,6 +1340,23 @@ def get_anthropic_beta_from_headers(headers: dict) -> list[str]:
         return [beta.strip() for beta in anthropic_beta_header.split(",")]
 
     return []
+
+
+def resolve_s3_encryption_key_id(
+    litellm_params: Mapping[str, Any],
+    optional_params: Mapping[str, Any] | None = None,
+) -> str | None:
+    """
+    Resolve the SSE-KMS key configured for Bedrock batch/file S3 objects.
+
+    Precedence: `s3_encryption_key_id` in litellm_params, then optional_params
+    (client-side / request params), then the AWS_S3_ENCRYPTION_KEY_ID env var.
+    """
+    candidates: Final = tuple(
+        source.get("s3_encryption_key_id") for source in (litellm_params, optional_params) if source is not None
+    )
+    explicit: Final = next((value for value in candidates if isinstance(value, str) and value), None)
+    return explicit or get_secret_str("AWS_S3_ENCRYPTION_KEY_ID")
 
 
 class CommonBatchFilesUtils:

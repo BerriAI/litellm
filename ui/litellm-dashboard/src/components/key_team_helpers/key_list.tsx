@@ -60,6 +60,7 @@ export interface KeyResponse {
   created_at: string;
   created_by?: string;
   updated_at: string;
+  settings_updated_at?: string | null;
   last_active: string | null;
   team_spend: number;
   team_alias: string;

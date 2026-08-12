@@ -4,8 +4,9 @@ AUTO ROUTER MANAGEMENT ENDPOINTS
 POST /auto_router/test_routing - Route one prompt through an unsaved complexity-router config
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final
 
 from pydantic import BaseModel, TypeAdapter
@@ -25,6 +26,7 @@ from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.autorouter_session_rollup import AUTOROUTER_BENCHMARKS_SQL
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router_strategy.complexity_router import ComplexityRouter
@@ -260,6 +262,7 @@ async def preview_auto_router_routing(
 class _SessionAggRow(BaseModel):
     router_name: str
     router_type: str
+    tier_turns: Mapping[str, int]
     sessions: int
     turns: int
     unordered_turns: int
@@ -282,35 +285,6 @@ class _SessionAggRow(BaseModel):
 
 
 _SESSION_AGG_ROWS: Final = TypeAdapter(list[_SessionAggRow])
-
-_BENCHMARKS_SQL: Final = """
-SELECT
-    router_name,
-    router_type,
-    COUNT(*)::int AS sessions,
-    COALESCE(SUM(turns), 0)::int AS turns,
-    COALESCE(SUM(unordered_turns), 0)::int AS unordered_turns,
-    COALESCE(SUM(covered_turns), 0)::int AS covered_turns,
-    COALESCE(SUM(cache_hits), 0)::int AS cache_hits,
-    COALESCE(SUM(same_model_turns), 0)::int AS same_model_turns,
-    COALESCE(SUM(same_model_hits), 0)::int AS same_model_hits,
-    COALESCE(SUM(first_visit_turns), 0)::int AS first_visit_turns,
-    COALESCE(SUM(first_visit_hits), 0)::int AS first_visit_hits,
-    COALESCE(SUM(return_turns), 0)::int AS return_turns,
-    COALESCE(SUM(return_hits), 0)::int AS return_hits,
-    COALESCE(SUM(return_expired_misses), 0)::int AS return_expired_misses,
-    COALESCE(SUM(return_within_ttl_misses), 0)::int AS return_within_ttl_misses,
-    COALESCE(SUM(ttl_5m_turns), 0)::int AS ttl_5m_turns,
-    COALESCE(SUM(ttl_1h_turns), 0)::int AS ttl_1h_turns,
-    COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens,
-    COALESCE(SUM(spend), 0)::float8 AS spend,
-    COALESCE(SUM(saved_spend), 0)::float8 AS saved_spend,
-    COALESCE(SUM(EXTRACT(EPOCH FROM (last_turn_at - first_turn_at))), 0)::float8 AS session_seconds
-FROM "LiteLLM_AutoRouterSession"
-WHERE last_turn_at >= $1::timestamp AND first_turn_at < $2::timestamp
-GROUP BY router_name, router_type
-ORDER BY SUM(spend) DESC
-"""
 
 
 def _parse_benchmark_day(value: str) -> datetime:
@@ -366,6 +340,7 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
     return _SessionAggRow(
         router_name="",
         router_type="",
+        tier_turns=MappingProxyType({}),
         sessions=sum(row.sessions for row in rows),
         turns=sum(row.turns for row in rows),
         unordered_turns=sum(row.unordered_turns for row in rows),
@@ -434,7 +409,7 @@ async def get_auto_router_benchmarks(
         raise HTTPException(status_code=400, detail="end_date must not be earlier than start_date")
 
     raw_rows: Final = await prisma_client.db.query_raw(
-        _BENCHMARKS_SQL,
+        AUTOROUTER_BENCHMARKS_SQL,
         start_day.isoformat(),
         (end_day + timedelta(days=1)).isoformat(),
     )
@@ -443,6 +418,7 @@ async def get_auto_router_benchmarks(
         AutoRouterBenchmarkGroup(
             router_name=row.router_name,
             router_type=row.router_type,
+            tier_turns=row.tier_turns,
             **_benchmark_totals(row).model_dump(),
         )
         for row in rows

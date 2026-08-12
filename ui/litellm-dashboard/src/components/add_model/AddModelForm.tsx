@@ -66,7 +66,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   } = useProviderFields();
   const { data: guardrailsData } = useGuardrails();
   const guardrailsList = guardrailsData?.guardrails.map((g) => g.guardrail_name);
-  const { data: tagsList, isLoading: isTagsLoading, error: tagsError } = useTags();
+  const { data: tagsList } = useTags();
 
   const handleTestConnection = async () => {
     setIsTestingConnection(true);

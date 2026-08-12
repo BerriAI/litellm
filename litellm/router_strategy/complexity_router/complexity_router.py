@@ -19,7 +19,7 @@ import asyncio
 import random
 import re
 from collections.abc import Iterator, Mapping, Sequence
-from itertools import islice
+from itertools import accumulate, islice
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
@@ -211,6 +211,16 @@ def _parent_session_kwargs(request_kwargs: Mapping[str, Any] | None) -> Mapping[
     return {k: kwargs[k] for k in ("litellm_session_id", "litellm_trace_id") if kwargs.get(k) is not None}
 
 
+def _response_cost_or_none(response: ModelResponse) -> float | None:
+    hidden_params: Final = response._hidden_params
+    if not isinstance(hidden_params, dict):
+        return None
+    cost: Final = hidden_params.get("response_cost")
+    if isinstance(cost, bool) or not isinstance(cost, (int, float)):
+        return None
+    return float(cost)
+
+
 def _effective_turn_off_message_logging(request_kwargs: Mapping[str, Any] | None) -> bool | None:
     from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
         initialize_standard_callback_dynamic_params,
@@ -223,6 +233,7 @@ def _effective_turn_off_message_logging(request_kwargs: Mapping[str, Any] | None
 
 _REMINDER_OPEN: Final = "<system-reminder>"
 _REMINDER_CLOSE: Final = "</system-reminder>"
+_DEFAULT_REMINDER_MARKERS: Final = ((_REMINDER_OPEN, _REMINDER_CLOSE),)
 
 _TRUNCATION_MARKER: Final = "..."
 
@@ -243,10 +254,8 @@ def _message_text(content: object) -> str:
     return content if isinstance(content, str) else ""
 
 
-def _reminder_block_spans(
-    lowered: str, open_marker: str = _REMINDER_OPEN, close_marker: str = _REMINDER_CLOSE
-) -> Iterator[tuple[int, int]]:
-    """Span of each complete reminder block, left to right.
+def _reminder_block_spans(lowered: str, open_marker: str, close_marker: str) -> Iterator[tuple[int, int]]:
+    """Span of each complete reminder block for one marker pair, left to right.
 
     Literal `str.find`, not a regex: the delimiters are fixed strings, and `<system-reminder>.*?`
     retried its lazy quantifier from every opening tag, so repeated unclosed tags were quadratic
@@ -262,17 +271,36 @@ def _reminder_block_spans(
         yield start, cursor
 
 
-def _strip_reminder_blocks(text: str, open_marker: str = _REMINDER_OPEN, close_marker: str = _REMINDER_CLOSE) -> str:
-    """Remove every complete reminder block from text, keeping everything written around them."""
-    spans: Final = tuple(_reminder_block_spans(text.lower(), open_marker, close_marker))
+def _strip_reminder_blocks(text: str, marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS) -> str:
+    """Remove every complete reminder block from text, keeping everything written around them.
+
+    Blocks from different pairs can nest or overlap, which the gap construction below would
+    otherwise mishandle: an inner block's end would resume the kept text partway through the outer
+    block, leaking the rest of that block into the classified ask. Running the block ends through a
+    maximum resumes each gap past the furthest block seen so far, which collapses nested and
+    overlapping spans without a separate merge pass. A single pair's ends already increase, so the
+    maximum is the identity there and the default path is byte-identical to a plain scan.
+
+    Deliberately linear in both the text and the block count. This runs pre-routing on input any
+    keyholder controls, and both a regex scan and a fold that rebuilds a growing tuple of merged
+    spans go quadratic on inputs that are cheap to send.
+    """
+    lowered: Final = text.lower()
+    spans: Final = tuple(
+        sorted(
+            span
+            for open_marker, close_marker in marker_pairs
+            for span in _reminder_block_spans(lowered, open_marker, close_marker)
+        )
+    )
     if not spans:
         return text.strip()
-    keep_from: Final = (0, *(end for _, end in spans))
+    keep_from: Final = (0, *accumulate((end for _, end in spans), max))
     keep_to: Final = (*(start for start, _ in spans), len(text))
     return " ".join(kept for a, b in zip(keep_from, keep_to) if (kept := text[a:b].strip()))
 
 
-def _human_text(content: object, open_marker: str = _REMINDER_OPEN, close_marker: str = _REMINDER_CLOSE) -> str:
+def _human_text(content: object, marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS) -> str:
     """Message content as the text a human wrote, with complete reminder blocks removed.
 
     Harnesses inject reminders as ordinary text alongside the live ask, so the block is stripped and
@@ -281,18 +309,18 @@ def _human_text(content: object, open_marker: str = _REMINDER_OPEN, close_marker
     one, and this same string drives escalation keywords and keyword_tier_rules, which choose the
     model and therefore the spend. An unclosed tag is not a block and is left intact.
     """
-    return _strip_reminder_blocks(_message_text(content), open_marker, close_marker)
+    return _strip_reminder_blocks(_message_text(content), marker_pairs)
 
 
 def _iter_human_asks_newest_first(
-    messages: Sequence[Mapping[str, object]], markers: tuple[str, str] = (_REMINDER_OPEN, _REMINDER_CLOSE)
+    messages: Sequence[Mapping[str, object]],
+    marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS,
 ) -> Iterator[str]:
     """Yield user-turn texts that carry a real human ask, newest first, with harness noise removed."""
-    open_marker, close_marker = markers
     return (
         text
         for msg in reversed(messages)
-        if msg.get("role") == "user" and (text := _human_text(msg.get("content"), open_marker, close_marker))
+        if msg.get("role") == "user" and (text := _human_text(msg.get("content"), marker_pairs))
     )
 
 
@@ -331,7 +359,8 @@ def _conversation_is_continuing(messages: Sequence[Mapping[str, object]] | None)
 
 
 def _newest_turn_ask(
-    messages: Sequence[Mapping[str, object]], markers: tuple[str, str] = (_REMINDER_OPEN, _REMINDER_CLOSE)
+    messages: Sequence[Mapping[str, object]],
+    marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS,
 ) -> str | None:
     """The human ask on the newest user turn, or None when that turn carries only plumbing.
 
@@ -342,12 +371,12 @@ def _newest_turn_ask(
     newest_user_turn: Final = next((msg for msg in reversed(messages) if msg.get("role") == "user"), None)
     if newest_user_turn is None:
         return None
-    return _human_text(newest_user_turn.get("content"), *markers) or None
+    return _human_text(newest_user_turn.get("content"), marker_pairs) or None
 
 
 def _extract_current_ask_and_system_prompt(
     messages: Sequence[Mapping[str, object]],
-    markers: tuple[str, str] = (_REMINDER_OPEN, _REMINDER_CLOSE),
+    marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS,
 ) -> tuple[str | None, str | None]:
     """The last real human ask and the last system prompt; either is None if absent.
 
@@ -355,7 +384,7 @@ def _extract_current_ask_and_system_prompt(
     the caller routes to its default model. That is the correct answer rather than a gap to fill:
     filling it would hand tier selection to harness-injected text.
     """
-    current_ask: Final = next(_iter_human_asks_newest_first(messages, markers), None)
+    current_ask: Final = next(_iter_human_asks_newest_first(messages, marker_pairs), None)
     system_prompt: Final = next(
         (
             text
@@ -375,7 +404,7 @@ def _truncate(text: str, limit: int) -> str:
 def _iter_context_turns_newest_first(
     messages: Sequence[Mapping[str, object]],
     include_assistant: bool,
-    markers: tuple[str, str] = (_REMINDER_OPEN, _REMINDER_CLOSE),
+    marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS,
 ) -> Iterator[tuple[str, str]]:
     """Yield (role, text) for turns eligible as classifier context, newest first.
 
@@ -391,7 +420,7 @@ def _iter_context_turns_newest_first(
         for msg in reversed(messages)
         if isinstance(role := msg.get("role"), str)
         and role in roles
-        and (text := _human_text(msg.get("content"), *markers))
+        and (text := _human_text(msg.get("content"), marker_pairs))
     )
 
 
@@ -401,7 +430,7 @@ def _extract_prior_turns(
     window_size: int,
     per_turn_chars: int,
     include_assistant: bool,
-    markers: tuple[str, str] = (_REMINDER_OPEN, _REMINDER_CLOSE),
+    marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS,
 ) -> tuple[tuple[str, str], ...]:
     """Up to window_size turns other than current_ask, oldest first, as (role, text).
 
@@ -421,7 +450,7 @@ def _extract_prior_turns(
     prior: Final = islice(
         (
             turn
-            for turn in _iter_context_turns_newest_first(messages, include_assistant, markers)
+            for turn in _iter_context_turns_newest_first(messages, include_assistant, marker_pairs)
             if turn[1] != current_ask
         ),
         window_size,
@@ -470,6 +499,7 @@ class ClassificationOutcome(NamedTuple):
     score: float | None
     signals: tuple[str, ...]
     cause: Literal["heuristic_scorer", "reasoning_override", "llm_classifier", "default_model_fallback"]
+    classifier_cost: float | None = None
 
 
 class ComplexityRouter(CustomLogger):
@@ -545,7 +575,11 @@ class ComplexityRouter(CustomLogger):
             if self.config.escalation_keywords is not None
             else DEFAULT_ESCALATION_KEYWORDS
         )
-        self._reminder_markers: tuple[str, str] = self.config.reminder_markers or (_REMINDER_OPEN, _REMINDER_CLOSE)
+        self._reminder_markers: tuple[tuple[str, str], ...] = (
+            tuple((pair.open, pair.close) for pair in self.config.reminder_markers)
+            if self.config.reminder_markers
+            else _DEFAULT_REMINDER_MARKERS
+        )
 
         # Lazily built on first semantic request and cached for reuse (route
         # embeddings are static, only the prompt is embedded per request). The lock
@@ -830,6 +864,7 @@ class ComplexityRouter(CustomLogger):
         escalation_keyword: str | None = None,
         escalated: bool = False,
         classifier_model: str | None = None,
+        classifier_cost: float | None = None,
         conversation_continuing: bool = True,
     ) -> StandardLoggingRoutingDecision:
         """Assemble the per-request provenance record for this router's decision.
@@ -875,6 +910,8 @@ class ComplexityRouter(CustomLogger):
             decision["escalated"] = escalated
         if classifier_model is not None:
             decision["classifier_model"] = classifier_model
+        if classifier_cost is not None:
+            decision["classifier_cost"] = classifier_cost
         return decision
 
     async def aclassify(
@@ -896,9 +933,13 @@ class ComplexityRouter(CustomLogger):
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
 
         try:
-            tier = await self._classify_with_llm(prompt, system_prompt, request_kwargs, messages)
+            tier, classifier_cost = await self._classify_with_llm(prompt, system_prompt, request_kwargs, messages)
             return ClassificationOutcome(
-                tier=tier, score=None, signals=(f"llm-classifier:{tier.value}",), cause="llm_classifier"
+                tier=tier,
+                score=None,
+                signals=(f"llm-classifier:{tier.value}",),
+                cause="llm_classifier",
+                classifier_cost=classifier_cost,
             )
         except Exception as e:  # noqa: BLE001 -- external LLM call can fail in many distinct ways (timeout, provider error, validation, parse error); any failure must fall back to the configured fallback path
             verbose_router_logger.warning(
@@ -944,7 +985,7 @@ class ComplexityRouter(CustomLogger):
         system_prompt: str | None = None,
         request_kwargs: dict[str, Any] | None = None,
         messages: Sequence[Mapping[str, object]] | None = None,
-    ) -> ComplexityTier:
+    ) -> tuple[ComplexityTier, float | None]:
         """
         Call the configured classifier model with a system/user role split and prior-turn context.
 
@@ -975,7 +1016,7 @@ class ComplexityRouter(CustomLogger):
                 window_size=self.config.classifier_context_window_size,
                 per_turn_chars=self.config.classifier_context_per_turn_chars,
                 include_assistant=include_assistant,
-                markers=self._reminder_markers,
+                marker_pairs=self._reminder_markers,
             )
             if context_enabled
             else ()
@@ -1044,7 +1085,7 @@ class ComplexityRouter(CustomLogger):
         tier: Final = self.config.tier_for_label(raw_tier)
         if tier is None:
             raise ValueError(f"LLM classifier returned an unrecognized tier: {raw_tier!r}")
-        return tier
+        return tier, _response_cost_or_none(response)
 
     @staticmethod
     def _build_classifier_user_payload(
@@ -1610,6 +1651,28 @@ class ComplexityRouter(CustomLogger):
         caller_scope: Final = self._get_user_api_key_hash_from_request_kwargs(request_kwargs) or "unscoped"
         return f"complexity_router_session_affinity:v1:{self.model_name}:{caller_scope}:{session_id}"
 
+    @property
+    def _uses_tier_pin(self) -> bool:
+        return bool(self.config.session_affinity and not self.config.plugins)
+
+    @property
+    def _uses_deployment_pin(self) -> bool:
+        """session_affinity implies the deployment pin: a session frozen onto one model
+        group but load-balanced across its deployments would still go cache-cold, which
+        is the exact failure both flags exist to prevent."""
+        return bool((self.config.deployment_affinity or self.config.session_affinity) and not self.config.plugins)
+
+    def _with_session_deployment_affinity(
+        self, response: PreRoutingHookResponse | None
+    ) -> PreRoutingHookResponse | None:
+        if response is None or not self._uses_deployment_pin:
+            return response
+        return response.model_copy(
+            update={  # mutable-ok: model_copy types update as a plain dict
+                "session_affinity_ttl_seconds": self.config.session_affinity_ttl_seconds
+            }
+        )
+
     async def async_pre_routing_hook(
         self,
         model: str,
@@ -1644,7 +1707,7 @@ class ComplexityRouter(CustomLogger):
         resolved_messages: Final = self._resolve_messages(messages, request_kwargs)
         conversation_continuing: Final = _conversation_is_continuing(resolved_messages)
 
-        use_session_affinity: Final = self.config.session_affinity and not self.config.plugins
+        use_session_affinity: Final = self._uses_tier_pin
         session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs) if use_session_affinity else None
         cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
 
@@ -1683,16 +1746,19 @@ class ComplexityRouter(CustomLogger):
                         "ComplexityRouter: routing decision cause=%s, routed_model=%s", cause, routed_model
                     )
                     has_original_messages: Final = messages is not None and len(messages) > 0
-                    return PreRoutingHookResponse(
-                        model=routed_model,
-                        messages=messages if has_original_messages else None,
-                        routing_decision=self._build_routing_decision(
-                            routed_model=routed_model,
-                            cause=cause,
-                            escalation_keyword=pin_escalation_keyword,
-                            escalated=escalated,
-                            conversation_continuing=conversation_continuing,
-                        ),
+                    return self._with_session_deployment_affinity(
+                        PreRoutingHookResponse(
+                            model=routed_model,
+                            messages=messages if has_original_messages else None,
+                            routing_decision=self._build_routing_decision(
+                                routed_model=routed_model,
+                                cause=cause,
+                                tier=self._tier_for_model(routed_model),
+                                escalation_keyword=pin_escalation_keyword,
+                                escalated=escalated,
+                                conversation_continuing=conversation_continuing,
+                            ),
+                        )
                     )
 
         response: Final = await self._classify_and_route(
@@ -1710,7 +1776,7 @@ class ComplexityRouter(CustomLogger):
                 value=response.model,
                 ttl=self.config.session_affinity_ttl_seconds,
             )
-        return response
+        return self._with_session_deployment_affinity(response)
 
     async def _classify_and_route(
         self,
@@ -1756,7 +1822,8 @@ class ComplexityRouter(CustomLogger):
 
         if user_message is None:
             verbose_router_logger.debug("ComplexityRouter: No user message found, routing to default model")
-            if not self.config.plugins and self.config.default_model:
+            default_model_first: Final = not self.config.plugins and self.config.default_model
+            if default_model_first:
                 # No plugins configured: preserve the pre-existing default_model-first
                 # priority exactly (changing it would be a silent behavior change for
                 # every non-plugin user, not just a security fix).
@@ -1768,12 +1835,14 @@ class ComplexityRouter(CustomLogger):
                 routed_model = await self._pick_model_for_tier(
                     ComplexityTier.MEDIUM, messages, resolved_messages, request_kwargs
                 )
+            fallback_tier: Final = None if default_model_first else ComplexityTier.MEDIUM
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
                 routing_decision=self._build_routing_decision(
                     routed_model=routed_model,
                     cause="default_fallback",
+                    tier=fallback_tier,
                     conversation_continuing=conversation_continuing,
                 ),
             )
@@ -1902,5 +1971,6 @@ class ComplexityRouter(CustomLogger):
                 escalation_keyword=escalation_keyword,
                 escalated=escalated,
                 classifier_model=classifier_model,
+                classifier_cost=outcome.classifier_cost,
             ),
         )
