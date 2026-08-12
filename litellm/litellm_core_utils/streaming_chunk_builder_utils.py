@@ -145,7 +145,7 @@ class ChunkProcessor:
 
         if first_hidden_params.get("created_at"):
 
-            def _created_at(chunk: Any) -> int | float:
+            def _created_at(chunk: object) -> int | float:
                 if isinstance(chunk, dict):
                     params = chunk.get("_hidden_params", {})
                 else:
@@ -158,7 +158,7 @@ class ChunkProcessor:
         return chunks
 
     def update_model_response_with_hidden_params(
-        self, model_response: ModelResponse, chunk: dict[str, Any] | None = None
+        self, model_response: ModelResponse, chunk: Mapping[str, dict[str, object]] | None = None
     ) -> ModelResponse:
         if chunk is None:
             return model_response
@@ -176,7 +176,7 @@ class ChunkProcessor:
         if not chunks:
             return
 
-        model: Final = getattr(response, "model", None)
+        model: Final[str | None] = getattr(response, "model", None)
         if not model:
             return
 
@@ -214,7 +214,7 @@ class ChunkProcessor:
             )
 
     @staticmethod
-    def _get_chunk_id(chunks: list[dict[str, Any]]) -> str:
+    def _get_chunk_id(chunks: Sequence[Mapping[str, str]]) -> str:
         """
         Chunks:
         [{"id": ""}, {"id": "1"}, {"id": "1"}]
@@ -225,7 +225,7 @@ class ChunkProcessor:
         return ""
 
     @staticmethod
-    def _get_model_from_chunks(chunks: list[dict[str, Any]], first_chunk_model: str) -> str:
+    def _get_model_from_chunks(chunks: Sequence[Mapping[str, str]], first_chunk_model: str) -> str:
         """
         Get the actual model from chunks, preferring a model that differs from the first chunk.
 

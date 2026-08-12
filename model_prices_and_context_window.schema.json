@@ -671,6 +671,9 @@
         "supports_tool_choice": {
           "type": "boolean"
         },
+        "supports_tool_search": {
+          "type": "boolean"
+        },
         "supports_url_context": {
           "type": "boolean"
         },
