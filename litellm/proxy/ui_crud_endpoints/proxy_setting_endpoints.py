@@ -21,6 +21,7 @@ from litellm.proxy.config_resolvers.sso import (
     SSO_SECRET_FIELDS,
     resolve_sso_config,
 )
+from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.proxy.utils import invalidate_config_param
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -306,6 +307,27 @@ ALLOWED_UI_SETTINGS_FIELDS: Final = {
     "disable_key_generate_for_org_admin",
     "enable_chat_ui",
 }
+
+ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: Final = "enable_ptu_cost_attribution"
+
+# UI settings derived from the deployment environment. Deliberately kept out of
+# ALLOWED_UI_SETTINGS_FIELDS: they are read-only, never persisted, and PATCH
+# rejects them so an admin cannot flip an env-gated feature at runtime.
+_DERIVED_UI_SETTINGS_FIELDS: Final[frozenset[str]] = frozenset({ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING})
+
+
+def _derived_ui_setting_value(key: str) -> object:
+    """The environment-derived value GET reports for ``key``.
+
+    PATCH compares against this rather than rejecting the key outright, so the body GET
+    hands back is still a valid PATCH body. Rejecting on presence broke read-modify-write:
+    a client that edited one setting and sent the rest back unchanged got a 400 and lost
+    the edit it actually wanted.
+    """
+    if key == ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING:
+        return is_ptu_cost_attribution_enabled()
+    return None
+
 
 # Flags that must be synced from the persisted UISettings into
 # general_settings at runtime (on both read and write).
@@ -1345,21 +1367,15 @@ async def get_ui_settings():
             detail={"error": "Database not connected. Please connect a database."},
         )
 
-    ui_settings: Mapping[str, JsonValue] = {}
-
     db_record: Final = await _ui_settings_db(UISettingsRepository(prisma_client)).find_unique(
         where={"id": "ui_settings"}
     )
 
-    if db_record and db_record.ui_settings:
-        ui_settings_json: Final = db_record.ui_settings
-        if isinstance(ui_settings_json, str):
-            ui_settings = json.loads(ui_settings_json)
-        else:
-            ui_settings = dict(ui_settings_json)
+    stored: Final = (db_record.ui_settings if db_record else None) or "{}"
+    parsed: Final = json.loads(stored) if isinstance(stored, str) else stored
 
     # Sanitize any unexpected keys from persisted config before returning
-    ui_settings = {k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
+    ui_settings: Final = {k: v for k, v in parsed.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
 
     # Sync runtime flags into general_settings so the proxy picks them up
     # at runtime (covers server restart scenarios).
@@ -1377,10 +1393,17 @@ async def get_ui_settings():
     # Build config-like object for schema helper
     config: Final[dict[str, object]] = {"litellm_settings": {"ui_settings": ui_settings}}
 
-    return await _get_settings_with_schema(
+    settings: Final = await _get_settings_with_schema(
         settings_key="ui_settings",
         settings_class=_get_effective_ui_settings_class(),
         config=config,
+    )
+    return UISettingsResponse(
+        values={
+            **settings["values"],
+            ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: is_ptu_cost_attribution_enabled(),
+        },
+        field_schema=settings["field_schema"],
     )
 
 
@@ -1416,6 +1439,20 @@ async def update_ui_settings(
         raise HTTPException(
             status_code=500,
             detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
+        )
+
+    conflicting_keys: Final = sorted(
+        key
+        for key, value in settings_body.items()
+        if key in _DERIVED_UI_SETTINGS_FIELDS and value != _derived_ui_setting_value(key)
+    )
+    if conflicting_keys:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Setting(s) {conflicting_keys} are derived from the deployment environment "
+                "and cannot be changed from the UI."
+            ),
         )
 
     # Validate against the same effective class GET advertises, so

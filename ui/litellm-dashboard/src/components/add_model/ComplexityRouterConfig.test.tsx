@@ -602,3 +602,32 @@ describe("ComplexityRouterConfig tier labels", () => {
     expect(screen.getByTitle("Deep")).toBeInTheDocument();
   });
 });
+
+describe("ComplexityRouterConfig affinity panel", () => {
+  it("holds both affinity switches with their backend defaults", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    fireEvent.click(screen.getByText("Advanced: Affinity"));
+
+    expect(screen.getByRole("switch", { name: "Pin a session to one deployment per model group" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Pin a session to its first model" })).not.toBeChecked();
+  });
+
+  it("writes deployment_affinity through onChange without touching other keys", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Affinity"));
+
+    fireEvent.click(screen.getByRole("switch", { name: "Pin a session to one deployment per model group" }));
+
+    expect(onChange).toHaveBeenCalledWith({ ...defaultValue, deployment_affinity: false });
+  });
+
+  it("renders a stored deployment_affinity=false as off", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig {...baseProps} value={{ ...defaultValue, deployment_affinity: false }} />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Affinity"));
+
+    expect(screen.getByRole("switch", { name: "Pin a session to one deployment per model group" })).not.toBeChecked();
+  });
+});

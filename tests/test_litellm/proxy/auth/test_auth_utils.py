@@ -3087,3 +3087,116 @@ class TestIsRequestBodySafeChecksBracketNotationMetadata:
             )
             is True
         )
+
+
+class TestHasUserSetupSso:
+    """_has_user_setup_sso must treat SAML IdP metadata as SSO configured.
+
+    Regression: UI discovery used this helper for sso_configured, but it only
+    checked OAuth client IDs, so SAML-only setups left the login button gray.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_sso_env(self, monkeypatch):
+        for key in (
+            "MICROSOFT_CLIENT_ID",
+            "GOOGLE_CLIENT_ID",
+            "GENERIC_CLIENT_ID",
+            "SAML_IDP_METADATA_URL",
+            "SAML_IDP_METADATA_XML",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+    def test_false_when_no_sso_env(self):
+        from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+
+        assert _has_user_setup_sso() is False
+
+    def test_true_for_oauth_client_ids(self, monkeypatch):
+        from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-client")
+        assert _has_user_setup_sso() is True
+
+    def test_true_for_saml_metadata_url(self, monkeypatch):
+        from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+
+        monkeypatch.setenv(
+            "SAML_IDP_METADATA_URL", "https://idp.example.com/metadata.xml"
+        )
+        assert _has_user_setup_sso() is True
+
+    def test_true_for_saml_metadata_xml(self, monkeypatch):
+        from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+
+        monkeypatch.setenv("SAML_IDP_METADATA_XML", "<EntityDescriptor/>")
+        assert _has_user_setup_sso() is True
+
+
+class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
+    """A caller must not be able to redirect Bedrock signing to another identity
+    reachable from the proxy host. ``get_credentials`` prefers a named profile
+    and the AssumeRole knobs over the deployment's static keys, and the file /
+    batch endpoints fold the request body and the deployment credentials into a
+    single params dict, so these have to be rejected at the boundary (#36155).
+    """
+
+    @pytest.mark.parametrize(
+        "selector",
+        ["aws_profile_name", "aws_session_name", "aws_external_id"],
+    )
+    def test_aws_identity_selector_in_batch_body_is_rejected(self, selector):
+        with pytest.raises(ValueError, match=selector):
+            is_request_body_safe(
+                request_body={
+                    "input_file_id": "file-abc123",
+                    "endpoint": "/v1/chat/completions",
+                    "completion_window": "24h",
+                    "model": "bedrock-batch-model",
+                    selector: "attacker-chosen",
+                },
+                general_settings={},
+                llm_router=None,
+                model="bedrock-batch-model",
+            )
+
+    @pytest.mark.parametrize(
+        "selector",
+        ["aws_profile_name", "aws_session_name", "aws_external_id"],
+    )
+    def test_aws_identity_selector_under_extra_body_is_rejected(self, selector):
+        with pytest.raises(ValueError, match=selector):
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock-batch-model",
+                    "extra_body": {selector: "attacker-chosen"},
+                },
+                general_settings={},
+                llm_router=None,
+                model="bedrock-batch-model",
+            )
+
+    def test_aws_identity_selector_allowed_under_proxy_wide_opt_in(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock-batch-model",
+                    "aws_profile_name": "admin-approved-profile",
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="bedrock-batch-model",
+            )
+            is True
+        )
+
+    def test_upload_body_without_identity_selectors_is_accepted(self):
+        assert (
+            is_request_body_safe(
+                request_body={"purpose": "batch", "model": "bedrock-batch-model"},
+                general_settings={},
+                llm_router=None,
+                model="bedrock-batch-model",
+            )
+            is True
+        )

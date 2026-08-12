@@ -1,15 +1,18 @@
 import hashlib
 import json
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIFileObject
 
-from litellm._logging import verbose_logger
+from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.types.router import CredentialLiteLLMParams
+from litellm.types.utils import LlmProviders
 
 
 def _is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool:
@@ -210,3 +213,77 @@ def filter_web_search_deployments(
     if len(healthy_deployments) > 0 and len(final_deployments) == 0:
         verbose_logger.warning("No deployments support web search for request")
     return final_deployments
+
+
+# Credential params that only one provider family reads, paired with the providers
+# that read them. A deployment carrying them while resolving elsewhere is almost
+# always a missing route prefix: `model: claude-sonnet-5` with `aws_region_name`
+# set resolves to the first-party Anthropic API, silently ignores the AWS
+# credentials, and 401s at request time.
+_AWS_PROVIDERS: Final = frozenset(
+    provider.value for provider in LlmProviders if provider.value.startswith(("bedrock", "sagemaker"))
+)
+_VERTEX_PROVIDERS: Final = frozenset(
+    provider.value for provider in LlmProviders if provider.value.startswith("vertex_ai")
+)
+
+PROVIDER_SCOPED_CREDENTIAL_PARAMS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
+    {
+        "aws_access_key_id": _AWS_PROVIDERS,
+        "aws_profile_name": _AWS_PROVIDERS,
+        "aws_region_name": _AWS_PROVIDERS,
+        "aws_role_name": _AWS_PROVIDERS,
+        "aws_secret_access_key": _AWS_PROVIDERS,
+        "aws_session_name": _AWS_PROVIDERS,
+        "aws_session_token": _AWS_PROVIDERS,
+        "aws_web_identity_token": _AWS_PROVIDERS,
+        "vertex_credentials": _VERTEX_PROVIDERS,
+        "vertex_location": _VERTEX_PROVIDERS,
+        "vertex_project": _VERTEX_PROVIDERS,
+    }
+)
+
+
+def warn_on_provider_credential_mismatch(model_name: str, litellm_params: Mapping[str, object]) -> str | None:
+    """
+    Warn when a deployment carries one provider's credentials but resolves to another.
+
+    Returns the warning text (for tests), or None when the deployment is consistent
+    or its provider cannot be resolved. Never raises: a deployment litellm cannot
+    classify is left alone rather than blocking router startup.
+
+    Only inline credential params are examined. A deployment that sources them
+    through ``litellm_credential_name`` resolves them after registration, so it
+    carries none of these keys here and is left alone rather than warned about
+    on incomplete information.
+    """
+    model: Final = litellm_params.get("model")
+    if not isinstance(model, str) or not model:
+        return None
+    scoped: Final = tuple(param for param in PROVIDER_SCOPED_CREDENTIAL_PARAMS if litellm_params.get(param) is not None)
+    if not scoped:
+        return None
+    custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
+    try:
+        _, resolved_provider, _, _ = get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+        )
+    except BadRequestError:
+        return None
+    mismatched: Final = sorted(
+        param for param in scoped if resolved_provider not in PROVIDER_SCOPED_CREDENTIAL_PARAMS[param]
+    )
+    if not mismatched:
+        return None
+    expected: Final = sorted(
+        {provider for param in mismatched for provider in PROVIDER_SCOPED_CREDENTIAL_PARAMS[param]}
+    )
+    warning: Final = (
+        f"Deployment '{model_name}' sets {mismatched} but 'model={model}' resolves to provider "
+        f"'{resolved_provider}', which ignores them. Those params are read by {expected}, so this is "
+        f"usually a missing route prefix (e.g. '{expected[0]}/{model}'); as written the request goes to "
+        f"'{resolved_provider}' and will fail on that provider's credentials."
+    )
+    verbose_router_logger.warning(warning)
+    return warning

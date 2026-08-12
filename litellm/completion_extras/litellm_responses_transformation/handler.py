@@ -22,6 +22,7 @@ class ResponsesToCompletionBridgeHandlerInputKwargs(TypedDict):
     model_response: "ModelResponse"
     logging_obj: "LiteLLMLoggingObj"
     custom_llm_provider: str
+    encoding: object
 
 
 class ResponsesToCompletionBridgeHandler:
@@ -102,35 +103,37 @@ class ResponsesToCompletionBridgeHandler:
         from litellm import LiteLLMLoggingObj
         from litellm.types.utils import ModelResponse
 
-        model: Final = kwargs.get("model")
+        typed_kwargs: Final[dict[str, object]] = kwargs
+
+        model: Final = typed_kwargs.get("model")
         if model is None or not isinstance(model, str):
             raise ValueError("model is required")
 
-        custom_llm_provider: Final = kwargs.get("custom_llm_provider")
+        custom_llm_provider: Final = typed_kwargs.get("custom_llm_provider")
         if custom_llm_provider is None or not isinstance(custom_llm_provider, str):
             raise ValueError("custom_llm_provider is required")
 
-        messages: Final = kwargs.get("messages")
+        messages: Final = typed_kwargs.get("messages")
         if messages is None or not isinstance(messages, list):
             raise ValueError("messages is required")
 
-        optional_params: Final = kwargs.get("optional_params")
+        optional_params: Final = typed_kwargs.get("optional_params")
         if optional_params is None or not isinstance(optional_params, dict):
             raise ValueError("optional_params is required")
 
-        litellm_params: Final = kwargs.get("litellm_params")
+        litellm_params: Final = typed_kwargs.get("litellm_params")
         if litellm_params is None or not isinstance(litellm_params, dict):
             raise ValueError("litellm_params is required")
 
-        headers: Final = kwargs.get("headers")
+        headers: Final = typed_kwargs.get("headers")
         if headers is None or not isinstance(headers, dict):
             raise ValueError("headers is required")
 
-        model_response: Final = kwargs.get("model_response")
+        model_response: Final = typed_kwargs.get("model_response")
         if model_response is None or not isinstance(model_response, ModelResponse):
             raise ValueError("model_response is required")
 
-        logging_obj: Final = kwargs.get("logging_obj")
+        logging_obj: Final = typed_kwargs.get("logging_obj")
         if logging_obj is None or not isinstance(logging_obj, LiteLLMLoggingObj):
             raise ValueError("logging_obj is required")
 
@@ -143,6 +146,7 @@ class ResponsesToCompletionBridgeHandler:
             model_response=model_response,
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
+            encoding=typed_kwargs.get("encoding"),
         )
 
     def completion(
@@ -205,7 +209,7 @@ class ResponsesToCompletionBridgeHandler:
                 messages=messages,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                encoding=kwargs.get("encoding"),
+                encoding=validated_kwargs["encoding"],
                 api_key=kwargs.get("api_key"),
                 json_mode=kwargs.get("json_mode"),
             )
@@ -230,7 +234,7 @@ class ResponsesToCompletionBridgeHandler:
                 messages=messages,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                encoding=kwargs.get("encoding"),
+                encoding=validated_kwargs["encoding"],
                 api_key=kwargs.get("api_key"),
                 json_mode=kwargs.get("json_mode"),
             )
@@ -303,7 +307,7 @@ class ResponsesToCompletionBridgeHandler:
                 messages=messages,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                encoding=kwargs.get("encoding"),
+                encoding=validated_kwargs["encoding"],
                 api_key=kwargs.get("api_key"),
                 json_mode=kwargs.get("json_mode"),
             )
@@ -328,7 +332,7 @@ class ResponsesToCompletionBridgeHandler:
                 messages=messages,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                encoding=kwargs.get("encoding"),
+                encoding=validated_kwargs["encoding"],
                 api_key=kwargs.get("api_key"),
                 json_mode=kwargs.get("json_mode"),
             )

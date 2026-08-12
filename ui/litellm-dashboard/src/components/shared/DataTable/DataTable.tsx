@@ -42,7 +42,15 @@ import { cn } from "@/lib/cva.config";
 
 import "./columnMeta";
 import { DataTablePagination, DEFAULT_PAGE_SIZE_OPTIONS } from "./DataTablePagination";
-import type { ColumnPinnedSide, DataTableProps, DataTableSize, FilterMode, PaginationMode, SortingMode } from "./types";
+import type {
+  ColumnPinnedSide,
+  DataTableProps,
+  DataTableResolvedProps,
+  DataTableSize,
+  FilterMode,
+  PaginationMode,
+  SortingMode,
+} from "./types";
 
 const INTERACTIVE_SELECTOR = "button, a, input, select, textarea, [role=checkbox], [data-row-click-exempt]";
 
@@ -63,47 +71,6 @@ const FILL_CLASSES = {
 } as const;
 
 const NO_FILL_CLASSES = { outer: "", frame: "", body: "", header: "" } as const;
-
-export class DataTableConfigError extends Error {
-  constructor(messages: readonly string[]) {
-    super(`DataTable misconfiguration:\n- ${messages.join("\n- ")}`);
-    this.name = "DataTableConfigError";
-  }
-}
-
-export function validateDataTableConfig<TData extends RowData, TValue>(
-  props: DataTableProps<TData, TValue>,
-): readonly string[] {
-  const serverSortingIncomplete =
-    props.sortingMode === "server" && (props.sorting === undefined || props.onSortingChange === undefined);
-
-  const serverPaginationPropsMissing =
-    props.pagination === undefined || props.onPaginationChange === undefined || props.rowCount === undefined;
-  const serverPaginationIncomplete = props.paginationMode === "server" && serverPaginationPropsMissing;
-
-  const serverFilteringIncomplete =
-    props.filterMode === "server" && (props.columnFilters === undefined || props.onColumnFiltersChange === undefined);
-
-  const bothSortingSources = props.defaultSorting !== undefined && props.sorting !== undefined;
-  const bothFilterSources = props.defaultColumnFilters !== undefined && props.columnFilters !== undefined;
-
-  const controlledSelectionIncomplete = props.rowSelection !== undefined && props.onRowSelectionChange === undefined;
-
-  return [
-    serverSortingIncomplete ? "sortingMode='server' requires both `sorting` and `onSortingChange`." : null,
-    serverPaginationIncomplete
-      ? "paginationMode='server' requires `pagination`, `onPaginationChange`, and `rowCount`."
-      : null,
-    serverFilteringIncomplete ? "filterMode='server' requires both `columnFilters` and `onColumnFiltersChange`." : null,
-    bothSortingSources ? "Provide either `defaultSorting` (uncontrolled) or `sorting` (controlled), not both." : null,
-    bothFilterSources
-      ? "Provide either `defaultColumnFilters` (uncontrolled) or `columnFilters` (controlled), not both."
-      : null,
-    controlledSelectionIncomplete
-      ? "Controlled `rowSelection` requires `onRowSelectionChange`; without it selection changes are dropped."
-      : null,
-  ].filter((message): message is string => message !== null);
-}
 
 function columnDefId<TData, TValue>(column: ColumnDef<TData, TValue>): string | undefined {
   if ("id" in column && typeof column.id === "string") {
@@ -442,7 +409,9 @@ function useControllable<T>(
   return { value: internal, onChange: setInternal };
 }
 
-function useDataTableInstance<TData extends RowData, TValue>(props: DataTableProps<TData, TValue>): Table<TData> {
+function useDataTableInstance<TData extends RowData, TValue>(
+  props: DataTableResolvedProps<TData, TValue>,
+): Table<TData> {
   const {
     data,
     columns,
@@ -532,14 +501,7 @@ function useDataTableInstance<TData extends RowData, TValue>(props: DataTablePro
 }
 
 export function DataTable<TData extends RowData, TValue>(props: DataTableProps<TData, TValue>) {
-  // Validate once at construction so a misconfig surfaces immediately instead of on every render.
-  useState<null>(() => {
-    const errors = validateDataTableConfig(props);
-    if (errors.length > 0) {
-      throw new DataTableConfigError(errors);
-    }
-    return null;
-  });
+  const resolved: DataTableResolvedProps<TData, TValue> = props;
 
   const {
     isLoading = false,
@@ -559,9 +521,9 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
     toolbar,
     paginationSlot,
     footer,
-  } = props;
+  } = resolved;
 
-  const table = useDataTableInstance(props);
+  const table = useDataTableInstance(resolved);
 
   const rows = table.getRowModel().rows;
   const visibleColumnCount = table.getVisibleLeafColumns().length;

@@ -11,7 +11,8 @@
       },
       "classifier_type": "heuristic",
       "escalation_keywords": ["LITELLM ESCALATE"],
-      "session_affinity": false
+      "session_affinity": false,
+      "deployment_affinity": true
     }
   },
   "openai_family": {
@@ -26,7 +27,8 @@
       },
       "classifier_type": "heuristic",
       "escalation_keywords": ["LITELLM ESCALATE"],
-      "session_affinity": false
+      "session_affinity": false,
+      "deployment_affinity": true
     }
   }
 }
