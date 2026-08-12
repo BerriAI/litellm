@@ -2,6 +2,7 @@ from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
+import pytest
 
 from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
 from litellm.types.llms.cohere import CohereEmbeddingInput
@@ -42,6 +43,34 @@ def test_transform_embedding_request_preserves_mixed_inputs() -> None:
     }
     assert "texts" not in request
     assert "images" not in request
+
+
+@pytest.mark.parametrize(
+    ("embedding_input", "expected_field", "expected_input_type"),
+    [
+        (["a red shoe"], "texts", "search_document"),
+        (["data:image/png;base64,aW1hZ2U="], "images", "image"),
+    ],
+)
+def test_transform_embedding_request_preserves_single_modality_paths(
+    embedding_input: list[str],
+    expected_field: str,
+    expected_input_type: str,
+) -> None:
+    config: Final = CohereEmbeddingConfig()
+
+    request: Final = config.transform_embedding_request(
+        model="embed-v4.0",
+        input=embedding_input,
+        optional_params={},
+        headers={},
+    )
+
+    assert request == {
+        "model": "embed-v4.0",
+        expected_field: embedding_input,
+        "input_type": expected_input_type,
+    }
 
 
 def test_transform_embedding_response_uses_multimodal_billing_metadata() -> None:
