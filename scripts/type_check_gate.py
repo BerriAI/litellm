@@ -52,6 +52,7 @@ carries an unambiguous ``rule`` field.
 
 import argparse
 import contextlib
+import fcntl
 import hashlib
 import io
 import json
@@ -193,19 +194,26 @@ def ensure_typecheck_env(
     """Sync the gate-owned venv (and its generated Prisma client) before a
     measurement pass. Unconditional on purpose: an up-to-date env makes both
     steps near-instant no-ops, and skipping them on a heuristic is how the
-    measured environment and the fingerprinted one drift apart."""
+    measured environment and the fingerprinted one drift apart.
+
+    Provisioning holds an exclusive flock so gates that share this env (this
+    one and scripts/dict_usage_gate.py, run concurrently by `make lint -j`)
+    never interleave `uv sync` / `prisma generate` on the same directory."""
     if not env_dir.exists():
         sys.stderr.write(
             f"provisioning {env_dir.name} (first run installs packages and "
             "generates the Prisma client; re-runs are near-instant no-ops)\n"
         )
     env: Final = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(env_dir)}
-    for cmd in typecheck_env_commands(env_dir):
-        if run(cmd, env) != 0:
-            raise SystemExit(
-                f"could not provision the type-check environment at {env_dir}: "
-                f"`{' '.join(cmd)}` failed"
-            )
+    lock_path: Final = env_dir.with_name(env_dir.name + ".lock")
+    with lock_path.open("w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        for cmd in typecheck_env_commands(env_dir):
+            if run(cmd, env) != 0:
+                raise SystemExit(
+                    f"could not provision the type-check environment at {env_dir}: "
+                    f"`{' '.join(cmd)}` failed"
+                )
     return env_dir
 
 
@@ -319,9 +327,12 @@ def cache_key(base_point: str, fingerprints: tuple[str, ...]) -> str:
 
 
 def cache_path(
-    directory: Path, base_point: str, fingerprints: tuple[str, ...]
+    directory: Path,
+    base_point: str,
+    fingerprints: tuple[str, ...],
+    prefix: str = CACHE_FILE_PREFIX,
 ) -> Path:
-    return directory / f"{CACHE_FILE_PREFIX}{cache_key(base_point, fingerprints)}.json"
+    return directory / f"{prefix}{cache_key(base_point, fingerprints)}.json"
 
 
 def default_cache_dir() -> Path:
@@ -381,14 +392,23 @@ def evicted_beyond_cap(entries: Sequence[Path], keep: int) -> tuple[Path, ...]:
 
 
 def store_counts(
-    directory: Path, path: Path, base_point: str, counts: Mapping[str, int]
+    directory: Path,
+    path: Path,
+    base_point: str,
+    counts: Mapping[str, int],
+    prefix: str = CACHE_FILE_PREFIX,
 ) -> None:
+    """Write one cache entry and prune the oldest entries sharing `prefix`.
+
+    The prefix scopes eviction to one gate's namespace, so a sibling gate
+    reusing this cache directory (scripts/dict_usage_gate.py) can never evict
+    basedpyright entries or be evicted by them."""
     directory.mkdir(parents=True, exist_ok=True)
     scratch = scratch_path(path)
     scratch.write_text(counts_payload(base_point, counts))
     scratch.replace(path)
     siblings: Final = tuple(
-        entry for entry in directory.glob(f"{CACHE_FILE_PREFIX}*.json") if entry != path
+        entry for entry in directory.glob(f"{prefix}*.json") if entry != path
     )
     for stale in evicted_beyond_cap(siblings, CACHE_KEEP_ENTRIES - 1):
         stale.unlink(missing_ok=True)
