@@ -121,7 +121,7 @@ def _parse_cursor_model_variant(model: str) -> _CursorModelVariant:
 def _router_can_serve(model: str, llm_router: "Router | None") -> bool:
     if llm_router is None:
         return False
-    if model in llm_router.model_names or model in llm_router.model_group_alias:
+    if llm_router.is_recognized_model(model):
         return True
     if model in llm_router.team_public_model_names:
         return True
