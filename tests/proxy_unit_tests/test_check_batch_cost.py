@@ -615,6 +615,182 @@ class TestCheckBatchCost:
         ), "a failed cost tracking attempt must not mark the job processed"
 
     @pytest.mark.asyncio
+    async def test_decoded_id_missing_model_id_is_permanently_retired(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """A unified id that decodes successfully but embeds no model id can never be
+        routed, regardless of retries or config changes. Leaving batch_processed=False
+        would let it re-occupy the oldest-N poll window every cycle and starve every
+        batch behind it, so it must be retired (status=unroutable, batch_processed=True)
+        instead of just skipped.
+        """
+        import base64
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+
+        mock_job = MagicMock()
+        mock_job.id = "job-unroutable-1"
+        mock_job.unified_object_id = base64.urlsafe_b64encode(
+            b"litellm_proxy;llm_batch_id:batch-456"
+        ).decode()
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+
+        await check_batch_cost_instance.check_batch_cost()
+
+        mock_llm_router.aretrieve_batch.assert_not_called()
+        assert (
+            mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1
+        ), "an unroutable row must be retired, not left for the next cycle"
+        update_data = mock_prisma_client.db.litellm_managedobjecttable.update.call_args[
+            1
+        ]["data"]
+        assert update_data["status"] == "unroutable"
+        assert update_data["batch_processed"] is True
+
+    @pytest.mark.asyncio
+    async def test_invalid_unified_id_is_left_for_retry_not_retired(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """Unlike a decoded id with no model id, an id that isn't a recognized unified
+        id at all (e.g. unmanaged-batch tracking is off) is a config-dependent failure —
+        enabling the flag later would make it routable. It must keep being retried, not
+        be retired.
+        """
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+
+        mock_job = MagicMock()
+        mock_job.id = "job-invalid-unified-1"
+        mock_job.unified_object_id = "some-raw-id"
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+
+        with patch(_IS_B64, return_value=False):
+            await check_batch_cost_instance.check_batch_cost()
+
+        mock_llm_router.aretrieve_batch.assert_not_called()
+        assert mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_provider_not_found_error_retires_job(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """A provider 404 (the batch record is gone/expired on the provider's side) is
+        permanent — no retry will ever bring it back. It must be retired (status=
+        not_found, batch_processed=True) instead of occupying the poll window forever.
+        """
+        import base64
+
+        from litellm.exceptions import NotFoundError
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+
+        mock_job = MagicMock()
+        mock_job.id = "job-404-1"
+        mock_job.unified_object_id = base64.urlsafe_b64encode(
+            b"litellm_proxy;model_id:model-123;llm_batch_id:batch-456"
+        ).decode()
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_llm_router.aretrieve_batch = AsyncMock(
+            side_effect=NotFoundError(
+                message="batch_not_found", model="gpt-4", llm_provider="openai"
+            )
+        )
+
+        await check_batch_cost_instance.check_batch_cost()
+
+        assert (
+            mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1
+        ), "a provider 404 must retire the row, not leave it for the next cycle"
+        update_data = mock_prisma_client.db.litellm_managedobjecttable.update.call_args[
+            1
+        ]["data"]
+        assert update_data["status"] == "not_found"
+        assert update_data["batch_processed"] is True
+
+    @pytest.mark.asyncio
+    async def test_generic_provider_retrieval_error_leaves_job_unprocessed(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """A transient provider error (rate limit, timeout, 5xx) must NOT retire the
+        row — only a provably permanent failure (404) does. The row is left unprocessed
+        so the next poll retries it.
+        """
+        import base64
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+
+        mock_job = MagicMock()
+        mock_job.id = "job-transient-1"
+        mock_job.unified_object_id = base64.urlsafe_b64encode(
+            b"litellm_proxy;model_id:model-123;llm_batch_id:batch-456"
+        ).decode()
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_llm_router.aretrieve_batch = AsyncMock(
+            side_effect=Exception("temporary network blip")
+        )
+
+        await check_batch_cost_instance.check_batch_cost()
+
+        assert mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_primary_and_fallback_queries_exclude_permanently_retired_statuses(
+        self, check_batch_cost_instance, mock_prisma_client
+    ):
+        """Both the primary (batch_processed-aware) and fallback queries must exclude
+        the synthetic terminal statuses used to retire permanently-unroutable/not-found
+        rows, so a retired row on an older schema (no batch_processed column) isn't
+        re-selected forever.
+        """
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[]
+        )
+        await check_batch_cost_instance.check_batch_cost()
+        primary_not_in = mock_prisma_client.db.litellm_managedobjecttable.find_many.call_args[
+            1
+        ]["where"]["status"]["not_in"]
+        assert "unroutable" in primary_not_in
+        assert "not_found" in primary_not_in
+
+        check_batch_cost_instance._has_batch_processed_column = False
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[]
+        )
+        await check_batch_cost_instance.check_batch_cost()
+        fallback_not_in = mock_prisma_client.db.litellm_managedobjecttable.find_many.call_args[
+            1
+        ]["where"]["status"]["not_in"]
+        assert "unroutable" in fallback_not_in
+        assert "not_found" in fallback_not_in
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("terminal_status", ["failed", "expired", "cancelled"])
     async def test_terminal_status_marks_job_processed(
         self,

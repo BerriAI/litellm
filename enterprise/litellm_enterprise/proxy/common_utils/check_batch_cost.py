@@ -11,6 +11,7 @@ from litellm.constants import (
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_OBJECTS_PER_POLL_CYCLE,
 )
+from litellm.exceptions import NotFoundError as LiteLLMNotFoundError
 
 if TYPE_CHECKING:
     from litellm.integrations.prometheus import PrometheusLogger
@@ -22,6 +23,20 @@ if TYPE_CHECKING:
 
 
 CHECK_BATCH_COST_USER_AGENT = "LiteLLM Proxy/CheckBatchCost"
+
+# Statuses a row is written back with when a failure is provably permanent — no retry
+# or config change can ever resolve it — so it must stop occupying the fixed-size,
+# oldest-first poll window instead of being retried forever. Both are excluded from
+# every find_many query the same way the provider-native terminal statuses are.
+PERMANENTLY_UNPROCESSABLE_STATUSES = ("unroutable", "not_found")
+
+
+class _UnroutableBatchError(Exception):
+    """Raised by _resolve_job_routing for the one routing failure that is permanent:
+    a unified id that decodes successfully but embeds no model id. Every other
+    routing failure is config-dependent (enabling unmanaged tracking, restoring a
+    deployment) and must keep being retried, so it returns None instead of raising.
+    """
 
 
 class CheckBatchCost:
@@ -136,7 +151,17 @@ class CheckBatchCost:
         result = await self.prisma_client.db.litellm_managedobjecttable.update_many(
             where={
                 "file_purpose": "batch",
-                "status": {"not_in": ["completed", "complete", "failed", "expired", "cancelled", "stale_expired"]},
+                "status": {
+                    "not_in": [
+                        "completed",
+                        "complete",
+                        "failed",
+                        "expired",
+                        "cancelled",
+                        "stale_expired",
+                        *PERMANENTLY_UNPROCESSABLE_STATUSES,
+                    ]
+                },
                 "created_at": {"lt": cutoff},
             },
             data={"status": "stale_expired"},
@@ -160,6 +185,7 @@ class CheckBatchCost:
                         "complete",
                         "completed",
                         "stale_expired",
+                        *PERMANENTLY_UNPROCESSABLE_STATUSES,
                     ]
                 },
             },
@@ -174,6 +200,28 @@ class CheckBatchCost:
         if prom_logger is not None:
             prom_logger.record_check_batch_cost_error(error_type)
 
+    async def _retire_unprocessable_job(
+        self, job: "LiteLLM_ManagedObjectTable", status: str
+    ) -> None:
+        """
+        Permanently mark a row as processed without costing it, for a failure that is
+        provably permanent (see PERMANENTLY_UNPROCESSABLE_STATUSES). Leaving
+        batch_processed=False here would let the row re-occupy the fixed-size,
+        oldest-first poll window on every cycle and starve every batch behind it.
+        """
+        update_data: Dict[str, Any] = {"status": status}
+        if self._has_batch_processed_column:
+            update_data["batch_processed"] = True
+        try:
+            await self.prisma_client.db.litellm_managedobjecttable.update(
+                where={"id": job.id},
+                data=update_data,
+            )
+        except Exception as db_err:
+            verbose_proxy_logger.error(
+                f"CheckBatchCost: failed to retire job {job.id} (status={status}) in DB: {db_err}"
+            )
+
     def _resolve_job_routing(
         self,
         job: "LiteLLM_ManagedObjectTable",
@@ -187,7 +235,10 @@ class CheckBatchCost:
         LiteLLM's own /v1/batches with a raw input_file_id) store the raw provider job id as
         unified_object_id instead; when track_unmanaged_batch_cost is enabled the model is derived
         from the provider-specific input_file_id layout (Vertex gs:// or Bedrock s3://) and mapped
-        to a matching deployment. Returns None (recording a metric) when the row can't be routed.
+        to a matching deployment. Returns None (recording a metric) when the row can't be routed
+        for a config-dependent reason that may resolve on a later cycle. Raises
+        _UnroutableBatchError for the one failure that is permanent: a unified id that
+        decodes but embeds no model id, which no retry or config change can fix.
         """
         from litellm.proxy.openai_files_endpoints.common_utils import (
             _is_base64_encoded_unified_file_id,
@@ -204,7 +255,7 @@ class CheckBatchCost:
                     f"Skipping job {unified_object_id} because it is not a valid model id"
                 )
                 self._record_error(prom_logger, "invalid_model_id")
-                return None
+                raise _UnroutableBatchError(unified_object_id)
             return model_id, get_batch_id_from_unified_batch_id(decoded)
 
         if self._track_unmanaged_batch_cost:
@@ -625,6 +676,7 @@ class CheckBatchCost:
                                 "expired",
                                 "cancelled",
                                 "stale_expired",
+                                *PERMANENTLY_UNPROCESSABLE_STATUSES,
                             ]
                         },
                     },
@@ -643,7 +695,15 @@ class CheckBatchCost:
         else:
             jobs = await self._fallback_find_jobs()
         for job in jobs:
-            routing = self._resolve_job_routing(job, prom_logger)
+            try:
+                routing = self._resolve_job_routing(job, prom_logger)
+            except _UnroutableBatchError:
+                verbose_proxy_logger.info(
+                    f"Retiring job {job.unified_object_id}: its unified id decodes but "
+                    "embeds no model id, so it can never be routed"
+                )
+                await self._retire_unprocessable_job(job, status="unroutable")
+                continue
             if routing is None:
                 continue
             model_id, batch_id = routing
@@ -661,6 +721,14 @@ class CheckBatchCost:
                         "batch_ignore_default_logging": True,
                     },
                 )
+            except LiteLLMNotFoundError as e:
+                verbose_proxy_logger.info(
+                    f"Retiring job {job.unified_object_id}: provider reports batch "
+                    f"{batch_id} not found — this is permanent, no retry will recover it: {e}"
+                )
+                self._record_error(prom_logger, "provider_batch_not_found")
+                await self._retire_unprocessable_job(job, status="not_found")
+                continue
             except Exception as e:
                 verbose_proxy_logger.info(
                     f"Skipping job {job.unified_object_id} because of error querying model ID: {model_id} for cost and usage of batch ID: {batch_id}: {e}"
