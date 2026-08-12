@@ -4,7 +4,7 @@ Constants and helpers for ChatGPT subscription OAuth.
 
 import os
 import platform
-from typing import Any
+from typing import Any, Final
 from uuid import uuid4
 
 import httpx
@@ -12,16 +12,16 @@ import httpx
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 # OAuth + API constants (derived from openai/codex)
-CHATGPT_AUTH_BASE = "https://auth.openai.com"
-CHATGPT_DEVICE_CODE_URL = f"{CHATGPT_AUTH_BASE}/api/accounts/deviceauth/usercode"
-CHATGPT_DEVICE_TOKEN_URL = f"{CHATGPT_AUTH_BASE}/api/accounts/deviceauth/token"
-CHATGPT_OAUTH_TOKEN_URL = f"{CHATGPT_AUTH_BASE}/oauth/token"
-CHATGPT_DEVICE_VERIFY_URL = f"{CHATGPT_AUTH_BASE}/codex/device"
-CHATGPT_API_BASE = "https://chatgpt.com/backend-api/codex"
-CHATGPT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
+CHATGPT_AUTH_BASE: Final = "https://auth.openai.com"
+CHATGPT_DEVICE_CODE_URL: Final = f"{CHATGPT_AUTH_BASE}/api/accounts/deviceauth/usercode"
+CHATGPT_DEVICE_TOKEN_URL: Final = f"{CHATGPT_AUTH_BASE}/api/accounts/deviceauth/token"
+CHATGPT_OAUTH_TOKEN_URL: Final = f"{CHATGPT_AUTH_BASE}/oauth/token"
+CHATGPT_DEVICE_VERIFY_URL: Final = f"{CHATGPT_AUTH_BASE}/codex/device"
+CHATGPT_API_BASE: Final = "https://chatgpt.com/backend-api/codex"
+CHATGPT_CLIENT_ID: Final = "app_EMoamEEZ73f0CkXaXp7hrann"
 
-DEFAULT_ORIGINATOR = "codex_cli_rs"
-DEFAULT_USER_AGENT = "codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown"
+DEFAULT_ORIGINATOR: Final = "codex_cli_rs"
+DEFAULT_USER_AGENT: Final = "codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown"
 CHATGPT_DEFAULT_INSTRUCTIONS = """You are Codex, based on GPT-5. You are running as a coding agent in the Codex CLI on a user's computer.
 
 ## General
@@ -150,13 +150,13 @@ def _sanitize_user_agent_token(value: str) -> str:
 
 
 def _terminal_user_agent() -> str:
-    term_program = os.getenv("TERM_PROGRAM")
+    term_program: Final = os.getenv("TERM_PROGRAM")
     if term_program:
-        version = os.getenv("TERM_PROGRAM_VERSION")
+        version: Final = os.getenv("TERM_PROGRAM_VERSION")
         token = f"{term_program}/{version}" if version else term_program
         return _sanitize_user_agent_token(token) or "unknown"
 
-    wezterm_version = os.getenv("WEZTERM_VERSION")
+    wezterm_version: Final = os.getenv("WEZTERM_VERSION")
     if wezterm_version is not None:
         token = f"WezTerm/{wezterm_version}" if wezterm_version else "WezTerm"
         return _sanitize_user_agent_token(token) or "WezTerm"
@@ -173,7 +173,7 @@ def _terminal_user_agent() -> str:
     if os.getenv("ALACRITTY_SOCKET") or os.getenv("TERM") == "alacritty":
         return "Alacritty"
 
-    konsole_version = os.getenv("KONSOLE_VERSION")
+    konsole_version: Final = os.getenv("KONSOLE_VERSION")
     if konsole_version is not None:
         token = f"Konsole/{konsole_version}" if konsole_version else "Konsole"
         return _sanitize_user_agent_token(token) or "Konsole"
@@ -181,7 +181,7 @@ def _terminal_user_agent() -> str:
     if os.getenv("GNOME_TERMINAL_SCREEN"):
         return "gnome-terminal"
 
-    vte_version = os.getenv("VTE_VERSION")
+    vte_version: Final = os.getenv("VTE_VERSION")
     if vte_version is not None:
         token = f"VTE/{vte_version}" if vte_version else "VTE"
         return _sanitize_user_agent_token(token) or "VTE"
@@ -189,7 +189,7 @@ def _terminal_user_agent() -> str:
     if os.getenv("WT_SESSION"):
         return "WindowsTerminal"
 
-    term = os.getenv("TERM")
+    term: Final = os.getenv("TERM")
     if term:
         return _sanitize_user_agent_token(term) or "unknown"
 
@@ -206,22 +206,22 @@ def _get_litellm_version() -> str:
 
 
 def get_chatgpt_originator() -> str:
-    originator = os.getenv("CHATGPT_ORIGINATOR") or DEFAULT_ORIGINATOR
+    originator: Final = os.getenv("CHATGPT_ORIGINATOR") or DEFAULT_ORIGINATOR
     return _safe_header_value(originator) or DEFAULT_ORIGINATOR
 
 
 def get_chatgpt_user_agent(originator: str) -> str:
-    override = os.getenv("CHATGPT_USER_AGENT")
+    override: Final = os.getenv("CHATGPT_USER_AGENT")
     if override:
         return _safe_header_value(override) or DEFAULT_USER_AGENT
-    version = _get_litellm_version()
-    os_type = platform.system() or "Unknown"
-    os_version = platform.release() or "0"
-    arch = platform.machine() or "unknown"
-    terminal_ua = _terminal_user_agent()
+    version: Final = _get_litellm_version()
+    os_type: Final = platform.system() or "Unknown"
+    os_version: Final = platform.release() or "0"
+    arch: Final = platform.machine() or "unknown"
+    terminal_ua: Final = _terminal_user_agent()
     suffix = os.getenv("CHATGPT_USER_AGENT_SUFFIX", "").strip()
     suffix = f" ({suffix})" if suffix else ""
-    candidate = f"{originator}/{version} ({os_type} {os_version}; {arch}) {terminal_ua}{suffix}"
+    candidate: Final = f"{originator}/{version} ({os_type} {os_version}; {arch}) {terminal_ua}{suffix}"
     return _safe_header_value(candidate) or DEFAULT_USER_AGENT
 
 
@@ -230,9 +230,9 @@ def get_chatgpt_default_headers(
     account_id: str | None,
     session_id: str | None = None,
 ) -> dict:
-    originator = get_chatgpt_originator()
-    user_agent = get_chatgpt_user_agent(originator)
-    headers = {
+    originator: Final = get_chatgpt_originator()
+    user_agent: Final = get_chatgpt_user_agent(originator)
+    headers: Final = {
         "Authorization": f"Bearer {access_token}",
         "content-type": "application/json",
         "accept": "text/event-stream",
@@ -269,12 +269,12 @@ def _normalize_litellm_params(litellm_params: Any | None) -> dict:
 
 
 def get_chatgpt_session_id(litellm_params: Any | None) -> str | None:
-    params = _normalize_litellm_params(litellm_params)
+    params: Final = _normalize_litellm_params(litellm_params)
     for key in ("litellm_session_id", "session_id"):
         value = params.get(key)
         if value:
             return str(value)
-    metadata = params.get("metadata")
+    metadata: Final = params.get("metadata")
     if isinstance(metadata, dict):
         value = metadata.get("session_id")
         if value:

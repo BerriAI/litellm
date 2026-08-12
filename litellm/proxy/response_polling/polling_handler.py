@@ -4,7 +4,7 @@ Response Polling Handler for Background Responses with Cache
 
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid4
@@ -55,10 +55,10 @@ class ResponsePollingHandler:
         Returns:
             ResponsesAPIResponse object following OpenAI spec
         """
-        created_timestamp = int(datetime.now(timezone.utc).timestamp())
+        created_timestamp: Final = int(datetime.now(timezone.utc).timestamp())
 
         # Create OpenAI-compliant response object
-        response = ResponsesAPIResponse(
+        response: Final = ResponsesAPIResponse(
             id=polling_id,
             object="response",
             status="queued",  # OpenAI native status
@@ -68,7 +68,7 @@ class ResponsePollingHandler:
             usage=None,
         )
 
-        cache_key = self.get_cache_key(polling_id)
+        cache_key: Final = self.get_cache_key(polling_id)
 
         if self.redis_cache:
             # Store ResponsesAPIResponse directly in Redis
@@ -77,7 +77,7 @@ class ResponsePollingHandler:
                 value=response.model_dump_json(),  # Pydantic v2 method
                 ttl=self.ttl,
             )
-            verbose_proxy_logger.debug(f"Created initial polling state for {polling_id} with TTL={self.ttl}s")
+            verbose_proxy_logger.debug("Created initial polling state for %s with TTL=%ss", polling_id, self.ttl)
 
         return response
 
@@ -136,16 +136,16 @@ class ResponsePollingHandler:
         if not self.redis_cache:
             return
 
-        cache_key = self.get_cache_key(polling_id)
+        cache_key: Final = self.get_cache_key(polling_id)
 
         # Get current state
-        cached_state = await self.redis_cache.async_get_cache(cache_key)
+        cached_state: Final = await self.redis_cache.async_get_cache(cache_key)
         if not cached_state:
-            verbose_proxy_logger.warning(f"No cached state found for polling_id: {polling_id}")
+            verbose_proxy_logger.warning("No cached state found for polling_id: %s", polling_id)
             return
 
         # Parse existing ResponsesAPIResponse from cache
-        state = json.loads(cached_state)
+        state: Final = json.loads(cached_state)
 
         # Update status (using OpenAI native status values)
         if status:
@@ -207,9 +207,9 @@ class ResponsePollingHandler:
             ttl=self.ttl,
         )
 
-        output_count = len(state.get("output", []))
+        output_count: Final = len(state.get("output", []))
         verbose_proxy_logger.debug(
-            f"Updated polling state for {polling_id}: status={state['status']}, output_items={output_count}"
+            "Updated polling state for %s: status=%s, output_items=%s", polling_id, state["status"], output_count
         )
 
     async def get_state(self, polling_id: str) -> dict[str, Any] | None:
@@ -217,8 +217,8 @@ class ResponsePollingHandler:
         if not self.redis_cache:
             return None
 
-        cache_key = self.get_cache_key(polling_id)
-        cached_state = await self.redis_cache.async_get_cache(cache_key)
+        cache_key: Final = self.get_cache_key(polling_id)
+        cached_state: Final = await self.redis_cache.async_get_cache(cache_key)
 
         if cached_state:
             return json.loads(cached_state)
@@ -242,7 +242,7 @@ class ResponsePollingHandler:
         if not self.redis_cache:
             return False
 
-        cache_key = self.get_cache_key(polling_id)
+        cache_key: Final = self.get_cache_key(polling_id)
         # Use RedisCache's async_delete_cache method which handles Redis/RedisCluster
         await self.redis_cache.async_delete_cache(cache_key)
         return True
@@ -277,7 +277,7 @@ def should_use_polling_for_request(
 
     # Check if model is in native_background_mode list - these use native provider background mode
     if native_background_mode and model in native_background_mode:
-        verbose_proxy_logger.debug(f"Model {model} is in native_background_mode list, skipping polling via cache")
+        verbose_proxy_logger.debug("Model %s is in native_background_mode list, skipping polling via cache", model)
         return False
 
     # "all" enables polling for all providers
@@ -288,14 +288,14 @@ def should_use_polling_for_request(
     if isinstance(polling_via_cache_enabled, list):
         # First, try to get provider from model string format "provider/model"
         if "/" in model:
-            provider = model.split("/")[0]
+            provider: Final = model.split("/")[0]
             if provider in polling_via_cache_enabled:
                 return True
         # Otherwise, check ALL deployments for this model_name in router
         elif llm_router is not None:
             try:
                 # Get all deployment indices for this model name
-                indices = llm_router.model_name_to_deployment_indices.get(model, [])
+                indices: Final = llm_router.model_name_to_deployment_indices.get(model, [])
                 for idx in indices:
                     deployment_dict = llm_router.model_list[idx]
                     litellm_params = deployment_dict.get("litellm_params", {})
@@ -311,9 +311,9 @@ def should_use_polling_for_request(
 
                     # If ANY deployment's provider matches, enable polling
                     if dep_provider and dep_provider in polling_via_cache_enabled:
-                        verbose_proxy_logger.debug(f"Polling enabled for model={model}, provider={dep_provider}")
+                        verbose_proxy_logger.debug("Polling enabled for model=%s, provider=%s", model, dep_provider)
                         return True
             except Exception as e:
-                verbose_proxy_logger.debug(f"Could not resolve provider for model {model}: {e}")
+                verbose_proxy_logger.debug("Could not resolve provider for model %s: %s", model, e)
 
     return False

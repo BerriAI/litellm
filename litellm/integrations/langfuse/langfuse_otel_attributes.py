@@ -5,7 +5,7 @@ Relevant Issue: https://github.com/BerriAI/litellm/issues/13764
 """
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import BaseModel
 from typing_extensions import override
@@ -59,7 +59,7 @@ def get_output_content_by_type(
         return ""
 
     kwargs = kwargs or {}
-    call_type = kwargs.get("call_type", None)
+    call_type: Final = kwargs.get("call_type", None)
 
     # Embedding responses - no output content
     if call_type == "embedding" or isinstance(response_obj, EmbeddingResponse):
@@ -82,16 +82,16 @@ class LangfuseLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
     @staticmethod
     @override
     def set_messages(span: "Span", kwargs: dict[str, Any]):
-        prompt = {"messages": kwargs.get("messages")}
-        optional_params = kwargs.get("optional_params", {})
-        functions = optional_params.get("functions")
-        tools = optional_params.get("tools")
+        prompt: Final = {"messages": kwargs.get("messages")}
+        optional_params: Final = kwargs.get("optional_params", {})
+        functions: Final = optional_params.get("functions")
+        tools: Final = optional_params.get("tools")
         if functions is not None:
             prompt["functions"] = functions
         if tools is not None:
             prompt["tools"] = tools
 
-        input = prompt
+        input: Final = prompt
         safe_set_attribute(span, "langfuse.observation.input", json.dumps(input))
 
     @staticmethod

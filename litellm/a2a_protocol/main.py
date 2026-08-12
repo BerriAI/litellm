@@ -13,12 +13,7 @@ import asyncio
 import datetime
 import uuid
 from collections.abc import AsyncIterator, Coroutine
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Optional,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Final, Optional, cast
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -35,6 +30,7 @@ from litellm.utils import client
 
 if TYPE_CHECKING:
     from a2a.client import Client as A2AClientType
+    from a2a.client import ClientCallContext as A2ACallContextType
     from a2a.compat.v0_3.types import (
         AgentCard,
         Message,
@@ -50,7 +46,7 @@ A2A_SDK_AVAILABLE = False
 _a2a_conversions: Any = None
 
 try:
-    from a2a.client import Client, ClientConfig, create_client
+    from a2a.client import Client, ClientCallContext, ClientConfig, create_client
     from a2a.compat.v0_3 import conversions as _a2a_conversions
     from a2a.compat.v0_3.types import (
         Message,
@@ -64,9 +60,10 @@ try:
 
     A2A_SDK_AVAILABLE = True
 except ImportError:
-    Client = None  # type: ignore[misc, assignment]
-    ClientConfig = None  # type: ignore[misc, assignment]
-    create_client = None  # type: ignore[misc, assignment]
+    Client = None
+    ClientCallContext = None
+    ClientConfig = None
+    create_client = None
 
 # Import our custom card resolver that supports multiple well-known paths
 from litellm.a2a_protocol.card_resolver import (
@@ -80,7 +77,7 @@ from litellm.a2a_protocol.exception_mapping_utils import (
 from litellm.a2a_protocol.exceptions import A2ALocalhostURLError
 
 # Use our custom resolver instead of the default A2A SDK resolver
-A2ACardResolver = LiteLLMA2ACardResolver
+A2ACardResolver: Final = LiteLLMA2ACardResolver
 
 
 def _set_usage_on_logging_obj(
@@ -96,9 +93,9 @@ def _set_usage_on_logging_obj(
         prompt_tokens: Number of input tokens
         completion_tokens: Number of output tokens
     """
-    litellm_logging_obj = kwargs.get("litellm_logging_obj")
+    litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
     if litellm_logging_obj is not None:
-        usage = litellm.Usage(
+        usage: Final = litellm.Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
@@ -120,13 +117,13 @@ def _set_agent_id_on_logging_obj(
     if agent_id is None:
         return
 
-    litellm_logging_obj = kwargs.get("litellm_logging_obj")
+    litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
     if litellm_logging_obj is not None:
         # Set agent_id directly on model_call_details (same pattern as custom_llm_provider)
         litellm_logging_obj.model_call_details["agent_id"] = agent_id
 
 
-_A2A_COST_PARAM_KEYS = ("cost_per_query", "input_cost_per_token", "output_cost_per_token")
+_A2A_COST_PARAM_KEYS: Final = ("cost_per_query", "input_cost_per_token", "output_cost_per_token")
 
 
 def _set_litellm_params_on_logging_obj(
@@ -141,7 +138,7 @@ def _set_litellm_params_on_logging_obj(
     litellm_params already carries metadata / proxy_server_request / user-key
     context, so merge the pricing keys in rather than replacing the dict.
     """
-    logging_obj = kwargs.get("litellm_logging_obj")
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
     if logging_obj is None:
         return
 
@@ -149,7 +146,7 @@ def _set_litellm_params_on_logging_obj(
     if not cost_params:
         return
 
-    existing = logging_obj.model_call_details.get("litellm_params") or {}
+    existing: Final = logging_obj.model_call_details.get("litellm_params") or {}
     logging_obj.model_call_details["litellm_params"] = {**existing, **cost_params}
 
 
@@ -162,17 +159,17 @@ def _get_a2a_model_info(a2a_client: Any, kwargs: dict[str, Any]) -> str:
     """
     agent_name = "unknown"
 
-    agent_card = _get_a2a_client_agent_card(a2a_client)
+    agent_card: Final = _get_a2a_client_agent_card(a2a_client)
 
     if agent_card is not None:
         agent_name = getattr(agent_card, "name", "unknown") or "unknown"
 
     # Build model string
-    model = f"a2a_agent/{agent_name}"
-    custom_llm_provider = "a2a_agent"
+    model: Final = f"a2a_agent/{agent_name}"
+    custom_llm_provider: Final = "a2a_agent"
 
     # Set on litellm_logging_obj if available (for standard logging payload)
-    litellm_logging_obj = kwargs.get("litellm_logging_obj")
+    litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
     if litellm_logging_obj is not None:
         litellm_logging_obj.model = model
         litellm_logging_obj.custom_llm_provider = custom_llm_provider
@@ -204,7 +201,7 @@ async def _send_message_via_completion_bridge(
 
     Requires request; api_base is optional for providers that derive endpoint from model.
     """
-    verbose_logger.info(f"A2A using completion bridge: provider={custom_llm_provider}, api_base={api_base}")
+    verbose_logger.info("A2A using completion bridge: provider=%s, api_base=%s", custom_llm_provider, api_base)
 
     from litellm.a2a_protocol.litellm_completion_bridge.handler import (
         A2ACompletionBridgeHandler,
@@ -212,7 +209,7 @@ async def _send_message_via_completion_bridge(
 
     params = request.params.model_dump(mode="json") if hasattr(request.params, "model_dump") else dict(request.params)
 
-    response_dict = await A2ACompletionBridgeHandler.handle_non_streaming(
+    response_dict: Final = await A2ACompletionBridgeHandler.handle_non_streaming(
         request_id=str(request.id),
         params=params,
         litellm_params=litellm_params,
@@ -223,6 +220,10 @@ async def _send_message_via_completion_bridge(
     return LiteLLMSendMessageResponse.from_dict(response_dict, request_id=str(request.id))
 
 
+def _get_a2a_call_context(a2a_client: "A2AClientType") -> Optional["A2ACallContextType"]:
+    return getattr(a2a_client, "_litellm_call_context", None)
+
+
 async def _send_message(a2a_client: "A2AClientType", request: "SendMessageRequest") -> "SendMessageResponse":
     """Send a non-streaming message via a2a-sdk 1.x and return JSON-RPC response."""
     if _a2a_conversions is None:
@@ -230,18 +231,18 @@ async def _send_message(a2a_client: "A2AClientType", request: "SendMessageReques
             "The 'a2a' package is required for A2A agent invocation. Install it with: pip install a2a-sdk"
         )
 
-    pb_request = _a2a_conversions.to_core_send_message_request(request)
+    pb_request: Final = _a2a_conversions.to_core_send_message_request(request)
     last_event = None
-    async for event in a2a_client.send_message(pb_request):
+    async for event in a2a_client.send_message(pb_request, context=_get_a2a_call_context(a2a_client)):
         last_event = event
     if last_event is None:
         raise RuntimeError("A2A send_message failed: no response received from agent.")
 
-    stream_compat = _a2a_conversions.to_compat_stream_response(
+    stream_compat: Final = _a2a_conversions.to_compat_stream_response(
         last_event,
         request_id=request.id,
     )
-    result = stream_compat.result
+    result: Final = stream_compat.result
     if not isinstance(result, (Message, Task)):
         raise RuntimeError(
             "A2A send_message failed: non-streaming message/send expects the "
@@ -305,8 +306,8 @@ async def _stream_messages(
             "The 'a2a' package is required for A2A agent invocation. Install it with: pip install a2a-sdk"
         )
 
-    pb_request = _a2a_conversions.to_core_send_message_request(request)
-    async for event in a2a_client.send_message(pb_request):
+    pb_request: Final = _a2a_conversions.to_core_send_message_request(request)
+    async for event in a2a_client.send_message(pb_request, context=_get_a2a_call_context(a2a_client)):
         compat_chunk = _a2a_conversions.to_compat_stream_response(
             event,
             request_id=request.id,
@@ -425,9 +426,9 @@ async def asend_message(
         ```
     """
     litellm_params = litellm_params or {}
-    logging_obj = kwargs.get("litellm_logging_obj")
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
     trace_id = getattr(logging_obj, "litellm_trace_id", None) if logging_obj else None
-    custom_llm_provider = litellm_params.get("custom_llm_provider")
+    custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
 
     # Route through completion bridge if custom_llm_provider is set
     if custom_llm_provider:
@@ -450,7 +451,7 @@ async def asend_message(
         if api_base is None:
             raise ValueError("Either a2a_client or api_base is required for standard A2A flow")
         trace_id = trace_id or str(uuid.uuid4())
-        extra_headers: dict[str, str] = {"X-LiteLLM-Trace-Id": trace_id}
+        extra_headers: Final[dict[str, str]] = {"X-LiteLLM-Trace-Id": trace_id}
         if agent_id:
             extra_headers["X-LiteLLM-Agent-Id"] = agent_id
         # Overlay agent-level headers (agent headers take precedence over LiteLLM internal ones)
@@ -461,15 +462,15 @@ async def asend_message(
     # Type assertion: a2a_client is guaranteed to be non-None here
     assert a2a_client is not None
 
-    agent_name = _get_a2a_model_info(a2a_client, kwargs)
+    agent_name: Final = _get_a2a_model_info(a2a_client, kwargs)
 
-    verbose_logger.info(f"A2A send_message request_id={request.id}, agent={agent_name}")
+    verbose_logger.info("A2A send_message request_id=%s, agent=%s", request.id, agent_name)
 
     # Get agent card URL for localhost retry logic
-    agent_card = _get_a2a_client_agent_card(a2a_client)
-    card_url = get_agent_card_url(agent_card) if agent_card else None
+    agent_card: Final = _get_a2a_client_agent_card(a2a_client)
+    card_url: Final = get_agent_card_url(agent_card) if agent_card else None
 
-    a2a_response = await _execute_a2a_send_with_retry(
+    a2a_response: Final = await _execute_a2a_send_with_retry(
         a2a_client=a2a_client,
         request=request,
         agent_card=agent_card,
@@ -478,13 +479,13 @@ async def asend_message(
         agent_name=agent_name,
     )
 
-    verbose_logger.info(f"A2A send_message completed, request_id={request.id}")
+    verbose_logger.info("A2A send_message completed, request_id=%s", request.id)
 
     # Wrap in LiteLLM response type for _hidden_params support
-    response = LiteLLMSendMessageResponse.from_a2a_response(a2a_response, request_id=str(request.id))
+    response: Final = LiteLLMSendMessageResponse.from_a2a_response(a2a_response, request_id=str(request.id))
 
     # Calculate token usage from request and response
-    response_dict = a2a_response.model_dump(mode="json", exclude_none=True)
+    response_dict: Final = a2a_response.model_dump(mode="json", exclude_none=True)
     (
         prompt_tokens,
         completion_tokens,
@@ -549,10 +550,10 @@ def _build_streaming_logging_obj(
     proxy_server_request: dict[str, Any] | None,
 ) -> Logging:
     """Build logging object for streaming A2A requests."""
-    start_time = datetime.datetime.now()
-    model = f"a2a_agent/{agent_name}"
+    start_time: Final = datetime.datetime.now()
+    model: Final = f"a2a_agent/{agent_name}"
 
-    logging_obj = Logging(
+    logging_obj: Final = Logging(
         model=model,
         messages=[{"role": "user", "content": "streaming-request"}],
         stream=False,
@@ -569,7 +570,7 @@ def _build_streaming_logging_obj(
     if agent_id:
         logging_obj.model_call_details["agent_id"] = agent_id
 
-    _litellm_params = litellm_params.copy() if litellm_params else {}
+    _litellm_params: Final = litellm_params.copy() if litellm_params else {}
     if metadata:
         _litellm_params["metadata"] = metadata
     if proxy_server_request:
@@ -632,7 +633,7 @@ async def asend_message_streaming(
         ```
     """
     litellm_params = litellm_params or {}
-    custom_llm_provider = litellm_params.get("custom_llm_provider")
+    custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
 
     # Route through completion bridge if custom_llm_provider is set
     if custom_llm_provider:
@@ -640,14 +641,14 @@ async def asend_message_streaming(
             raise ValueError("request is required for completion bridge")
         # api_base is optional for providers that derive endpoint from model (e.g., bedrock/agentcore)
 
-        verbose_logger.info(f"A2A streaming using completion bridge: provider={custom_llm_provider}")
+        verbose_logger.info("A2A streaming using completion bridge: provider=%s", custom_llm_provider)
 
         from litellm.a2a_protocol.litellm_completion_bridge.handler import (
             A2ACompletionBridgeHandler,
         )
 
         # Extract params from request
-        params = (
+        params: Final = (
             request.params.model_dump(mode="json") if hasattr(request.params, "model_dump") else dict(request.params)
         )
 
@@ -664,15 +665,15 @@ async def asend_message_streaming(
     if request is None:
         raise ValueError("request is required")
 
-    _raw_logging_obj = kwargs.get("litellm_logging_obj")
+    _raw_logging_obj: Final = kwargs.get("litellm_logging_obj")
     logging_obj: Logging | None = _raw_logging_obj if isinstance(_raw_logging_obj, Logging) else None
 
     if a2a_client is None:
         if api_base is None:
             raise ValueError("Either a2a_client or api_base is required for standard A2A flow")
-        logging_trace_id = getattr(logging_obj, "litellm_trace_id", None) if logging_obj else None
-        trace_id = logging_trace_id or (str(request.id) if request.id else str(uuid.uuid4()))
-        extra_headers: dict[str, str] = {"X-LiteLLM-Trace-Id": trace_id}
+        logging_trace_id: Final = getattr(logging_obj, "litellm_trace_id", None) if logging_obj else None
+        trace_id: Final = logging_trace_id or (str(request.id) if request.id else str(uuid.uuid4()))
+        extra_headers: Final[dict[str, str]] = {"X-LiteLLM-Trace-Id": trace_id}
         if agent_id:
             extra_headers["X-LiteLLM-Agent-Id"] = agent_id
         if agent_extra_headers:
@@ -685,7 +686,7 @@ async def asend_message_streaming(
 
     assert a2a_client is not None
 
-    agent_name = _get_a2a_model_info(a2a_client, kwargs)
+    agent_name: Final = _get_a2a_model_info(a2a_client, kwargs)
 
     if logging_obj is None:
         logging_obj = _build_streaming_logging_obj(
@@ -697,12 +698,12 @@ async def asend_message_streaming(
             proxy_server_request=proxy_server_request,
         )
 
-    verbose_logger.info(f"A2A send_message_streaming request_id={request.id}, agent={agent_name}")
+    verbose_logger.info("A2A send_message_streaming request_id=%s, agent=%s", request.id, agent_name)
 
-    agent_card = _get_a2a_client_agent_card(a2a_client)
-    card_url = get_agent_card_url(agent_card) if agent_card else None
+    agent_card: Final = _get_a2a_client_agent_card(a2a_client)
+    card_url: Final = get_agent_card_url(agent_card) if agent_card else None
 
-    stream = _execute_a2a_stream_with_retry(
+    stream: Final = _execute_a2a_stream_with_retry(
         a2a_client=a2a_client,
         request=request,
         agent_card=agent_card,
@@ -759,46 +760,38 @@ async def create_a2a_client(
             "The 'a2a' package is required for A2A agent invocation. Install it with: pip install a2a-sdk"
         )
 
-    verbose_logger.info(f"Creating A2A client for {base_url}")
+    verbose_logger.info("Creating A2A client for %s", base_url)
 
-    # Use get_async_httpx_client with per-agent params so that different agents
-    # (with different extra_headers) get separate cached clients.  The params
-    # dict is hashed into the cache key, keeping agent auth isolated while
-    # still reusing connections within the same agent.
-    #
-    # Only pass params that AsyncHTTPHandler.__init__ accepts (e.g. timeout).
-    # Use "disable_aiohttp_transport" key for cache-key-only data (it's
-    # filtered out before reaching the constructor).
-    _client_params: dict = {"timeout": timeout}
-    if extra_headers:
-        # Encode headers into a cache-key-only param so each unique header
-        # set produces a distinct cache key.
-        _client_params["disable_aiohttp_transport"] = str(sorted(extra_headers.items()))
-    _async_handler = get_async_httpx_client(
+    _async_handler: Final = get_async_httpx_client(
         llm_provider=httpxSpecialProvider.A2AProvider,
-        params=_client_params,
+        params={"timeout": timeout},
     )
-    httpx_client = _async_handler.client
+    httpx_client: Final = _async_handler.client
     if extra_headers:
-        httpx_client.headers.update(extra_headers)
-        verbose_proxy_logger.debug(f"A2A client created with extra_headers={list(extra_headers.keys())}")
+        verbose_proxy_logger.debug("A2A client created with extra_headers=%s", list(extra_headers.keys()))
 
-    a2a_client = await create_client(  # pyright: ignore[reportOptionalCall]
+    a2a_client: Final = await create_client(  # pyright: ignore[reportOptionalCall]
         base_url,
         client_config=ClientConfig(  # pyright: ignore[reportOptionalCall]
             httpx_client=httpx_client,
             streaming=streaming,
         ),
+        resolver_http_kwargs={"headers": extra_headers} if extra_headers else None,
     )
     # Stash LiteLLM-owned handles on the client so the localhost-retry path can reuse
-    # the configured httpx client (with this agent's trace-id/auth headers) without
-    # excavating a2a-sdk private internals.
-    a2a_client._litellm_httpx_client = httpx_client  # type: ignore[attr-defined]
-    agent_card = getattr(a2a_client, "_card", None)
+    # the configured httpx client and this agent's headers without excavating
+    # a2a-sdk private internals.
+    a2a_client._litellm_httpx_client = httpx_client
+    a2a_client._litellm_call_context = (  # pyright: ignore[reportAttributeAccessIssue]  # LiteLLM-owned stash
+        ClientCallContext(service_parameters=extra_headers)  # pyright: ignore[reportOptionalCall]  # SDK checked above
+        if extra_headers
+        else None
+    )
+    agent_card: Final = getattr(a2a_client, "_card", None)
     if agent_card is not None:
-        a2a_client._litellm_agent_card = agent_card  # type: ignore[attr-defined]
+        a2a_client._litellm_agent_card = agent_card
 
-    verbose_logger.info(f"A2A client created for {base_url}")
+    verbose_logger.info("A2A client created for %s", base_url)
 
     return a2a_client
 
@@ -824,20 +817,20 @@ async def aget_agent_card(
             "The 'a2a' package is required for A2A agent invocation. Install it with: pip install a2a-sdk"
         )
 
-    verbose_logger.info(f"Fetching agent card from {base_url}")
+    verbose_logger.info("Fetching agent card from %s", base_url)
 
     # Use LiteLLM's cached httpx client
-    http_handler = get_async_httpx_client(
+    http_handler: Final = get_async_httpx_client(
         llm_provider=httpxSpecialProvider.A2A,
         params={"timeout": timeout},
     )
-    httpx_client = http_handler.client
+    httpx_client: Final = http_handler.client
 
-    resolver = A2ACardResolver(
+    resolver: Final = A2ACardResolver(
         httpx_client=httpx_client,
         base_url=base_url,
     )
-    agent_card = await resolver.get_agent_card()
+    agent_card: Final = await resolver.get_agent_card()
 
-    verbose_logger.info(f"Fetched agent card: {agent_card.name if hasattr(agent_card, 'name') else 'unknown'}")
+    verbose_logger.info("Fetched agent card: %s", agent_card.name if hasattr(agent_card, "name") else "unknown")
     return agent_card

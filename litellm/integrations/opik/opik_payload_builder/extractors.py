@@ -1,7 +1,7 @@
 """Data extraction functions for Opik payload building."""
 
 import json
-from typing import Any
+from typing import Any, Final
 
 from litellm import _logging
 
@@ -20,7 +20,7 @@ def normalize_provider_name(provider: str | None) -> str | None:
         return None
 
     # Provider mapping to names used in Opik
-    provider_mapping = {
+    provider_mapping: Final = {
         "openai": "openai",
         "vertex_ai-language-models": "google_vertexai",
         "gemini": "google_ai",
@@ -53,20 +53,20 @@ def extract_opik_metadata(
         Merged Opik metadata dictionary.
     """
     # Start with auth-key defaults (lowest priority).
-    auth_meta = standard_logging_metadata.get("user_api_key_auth_metadata") or {}
-    opik_meta = (auth_meta.get("opik") or {}).copy()
+    auth_meta: Final = standard_logging_metadata.get("user_api_key_auth_metadata") or {}
+    opik_meta: Final = (auth_meta.get("opik") or {}).copy()
 
     # Request-level values override auth-key defaults.
-    request_opik = litellm_metadata.get("opik") or {}
+    request_opik: Final = litellm_metadata.get("opik") or {}
     opik_meta.update(request_opik)
 
     # Requester-level values win over everything else.
-    requester_metadata = standard_logging_metadata.get("requester_metadata", {}) or {}
-    requester_opik = requester_metadata.get("opik", {}) or {}
+    requester_metadata: Final = standard_logging_metadata.get("requester_metadata", {}) or {}
+    requester_opik: Final = requester_metadata.get("opik", {}) or {}
     if requester_opik:
         opik_meta.update(requester_opik)
 
-    _logging.verbose_logger.debug(f"litellm_opik_metadata - {json.dumps(opik_meta, default=str)}")
+    _logging.verbose_logger.debug("litellm_opik_metadata - %s", json.dumps(opik_meta, default=str))
 
     return opik_meta
 
@@ -92,7 +92,7 @@ def extract_span_identifiers(
     try:
         return current_span_data.trace_id, current_span_data.id
     except AttributeError:
-        _logging.verbose_logger.warning(f"Unexpected current_span_data format: {type(current_span_data)}")
+        _logging.verbose_logger.warning("Unexpected current_span_data format: %s", type(current_span_data))
         return None, None
 
 
@@ -110,7 +110,7 @@ def extract_tags(
     Returns:
         List of tags
     """
-    tags = list(opik_metadata.get("tags", []))
+    tags: Final = list(opik_metadata.get("tags", []))
 
     if custom_llm_provider:
         tags.append(custom_llm_provider)
@@ -152,7 +152,7 @@ def apply_proxy_header_overrides(
                 if isinstance(parsed_tags, list):
                     tags.extend(parsed_tags)
             except (json.JSONDecodeError, TypeError):
-                _logging.verbose_logger.warning(f"Failed to parse tags from header: {value}")
+                _logging.verbose_logger.warning("Failed to parse tags from header: %s", value)
 
     return project_name, tags, thread_id
 
@@ -182,7 +182,7 @@ def extract_and_build_metadata(
         Complete metadata dictionary for trace/span
     """
     # Start with opik metadata (excluding current_span_data which is used for trace linking)
-    metadata = {k: v for k, v in opik_metadata.items() if k != "current_span_data"}
+    metadata: Final = {k: v for k, v in opik_metadata.items() if k != "current_span_data"}
     metadata["created_from"] = "litellm"
 
     # Merge with standard logging metadata
@@ -190,7 +190,7 @@ def extract_and_build_metadata(
 
     # Add fields from standard_logging_object
     # These come from the LiteLLM logging infrastructure
-    field_mappings = {
+    field_mappings: Final = {
         "call_type": "type",
         "status": "status",
         "model": "model",

@@ -1,18 +1,12 @@
 from __future__ import annotations
 
 import csv
-import os
-import subprocess
-import sys
-import tempfile
 from dataclasses import dataclass
 from itertools import accumulate
 from pathlib import Path
 
 from pydantic import BaseModel, TypeAdapter
 
-_LOCUSTFILE = Path(__file__).with_name("locustfile.py")
-_CSV_PREFIX = "locust"
 _GENERATOR_SATURATION_MARKER = "CPU usage above"
 _MAX_REPORTED_ERRORS = 5
 
@@ -127,62 +121,3 @@ def read_generator_warnings(stderr: str) -> tuple[str, ...]:
         if _GENERATOR_SATURATION_MARKER in line
     )
     return tuple(dict.fromkeys(saturated))
-
-
-def run_chat_load(
-    *,
-    base_url: str,
-    api_key: str,
-    model: str,
-    users: int,
-    spawn_rate: float,
-    duration_seconds: float,
-) -> LoadResult:
-    with tempfile.TemporaryDirectory(prefix="e2e-load-") as report_dir:
-        csv_prefix = Path(report_dir) / _CSV_PREFIX
-        completed = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "locust",
-                "--headless",
-                "--json",
-                "--csv",
-                str(csv_prefix),
-                "--locustfile",
-                str(_LOCUSTFILE),
-                "--host",
-                base_url,
-                "--users",
-                str(users),
-                "--spawn-rate",
-                str(spawn_rate),
-                "--run-time",
-                f"{int(duration_seconds)}s",
-                "--exit-code-on-error",
-                "0",
-            ],
-            env={**os.environ, "LOAD_API_KEY": api_key, "LOAD_MODEL": model},
-            capture_output=True,
-            text=True,
-            timeout=duration_seconds + 120,
-            check=False,
-        )
-        if completed.returncode != 0:
-            raise RuntimeError(
-                f"locust exited {completed.returncode} before it could report throughput "
-                f"(a startup failure, not request failures, which are folded into the JSON summary via "
-                f"--exit-code-on-error 0):\n{completed.stderr}"
-            )
-        try:
-            entries = _STATS_ADAPTER.validate_json(completed.stdout)
-        except ValueError as exc:
-            raise RuntimeError(
-                f"locust exited 0 but did not print a parseable --json throughput summary on stdout; "
-                f"got stdout={completed.stdout!r}, stderr={completed.stderr!r}"
-            ) from exc
-        return aggregate_stats(
-            entries,
-            read_errors(csv_prefix.with_name(f"{_CSV_PREFIX}_failures.csv")),
-            read_generator_warnings(completed.stderr),
-        )

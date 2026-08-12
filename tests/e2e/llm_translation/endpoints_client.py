@@ -12,16 +12,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel
-
-from proxy_client import ProxyClient
 from e2e_http import BinaryStream, Result, StreamingResponse
 from models import CacheControl, ChatMessage, LiteLLMParamsBody, RichMessage, TextBlock
+from proxy_client import ProxyClient
+from pydantic import BaseModel
 
 __all__ = [
     "CacheControl",
+    "ImageEditForm",
+    "ImagesResult",
     "RichMessage",
     "TextBlock",
+    "TranscriptionForm",
+    "TranscriptionResult",
 ]
 
 
@@ -70,6 +73,7 @@ class ResponsesRequest(BaseModel):
     instructions: str | None = None
     stream: bool = False
     tools: list[ResponsesFunctionTool] | None = None
+    guardrails: list[str] | None = None
 
 
 class MessagesRequest(BaseModel):
@@ -83,6 +87,12 @@ class RichMessagesRequest(BaseModel):
     max_tokens: int = 64
     system: list[TextBlock]
     messages: list[RichMessage]
+
+
+class CompletionsRequest(BaseModel):
+    model: str
+    prompt: str
+    max_tokens: int = 32
 
 
 class EmbeddingsRequest(BaseModel):
@@ -110,6 +120,12 @@ class ImageRequest(BaseModel):
     size: str = "1024x1024"
 
 
+class ImageEditForm(BaseModel):
+    model: str
+    prompt: str
+    n: int = 1
+
+
 class TranscriptionForm(BaseModel):
     model: str
     response_format: str = "json"
@@ -118,6 +134,19 @@ class TranscriptionForm(BaseModel):
 class ModerationRequest(BaseModel):
     model: str
     input: str
+
+
+class GenerateContentPart(BaseModel):
+    text: str
+
+
+class GenerateContentContent(BaseModel):
+    role: Literal["user"] = "user"
+    parts: tuple[GenerateContentPart, ...]
+
+
+class GenerateContentBody(BaseModel):
+    contents: tuple[GenerateContentContent, ...]
 
 
 class ResponsesOutputContent(BaseModel):
@@ -193,6 +222,14 @@ class MessagesResult(BaseModel):
         return "".join(block.text or "" for block in self.content)
 
 
+class CompletionChoice(BaseModel):
+    text: str | None = None
+
+
+class CompletionsResult(BaseModel):
+    choices: list[CompletionChoice] = []
+
+
 class EmbeddingItem(BaseModel):
     embedding: list[float] = []
 
@@ -221,12 +258,6 @@ class ImageItem(BaseModel):
 
 class ImagesResult(BaseModel):
     data: list[ImageItem] = []
-
-
-class ImageEditForm(BaseModel):
-    model: str
-    prompt: str
-    n: int = 1
 
 
 class TranscriptionResult(BaseModel):
@@ -271,7 +302,13 @@ class EndpointsClient:
         )
 
     def responses(
-        self, key: str, model: str, text: str, *, stream: bool = False
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        stream: bool = False,
+        guardrails: list[str] | None = None,
     ) -> StreamingResponse:
         return self._send(
             "/v1/responses",
@@ -281,6 +318,7 @@ class EndpointsClient:
                 input=text,
                 instructions="You are a helpful assistant",
                 stream=stream,
+                guardrails=guardrails,
             ),
             stream=stream,
         )
@@ -330,6 +368,15 @@ class EndpointsClient:
                 max_tokens=max_tokens,
                 messages=[ChatMessage(role="user", content=text)],
             ),
+        )
+
+    def text_completions(
+        self, key: str, model: str, prompt: str, *, max_tokens: int = 32
+    ) -> StreamingResponse:
+        return self._send(
+            "/v1/completions",
+            key,
+            CompletionsRequest(model=model, prompt=prompt, max_tokens=max_tokens),
         )
 
     def embeddings(self, key: str, model: str, text: str) -> StreamingResponse:
@@ -398,6 +445,19 @@ class EndpointsClient:
             file_content_type="image/png",
             file_field="image",
             response_type=ImagesResult,
+        )
+
+    def generate_content(
+        self, key: str, model: str, text: str, *, stream: bool = False
+    ) -> StreamingResponse:
+        operation = "streamGenerateContent" if stream else "generateContent"
+        return self._send(
+            f"/v1beta/models/{model}:{operation}",
+            key,
+            GenerateContentBody(
+                contents=(GenerateContentContent(parts=(GenerateContentPart(text=text),)),)
+            ),
+            stream=stream,
         )
 
 

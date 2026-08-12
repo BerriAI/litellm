@@ -33,39 +33,43 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
 }) => {
   const [form] = Form.useForm();
   const [vectorStoreDetails, setVectorStoreDetails] = useState<VectorStore | null>(null);
+  const [loadFailed, setLoadFailed] = useState<boolean>(false);
   const [isEditing, setIsEditing] = useState<boolean>(editVectorStore);
   const [metadataString, setMetadataString] = useState<string>("{}");
   const [credentials, setCredentials] = useState<CredentialItem[]>([]);
-  const [activeTab, setActiveTab] = useState<string>(editVectorStore ? "details" : "details");
 
   const fetchVectorStoreDetails = async () => {
     if (!accessToken) return;
     try {
+      setLoadFailed(false);
       const response = await vectorStoreInfoCall(accessToken, vectorStoreId);
-      if (response && response.vector_store) {
-        setVectorStoreDetails(response.vector_store);
+      if (!response || !response.vector_store) {
+        setLoadFailed(true);
+        return;
+      }
+      setVectorStoreDetails(response.vector_store);
 
-        // If metadata exists and is an object, stringify it for display/editing
-        if (response.vector_store.vector_store_metadata) {
-          const metadata =
-            typeof response.vector_store.vector_store_metadata === "string"
-              ? JSON.parse(response.vector_store.vector_store_metadata)
-              : response.vector_store.vector_store_metadata;
-          setMetadataString(JSON.stringify(metadata, null, 2));
-        }
+      // If metadata exists and is an object, stringify it for display/editing
+      if (response.vector_store.vector_store_metadata) {
+        const metadata =
+          typeof response.vector_store.vector_store_metadata === "string"
+            ? JSON.parse(response.vector_store.vector_store_metadata)
+            : response.vector_store.vector_store_metadata;
+        setMetadataString(JSON.stringify(metadata, null, 2));
+      }
 
-        if (editVectorStore) {
-          form.setFieldsValue({
-            vector_store_id: response.vector_store.vector_store_id,
-            custom_llm_provider: response.vector_store.custom_llm_provider,
-            vector_store_name: response.vector_store.vector_store_name,
-            vector_store_description: response.vector_store.vector_store_description,
-          });
-        }
+      if (editVectorStore) {
+        form.setFieldsValue({
+          vector_store_id: response.vector_store.vector_store_id,
+          custom_llm_provider: response.vector_store.custom_llm_provider,
+          vector_store_name: response.vector_store.vector_store_name,
+          vector_store_description: response.vector_store.vector_store_description,
+        });
       }
     } catch (error) {
       console.error("Error fetching vector store details:", error);
       NotificationsManager.fromBackend("Error fetching vector store details: " + error);
+      setLoadFailed(true);
     }
   };
 
@@ -113,6 +117,20 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
       NotificationsManager.fromBackend("Error updating vector store: " + error);
     }
   };
+
+  if (loadFailed) {
+    return (
+      <div className="p-4 max-w-full">
+        <Button icon={ArrowLeftIcon} variant="light" className="mb-4" onClick={onClose}>
+          Back to Vector Stores
+        </Button>
+        <Title>Vector store not found</Title>
+        <Text className="text-gray-500">
+          Vector store {vectorStoreId} could not be loaded. It may have been deleted.
+        </Text>
+      </div>
+    );
+  }
 
   if (!vectorStoreDetails) {
     return <div>Loading...</div>;

@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.llms.openai.image_generation import GPTImageGenerationConfig
 
 
@@ -60,5 +62,5 @@ class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
         Returns:
             True if the model is a FLUX 2 model
         """
-        model_lower = model.lower().replace(".", "-").replace("_", "-")
+        model_lower: Final = model.lower().replace(".", "-").replace("_", "-")
         return "flux-2" in model_lower or "flux2" in model_lower

@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cva.config";
 import { fetchDiscoverableMCPServers } from "@/components/networking";
 import { DiscoverableMCPServer, DiscoverMCPServersResponse } from "@/components/mcp_tools/types";
-import { mcpLogoImg } from "./create_mcp_server";
+import { mcpLogoImg } from "./CreateMCPServer";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 
 interface MCPDiscoveryProps {
