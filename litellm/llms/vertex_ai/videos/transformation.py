@@ -7,7 +7,7 @@ Based on: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-refer
 
 import base64
 import time
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
@@ -92,13 +92,13 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
     3. Extract video data (base64) from response
     """
 
-    _OPENAI_VIDEO_SIZE_TO_ASPECT_RATIO: dict[str, str] = {
+    _OPENAI_VIDEO_SIZE_TO_ASPECT_RATIO: ClassVar[dict[str, str]] = {
         "1280x720": "16:9",
         "1920x1080": "16:9",
         "720x1280": "9:16",
         "1080x1920": "9:16",
     }
-    _OPENAI_VIDEO_SIZE_TO_RESOLUTION: dict[str, str] = {
+    _OPENAI_VIDEO_SIZE_TO_RESOLUTION: ClassVar[dict[str, str]] = {
         "1280x720": "720p",
         "1920x1080": "1080p",
         "720x1280": "720p",
