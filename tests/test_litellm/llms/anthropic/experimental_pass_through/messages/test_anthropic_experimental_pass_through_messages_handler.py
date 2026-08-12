@@ -1429,3 +1429,72 @@ async def test_anthropic_pass_through_drop_params(monkeypatch):
 
     optional_params = mock_handler.call_args.kwargs.get("anthropic_messages_optional_request_params", {})
     assert "context_management" not in optional_params
+
+
+def test_drop_params_filters_unsupported_anthropic_params():
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        _drop_unsupported_anthropic_messages_params,
+    )
+
+    params = {
+        "max_tokens": 64,
+        "metadata": {"request_id": "test"},
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+        "output_config": {"effort": "high"},
+        "context_management": {"edits": []},
+    }
+
+    filtered = _drop_unsupported_anthropic_messages_params(
+        anthropic_messages_optional_request_params=params,
+        model="claude-3-haiku-20240307",
+        custom_llm_provider="vertex_ai",
+        additional_drop_params=["metadata"],
+    )
+
+    assert filtered == {"max_tokens": 64}
+    assert params["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert "context_management" in params
+
+
+def test_drop_params_preserves_supported_anthropic_params():
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        _drop_unsupported_anthropic_messages_params,
+    )
+
+    params = {
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+        "output_config": {"effort": "high"},
+        "context_management": {"edits": []},
+    }
+
+    filtered = _drop_unsupported_anthropic_messages_params(
+        anthropic_messages_optional_request_params=params,
+        model="claude-opus-4-5-20251101",
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert filtered == params
+    assert filtered is not params
+
+
+@pytest.mark.asyncio
+async def test_anthropic_pass_through_keeps_supported_params_without_drop(monkeypatch):
+    import litellm
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    mock_handler = AsyncMock()
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(handler.base_llm_http_handler, "anthropic_messages_handler", mock_handler)
+
+    await handler.anthropic_messages_handler(
+        model="vertex_ai/claude-opus-4-5-20251101",
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=64,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        drop_params=False,
+        custom_llm_provider="vertex_ai",
+        is_async=True,
+    )
+
+    optional_params = mock_handler.call_args.kwargs["anthropic_messages_optional_request_params"]
+    assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 1024}
