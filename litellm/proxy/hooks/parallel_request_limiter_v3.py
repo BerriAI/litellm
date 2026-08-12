@@ -24,7 +24,7 @@ from typing import (
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
+from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
@@ -2991,6 +2991,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         rate_limit_type: Literal["output", "input", "total"],
     ) -> list[RedisPipelineIncrementOperation]:
         """Build Redis pipeline increment ops for TPM / parallel-request counters."""
+        from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
@@ -2998,6 +2999,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # Get metadata from standard_logging_object - this correctly handles both
         # 'metadata' and 'litellm_metadata' fields from litellm_params
         standard_logging_object: Final = kwargs.get("standard_logging_object") or {}
+        request_metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
+        if request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
+            # Internal sub-calls bill spend to the caller but are not the caller's
+            # traffic; charging them here would let background evals eat TPM headroom.
+            return []
         standard_logging_metadata: Final = standard_logging_object.get("metadata") or {}
 
         model_group: Final = get_model_group_from_litellm_kwargs(kwargs)
