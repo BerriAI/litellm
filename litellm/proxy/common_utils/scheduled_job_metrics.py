@@ -88,8 +88,11 @@ class ScheduledJobMetricsListener:
     """Pairs APScheduler's submit and completion events into job runs.
 
     Duration is measured across those two events because APScheduler does not
-    report it. Start times are held per job id; ``max_instances=1`` means a job
-    id has at most one run in flight, so a plain mapping is sufficient.
+    report it. Runs are keyed by job id AND scheduled run time, because
+    ``max_instances`` and ``coalesce`` are both env-overridable: raising the
+    first puts several runs of one job in flight at once, and disabling the
+    second makes one submission produce a completion per missed run time. Keying
+    on the job id alone would let those runs consume each other's start times.
     """
 
     def __init__(self, *, monotonic: Final = time.monotonic) -> None:
@@ -109,10 +112,16 @@ class ScheduledJobMetricsListener:
         except Exception as e:  # noqa: BLE001  # telemetry must not disturb the scheduler
             verbose_proxy_logger.debug("scheduled job metrics listener failed: %s", e)
 
+    @staticmethod
+    def _key(job_id: str, scheduled_run_time: object) -> str:
+        return f"{job_id}@{scheduled_run_time}"
+
     def _to_run(self, event: JobEvent) -> JobRun | None:
         job_name: Final = _label_for(event.job_id)
         if event.code == EVENT_JOB_SUBMITTED:
-            self._started_at[event.job_id] = self._monotonic()
+            now: Final = self._monotonic()
+            for scheduled in getattr(event, "scheduled_run_times", ()) or (None,):
+                self._started_at[self._key(event.job_id, scheduled)] = now
             return None
 
         # Neither of these follows a submission of its own. MAX_INSTANCES in
@@ -124,7 +133,9 @@ class ScheduledJobMetricsListener:
         if event.code == EVENT_JOB_MAX_INSTANCES:
             return JobRun(job_name, JobResult.MAX_INSTANCES, None, None)
 
-        started_at: Final = self._started_at.pop(event.job_id, None)
+        started_at: Final = self._started_at.pop(
+            self._key(event.job_id, getattr(event, "scheduled_run_time", None)), None
+        )
         duration: Final = None if started_at is None else self._monotonic() - started_at
 
         if event.code == EVENT_JOB_ERROR:

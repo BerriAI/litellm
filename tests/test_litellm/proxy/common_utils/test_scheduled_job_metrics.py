@@ -254,3 +254,55 @@ def test_every_job_litellm_registers_pins_an_explicit_id():
                 offenders.append(f"{path.relative_to(root)}: {match.group(1).strip().splitlines()[0]}")
 
     assert not offenders, "scheduler.add_job without an explicit id=: " + "; ".join(offenders)
+
+
+def test_concurrent_runs_of_one_job_keep_their_own_durations():
+    """APSCHEDULER_MAX_INSTANCES is env-overridable, so two runs of the same job
+    can be in flight at once. Keying start times by job id alone would let the
+    first completion consume the second run's start."""
+    import datetime
+
+    from apscheduler.events import (
+        EVENT_JOB_EXECUTED,
+        EVENT_JOB_SUBMITTED,
+        JobExecutionEvent,
+        JobSubmissionEvent,
+    )
+
+    first = datetime.datetime(2026, 1, 1, 0, 0, 0)
+    second = datetime.datetime(2026, 1, 1, 0, 0, 30)
+    ticks = iter([100.0, 110.0, 105.0, 140.0])
+    listener = ScheduledJobMetricsListener(monotonic=lambda: next(ticks))
+
+    listener._to_run(JobSubmissionEvent(EVENT_JOB_SUBMITTED, "slow_job", "default", [first]))
+    listener._to_run(JobSubmissionEvent(EVENT_JOB_SUBMITTED, "slow_job", "default", [second]))
+    run_a = listener._to_run(JobExecutionEvent(EVENT_JOB_EXECUTED, "slow_job", "default", first, retval=None))
+    run_b = listener._to_run(JobExecutionEvent(EVENT_JOB_EXECUTED, "slow_job", "default", second, retval=None))
+
+    assert run_a is not None and run_a.duration_seconds == pytest.approx(5.0)
+    assert run_b is not None and run_b.duration_seconds == pytest.approx(30.0)
+
+
+def test_one_submission_of_several_run_times_pairs_each_completion():
+    """With coalesce=False a single submission carries several run times and
+    produces a completion for each."""
+    import datetime
+
+    from apscheduler.events import (
+        EVENT_JOB_EXECUTED,
+        EVENT_JOB_SUBMITTED,
+        JobExecutionEvent,
+        JobSubmissionEvent,
+    )
+
+    times = [datetime.datetime(2026, 1, 1, 0, 0, s) for s in (0, 1, 2)]
+    ticks = iter([100.0, 101.0, 102.0, 103.0])
+    listener = ScheduledJobMetricsListener(monotonic=lambda: next(ticks))
+
+    listener._to_run(JobSubmissionEvent(EVENT_JOB_SUBMITTED, "job", "default", times))
+    durations = [
+        listener._to_run(JobExecutionEvent(EVENT_JOB_EXECUTED, "job", "default", t, retval=None)).duration_seconds
+        for t in times
+    ]
+
+    assert all(d is not None for d in durations), f"every run time must pair, got {durations}"

@@ -15,14 +15,13 @@ else:
     ProxyLogging = Any
 
 
-def _record_lock_attempt(cronjob_id: str, acquired: bool | None) -> None:
+def _record_lock_attempt(cronjob_id: str, result: str) -> None:
     """Publish the outcome of one single-owner lock attempt.
 
-    ``None`` means no Redis is configured, which is a different operational
-    state from losing the race, so it gets its own result rather than being
-    folded into a failure.
+    Each result is a distinct operational state: no Redis means no pod can ever
+    be elected, an error means the attempt itself failed, and not_acquired means
+    another pod simply won.
     """
-    result: Final = "no_redis" if acquired is None else ("acquired" if acquired else "not_acquired")
     try:
         from litellm.integrations.prometheus import PrometheusLogger
 
@@ -65,11 +64,21 @@ end
     ) -> bool | None:
         """Attempt the lock and record the outcome, then hand back the raw result.
 
-        Wraps the attempt rather than instrumenting each of its exits, so the
-        three-state contract below reaches callers untouched.
+        Owns the no-Redis and error exits so the metric can tell a failed attempt
+        apart from losing the election, which the inner method reports as the
+        same False.
         """
-        acquired: Final = await self._attempt_acquire_lock(cronjob_id, ttl=ttl, allow_reentrant=allow_reentrant)
-        _record_lock_attempt(cronjob_id, acquired)
+        if self.redis_cache is None:
+            verbose_proxy_logger.debug("redis_cache is None, skipping acquire_lock")
+            _record_lock_attempt(cronjob_id, "no_redis")
+            return None
+        try:
+            acquired: Final = await self._attempt_acquire_lock(cronjob_id, ttl=ttl, allow_reentrant=allow_reentrant)
+        except Exception as e:
+            verbose_proxy_logger.error("Error acquiring Redis lock for %s: %s", cronjob_id, e)
+            _record_lock_attempt(cronjob_id, "error")
+            return False
+        _record_lock_attempt(cronjob_id, "acquired" if acquired else "not_acquired")
         return acquired
 
     async def _attempt_acquire_lock(
@@ -93,57 +102,52 @@ end
                  may redo it before the TTL expires.
         """
         if self.redis_cache is None:
-            verbose_proxy_logger.debug("redis_cache is None, skipping acquire_lock")
             return None
-        try:
-            lock_ttl: Final = ttl or DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
-            verbose_proxy_logger.debug(
-                "Pod %s attempting to acquire Redis lock for cronjob_id=%s (ttl=%ds)",
+        lock_ttl: Final = ttl or DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
+        verbose_proxy_logger.debug(
+            "Pod %s attempting to acquire Redis lock for cronjob_id=%s (ttl=%ds)",
+            self.pod_id,
+            cronjob_id,
+            lock_ttl,
+        )
+        # Try to set the lock key with the pod_id as its value, only if it doesn't exist (NX)
+        # and with an expiration (EX) to avoid deadlocks.
+        lock_key: Final = PodLockManager.get_redis_lock_key(cronjob_id)
+        acquired: Final = await self.redis_cache.async_set_cache(
+            lock_key,
+            self.pod_id,
+            nx=True,
+            ttl=lock_ttl,
+        )
+        if acquired:
+            verbose_proxy_logger.info(
+                "Pod %s successfully acquired Redis lock for cronjob_id=%s",
                 self.pod_id,
                 cronjob_id,
-                lock_ttl,
             )
-            # Try to set the lock key with the pod_id as its value, only if it doesn't exist (NX)
-            # and with an expiration (EX) to avoid deadlocks.
-            lock_key: Final = PodLockManager.get_redis_lock_key(cronjob_id)
-            acquired: Final = await self.redis_cache.async_set_cache(
-                lock_key,
-                self.pod_id,
-                nx=True,
-                ttl=lock_ttl,
-            )
-            if acquired:
-                verbose_proxy_logger.info(
-                    "Pod %s successfully acquired Redis lock for cronjob_id=%s",
-                    self.pod_id,
-                    cronjob_id,
-                )
 
-                return True
-            else:
-                # Check if the current pod already holds the lock
-                current_value = await self.redis_cache.async_get_cache(lock_key)
-                if current_value is not None:
-                    if isinstance(current_value, bytes):
-                        current_value = current_value.decode("utf-8")
-                    if current_value == self.pod_id and allow_reentrant:
-                        verbose_proxy_logger.info(
-                            "Pod %s already holds the Redis lock for cronjob_id=%s",
-                            self.pod_id,
-                            cronjob_id,
-                        )
-                        self._emit_acquired_lock_event(cronjob_id, self.pod_id)
-                        return True
+            return True
+        else:
+            # Check if the current pod already holds the lock
+            current_value = await self.redis_cache.async_get_cache(lock_key)
+            if current_value is not None:
+                if isinstance(current_value, bytes):
+                    current_value = current_value.decode("utf-8")
+                if current_value == self.pod_id and allow_reentrant:
                     verbose_proxy_logger.info(
-                        "Pod %s could not acquire lock for cronjob_id=%s, held by pod %s.",
+                        "Pod %s already holds the Redis lock for cronjob_id=%s",
                         self.pod_id,
                         cronjob_id,
-                        current_value,
                     )
-            return False
-        except Exception as e:
-            verbose_proxy_logger.error("Error acquiring Redis lock for %s: %s", cronjob_id, e)
-            return False
+                    self._emit_acquired_lock_event(cronjob_id, self.pod_id)
+                    return True
+                verbose_proxy_logger.info(
+                    "Pod %s could not acquire lock for cronjob_id=%s, held by pod %s.",
+                    self.pod_id,
+                    cronjob_id,
+                    current_value,
+                )
+        return False
 
     async def release_lock(
         self,

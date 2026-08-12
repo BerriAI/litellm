@@ -504,3 +504,22 @@ async def test_recording_the_lock_outcome_never_blocks_the_job():
         side_effect=RuntimeError("metrics down"),
     ):
         assert await manager.acquire_lock(cronjob_id="db_spend_update_job") is True
+
+
+@pytest.mark.asyncio
+async def test_a_redis_failure_is_not_reported_as_losing_the_election():
+    """not_acquired means another pod won. An attempt that errored is a
+    different operational state and must not be read as healthy contention."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+
+    cache = MagicMock()
+    cache.async_set_cache = AsyncMock(side_effect=ConnectionError("redis down"))
+    manager = PodLockManager(redis_cache=cache)
+    logger = MagicMock()
+
+    with patch("litellm.integrations.prometheus.PrometheusLogger.get_instance", return_value=logger):
+        assert await manager.acquire_lock(cronjob_id="db_spend_update_job") is False
+
+    logger.record_cronjob_lock_attempt.assert_called_once_with("db_spend_update_job", "error")
