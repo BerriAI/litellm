@@ -1,27 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import React from "react";
 import { describe, expect, it, vi } from "vitest";
 import ModelRetrySettingsTab from "./ModelRetrySettingsTab";
-
-// TabPanel requires a parent Tabs context in Tremor. We stub it to render children
-// directly so the component can be tested in isolation.
-vi.mock("@tremor/react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tremor/react")>();
-  // Re-apply the global Button/Tooltip overrides from tests/setupTests.ts. A file-level
-  // vi.mock fully replaces the setup-level mock, so without this the real Tremor Button
-  // leaks through and its useTooltip(300) schedules a native setTimeout that can fire
-  // post-teardown -> "window is not defined".
-  return {
-    ...actual,
-    TabPanel: ({ children }: { children: React.ReactNode }) => React.createElement("div", null, children),
-    Button: React.forwardRef<HTMLButtonElement, any>(({ children, variant, size, loading, ...props }, ref) =>
-      React.createElement("button", { ...props, ref }, children),
-    ),
-    Tooltip: ({ children }: { children?: React.ReactNode }) => React.createElement(React.Fragment, null, children),
-    // Keep Select/SelectItem as the real implementation so scope-switching is testable
-  };
-});
 
 type GlobalRetryPolicy = { [key: string]: number };
 type ModelGroupRetryPolicy = { [key: string]: { [key: string]: number } | undefined };
