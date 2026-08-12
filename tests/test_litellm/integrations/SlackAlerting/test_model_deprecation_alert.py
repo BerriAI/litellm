@@ -13,7 +13,10 @@ sys.path.insert(0, os.path.abspath("../../../.."))
 import litellm
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.proxy._types import AlertType
-from litellm.types.proxy.model_deprecation import DEPRECATION_ROUTER_WAIT_SECONDS
+from litellm.types.proxy.model_deprecation import (
+    DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
+    DEPRECATION_ROUTER_WAIT_SECONDS,
+)
 
 
 def _make_router(deployments):
@@ -166,12 +169,13 @@ async def test_should_wait_for_the_router_instead_of_sleeping_a_full_day(monkeyp
             }
         ]
     )
-    routers = chain((None, None), repeat(router))
+    router_absent_passes = 100
+    routers = chain(repeat(None, router_absent_passes), repeat(router))
     slept: list[float] = []
 
     async def record_sleep(seconds):
         slept.append(seconds)
-        if len(slept) > 2:
+        if len(slept) > router_absent_passes:
             raise asyncio.CancelledError
 
     with (
@@ -186,6 +190,8 @@ async def test_should_wait_for_the_router_instead_of_sleeping_a_full_day(monkeyp
             get_llm_router=lambda: next(routers)
         )
 
-    assert slept[:2] == [DEPRECATION_ROUTER_WAIT_SECONDS] * 2
+    assert slept == [DEPRECATION_ROUTER_WAIT_SECONDS] * router_absent_passes + [
+        DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS
+    ]
     mock_send_alert.assert_awaited_once()
     assert "dead-alias" in mock_send_alert.await_args.kwargs["message"]
