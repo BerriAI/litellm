@@ -22,6 +22,7 @@ export const normalizeClassifierLlmConfig = (config: ClassifierLLMConfig): Class
 
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
+  defaultModel: string | undefined;
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
   classifierLlmConfig: ClassifierLLMConfig | undefined;
@@ -46,6 +47,7 @@ export interface BuildComplexityRouterConfigParams {
 
 export interface ComplexityRouterConfigPayload {
   tiers: ComplexityTiers;
+  default_model?: string;
   tier_labels?: ComplexityTierLabels;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
@@ -131,6 +133,7 @@ export const getSemanticConfigError = ({
 
 export const buildComplexityRouterConfig = ({
   tiers,
+  defaultModel,
   tierLabels,
   classifierType,
   classifierLlmConfig,
@@ -158,6 +161,7 @@ export const buildComplexityRouterConfig = ({
 
   return {
     tiers,
+    ...(defaultModel?.trim() && { default_model: defaultModel }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
     ...(classifierType === "llm" &&

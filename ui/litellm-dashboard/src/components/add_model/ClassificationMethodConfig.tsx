@@ -49,8 +49,8 @@ interface ClassificationMethodConfigProps {
   customTechnicalKeywords?: string[];
   onCustomTechnicalKeywordsChange?: (keywords: string[]) => void;
   showValidationErrors?: boolean;
-  /** Enables the default-model fallback, which the backend rejects without a default model. */
-  hasDefaultModel?: boolean;
+  /** The resolved default model - see resolveComplexityDefaultModel. Names and gates the radio. */
+  defaultModel?: string;
 }
 
 const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
@@ -60,8 +60,9 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   customTechnicalKeywords,
   onCustomTechnicalKeywordsChange,
   showValidationErrors = false,
-  hasDefaultModel = false,
+  defaultModel,
 }) => {
+  const hasDefaultModel = Boolean(defaultModel);
   const classifierModelMissing =
     showValidationErrors && value.classifier_type === "llm" && !value.classifier_llm_config?.model;
 
@@ -227,10 +228,14 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
                 </Radio>
                 <Radio value="default_model" disabled={!hasDefaultModel}>
                   <Tooltip
-                    title={hasDefaultModel ? undefined : "Set a default model on this router to use this option"}
+                    title={
+                      hasDefaultModel
+                        ? "Change it in the Default Model row above the advanced sections."
+                        : "Set a default model on this router to use this option"
+                    }
                   >
                     <span>
-                      <Text>Route to the default model</Text>{" "}
+                      <Text>Route to the default model{defaultModel ? ` (${defaultModel})` : ""}</Text>{" "}
                       <Text type="secondary">— right when your prompt grades something other than complexity</Text>
                     </span>
                   </Tooltip>

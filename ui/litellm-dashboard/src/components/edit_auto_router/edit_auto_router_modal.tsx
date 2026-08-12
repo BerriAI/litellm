@@ -4,7 +4,7 @@ import { TextInput } from "@tremor/react";
 import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
-import { normalizeTierModels } from "../add_model/complexity_router_tiers";
+import { normalizeTierModels, resolveComplexityDefaultModel } from "../add_model/complexity_router_tiers";
 import { isComplexityRouter } from "../add_model/auto_router_strategies";
 import {
   getKeywordTierRulesError,
@@ -48,6 +48,7 @@ interface EditAutoRouterModalProps {
 // actually renders a control that can set it.
 const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "tiers",
+  "default_model",
   "tier_labels",
   "classifier_type",
   "classifier_llm_config",
@@ -81,6 +82,9 @@ const toRecord = (value: unknown): Record<string, unknown> => {
     : {};
 };
 
+export const hydratePinnedDefaultModel = (stored: unknown): string | undefined =>
+  typeof stored === "string" && stored.trim() ? stored : undefined;
+
 export interface KeywordMatchingState {
   keywordTierRules: KeywordTierRule[];
   escalationKeywords: string[];
@@ -109,6 +113,7 @@ export const buildUpdatedComplexityRouterConfig = (
   return {
     ...preservedConfig,
     tiers: value.tiers,
+    ...(value.default_model?.trim() && { default_model: value.default_model }),
     ...(serializedTierLabels && { tier_labels: serializedTierLabels }),
     classifier_type: value.classifier_type,
     ...(value.classifier_type === "llm" && value.classifier_llm_config
@@ -243,6 +248,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             COMPLEX: normalizeTierModels(parsedConfig.tiers?.COMPLEX),
             REASONING: normalizeTierModels(parsedConfig.tiers?.REASONING),
           },
+          default_model: hydratePinnedDefaultModel(parsedConfig.default_model),
           tier_labels: hydrateTierLabels(parsedConfig.tier_labels),
           classifier_type: parsedConfig.classifier_type || "heuristic",
           classifier_llm_config: parsedConfig.classifier_llm_config,
@@ -362,7 +368,19 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
           return;
         }
 
-        const defaultModel = tiers.MEDIUM[0] || tiers.SIMPLE[0] || tiers.COMPLEX[0] || tiers.REASONING[0];
+        // Unlike the create form, this modal only requires one non-empty tier, so a router can reach
+        // here with nothing the backend would pick as a default. init_complexity_router_deployment
+        // raises in that case (litellm/router.py), so block it rather than saving a router that
+        // fails at init.
+        const defaultModel = resolveComplexityDefaultModel(tiers, complexityRouterConfig.default_model);
+        if (!defaultModel) {
+          setShowValidationErrors(true);
+          NotificationsManager.fromBackend(
+            "Add a model to the Simple or Medium tier, or pin a default model, so requests have somewhere to route.",
+          );
+          return;
+        }
+
         const updatedLitellmParams = {
           ...modelData.litellm_params,
           complexity_router_config: buildUpdatedComplexityRouterConfig(

@@ -548,3 +548,111 @@ describe("EditAutoRouterModal custom classifier prompt and fallback", () => {
     expect(savedConfig().classifier_llm_config).not.toHaveProperty("system_prompt");
   });
 });
+
+describe("EditAutoRouterModal default model", () => {
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  const savedDefaultModel = () => {
+    const [, payload] = modelPatchUpdateCall.mock.calls.at(-1) ?? [];
+    return payload?.litellm_params?.complexity_router_default_model;
+  };
+
+  const renderWithStoredPin = (default_model?: string) =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: {
+            ...MODEL_DATA.litellm_params,
+            complexity_router_config: { ...STORED_CONFIG, ...(default_model && { default_model }) },
+          },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  it("preserves a stored pin through an untouched open-and-save", async () => {
+    const user = userEvent.setup();
+    renderWithStoredPin("out-of-band-default");
+
+    await user.click(await screen.findByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedDefaultModel()).toBe("out-of-band-default");
+    expect(savedConfig()).toMatchObject({ default_model: "out-of-band-default" });
+  });
+
+  it("shows a stored pin as the selection, so the saved value is not a hidden one", async () => {
+    renderWithStoredPin("out-of-band-default");
+
+    const select = await screen.findByRole("combobox", { name: "Default model" });
+    expect(within(select.closest(".ant-select") as HTMLElement).getByTitle("out-of-band-default")).toBeInTheDocument();
+  });
+
+  // The pin is recorded in the config rather than inferred by comparing the stored default to a
+  // re-derivation, so pinning the model the tiers already imply still reads back as a pin.
+  it("keeps a pin that matches what the tiers derive", async () => {
+    const user = userEvent.setup();
+    renderWithStoredPin(STORED_CONFIG.tiers.MEDIUM[0]);
+
+    const select = await screen.findByRole("combobox", { name: "Default model" });
+    expect(
+      within(select.closest(".ant-select") as HTMLElement).getByTitle(STORED_CONFIG.tiers.MEDIUM[0]),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).toMatchObject({ default_model: STORED_CONFIG.tiers.MEDIUM[0] });
+  });
+
+  // This modal only requires one non-empty tier, so a COMPLEX-only router is reachable here even
+  // though the backend raises on it. The block keeps that failure at save time instead of init.
+  it("blocks a save when neither the tiers nor a pin give the backend a default", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: {
+            ...MODEL_DATA.litellm_params,
+            complexity_router_config: {
+              ...STORED_CONFIG,
+              tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: ["complex-model"], REASONING: [] },
+            },
+          },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(expect.stringContaining("Simple or Medium tier")),
+    );
+    expect(modelPatchUpdateCall).not.toHaveBeenCalled();
+  });
+
+  it("leaves a router with no stored pin tracking its tiers", async () => {
+    const user = userEvent.setup();
+    renderWithStoredPin();
+
+    const select = await screen.findByRole("combobox", { name: "Default model" });
+    expect(select.closest(".ant-select")?.querySelector(".ant-select-selection-item")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedDefaultModel()).toBe(STORED_CONFIG.tiers.MEDIUM[0]);
+    expect(savedConfig()).not.toHaveProperty("default_model");
+  });
+});
