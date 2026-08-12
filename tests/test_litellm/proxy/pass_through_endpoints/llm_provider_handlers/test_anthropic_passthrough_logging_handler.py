@@ -955,6 +955,16 @@ class TestAnthropicBatchPassthroughCostTracking:
         return mock_managed_files_hook.store_unified_object_id.call_args[1]
 
     @pytest.mark.asyncio
+    async def test_persisted_tags_are_db_safe(self, mock_logging_obj):
+        """Regression for PostgreSQL 22P05, asserted on the value that actually reaches
+        store_unified_object_id so it stays pinned if the sanitation moves."""
+        call_kwargs = await self._store_with_metadata(
+            mock_logging_obj, {"user_api_key": "hashed-key-a", "tags": ["clean", "bad\x00tag"]}
+        )
+
+        assert call_kwargs["request_tags"] == ("clean", "badtag")
+
+    @pytest.mark.asyncio
     async def test_create_persists_key_hash_and_tags(self, mock_logging_obj):
         """Regression (LIT-5288): the batch create must persist the creating key's hashed
         token and its tags so CheckBatchCost can attribute the batch-cost spend row to the
