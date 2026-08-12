@@ -50,7 +50,7 @@ const UtteranceInput = ({ value, onChange }: UtteranceInputProps) => {
 
   const addUtterances = (input: string) => {
     const additions = input
-      .split(/[\n,]/)
+      .split("\n")
       .map((utterance) => utterance.trim())
       .filter((utterance) => utterance !== "" && !value.includes(utterance));
 
@@ -81,7 +81,7 @@ const UtteranceInput = ({ value, onChange }: UtteranceInputProps) => {
         onChange={(event) => setDraft(event.target.value)}
         onBlur={() => draft.trim() && addUtterances(draft)}
         onKeyDown={(event) => {
-          if ((event.key === "Enter" || event.key === ",") && draft.trim()) {
+          if (event.key === "Enter" && draft.trim()) {
             event.preventDefault();
             addUtterances(draft);
           } else if (event.key === "Backspace" && draft === "" && value.length > 0) {
@@ -90,7 +90,7 @@ const UtteranceInput = ({ value, onChange }: UtteranceInputProps) => {
         }}
         onPaste={(event) => {
           const pastedText = event.clipboardData.getData("text");
-          if (/[\n,]/.test(pastedText)) {
+          if (pastedText.includes("\n")) {
             event.preventDefault();
             addUtterances(pastedText);
           }

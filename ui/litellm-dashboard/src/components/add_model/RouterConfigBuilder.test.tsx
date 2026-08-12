@@ -194,6 +194,23 @@ describe("RouterConfigBuilder", () => {
     });
   });
 
+  it("should preserve commas inside a single utterance", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const value = {
+      routes: [{ name: "gpt-4", utterances: [], description: "", score_threshold: 0.5 }],
+    };
+    render(<RouterConfigBuilder modelInfo={MOCK_MODEL_INFO} value={value} onChange={onChange} />);
+
+    const utteranceInput = await screen.findByRole("textbox", { name: "Example Utterances" });
+    await user.type(utteranceInput, "Compare Paris, France{Enter}");
+
+    await waitFor(() => {
+      const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1];
+      expect(lastCall[0].routes[0].utterances).toEqual(["Compare Paris, France"]);
+    });
+  });
+
   it("should add multiple routes", async () => {
     const user = userEvent.setup();
     render(<RouterConfigBuilder modelInfo={MOCK_MODEL_INFO} />);
