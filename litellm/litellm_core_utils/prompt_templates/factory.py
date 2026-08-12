@@ -5371,6 +5371,8 @@ def _parse_tool_call_arguments(raw: Any, tool_name: str | None, context: str) ->
         return raw
     if not isinstance(raw, str):
         return {}
+    if raw == "redacted-by-litellm":
+        return {}
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         parse_tool_call_arguments,
     )
