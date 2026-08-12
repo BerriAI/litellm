@@ -40,6 +40,7 @@ LlmEndpoint = Literal[
     "audio_transcriptions",
     "moderations",
     "realtime",
+    "google_native",
     "vector_stores",
     "ocr",
     "bedrock_native",

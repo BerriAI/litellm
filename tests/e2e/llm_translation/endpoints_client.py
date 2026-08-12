@@ -136,6 +136,19 @@ class ModerationRequest(BaseModel):
     input: str
 
 
+class GenerateContentPart(BaseModel):
+    text: str
+
+
+class GenerateContentContent(BaseModel):
+    role: Literal["user"] = "user"
+    parts: tuple[GenerateContentPart, ...]
+
+
+class GenerateContentBody(BaseModel):
+    contents: tuple[GenerateContentContent, ...]
+
+
 class ResponsesOutputContent(BaseModel):
     type: str | None = None
     text: str | None = None
@@ -432,6 +445,19 @@ class EndpointsClient:
             file_content_type="image/png",
             file_field="image",
             response_type=ImagesResult,
+        )
+
+    def generate_content(
+        self, key: str, model: str, text: str, *, stream: bool = False
+    ) -> StreamingResponse:
+        operation = "streamGenerateContent" if stream else "generateContent"
+        return self._send(
+            f"/v1beta/models/{model}:{operation}",
+            key,
+            GenerateContentBody(
+                contents=(GenerateContentContent(parts=(GenerateContentPart(text=text),)),)
+            ),
+            stream=stream,
         )
 
 
