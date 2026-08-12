@@ -1120,38 +1120,6 @@ def test_lm_studio_embedding_params():
     assert len(optional_params) == 0
 
 
-@pytest.mark.parametrize("provider", ["azure", "together_ai"])
-def test_embedding_dimensions_drop_params_for_openai_compatible_provider(provider):
-    previous_drop_params = litellm.drop_params
-    try:
-        litellm.drop_params = False
-        dropped = get_optional_params_embeddings(
-            model=f"{provider}/dummy-model",
-            custom_llm_provider=provider,
-            dimensions=512,
-            drop_params=True,
-        )
-        assert "dimensions" not in dropped
-
-        litellm.drop_params = True
-        dropped_globally = get_optional_params_embeddings(
-            model=f"{provider}/dummy-model",
-            custom_llm_provider=provider,
-            dimensions=512,
-        )
-        assert "dimensions" not in dropped_globally
-
-        litellm.drop_params = False
-        preserved = get_optional_params_embeddings(
-            model=f"{provider}/dummy-model",
-            custom_llm_provider=provider,
-            dimensions=512,
-        )
-        assert preserved["dimensions"] == 512
-    finally:
-        litellm.drop_params = previous_drop_params
-
-
 def test_ollama_pydantic_obj():
     from pydantic import BaseModel
 

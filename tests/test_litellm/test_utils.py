@@ -733,6 +733,38 @@ def test_cohere_embedding_optional_params():
     assert optional_params is not None
 
 
+@pytest.mark.parametrize("provider", ["azure", "together_ai"])
+def test_embedding_dimensions_drop_params_for_openai_compatible_provider(provider):
+    previous_drop_params = litellm.drop_params
+    try:
+        litellm.drop_params = False
+        dropped = litellm.utils.get_optional_params_embeddings(
+            model=f"{provider}/dummy-model",
+            custom_llm_provider=provider,
+            dimensions=512,
+            drop_params=True,
+        )
+        assert "dimensions" not in dropped
+
+        litellm.drop_params = True
+        dropped_globally = litellm.utils.get_optional_params_embeddings(
+            model=f"{provider}/dummy-model",
+            custom_llm_provider=provider,
+            dimensions=512,
+        )
+        assert "dimensions" not in dropped_globally
+
+        litellm.drop_params = False
+        preserved = litellm.utils.get_optional_params_embeddings(
+            model=f"{provider}/dummy-model",
+            custom_llm_provider=provider,
+            dimensions=512,
+        )
+        assert preserved["dimensions"] == 512
+    finally:
+        litellm.drop_params = previous_drop_params
+
+
 def validate_model_cost_values(model_data, exceptions=None):
     """
     Validates that cost values in model data do not exceed 1.
