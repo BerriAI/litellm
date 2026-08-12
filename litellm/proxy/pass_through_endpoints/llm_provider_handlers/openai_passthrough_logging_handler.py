@@ -351,10 +351,6 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     model_response_object=EmbeddingResponse(),
                     response_type="embedding",
                 )
-                if not isinstance(litellm_model_response, EmbeddingResponse):
-                    raise TypeError(
-                        f"Expected EmbeddingResponse from convert_to_model_response_object, got {type(litellm_model_response)}"
-                    )
                 response_cost = litellm.completion_cost(
                     completion_response=litellm_model_response,
                     model=model,
