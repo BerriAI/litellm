@@ -2,6 +2,8 @@
 
 This document helps contributors understand where to make changes in LiteLLM.
 
+For **why** a given layer is shaped the way it is, see the architecture decision records in [`adr/`](adr/README.md). This document is the map; the ADRs are the reasoning, and reading the relevant one first is usually what keeps a change from duplicating a mechanism that already exists.
+
 ---
 
 ## How It Works
