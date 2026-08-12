@@ -41,7 +41,7 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
     The Gandr endpoint is OpenAI-compatible (`POST /v1/audio/speech`), so the
     request body is passed through with the OpenAI field names (`voice`,
     `response_format`, `speed`) intact. Only authentication differs: calls are
-    authorized with the `x-api-key` header using a `gnd_` token.
+    authorized with an `Authorization: Bearer` header using a `gnd_` token.
 
     Reference: https://gandr.ai/docs
     """
@@ -157,7 +157,7 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
 
         headers.update(
             {
-                "x-api-key": api_key,
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             }
         )
@@ -179,7 +179,7 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
         """
         Build the Gandr TTS request payload. The body is OpenAI-shaped
         (`input`, `model`, `voice`, `response_format`, `speed`); the repo's
-        HTTP handler attaches the required `x-api-key` header from
+        HTTP handler attaches the required `Authorization: Bearer` header from
         `validate_environment`.
         """
         params: Final = dict(optional_params) if optional_params else {}
