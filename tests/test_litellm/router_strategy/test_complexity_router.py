@@ -2304,6 +2304,15 @@ class TestRouterPreRoutingSharedAliasName:
         assert cn_result is not None and cn_result.model == "gpt-cn"
         assert "drop_params" not in cn_kwargs
 
+    def test_forwardable_alias_marker_params_reads_the_marker_entry_only(self):
+        router = Router(model_list=[self._plain_entry(), self._marker_entry(), self._tier_entry()])
+
+        forwarded = dict(router._forwardable_alias_marker_params(model="gpt4o", strategy_tags=()))
+
+        assert forwarded["drop_params"] is True
+        assert "api_key" not in forwarded and "api_base" not in forwarded
+        assert router._forwardable_alias_marker_params(model="gemini-flash", strategy_tags=()) == ()
+
 
 class TestAdaptiveSoftFloors:
     def test_adaptive_defaults_use_cost_weighted_cold_policy(self):
