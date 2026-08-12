@@ -290,8 +290,8 @@ class TestVectorStores:
         hit_blob = " ".join(
             " ".join(part.text for part in (hit.content or [])) + " " + (hit.filename or "") for hit in search.data
         )
-        assert marker in hit_blob or any((hit.file_id or "") == uploaded.id for hit in search.data), (
-            f"search hits must reference marker or uploaded file; marker={marker!r} hits={search.data}"
+        assert marker in hit_blob, (
+            f"search hits must contain the queried marker in indexed content; marker={marker!r} hits={search.data}"
         )
 
         deleted_file = unwrap(
