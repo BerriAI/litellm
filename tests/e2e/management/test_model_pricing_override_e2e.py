@@ -122,7 +122,12 @@ class TestPricingOverrideClearAndReload:
                 response_type=NoBody,
             )
         )
-        _poll_override_cleared(proxy, model_name)
+        cleared_entry = _poll_override_cleared(proxy, model_name)
+        assert cleared_entry.litellm_params.input_cost_per_token is None, (
+            f"override must be cleared before the reload, else a later ordinary router refresh "
+            f"could clear it and let this test pass without proving reload preserved the clear: "
+            f"{cleared_entry.litellm_params.input_cost_per_token}"
+        )
 
         unwrap(
             proxy.transport.post(

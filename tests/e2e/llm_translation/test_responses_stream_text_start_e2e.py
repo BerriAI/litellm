@@ -16,7 +16,7 @@ issue describes.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Final, Literal
 
 import pytest
 from pydantic import BaseModel
@@ -84,6 +84,19 @@ class _StreamEvent(BaseModel):
         return self.item.id if self.item else None
 
 
+_ANNOUNCE_TYPES: Final = ("response.output_item.added", "response.content_part.added")
+
+
+def _announced_before(events: list[_StreamEvent], index: int) -> frozenset[str]:
+    """Item ids announced by an output_item.added / content_part.added event
+    strictly before `index`: the ids a text delta at `index` is allowed to target."""
+    return frozenset(
+        item_id
+        for event in events[:index]
+        if event.type in _ANNOUNCE_TYPES and (item_id := event.announced_item_id()) is not None
+    )
+
+
 def _stream_post_tool_text(proxy: ProxyClient, key: str, model: str) -> StreamingResponse:
     call_id = f"call_{unique_marker()}"
     return proxy.transport.stream(
@@ -123,18 +136,16 @@ class TestResponsesStreamTextStart:
         deltas = [event for event in events if event.type == "response.output_text.delta"]
         assert deltas, f"the post-tool round streamed no text deltas: {[e.type for e in events]}"
 
-        announced: set[str] = set()
-        for event in events:
+        for index, event in enumerate(events):
+            if event.type != "response.output_text.delta":
+                continue
             item_id = event.announced_item_id()
-            if event.type in ("response.output_item.added", "response.content_part.added") and item_id:
-                announced.add(item_id)
-            if event.type == "response.output_text.delta":
-                assert item_id in announced, (
-                    f"text delta for item {item_id!r} arrived before any output_item.added/"
-                    f"content_part.added announced it; OpenAI-SDK parsers fail with "
-                    f"'text part ... not found' (#27671). Events so far: "
-                    f"{[e.type for e in events[: events.index(event) + 1]]}"
-                )
+            assert item_id in _announced_before(events, index), (
+                f"text delta for item {item_id!r} arrived before any output_item.added/"
+                f"content_part.added announced it; OpenAI-SDK parsers fail with "
+                f"'text part ... not found' (#27671). Events so far: "
+                f"{[e.type for e in events[: index + 1]]}"
+            )
         assert any(event.type == "response.completed" for event in events), (
             f"stream never completed: {[e.type for e in events][-5:]}"
         )

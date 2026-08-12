@@ -126,12 +126,15 @@ class TestMcpToolsetToolNames:
             )
         )
         served_names = [tool.name for tool in served.tools]
-        prefixed = [
-            name
-            for name in served_names
-            if name.endswith(SEARCH_LOGS_TOOL) and name != SEARCH_LOGS_TOOL
-        ]
-        assert prefixed, (
-            f"a toolset-scoped key must be served {SEARCH_LOGS_TOOL} under its "
-            f"'{{server_prefix}}{{separator}}{SEARCH_LOGS_TOOL}' wire name; got {served_names}"
+        alias = next(
+            (row.alias for row in client.registered_servers() if row.server_id == server_id),
+            None,
+        )
+        assert alias is not None, f"registered server {server_id} absent from /v1/mcp/server listing"
+        expected_name = f"{alias}-{SEARCH_LOGS_TOOL}"
+        assert expected_name in served_names, (
+            f"a toolset-scoped key must be served {SEARCH_LOGS_TOOL} under its exact documented "
+            f"wire name {expected_name!r} ('<alias>-<tool>'). A wrong prefix or separator still "
+            f"ends in {SEARCH_LOGS_TOOL} but breaks every client calling the documented name with "
+            f"'tool not found'; got {served_names}"
         )
