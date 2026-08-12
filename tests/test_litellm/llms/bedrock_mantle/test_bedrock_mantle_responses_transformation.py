@@ -1532,7 +1532,7 @@ class TestBedrockMantleResponsesPricing:
         assert info["cache_creation_input_token_cost"] == pytest.approx(cache_creation_cost)
         assert info["cache_read_input_token_cost"] == pytest.approx(cache_read_cost)
         assert info["output_cost_per_token"] == pytest.approx(output_cost)
-        assert info["max_input_tokens"] == 272000
+        assert info["max_input_tokens"] == 1000000
 
     @pytest.mark.parametrize(
         "model, input_cost, output_cost",
