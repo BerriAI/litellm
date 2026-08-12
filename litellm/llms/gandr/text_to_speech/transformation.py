@@ -95,9 +95,7 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
                 mapped_voice = voice_override
 
         if mapped_voice is None:
-            raise ValueError(
-                "Gandr voice is required. Pass `voice` when calling `litellm.speech()`."
-            )
+            raise ValueError("Gandr voice is required. Pass `voice` when calling `litellm.speech()`.")
 
         # `response_format` is passed through under its OpenAI name; the door
         # serves wav and pcm natively and returns an honest 400 for anything
@@ -115,9 +113,7 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
             except (TypeError, ValueError):
                 params.pop("speed", None)
 
-        mapped_params: Final[dict[str, Any]] = {
-            k: v for k, v in params.items() if v is not None
-        }
+        mapped_params: Final[dict[str, Any]] = {k: v for k, v in params.items() if v is not None}
 
         reserved_kwarg_keys: Final = set(all_litellm_params) | {
             "voice",
@@ -156,9 +152,7 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
         server_api_key: Final = litellm.api_key or get_secret_str("GANDR_API_KEY")
 
         if api_key is None and api_base is not None and server_api_key is not None:
-            trusted_base: Final = (
-                get_secret_str("GANDR_API_BASE") or self.TTS_BASE_URL
-            ).rstrip("/")
+            trusted_base: Final = (get_secret_str("GANDR_API_BASE") or self.TTS_BASE_URL).rstrip("/")
             if api_base.rstrip("/") != trusted_base:
                 raise ValueError(
                     "Refusing to send the server-configured GANDR_API_KEY to the "
@@ -208,9 +202,7 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
             "input": input,
             "model": model,
             "voice": voice,
-            "response_format": params.get(
-                "response_format", self.DEFAULT_OUTPUT_FORMAT
-            ),
+            "response_format": params.get("response_format", self.DEFAULT_OUTPUT_FORMAT),
             "speed": params.get("speed", 1.0),
         }
 
