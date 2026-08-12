@@ -1060,14 +1060,11 @@ class Router:
                 raise ValueError("routing_groups: group_name must be non-empty.")
             if group.group_name == "default":
                 raise ValueError("routing_groups: 'default' is reserved for the implicit fallback group.")
-            if group.group_name in known_model_names:
-                raise ValueError(
-                    f"routing_groups: group_name '{group.group_name}' collides with an existing model_name; "
-                    "group names are callable models and must not shadow one."
-                )
-            if group.group_name in self.model_group_alias:
-                raise ValueError(
-                    f"routing_groups: group_name '{group.group_name}' collides with a model_group_alias entry."
+            if group.group_name in known_model_names or group.group_name in (self.model_group_alias or {}):
+                verbose_router_logger.warning(
+                    "routing_groups: group_name '%s' is shadowed by an existing model_name or model_group_alias; "
+                    "the group's strategy still applies to its members, but the name is not callable until renamed.",
+                    group.group_name,
                 )
             if group.group_name in seen_group_names:
                 raise ValueError(
@@ -1116,7 +1113,11 @@ class Router:
         if not self._routing_groups:
             return None
         group: Final = self._routing_groups.get(model_name)
-        if group is None or model_name in self.model_name_to_deployment_indices:
+        if (
+            group is None
+            or model_name in self.model_name_to_deployment_indices
+            or model_name in (self.model_group_alias or {})
+        ):
             return None
         return group
 
@@ -1134,6 +1135,8 @@ class Router:
         specific deployment > model id > model_group_alias > routing group >
         model_name > team/pattern/default fallbacks.
         """
+        if not self._routing_groups:
+            return None
         routing_group: Final = self.get_routing_group(model)
         if routing_group is None:
             return None

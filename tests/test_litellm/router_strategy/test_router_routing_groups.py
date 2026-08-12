@@ -774,22 +774,38 @@ async def test_group_call_dispatches_via_group_selector():
         assert deployment["model_name"] in {"filtered-model", "other-model"}
 
 
-def test_group_name_collision_with_model_name_raises():
-    with pytest.raises(ValueError, match="collides with an existing model_name"):
-        _build_router(
+def test_group_name_colliding_with_model_name_is_shadowed_with_warning(caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        router = _build_router(
             routing_groups=[
-                {"group_name": "filtered-model", "models": ["other-model"], "routing_strategy": "simple-shuffle"}
+                {"group_name": "filtered-model", "models": ["other-model"], "routing_strategy": "latency-based-routing"}
             ]
         )
+    assert any("shadowed" in record.getMessage() for record in caplog.records)
+    assert router.get_routing_group("filtered-model") is None
+    assert router._get_routing_context("other-model")[0] == "latency-based-routing"
+
+    model, deployments = router._common_checks_available_deployment(model="filtered-model")
+    assert sorted(d["model_info"]["id"] for d in deployments) == ["deploy-1", "deploy-2"]
 
 
-def test_group_name_collision_with_model_group_alias_raises():
-    with pytest.raises(ValueError, match="collides with a model_group_alias"):
-        Router(
+def test_group_name_colliding_with_model_group_alias_is_shadowed_with_warning(caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        router = Router(
             model_list=_model_list(),
             model_group_alias={"quality": "filtered-model"},
             routing_groups=_quality_group(),
         )
+    assert any("shadowed" in record.getMessage() for record in caplog.records)
+    assert router.get_routing_group("quality") is None
+
+    model, deployments = router._common_checks_available_deployment(model="quality")
+    assert model == "filtered-model"
+    assert sorted(d["model_info"]["id"] for d in deployments) == ["deploy-1", "deploy-2"]
 
 
 def test_real_model_added_later_shadows_group():
@@ -1007,3 +1023,36 @@ def test_group_rebuild_invalidates_access_groups_cache():
 
     router.update_settings(routing_groups=[])
     assert router._access_groups_cache is None
+
+
+def test_get_model_list_from_routing_groups_materializes_rows():
+    router = _build_router(routing_groups=_quality_group())
+    rows = router.get_model_list_from_routing_groups()
+    assert {row["model_name"] for row in rows} == {"quality"}
+    assert router.get_model_list_from_routing_groups() is rows
+
+    named = router.get_model_list_from_routing_groups(model_name="quality")
+    assert sorted(row["model_info"]["id"] for row in named) == ["deploy-1", "deploy-2", "deploy-3"]
+    assert router.get_model_list_from_routing_groups(model_name="filtered-model") == ()
+
+
+def test_get_routing_group_deployments_unions_members():
+    router = _build_router(routing_groups=_quality_group())
+    union = router._get_routing_group_deployments("quality")
+    assert sorted(d["model_info"]["id"] for d in union) == ["deploy-1", "deploy-2", "deploy-3"]
+    assert router._get_routing_group_deployments("filtered-model") is None
+
+
+def test_materialize_routing_group_rows_labels_members_with_group_name():
+    router = _build_router(routing_groups=_quality_group())
+    group = router.get_routing_group("quality")
+    rows = router._materialize_routing_group_rows((group,))
+    assert {row["model_name"] for row in rows} == {"quality"}
+    assert len(rows) == 3
+
+
+def test_as_routing_group_row_strips_access_groups():
+    source = {"model_name": "member", "model_info": {"id": "d1", "access_groups": ["restricted"]}}
+    row = Router._as_routing_group_row(source)
+    assert row["model_info"] == {"id": "d1"}
+    assert source["model_info"]["access_groups"] == ["restricted"]
