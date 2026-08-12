@@ -770,6 +770,65 @@ def test_proxy_startup_event_warns_for_global_budget_without_database():
     )
 
 
+@pytest.mark.asyncio
+async def test_startup_keeps_config_file_coordination_redis_when_authoritative():
+    persisted_settings = AsyncMock(return_value={"host": "database-redis"})
+    with (
+        patch.object(
+            ps.proxy_config,
+            "config_file_general_setting_is_authoritative",
+            return_value=True,
+        ),
+        patch.object(
+            ps,
+            "get_persisted_coordination_redis_settings",
+            persisted_settings,
+        ),
+    ):
+        result = await ProxyStartupEvent._init_coordination_redis_from_db(
+            litellm_settings={},
+            llm_router=None,
+        )
+
+    assert result is None
+    persisted_settings.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_store_model_in_db_config_file_false_blocks_database_override():
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_db_record = MagicMock()
+    mock_db_record.param_value = {"store_model_in_db": True}
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_record)
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
+    mock_proxy_config = MagicMock()
+    mock_proxy_config.add_deployment = AsyncMock()
+    mock_proxy_config.init_mcp_servers_from_db = AsyncMock()
+    mock_proxy_config.config_file_general_setting_is_authoritative = MagicMock(return_value=True)
+
+    with (
+        patch.object(ps, "proxy_config", mock_proxy_config),
+        patch.object(ps, "store_model_in_db", False),
+        patch.object(ps, "get_secret_bool", return_value=False),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+        assert ps.store_model_in_db is False
+        mock_prisma_client.db.litellm_config.find_first.assert_not_awaited()
+        mock_proxy_config.add_deployment.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # _initialize_slack_alerting_jobs — spend-report pod locking (issue #14809)
 # ---------------------------------------------------------------------------
