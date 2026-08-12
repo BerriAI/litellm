@@ -11171,14 +11171,12 @@ async def test_new_team_omitted_budget_duration_still_takes_configured_default(
 
 
 @pytest.mark.asyncio
-async def test_new_team_explicit_null_max_budget_beats_configured_default(
+async def test_new_team_explicit_null_max_budget_still_takes_configured_default(
     mock_db_client, mock_admin_auth, monkeypatch
 ):
-    """The whole default_team_params loop is gated on what the request set, not budget_duration alone.
-
-    Scoped to default_team_params: the legacy default_team_settings max_budget
-    fallback is still value-gated, so it is pinned off here.
-    """
+    """The explicit-null opt-out is budget_duration-only: nulling limit fields
+    (max_budget, tpm/rpm) must not skip configured defaults, or any team creator
+    could mint uncapped teams (veria finding on PR #36699)."""
     from fastapi import Request
 
     import litellm
@@ -11196,4 +11194,4 @@ async def test_new_team_explicit_null_max_budget_beats_configured_default(
     )
 
     team_data = mock_team_create.call_args.kwargs["data"]
-    assert team_data.get("max_budget") is None
+    assert team_data.get("max_budget") == 100.0
