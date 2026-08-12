@@ -7626,7 +7626,7 @@ async def amoderation(
 
 
 @client
-async def atranscription(*args, **kwargs) -> TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]:
+async def atranscription(*args, **kwargs) -> TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]:  # noqa: ANN002, ANN003
     """
     Calls openai + azure whisper endpoints.
 
