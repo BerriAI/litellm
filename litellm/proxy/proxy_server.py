@@ -7865,8 +7865,17 @@ def _resolve_keepalive_seconds(request_data: Mapping[str, Any], response: object
     # keepalive_seconds is operator-only unless the deployment explicitly opts in:
     # a client can't unilaterally enable heartbeats (and the LB-idle-timeout
     # evasion that comes with them) for a deployment that never configured this.
+    # When neither the request nor the deployment sets a value, the operator's
+    # global `litellm_settings.sse_keepalive_ping_interval_seconds` applies; a
+    # deployment's explicit `keepalive_seconds: 0` above still hard-disables it.
     client_supplied: Final = request_data.get("keepalive_seconds") if allow_client_override else None
-    raw: Final = client_supplied if client_supplied is not None else deployment_raw
+    raw: Final = (
+        client_supplied
+        if client_supplied is not None
+        else deployment_raw
+        if deployment_raw is not None
+        else litellm.sse_keepalive_ping_interval_seconds
+    )
     try:
         value: Final = float(raw) if isinstance(raw, (int, float, str)) else 0.0
     except ValueError:
@@ -7977,18 +7986,19 @@ async def async_data_generator(
 
         # A stream can start on a deployment with keepalive off and fall back
         # mid-stream to one that enables it: only skip wrapping altogether when
-        # there's no router to ever fall back through in the first place (in
-        # which case _resolve_keepalive_seconds can never return non-zero for
-        # any chunk of this stream), not merely because the first chunk's
-        # deployment happens to start with it off.
+        # there's no router to ever fall back through AND the resolved interval
+        # (including the global sse_keepalive_ping_interval_seconds fallback)
+        # starts disabled, not merely because the first chunk's deployment
+        # happens to start with it off.
         resolve_keepalive_seconds: Final = _make_keepalive_resolver(request_data)
+        initial_keepalive_seconds: Final = resolve_keepalive_seconds(response)
         stream_source: Final = (
             _iter_with_keepalive(
                 stream_iterator.__aiter__(),
                 resolve_keepalive_seconds,
-                resolve_keepalive_seconds(response),
+                initial_keepalive_seconds,
             )
-            if llm_router is not None
+            if llm_router is not None or initial_keepalive_seconds > 0
             else stream_iterator
         )
 
