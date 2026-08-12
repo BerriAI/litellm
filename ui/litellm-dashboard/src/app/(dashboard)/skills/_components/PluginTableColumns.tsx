@@ -1,11 +1,15 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
-import { Copy, MoreHorizontal, Trash2 } from "lucide-react";
+import { Check, Copy, MoreHorizontal, Trash2, X } from "lucide-react";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
 import { DateCell, IdentityCell, StatusBadge } from "@/components/shared/table_cells";
-import { getCategoryBadgeColor } from "@/components/claude_code_plugins/helpers";
+import {
+  getCategoryBadgeColor,
+  getApprovalStatusDisplay,
+  isAwaitingReview,
+} from "@/components/claude_code_plugins/helpers";
 import { Plugin } from "@/components/claude_code_plugins/types";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -44,9 +48,10 @@ interface PluginRowActionsProps {
   plugin: Plugin;
   isAdmin: boolean;
   onDeleteClick: (pluginName: string, displayName: string) => void;
+  onReviewClick: (plugin: Plugin, decision: "approve" | "reject") => void;
 }
 
-function PluginRowActions({ plugin, isAdmin, onDeleteClick }: PluginRowActionsProps) {
+function PluginRowActions({ plugin, isAdmin, onDeleteClick, onReviewClick }: PluginRowActionsProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -64,6 +69,19 @@ function PluginRowActions({ plugin, isAdmin, onDeleteClick }: PluginRowActionsPr
           <Copy />
           Copy skill ID
         </DropdownMenuItem>
+        {isAdmin && isAwaitingReview(plugin) && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem data-testid="plugin-action-approve" onClick={() => onReviewClick(plugin, "approve")}>
+              <Check />
+              Approve
+            </DropdownMenuItem>
+            <DropdownMenuItem data-testid="plugin-action-reject" onClick={() => onReviewClick(plugin, "reject")}>
+              <X />
+              Reject
+            </DropdownMenuItem>
+          </>
+        )}
         {isAdmin && (
           <>
             <DropdownMenuSeparator />
@@ -86,12 +104,14 @@ interface PluginTableColumnsDeps {
   isAdmin: boolean;
   onPluginClick: (pluginId: string) => void;
   onDeleteClick: (pluginName: string, displayName: string) => void;
+  onReviewClick: (plugin: Plugin, decision: "approve" | "reject") => void;
 }
 
 export const getPluginTableColumns = ({
   isAdmin,
   onPluginClick,
   onDeleteClick,
+  onReviewClick,
 }: PluginTableColumnsDeps): ColumnDef<Plugin>[] => [
   {
     id: "name",
@@ -155,6 +175,25 @@ export const getPluginTableColumns = ({
     ),
   },
   {
+    id: "approval_status",
+    accessorKey: "approval_status",
+    meta: { title: "Review", skeleton: "badge" },
+    header: "Review",
+    size: 140,
+    enableSorting: false,
+    cell: ({ row }) => {
+      const display = getApprovalStatusDisplay(row.original.approval_status);
+      return (
+        <StatusBadge
+          tone={display.tone}
+          label={display.label}
+          tooltip={row.original.review_notes || undefined}
+          dataTestId={`approval-status-${row.original.name}`}
+        />
+      );
+    },
+  },
+  {
     id: "created_at",
     accessorKey: "created_at",
     sortingFn: "datetime",
@@ -173,7 +212,12 @@ export const getPluginTableColumns = ({
     enableHiding: false,
     cell: ({ row }) => (
       <div className="flex justify-end">
-        <PluginRowActions plugin={row.original} isAdmin={isAdmin} onDeleteClick={onDeleteClick} />
+        <PluginRowActions
+          plugin={row.original}
+          isAdmin={isAdmin}
+          onDeleteClick={onDeleteClick}
+          onReviewClick={onReviewClick}
+        />
       </div>
     ),
   },

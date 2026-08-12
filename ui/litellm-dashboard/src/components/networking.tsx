@@ -7486,6 +7486,26 @@ export const deleteClaudeCodePlugin = async (accessToken: string, pluginName: st
   }
 };
 
+/**
+ * Approve or reject a submitted skill (admin only)
+ */
+export const reviewClaudeCodePlugin = async (
+  accessToken: string,
+  pluginName: string,
+  decision: "approve" | "reject",
+  reviewNotes?: string,
+) => {
+  try {
+    return await apiClient.post(`/claude-code/plugins/${pluginName}/${decision}`, {
+      accessToken,
+      ...(decision === "reject" ? { body: { review_notes: reviewNotes || null } } : {}),
+    });
+  } catch (error) {
+    console.error(`Failed to ${decision} skill "${pluginName}":`, error);
+    throw error;
+  }
+};
+
 // Compliance check types and functions
 
 export interface ComplianceCheckResult {

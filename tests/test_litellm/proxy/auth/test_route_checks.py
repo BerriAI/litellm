@@ -3298,3 +3298,29 @@ def test_user_daily_activity_aggregated_not_covered_by_prefix_match():
         route="/user/daily/activity/aggregated",
         allowed_routes=["/user/daily/activity"],
     )
+
+
+@pytest.mark.parametrize(
+    "route, allowed",
+    [
+        ("/claude-code/marketplace.json", True),
+        ("/claude-code/plugins", True),
+        ("/claude-code/plugins/my-skill", True),
+        ("/claude-code/plugins/my-skill/approve", False),
+        ("/claude-code/plugins/my-skill/reject", False),
+        ("/claude-code/plugins/my-skill/enable", False),
+        ("/claude-code/plugins/my-skill/disable", False),
+    ],
+)
+def test_skill_submission_routes_open_to_internal_users_but_review_stays_admin_only(
+    route, allowed
+):
+    """Internal users can submit and track their own skills, while approving,
+    rejecting and publishing a skill stays with proxy admins.
+    """
+    assert (
+        RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.internal_user_routes.value
+        )
+        is allowed
+    )

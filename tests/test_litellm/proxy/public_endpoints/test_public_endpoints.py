@@ -954,3 +954,48 @@ def test_public_mcp_hub_does_not_expose_upstream_url():
     assert all("url" not in item for item in data)
     assert secret_url not in response.text
     app.dependency_overrides.clear()
+
+
+def test_public_skill_hub_serves_only_approved_and_enabled_skills():
+    """A submission awaiting review is enabled=False and approval_status=pending_review, so
+    /public/skill_hub must not serve it even if a row is enabled without approval."""
+    import json as json_lib
+
+    import litellm.proxy.proxy_server
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    def _record(name, enabled, approval_status):
+        record = MagicMock()
+        record.id = name
+        record.name = name
+        record.version = "1.0.0"
+        record.description = name
+        record.manifest_json = json_lib.dumps({"source": {"source": "github", "repo": f"org/{name}"}})
+        record.enabled = enabled
+        record.approval_status = approval_status
+        record.created_at = datetime.now(timezone.utc)
+        record.updated_at = datetime.now(timezone.utc)
+        record.created_by = "someone"
+        return record
+
+    records = [
+        _record("approved-skill", True, "active"),
+        _record("pending-skill", False, "pending_review"),
+        _record("enabled-but-unapproved", True, "pending_review"),
+        _record("rejected-skill", True, "rejected"),
+    ]
+
+    async def _find_many(where=None):
+        return [r for r in records if all(getattr(r, key) == value for key, value in (where or {}).items())]
+
+    mock_client = MagicMock()
+    mock_client.db.litellm_claudecodeplugintable.find_many = AsyncMock(side_effect=_find_many)
+
+    with patch.object(litellm.proxy.proxy_server, "prisma_client", mock_client):
+        response = client.get("/public/skill_hub")
+
+    assert response.status_code == 200
+    assert [plugin["name"] for plugin in response.json()["plugins"]] == ["approved-skill"]

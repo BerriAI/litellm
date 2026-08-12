@@ -2,7 +2,15 @@
 Claude Code Marketplace endpoint types for LiteLLM Proxy
 """
 
+from typing import Final, Literal
+
 from pydantic import BaseModel, Field
+
+SkillApprovalStatus = Literal["pending_review", "active", "rejected"]
+
+SKILL_PENDING_REVIEW: Final[SkillApprovalStatus] = "pending_review"
+SKILL_ACTIVE: Final[SkillApprovalStatus] = "active"
+SKILL_REJECTED: Final[SkillApprovalStatus] = "rejected"
 
 
 class PluginAuthor(BaseModel):
@@ -78,14 +86,33 @@ class PluginResponse(BaseModel):
     description: str | None = Field(None, description="Plugin description")
     source: dict[str, str] = Field(..., description="Git source reference")
     enabled: bool = Field(..., description="Whether plugin is enabled")
+    approval_status: SkillApprovalStatus = Field("active", description="Administrator approval state")
 
 
 class RegisterPluginResponse(BaseModel):
     """Response from plugin registration."""
 
     status: str = Field(..., description="Operation status")
-    action: str = Field(..., description="Action taken (created/updated)")
+    action: str = Field(..., description="Action taken (created/submitted_for_review/updated)")
     plugin: PluginResponse = Field(..., description="Plugin information")
+
+
+class RejectPluginRequest(BaseModel):
+    """Administrator rejection of a submitted skill."""
+
+    review_notes: str | None = Field(None, description="Reviewer feedback shown to the submitter")
+
+
+class ReviewPluginResponse(BaseModel):
+    """Response from approving or rejecting a submitted skill."""
+
+    status: str = Field(..., description="Operation status")
+    name: str = Field(..., description="Skill name")
+    approval_status: SkillApprovalStatus = Field(..., description="Resulting approval state")
+    enabled: bool = Field(..., description="Whether the skill is now served to users")
+    reviewed_by: str | None = Field(None, description="User id of the reviewing administrator")
+    reviewed_at: str | None = Field(None, description="ISO timestamp of the review")
+    review_notes: str | None = Field(None, description="Reviewer feedback")
 
 
 class PluginListItem(BaseModel):
@@ -103,6 +130,11 @@ class PluginListItem(BaseModel):
     domain: str | None = None
     namespace: str | None = None
     enabled: bool
+    approval_status: SkillApprovalStatus = "active"
+    review_notes: str | None = None
+    reviewed_by: str | None = None
+    reviewed_at: str | None = None
+    created_by: str | None = None
     created_at: str | None
     updated_at: str | None
 

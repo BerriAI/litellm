@@ -1338,17 +1338,22 @@ model LiteLLM_AccessGroupTable {
 }
 // Claude Code Plugin Marketplace table
 model LiteLLM_ClaudeCodePluginTable {
-  id            String    @id @default(uuid())
-  name          String    @unique
-  version       String?
-  description   String?
-  manifest_json String?
-  files_json    String?   @default("{}")
-  enabled       Boolean   @default(true)
-  created_at    DateTime? @default(now())
-  updated_at    DateTime? @default(now()) @updatedAt
-  created_by    String?
+  id              String    @id @default(uuid())
+  name            String    @unique
+  version         String?
+  description     String?
+  manifest_json   String?
+  files_json      String?   @default("{}")
+  enabled         Boolean   @default(true)
+  approval_status String?   @default("active")
+  review_notes    String?
+  reviewed_by     String?
+  reviewed_at     DateTime?
+  created_at      DateTime? @default(now())
+  updated_at      DateTime? @default(now()) @updatedAt
+  created_by      String?
 
+  @@index([approval_status])
   @@map("LiteLLM_ClaudeCodePluginTable")
 }
 

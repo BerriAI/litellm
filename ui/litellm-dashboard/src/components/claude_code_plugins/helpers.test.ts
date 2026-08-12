@@ -18,6 +18,10 @@ import {
   parseSkillSource,
   isValidSubPath,
   buildMarketplaceSettingsSnippet,
+  getApprovalStatusDisplay,
+  isAwaitingReview,
+  isApprovedSkill,
+  countAwaitingReview,
 } from "./helpers";
 import { MarketplacePluginEntry, PluginSource } from "./types";
 
@@ -585,5 +589,33 @@ describe("isValidSubPath", () => {
     expect(isValidSubPath("../etc")).toBe(false);
     expect(isValidSubPath("/abs")).toBe(false);
     expect(isValidSubPath("a//b")).toBe(false);
+  });
+});
+
+describe("getApprovalStatusDisplay", () => {
+  it("maps each approval state to its badge", () => {
+    expect(getApprovalStatusDisplay("pending_review")).toEqual({ label: "Pending Review", tone: "warning" });
+    expect(getApprovalStatusDisplay("rejected")).toEqual({ label: "Rejected", tone: "error" });
+    expect(getApprovalStatusDisplay("active")).toEqual({ label: "Active", tone: "success" });
+  });
+
+  it("reads a skill registered before approval existed as active", () => {
+    expect(getApprovalStatusDisplay(undefined)).toEqual({ label: "Active", tone: "success" });
+  });
+});
+
+describe("isAwaitingReview / isApprovedSkill / countAwaitingReview", () => {
+  it("separates submissions awaiting review from publishable skills", () => {
+    const skills = [
+      { approval_status: "pending_review" as const },
+      { approval_status: "pending_review" as const },
+      { approval_status: "active" as const },
+      { approval_status: "rejected" as const },
+      {},
+    ];
+
+    expect(countAwaitingReview(skills)).toBe(2);
+    expect(skills.filter(isApprovedSkill)).toEqual([{ approval_status: "active" }, {}]);
+    expect(isAwaitingReview({ approval_status: "rejected" })).toBe(false);
   });
 });

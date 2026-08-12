@@ -136,8 +136,12 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
 
     setIsSubmitting(true);
     try {
-      await registerClaudeCodePlugin(accessToken, buildRegisterRequest(values, urlPreview.parsed));
-      MessageManager.success("Skill registered successfully");
+      const response = await registerClaudeCodePlugin(accessToken, buildRegisterRequest(values, urlPreview.parsed));
+      MessageManager.success(
+        response?.action === "submitted_for_review"
+          ? "Skill submitted for administrator review"
+          : "Skill registered successfully",
+      );
       form.resetFields();
       setUrlPreview(null);
       setUrlEncodesSubdir(false);

@@ -28,13 +28,24 @@ const mockPlugins: Plugin[] = [
 
 const mockOnDeleteClick = vi.fn();
 const mockOnPluginClick = vi.fn();
+const mockOnReviewClick = vi.fn();
 
 const defaultProps = {
   pluginsList: mockPlugins,
   isLoading: false,
   onDeleteClick: mockOnDeleteClick,
+  onReviewClick: mockOnReviewClick,
   isAdmin: true,
   onPluginClick: mockOnPluginClick,
+};
+
+const submittedSkill: Plugin = {
+  id: "plugin-id-submitted",
+  name: "submitted-skill",
+  source: { source: "github", repo: "org/submitted-skill" },
+  enabled: false,
+  approval_status: "pending_review",
+  created_at: "2025-02-01T09:00:00Z",
 };
 
 describe("PluginTable", () => {
@@ -44,7 +55,7 @@ describe("PluginTable", () => {
 
   it("should render every column header", () => {
     render(<PluginTable {...defaultProps} />);
-    for (const header of ["Skill Name", "Version", "Description", "Category", "Public", "Created At"]) {
+    for (const header of ["Skill Name", "Version", "Description", "Category", "Public", "Review", "Created At"]) {
       expect(screen.getByText(header)).toBeInTheDocument();
     }
   });
@@ -109,5 +120,39 @@ describe("PluginTable", () => {
     await user.click(screen.getByTestId("plugin-actions-newer-skill"));
     expect(await screen.findByTestId("plugin-action-copy")).toBeInTheDocument();
     expect(screen.queryByTestId("plugin-action-delete")).not.toBeInTheDocument();
+  });
+
+  it("should badge a submission as pending review and a legacy skill as active", () => {
+    render(<PluginTable {...defaultProps} pluginsList={[...mockPlugins, submittedSkill]} />);
+    expect(screen.getByTestId("approval-status-submitted-skill")).toHaveTextContent("Pending Review");
+    expect(screen.getByTestId("approval-status-newer-skill")).toHaveTextContent("Active");
+  });
+
+  it.each([
+    ["approve", "plugin-action-approve"],
+    ["reject", "plugin-action-reject"],
+  ])("should let an admin %s a submission from the actions menu", async (decision, testId) => {
+    const user = userEvent.setup();
+    render(<PluginTable {...defaultProps} pluginsList={[submittedSkill]} />);
+    await user.click(screen.getByTestId("plugin-actions-submitted-skill"));
+    await user.click(await screen.findByTestId(testId));
+    expect(mockOnReviewClick).toHaveBeenCalledWith(submittedSkill, decision);
+  });
+
+  it("should not offer review actions on an already active skill", async () => {
+    const user = userEvent.setup();
+    render(<PluginTable {...defaultProps} />);
+    await user.click(screen.getByTestId("plugin-actions-newer-skill"));
+    expect(await screen.findByTestId("plugin-action-copy")).toBeInTheDocument();
+    expect(screen.queryByTestId("plugin-action-approve")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("plugin-action-reject")).not.toBeInTheDocument();
+  });
+
+  it("should not offer review actions to a non-admin viewing a submission", async () => {
+    const user = userEvent.setup();
+    render(<PluginTable {...defaultProps} isAdmin={false} pluginsList={[submittedSkill]} />);
+    await user.click(screen.getByTestId("plugin-actions-submitted-skill"));
+    expect(await screen.findByTestId("plugin-action-copy")).toBeInTheDocument();
+    expect(screen.queryByTestId("plugin-action-approve")).not.toBeInTheDocument();
   });
 });

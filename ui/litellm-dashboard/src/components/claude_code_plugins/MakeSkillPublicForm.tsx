@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { Modal, Form, Steps, Button, Checkbox } from "antd";
 import { Text, Title, Badge } from "@tremor/react";
 import { enableClaudeCodePlugin, disableClaudeCodePlugin } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
+import { isApprovedSkill } from "./helpers";
 import { Plugin } from "./types";
 
 const { Step } = Steps;
@@ -26,6 +27,9 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
   const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [form] = Form.useForm();
+
+  const publishableSkills = useMemo(() => skillsList.filter(isApprovedSkill), [skillsList]);
+  const awaitingReviewCount = skillsList.length - publishableSkills.length;
 
   const handleClose = () => {
     setCurrentStep(0);
@@ -54,7 +58,7 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
-      setSelectedSkills(new Set(skillsList.map((s) => s.name)));
+      setSelectedSkills(new Set(publishableSkills.map((s) => s.name)));
     } else {
       setSelectedSkills(new Set());
     }
@@ -62,10 +66,10 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
 
   // Pre-check already-published skills when modal opens
   useEffect(() => {
-    if (visible && skillsList.length > 0) {
-      setSelectedSkills(new Set(skillsList.filter((s) => s.enabled).map((s) => s.name)));
+    if (visible && publishableSkills.length > 0) {
+      setSelectedSkills(new Set(publishableSkills.filter((s) => s.enabled).map((s) => s.name)));
     }
-  }, [visible, skillsList]);
+  }, [visible, publishableSkills]);
 
   const handleSubmit = async () => {
     if (selectedSkills.size === 0) {
@@ -77,7 +81,7 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
     try {
       const selectedSet = selectedSkills;
       await Promise.all(
-        skillsList.map((skill) => {
+        publishableSkills.map((skill) => {
           const shouldBePublic = selectedSet.has(skill.name);
           if (shouldBePublic && !skill.enabled) {
             return enableClaudeCodePlugin(accessToken, skill.name);
@@ -100,7 +104,7 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
     }
   };
 
-  const allSelected = skillsList.length > 0 && skillsList.every((s) => selectedSkills.has(s.name));
+  const allSelected = publishableSkills.length > 0 && publishableSkills.every((s) => selectedSkills.has(s.name));
   const isIndeterminate = selectedSkills.size > 0 && !allSelected;
 
   const renderStep1 = () => (
@@ -111,9 +115,9 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
           checked={allSelected}
           indeterminate={isIndeterminate}
           onChange={(e) => handleSelectAll(e.target.checked)}
-          disabled={skillsList.length === 0}
+          disabled={publishableSkills.length === 0}
         >
-          Select All ({skillsList.length})
+          Select All ({publishableSkills.length})
         </Checkbox>
       </div>
 
@@ -121,14 +125,20 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
         Selected skills will be visible to all users in the Skill Hub. Deselected skills will be unpublished.
       </Text>
 
+      {awaitingReviewCount > 0 && (
+        <Text className="text-sm text-amber-700">
+          {awaitingReviewCount} submitted skill(s) are not listed here yet. Approve them on the Skills page first.
+        </Text>
+      )}
+
       <div className="max-h-96 overflow-y-auto border rounded-lg p-4">
         <div className="space-y-3">
-          {skillsList.length === 0 ? (
+          {publishableSkills.length === 0 ? (
             <div className="text-center py-8 text-gray-500">
               <Text>No skills registered yet.</Text>
             </div>
           ) : (
-            skillsList.map((skill) => (
+            publishableSkills.map((skill) => (
               <div key={skill.name} className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-gray-50">
                 <Checkbox
                   checked={selectedSkills.has(skill.name)}
@@ -184,7 +194,7 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
         <div className="max-h-48 overflow-y-auto border rounded-lg p-3">
           <div className="space-y-2">
             {Array.from(selectedSkills).map((name) => {
-              const skill = skillsList.find((s) => s.name === name);
+              const skill = publishableSkills.find((s) => s.name === name);
               return (
                 <div key={name} className="flex items-center justify-between p-2 bg-gray-50 rounded-sm">
                   <Text className="font-mono text-sm">{name}</Text>
