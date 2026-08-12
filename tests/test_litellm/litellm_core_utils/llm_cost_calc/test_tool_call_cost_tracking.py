@@ -339,7 +339,7 @@ def test_get_cost_for_vertex_ai_gemini_web_search(model, custom_llm_provider):
     for url_citation annotations, not usage.prompt_tokens_details.web_search_requests.
     This causes Vertex AI grounding costs to not be tracked.
     """
-    from litellm.types.utils import PromptTokensDetailsWrapper, Usage, Choices, Message
+    from litellm.types.utils import Choices, Message, PromptTokensDetailsWrapper, Usage
 
     # Create a realistic ModelResponse like what Vertex AI returns
     response = ModelResponse(
@@ -604,3 +604,66 @@ def test_web_search_provider_prefix_fallback_does_not_misprice_non_gemini_model(
 
 # Note: File search integration test removed due to complex annotation detection logic
 # The unit tests in test_azure_assistant_cost_tracking.py provide comprehensive coverage
+
+
+def test_response_includes_output_type_reads_dict_output_items():
+    """
+    Regression: output items that fail OpenAI SDK validation (e.g. xAI web_search_call
+    items without an "action" field) stay plain dicts in the output union. The gate must
+    read their "type" key instead of returning False and skipping the web search fee.
+    """
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    response = ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_1",
+            "created_at": 1754900000,
+            "model": "grok-4",
+            "object": "response",
+            "status": "completed",
+            "output": [{"type": "web_search_call", "id": "ws_1", "status": "completed"}],
+        }
+    )
+
+    assert isinstance(response.output[0], dict)
+    assert StandardBuiltInToolCostTracking.response_includes_output_type(
+        response_object=response, output_type="web_search_call"
+    )
+    assert not StandardBuiltInToolCostTracking.response_includes_output_type(
+        response_object=response, output_type="file_search_call"
+    )
+
+
+def test_web_search_gate_reads_server_side_tool_usage_details_without_citations():
+    """
+    Regression: xAI chat responses bridged from the Responses API only carry
+    usage.server_side_tool_usage_details; a searched answer with no url_citation
+    annotations must still be billed for its web search calls.
+    """
+    from litellm.llms.xai.cost_calculator import _DEFAULT_WEB_SEARCH_COST_PER_CALL
+    from litellm.types.utils import Usage
+
+    usage = Usage(
+        prompt_tokens=10,
+        completion_tokens=20,
+        total_tokens=30,
+        server_side_tool_usage_details={"web_search_calls": 3},
+    )
+    response = ModelResponse(model="xai/grok-4.5")
+
+    assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+        response_object=response, usage=usage
+    )
+    assert not StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+        response_object=response,
+        usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="xai/grok-4.5",
+        response_object=response,
+        usage=usage,
+        custom_llm_provider="xai",
+        standard_built_in_tools_params=None,
+    )
+    assert cost == 3 * _DEFAULT_WEB_SEARCH_COST_PER_CALL

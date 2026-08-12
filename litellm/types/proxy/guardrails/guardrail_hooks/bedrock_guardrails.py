@@ -28,6 +28,9 @@ class BedrockGuardrailUsage(TypedDict, total=False):
     sensitiveInformationPolicyUnits: int | None
     sensitiveInformationPolicyFreeUnits: int | None
     contextualGroundingPolicyUnits: int | None
+    contentPolicyImageUnits: int | None
+    automatedReasoningPolicyUnits: int | None
+    automatedReasoningPolicies: int | None
 
 
 class BedrockGuardrailOutput(TypedDict, total=False):
