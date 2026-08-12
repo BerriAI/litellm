@@ -106,9 +106,26 @@ def test_streaming_chat_completion_tracks_spend(
         f"count to three {unique_marker()}",
         max_tokens=64,
     )
+    # A stream commits its HTTP 200 before the upstream completes, so result.ok alone
+    # says nothing about what the stream did: a break mid-flight comes back as a 200
+    # carrying an SSE error frame and no [DONE] (async_data_generator's except arm).
+    # Judge the stream on its own terms here, or a broken stream is only noticed
+    # E2E_POLL_TIMEOUT later as a missing spend row, blaming the wrong subsystem.
     assert (
         result.ok
     ), f"stream failed (status {result.status_code}): {result.body[:300]}"
+    assert result.is_streaming, (
+        f"expected an SSE stream from /chat/completions, got content-type "
+        f"{result.content_type!r}"
+    )
+    assert result.chunks > 0, "no SSE events were consumed from the stream"
+    assert (
+        result.stream_error is None
+    ), f"the stream carried an error event: {result.stream_error}"
+    assert result.stream_done, (
+        f"the stream never terminated with [DONE], so it broke mid-flight: "
+        f"chunks={result.chunks} last_events={result.stream_events[-2:]}"
+    )
 
     rows = client.poll_logs_for_key(
         scoped_key, predicate=lambda rs: any((r.spend or 0) > 0 for r in rs)

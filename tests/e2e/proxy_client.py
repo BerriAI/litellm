@@ -443,14 +443,16 @@ class ProxyClient:
 
     # ---- spend read-back ------------------------------------------------
 
-    def spend_logs(self, params: SpendLogsParams) -> list[SpendLogRow]:
-        result = self.transport.get(
+    def _read_spend_logs(self, params: SpendLogsParams) -> Result[SpendLogs]:
+        return self.transport.get(
             "/spend/logs",
             headers=self.transport.master,
             params=params,
             response_type=SpendLogs,
         )
-        match result:
+
+    def spend_logs(self, params: SpendLogsParams) -> list[SpendLogRow]:
+        match self._read_spend_logs(params):
             case Success(data=logs):
                 return logs.root
             case _:
@@ -481,7 +483,7 @@ class ProxyClient:
     def poll_logs_for_key(
         self, key: str, *, min_rows: int = 1, predicate: RowsPredicate | None = None
     ) -> list[SpendLogRow]:
-        return self._poll(lambda: self.spend_logs(SpendLogsParams(api_key=key)), min_rows, predicate)
+        return self._poll(lambda: self._read_spend_logs(SpendLogsParams(api_key=key)), min_rows, predicate)
 
     def poll_logs_for_request_id(
         self,
@@ -491,24 +493,47 @@ class ProxyClient:
         predicate: RowsPredicate | None = None,
     ) -> list[SpendLogRow]:
         return self._poll(
-            lambda: self.spend_logs(SpendLogsParams(request_id=request_id)),
+            lambda: self._read_spend_logs(SpendLogsParams(request_id=request_id)),
             min_rows,
             predicate,
         )
 
     def _poll(
         self,
-        fetch: Callable[[], list[SpendLogRow]],
+        fetch: Callable[[], Result[SpendLogs]],
         min_rows: int,
         predicate: RowsPredicate | None,
     ) -> list[SpendLogRow]:
+        """Poll /spend/logs to the deadline, returning the last rows the proxy served.
+
+        A read that never succeeded is not evidence the rows are absent. /spend/logs
+        500s and times out under load (see test_spend_logs_endpoint_returns_spend), and
+        counting those as "no rows yet" makes an unreadable endpoint indistinguishable
+        from a spend row that was never written - the caller then asserts an empty list
+        and blames the write path for a failure on the read path. A single successful
+        read anywhere in the window is enough to trust the emptiness, so a transient
+        blip still polls through; a window where every read failed raises instead.
+        """
         deadline = time.monotonic() + self.poll_timeout
         rows: list[SpendLogRow] = []
+        last_failure: Result[SpendLogs] | None = None
+        served = False
         while time.monotonic() < deadline:
-            rows = fetch()
-            if len(rows) >= min_rows and (predicate is None or predicate(rows)):
-                return rows
+            match fetch():
+                case Success(data=logs):
+                    served = True
+                    rows = logs.root
+                    if len(rows) >= min_rows and (predicate is None or predicate(rows)):
+                        return rows
+                case failure:
+                    last_failure = failure
             time.sleep(self.poll_interval)
+        if not served and last_failure is not None:
+            raise AssertionError(
+                f"/spend/logs never returned a successful read in {self.poll_timeout}s of "
+                f"polling, so an empty result says nothing about the spend rows. "
+                f"Last read: {last_failure}"
+            )
         return rows
 
     # ---- route probe ----------------------------------------------------
