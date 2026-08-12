@@ -92,6 +92,10 @@ class TenantRoute:
 
     tracer: Tracer
     detached: bool
+    #: The provider ``tracer`` came from, or ``None`` on the default route. A
+    #: caller that keeps a span open across callbacks must ``hold``/``release``
+    #: it so LRU eviction can't shut the provider down under the open span.
+    provider: TracerProvider | None = None
 
 
 class TenantTracerCache:
@@ -107,11 +111,42 @@ class TenantTracerCache:
         self._callback_name = callback_name
         self._tracer_name = tracer_name
         self._providers: OrderedDict[tuple[_HeaderItems, _HeaderItems], TracerProvider] = OrderedDict()
+        self._open_span_counts: dict[TracerProvider, int] = {}  # mutable-ok: live refcount state
+        self._retired: set[TracerProvider] = set()  # mutable-ok: evicted providers draining open spans
         self._project_routable = any(
             spec.owner == callback_name and spec.kind.lower() not in (*_NON_OTLP_KINDS, *_GRPC_KINDS)
             for spec in config.exporters
         )
         self._warned_project_unroutable = False
+
+    def hold(self, provider: TracerProvider) -> None:
+        """Count an open span on ``provider`` so eviction defers its shutdown."""
+        self._open_span_counts[provider] = self._open_span_counts.get(provider, 0) + 1
+
+    def release(self, provider: TracerProvider) -> None:
+        """Drop one open-span count; shut a retired provider down once drained."""
+        remaining: Final = self._open_span_counts.get(provider, 0) - 1
+        if remaining > 0:
+            self._open_span_counts[provider] = remaining
+            return
+        self._open_span_counts.pop(provider, None)
+        if provider in self._retired:
+            self._retired.discard(provider)
+            _shutdown_provider(provider)
+
+    def _retire(self, provider: TracerProvider) -> None:
+        """Shut an evicted provider down, or defer while spans are still open.
+
+        Shutting down immediately would stop the provider's processors while a
+        span opened at ``pre_call`` is still live, silently dropping it at end
+        instead of exporting it. A retired provider is pinned only by its open
+        spans, and the logger's open-call map is itself bounded, so a request
+        that never reaches a close callback still releases it eventually.
+        """
+        if self._open_span_counts.get(provider, 0) > 0:
+            self._retired.add(provider)
+            return
+        _shutdown_provider(provider)
 
     def route_for(
         self,
@@ -142,8 +177,12 @@ class TenantTracerCache:
             self._providers[cache_key] = provider
             if len(self._providers) > _MAX_CACHED_PROVIDERS:
                 _, evicted = self._providers.popitem(last=False)
-                _shutdown_provider(evicted)
-        return TenantRoute(tracer=get_tracer(provider, self._tracer_name), detached=bool(project_headers))
+                self._retire(evicted)
+        return TenantRoute(
+            tracer=get_tracer(provider, self._tracer_name),
+            detached=bool(project_headers),
+            provider=provider,
+        )
 
     def _project_headers(self, auth_metadata: Mapping[str, str] | None) -> Mapping[str, str]:
         """The per-request project-routing headers, if this cache can apply them.

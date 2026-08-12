@@ -137,13 +137,24 @@ class _LLMCallSpan:
     own (worker-copied) ambient context using ``start_time_ns``. The presence of
     a carrier for a call at all is the proof that ``pre_call`` ran, i.e. that an
     upstream call was actually attempted.
+
+    ``provider`` is the routed provider the live span was opened on (``None`` on
+    the default route or when creation was deferred). It is held in the tenant
+    cache while the span is open so LRU eviction can't shut the provider down
+    under it, and must be released exactly once when the carrier is removed.
     """
 
-    __slots__ = ("span", "start_time_ns")
+    __slots__ = ("provider", "span", "start_time_ns")
 
-    def __init__(self, span: "Span | None", start_time_ns: int | None) -> None:
+    def __init__(
+        self,
+        span: "Span | None",
+        start_time_ns: int | None,
+        provider: "TracerProvider | None" = None,
+    ) -> None:
         self.span = span
         self.start_time_ns = start_time_ns
+        self.provider = provider
 
 
 class OpenTelemetryV2(CustomLogger):
@@ -288,12 +299,19 @@ class OpenTelemetryV2(CustomLogger):
                 tracer=route.tracer,
                 links=_request_trace_links(parent_context) if route.detached else None,
             )
-        self._open_llm_calls[call_id] = _LLMCallSpan(span=span, start_time_ns=start_time_ns)
+        if span is not None and route.provider is not None:
+            self._tenant_tracers.hold(route.provider)
+        self._open_llm_calls[call_id] = _LLMCallSpan(
+            span=span,
+            start_time_ns=start_time_ns,
+            provider=route.provider if span is not None else None,
+        )
         # Evict the oldest open call if the map is over budget. A call that opens
         # but never closes (a stream that only fires stream events) would linger
         # otherwise; the evicted span is simply dropped (never exported).
         if len(self._open_llm_calls) > _OPEN_CALLS_MAX:
-            self._open_llm_calls.popitem(last=False)
+            _, evicted = self._open_llm_calls.popitem(last=False)
+            self._release_carrier(evicted)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         if self._emit_mcp_tool_call(kwargs, start_time, end_time):
@@ -387,7 +405,7 @@ class OpenTelemetryV2(CustomLogger):
         # otherwise linger until evicted; drop it so it's neither leaked nor closed
         # as a phantom LLM span.
         if data.identity.call_id:
-            self._open_llm_calls.pop(data.identity.call_id, None)
+            self._release_carrier(self._open_llm_calls.pop(data.identity.call_id, None))
         route: Final = self._tenant_tracers.route_for(self.tracer, None, auth_metadata(payload, kwargs))
         parent_context, links = resolve_mcp_span_context()
         seeded: Final = self._seed_identity_baggage(data.identity, None, parent_context)
@@ -425,7 +443,7 @@ class OpenTelemetryV2(CustomLogger):
             payload, capture_content=self.config.capture_span_content
         )
         if data.identity.call_id:
-            self._open_llm_calls.pop(data.identity.call_id, None)
+            self._release_carrier(self._open_llm_calls.pop(data.identity.call_id, None))
         route: Final = self._tenant_tracers.route_for(self.tracer, None, auth_metadata(payload, kwargs))
         parent_context, links = resolve_mcp_span_context()
         seeded: Final = self._seed_identity_baggage(data.identity, None, parent_context)
@@ -459,6 +477,24 @@ class OpenTelemetryV2(CustomLogger):
         carrier: Final = self._open_llm_calls.pop(call_id, None) if call_id else None
         if carrier is None:
             return None
+        try:
+            return self._finish_carrier(carrier, call, end_time)
+        finally:
+            # After the span has ended, so a release-triggered provider shutdown
+            # force-flushes it out rather than racing its enqueue.
+            self._release_carrier(carrier)
+
+    def _release_carrier(self, carrier: "_LLMCallSpan | None") -> None:
+        """Release the routed provider a removed carrier was holding open."""
+        if carrier is not None and carrier.provider is not None:
+            self._tenant_tracers.release(carrier.provider)
+
+    def _finish_carrier(
+        self,
+        carrier: _LLMCallSpan,
+        call: LLMCallEvent,
+        end_time: datetime | float | None,
+    ) -> Span | None:
         payload: Final = call.payload
         if payload is None:
             if carrier.span is not None:

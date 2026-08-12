@@ -2392,3 +2392,50 @@ def test_project_routing_resolves_at_pre_call_before_payload_exists():
     assert all(
         s.name != "chat gpt-4o" for s in default_exporter.get_finished_spans()
     )
+
+
+def test_evicted_provider_still_exports_span_opened_before_eviction(monkeypatch):
+    """LRU eviction while a routed span is still open must defer the provider
+    shutdown: the span opened at ``pre_call`` closes at the later success
+    callback and would otherwise be silently dropped instead of exported."""
+    from litellm.integrations.otel.plumbing import routing as routing_mod
+
+    monkeypatch.setattr(routing_mod, "_MAX_CACHED_PROVIDERS", 1)
+    logger, _default_exporter, captured = _phoenix_routing_logger("capture_evict")
+    md_a = {"user_api_key_auth_metadata": {"phoenix_project_name": "proj-a"}}
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    with trace.use_span(server, end_on_exit=False):
+        logger.log_pre_api_call(
+            model="gpt-4o",
+            messages=[],
+            kwargs={"litellm_call_id": "call_a", "litellm_params": {"metadata": md_a}},
+        )
+
+    # A second project's full call overflows the size-1 LRU and evicts proj-a's
+    # provider while call_a's span is still open.
+    md_b = {"user_api_key_auth_metadata": {"phoenix_project_name": "proj-b"}}
+    _emit_llm(
+        logger,
+        {
+            "standard_logging_object": _payload(litellm_call_id="call_b", metadata=md_b),
+            "litellm_params": {"metadata": md_b},
+        },
+    )
+
+    asyncio.run(
+        logger.async_log_success_event(
+            {
+                "standard_logging_object": _payload(litellm_call_id="call_a", metadata=md_a),
+                "litellm_params": {"metadata": md_a},
+            },
+            None,
+            None,
+            None,
+        )
+    )
+    server.end()
+
+    headers_a = next(h for h in captured if "proj-a" in h)
+    assert [s.name for s in captured[headers_a].get_finished_spans()] == ["chat gpt-4o"]

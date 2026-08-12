@@ -298,3 +298,40 @@ def test_grpc_exporter_gets_no_project_routing():
     assert cache.route_for(default, None, {"phoenix_project_name": "proj"}).tracer is default
     assert cache._providers == {}
     assert cache._warned_project_unroutable is True
+
+
+def test_eviction_defers_shutdown_while_a_span_is_open(monkeypatch):
+    # An LLM span opened at pre_call stays open until the close callback; LRU
+    # eviction in that window must not stop the provider's processors, or the
+    # span is silently dropped at end instead of exported.
+    from litellm.integrations.otel.plumbing import routing as routing_mod
+
+    monkeypatch.setattr(routing_mod, "_MAX_CACHED_PROVIDERS", 1)
+    shut_down = []
+    monkeypatch.setattr(
+        routing_mod, "_shutdown_provider", lambda p: shut_down.append(p)
+    )
+    cache = _cache("arize")
+    default = NoOpTracer()
+
+    route_a = cache.route_for(default, {"arize_space_id": "A", "arize_api_key": "K"})
+    assert route_a.provider is not None
+    cache.hold(route_a.provider)
+    cache.route_for(default, {"arize_space_id": "B", "arize_api_key": "K"})  # evicts A
+    assert shut_down == []  # deferred: A still has an open span
+    cache.release(route_a.provider)
+    assert shut_down == [route_a.provider]
+
+
+def test_release_without_eviction_keeps_provider_alive(monkeypatch):
+    from litellm.integrations.otel.plumbing import routing as routing_mod
+
+    shut_down = []
+    monkeypatch.setattr(
+        routing_mod, "_shutdown_provider", lambda p: shut_down.append(p)
+    )
+    cache = _cache("arize")
+    route = cache.route_for(NoOpTracer(), {"arize_space_id": "A", "arize_api_key": "K"})
+    cache.hold(route.provider)
+    cache.release(route.provider)
+    assert shut_down == []  # still cached, never retired
