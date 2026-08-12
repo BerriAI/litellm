@@ -1858,6 +1858,21 @@ class TestToolTransformation:
 
         assert messages[0]["tool_calls"][0]["function"]["name"] == "mcp__everything__get_sum"
 
+    def test_custom_tool_call_echo_keeps_short_name(self):
+        """Custom tools stay advertised under their short name, so a namespace on
+        a custom_tool_call echo is routing metadata and must not be prefixed."""
+        messages = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+            function_call={
+                "type": "custom_tool_call",
+                "name": "apply_patch",
+                "namespace": "mcp__everything",
+                "call_id": "call_2",
+                "input": "patch body",
+            }
+        )
+
+        assert messages[0]["tool_calls"][0]["function"]["name"] == "apply_patch"
+
     @pytest.mark.parametrize("nested", [True, False])
     def test_transform_namespace_tools_preserves_allowed_callers(self, nested):
         function_tool = {
