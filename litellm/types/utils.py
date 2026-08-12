@@ -152,6 +152,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_web_search: bool | None
     supports_reasoning: bool | None
     supports_adaptive_thinking: bool | None
+    supports_tool_search: bool | None
     supports_mid_conversation_system: bool | None
     supports_url_context: bool | None
     supports_none_reasoning_effort: bool | None
@@ -3129,6 +3130,7 @@ class StandardAuditLogPayload(TypedDict):
 class StandardLoggingPayload(TypedDict):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
+    session_id: str  # End-user/conversation session id (litellm_session_id), independent of trace_id
     litellm_call_id: str | None  # UUID returned in x-litellm-call-id response header
     call_type: str
     stream: bool | None
@@ -3384,6 +3386,8 @@ agentic_loop_internal_litellm_params: Final = [
     "_code_interpreter_interception_sandbox_key",
     "_code_interpreter_interception_session_scoped",
     "_code_interpreter_interception_converted_stream",
+    "_websearch_interception_emit_native_blocks",
+    "_websearch_interception_converted_stream",
 ]
 
 # Proxy-owned callback credentials, stamped from admin-configured team/key callback
@@ -3398,6 +3402,8 @@ all_litellm_params = (
     + [
         "metadata",
         "litellm_metadata",
+        "keepalive_seconds",
+        "allow_client_keepalive_override",
         "litellm_trace_id",
         "litellm_request_debug",
         "guardrails",
@@ -3462,6 +3468,7 @@ all_litellm_params = (
         "caching_groups",
         "ttl",
         "cache",
+        "enable_prompt_caching",
         "no-log",
         "base_model",
         "stream_timeout",
