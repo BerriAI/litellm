@@ -41,8 +41,7 @@ def test_lightning_specs(model, provider):
     assert info["output_cost_per_token"] == 2e-07
 
     assert info["max_input_tokens"] == 262144
-    assert info["max_output_tokens"] == 262144
-    assert info["max_tokens"] == 262144
+    assert "max_output_tokens" not in info, "neither provider publishes an output cap"
 
     assert info["supports_reasoning"] is True
     assert info["supports_function_calling"] is True
