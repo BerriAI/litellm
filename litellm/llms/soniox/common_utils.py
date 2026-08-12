@@ -5,7 +5,7 @@ Shared utilities for the Soniox provider (https://soniox.com).
 import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from functools import reduce
+from itertools import accumulate, groupby
 from typing import Any, Final
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -266,14 +266,16 @@ def _should_break(cue: Sequence[_Word], word: _Word) -> bool:
 
 
 def _cue_start_indices(words: Sequence[_Word]) -> tuple[int, ...]:
-    def step(starts: tuple[int, ...], index: int) -> tuple[int, ...]:
+    def next_start(start: int, index: int) -> int:
         if words[index - 1].text.rstrip().endswith(_SENTENCE_END_CHARS):
-            return (*starts, index)
-        if _should_break(words[starts[-1] : index], words[index]):
-            return (*starts, index)
-        return starts
+            return index
+        if _should_break(words[start:index], words[index]):
+            return index
+        return start
 
-    return reduce(step, range(1, len(words)), (0,)) if words else ()
+    if not words:
+        return ()
+    return tuple(start for start, _ in groupby(accumulate(range(1, len(words)), next_start, initial=0)))
 
 
 def _build_cue(ws: Sequence[_Word]) -> _Cue | None:
