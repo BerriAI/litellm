@@ -1229,6 +1229,78 @@ def test_resolve_keepalive_seconds_deployment_disable_cannot_be_overridden_by_re
     assert result == 0.0
 
 
+def test_resolve_keepalive_seconds_global_default_applies_when_unconfigured(monkeypatch):
+    """litellm_settings.sse_keepalive_ping_interval_seconds is the operator's
+    global default: it applies when neither the serving deployment nor the
+    request supplies keepalive_seconds, including proxies with no router at
+    all."""
+    import litellm
+
+    monkeypatch.setattr(ps, "llm_router", None)
+    monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", 15.0)
+
+    result = _resolve_keepalive_seconds({}, response=None)
+    assert result == 15.0
+
+
+def test_resolve_keepalive_seconds_global_default_is_clamped(monkeypatch):
+    import litellm
+
+    monkeypatch.setattr(ps, "llm_router", None)
+    monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", 900.0)
+
+    result = _resolve_keepalive_seconds({}, response=None)
+    assert result == _KEEPALIVE_MAX_SECONDS
+
+
+def test_resolve_keepalive_seconds_deployment_zero_beats_global_default(monkeypatch):
+    """A deployment's explicit keepalive_seconds: 0 is a hard operator disable
+    that must also win over the global default interval, or the global setting
+    would silently re-enable heartbeats (and the LB-idle-timeout evasion that
+    comes with them) for a deployment the operator opted out of."""
+    from unittest.mock import MagicMock
+
+    import litellm
+
+    deployment = MagicMock()
+    deployment.litellm_params.keepalive_seconds = 0
+    deployment.litellm_params.allow_client_keepalive_override = False
+
+    router = MagicMock()
+    router.get_deployment.return_value = deployment
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", 15.0)
+
+    response = MagicMock()
+    response._hidden_params = {"model_id": "deploy-disabled"}
+
+    result = _resolve_keepalive_seconds({"model": "my-model"}, response=response)
+    assert result == 0.0
+
+
+def test_resolve_keepalive_seconds_deployment_value_beats_global_default(monkeypatch):
+    from unittest.mock import MagicMock
+
+    import litellm
+
+    deployment = MagicMock()
+    deployment.litellm_params.keepalive_seconds = 30.0
+    deployment.litellm_params.allow_client_keepalive_override = False
+
+    router = MagicMock()
+    router.get_deployment.return_value = deployment
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", 15.0)
+
+    response = MagicMock()
+    response._hidden_params = {"model_id": "deploy-tuned"}
+
+    result = _resolve_keepalive_seconds({"model": "my-model"}, response=response)
+    assert result == 30.0
+
+
 def test_keepalive_from_deployment_config_reads_by_model_id(monkeypatch):
     from unittest.mock import MagicMock
 
@@ -1528,6 +1600,39 @@ async def test_async_data_generator_emits_ping_heartbeat(monkeypatch):
         response=_slow_response(),
         user_api_key_dict=_user_auth(),
         request_data={"model": "gpt-4", "keepalive_seconds": 0.05},
+    ):
+        out.append(line)
+
+    pings = [item for item in out if item == ": ping\n\n"]
+    assert len(pings) >= 2, f"expected >= 2 ping frames; got {len(pings)}"
+    assert out[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_emits_ping_heartbeat_from_global_default_without_router(monkeypatch):
+    """The global sse_keepalive_ping_interval_seconds must produce ': ping'
+    frames even on a proxy with no router, where the wrap was previously
+    skipped entirely because no deployment could ever resolve a non-zero
+    interval."""
+    import asyncio
+
+    import litellm
+
+    _patch_logging_flags(monkeypatch)
+    monkeypatch.setattr(ps, "_KEEPALIVE_MIN_SECONDS", 0.05)
+    monkeypatch.setattr(ps, "llm_router", None)
+    monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", 0.05)
+
+    async def _slow_response():
+        yield _simple_chunk(content="hello")
+        await asyncio.sleep(0.4)
+        yield _simple_chunk(content="world")
+
+    out = []
+    async for line in async_data_generator(
+        response=_slow_response(),
+        user_api_key_dict=_user_auth(),
+        request_data={"model": "gpt-4"},
     ):
         out.append(line)
 
