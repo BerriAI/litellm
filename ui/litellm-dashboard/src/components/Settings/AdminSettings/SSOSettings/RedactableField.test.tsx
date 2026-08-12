@@ -35,15 +35,31 @@ describe("RedactableField", () => {
       expect(screen.queryByText("•".repeat(testValue.length))).not.toBeInTheDocument();
     });
 
+    it("should identify the hidden-value control and render its icon", () => {
+      renderWithProviders(<RedactableField value={testValue} />);
+
+      const button = screen.getByRole("button", { name: "Show value" });
+      expect(button.querySelector("svg")).toBeInTheDocument();
+    });
+
+    it("should identify the visible-value control and render its icon", () => {
+      renderWithProviders(<RedactableField value={testValue} defaultHidden={false} />);
+
+      const button = screen.getByRole("button", { name: "Hide value" });
+      expect(button.querySelector("svg")).toBeInTheDocument();
+    });
+
     it("should toggle visibility when button is clicked", async () => {
       const user = userEvent.setup();
       renderWithProviders(<RedactableField value={testValue} />);
 
-      await user.click(screen.getByRole("button"));
+      await user.click(screen.getByRole("button", { name: "Show value" }));
       expect(screen.getByText(testValue)).toBeInTheDocument();
+      expect(screen.queryByText("•".repeat(testValue.length))).not.toBeInTheDocument();
 
-      await user.click(screen.getByRole("button"));
+      await user.click(screen.getByRole("button", { name: "Hide value" }));
       expect(screen.getByText("•".repeat(testValue.length))).toBeInTheDocument();
+      expect(screen.queryByText(testValue)).not.toBeInTheDocument();
     });
 
     it("should handle empty string value", () => {
