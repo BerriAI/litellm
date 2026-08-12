@@ -5,7 +5,7 @@ import ssl
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
 from contextlib import asynccontextmanager
 from functools import lru_cache
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, TypeVar, Union, cast, get_type_hints
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -20,6 +20,7 @@ from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -250,6 +251,24 @@ def _has_pre_call_deployment_hook(logging_obj: LiteLLMLoggingObj) -> bool:
         if getattr(cb_func, "__func__", cb_func) is not getattr(base_func, "__func__", base_func):
             return True
     return False
+
+
+def _aws_signing_overrides(
+    optional_params: Mapping[str, Any], litellm_params: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    """AWS credential params for SigV4 signers that read them off optional_params.
+
+    Only `bedrock`/`sagemaker` keep `aws_*` in optional_params: every other provider
+    spreads optional_params into the request body, so the params are stripped there
+    and survive on litellm_params alone.
+    """
+    return MappingProxyType(
+        {
+            key: litellm_params[key]
+            for key in AWS_CREDENTIAL_KWARGS_KEYS
+            if optional_params.get(key) is None and litellm_params.get(key) is not None
+        }
+    )
 
 
 class BaseLLMHTTPHandler:
@@ -495,7 +514,10 @@ class BaseLLMHTTPHandler:
 
         headers, signed_json_body = provider_config.sign_request(
             headers=headers,
-            optional_params=optional_params,
+            optional_params={
+                **optional_params,
+                **_aws_signing_overrides(optional_params, litellm_params),
+            },
             request_data=data,
             api_base=api_base,
             api_key=api_key,
