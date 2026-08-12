@@ -20,6 +20,47 @@ def _reset_litellm_http_client_cache():
     in_memory_llm_clients_cache.flush_cache()
 
 
+def _make_gemma_vertex_response(
+    content="ok",
+    response_id="chatcmpl-test",
+    total_tokens=114,
+):
+    """Build a minimal but valid Vertex Gemma `predictions` response body."""
+    return {
+        "deployedModelId": "1207280419999999999",
+        "model": "projects/993702345710/locations/us-central1/models/gemma-3-12b-it-1222199011122",
+        "modelDisplayName": "gemma-3-12b-it-1222199011122",
+        "modelVersionId": "1",
+        "predictions": {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "logprobs": None,
+                    "message": {
+                        "content": content,
+                        "reasoning_content": None,
+                        "role": "assistant",
+                        "tool_calls": [],
+                    },
+                    "stop_reason": None,
+                }
+            ],
+            "created": 1759863903,
+            "id": response_id,
+            "model": "google/gemma-3-12b-it",
+            "object": "chat.completion",
+            "prompt_logprobs": None,
+            "usage": {
+                "completion_tokens": 100,
+                "prompt_tokens": 14,
+                "prompt_tokens_details": None,
+                "total_tokens": total_tokens,
+            },
+        },
+    }
+
+
 class TestVertexGemmaCompletion:
     """Test completion flow for Vertex AI Gemma models using litellm.acompletion()"""
 
@@ -121,9 +162,7 @@ class TestVertexGemmaCompletion:
 
         # Mock the async HTTP handler and Vertex authentication
         with (
-            patch(
-                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-            ) as mock_get_client,
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_get_client,
             patch(
                 "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "PROJECT_ID"),
@@ -151,14 +190,11 @@ class TestVertexGemmaCompletion:
             assert call_args is not None, "HTTP handler was not called"
 
             request_data = call_args.kwargs["json"]
-            print("request body=", json.dumps(request_data, indent=4))
             request_url = call_args.kwargs["url"]
 
             # Validate exact URL matches what we sent
             expected_url = "https://32277599999999999.us-central1-10582012152.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict"
-            assert (
-                request_url == expected_url
-            ), f"Expected URL: {expected_url}\nActual URL: {request_url}"
+            assert request_url == expected_url, f"Expected URL: {expected_url}\nActual URL: {request_url}"
 
             # Validate Request Body matches expected format
             assert "instances" in request_data
@@ -211,9 +247,7 @@ class TestVertexGemmaCompletion:
         }
 
         with (
-            patch(
-                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-            ) as mock_get_client,
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_get_client,
             patch(
                 "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "test-project"),
@@ -286,9 +320,7 @@ class TestVertexGemmaCompletion:
         }
 
         with (
-            patch(
-                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-            ) as mock_get_client,
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_get_client,
             patch(
                 "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "PROJECT_ID"),
@@ -312,9 +344,7 @@ class TestVertexGemmaCompletion:
             )
 
             # Verify the response is a MockResponseIterator
-            assert isinstance(
-                response, MockResponseIterator
-            ), f"Expected MockResponseIterator, got {type(response)}"
+            assert isinstance(response, MockResponseIterator), f"Expected MockResponseIterator, got {type(response)}"
 
             # Verify the request sent to Vertex does NOT include 'stream'
             call_args = mock_client.post.call_args
@@ -324,9 +354,7 @@ class TestVertexGemmaCompletion:
             instance = request_data["instances"][0]
 
             # Critical: Verify stream parameter is NOT sent to Vertex API
-            assert (
-                "stream" not in instance
-            ), "stream parameter should not be sent to Vertex API"
+            assert "stream" not in instance, "stream parameter should not be sent to Vertex API"
 
             # Verify we can iterate the fake stream and get the response
             chunks = []
@@ -334,9 +362,7 @@ class TestVertexGemmaCompletion:
                 chunks.append(chunk)
 
             # Should get exactly one chunk (fake streaming)
-            assert (
-                len(chunks) == 1
-            ), f"Expected 1 chunk from fake stream, got {len(chunks)}"
+            assert len(chunks) == 1, f"Expected 1 chunk from fake stream, got {len(chunks)}"
 
             # Verify the chunk has the expected content
             chunk = chunks[0]
@@ -388,9 +414,7 @@ class TestVertexGemmaCompletion:
         }
 
         with (
-            patch(
-                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-            ) as mock_get_client,
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_get_client,
             patch(
                 "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "PROJECT_ID"),
@@ -403,8 +427,7 @@ class TestVertexGemmaCompletion:
             mock_client.post = AsyncMock(return_value=mock_response)
             mock_get_client.return_value = mock_client
 
-            # Call with both stream and stream_options
-            response = await litellm.acompletion(
+            await litellm.acompletion(
                 model="vertex_ai/gemma/gemma-3-12b-it-1222199011122",
                 messages=[{"role": "user", "content": "Test"}],
                 stream=True,
@@ -419,16 +442,11 @@ class TestVertexGemmaCompletion:
             assert call_args is not None, "HTTP client was not called"
 
             request_data = call_args.kwargs["json"]
-            print("request body=", json.dumps(request_data, indent=4))
             instance = request_data["instances"][0]
 
             # Critical: Verify both stream and stream_options are NOT sent to Vertex API
-            assert (
-                "stream" not in instance
-            ), "stream parameter should not be sent to Vertex API"
-            assert (
-                "stream_options" not in instance
-            ), "stream_options parameter should not be sent to Vertex API"
+            assert "stream" not in instance, "stream parameter should not be sent to Vertex API"
+            assert "stream_options" not in instance, "stream_options parameter should not be sent to Vertex API"
 
             # Verify other parameters are present
             assert "messages" in instance
@@ -479,9 +497,7 @@ class TestVertexGemmaCompletion:
         }
 
         with (
-            patch(
-                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-            ) as mock_get_client,
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_get_client,
             patch(
                 "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "PROJECT_ID"),
@@ -502,9 +518,7 @@ class TestVertexGemmaCompletion:
             await litellm.acompletion(
                 model="vertex_ai/gemma/gemma-3-12b-it-1222199011122",
                 messages=[{"role": "user", "content": "Test"}],
-                context_management=[
-                    {"type": "compaction", "compact_threshold": 200000}
-                ],
+                context_management=[{"type": "compaction", "compact_threshold": 200000}],
                 allowed_openai_params=["context_management"],
                 api_base="https://test.us-central1-project.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict",
                 vertex_project="PROJECT_ID",
@@ -515,12 +529,9 @@ class TestVertexGemmaCompletion:
             assert call_args is not None, "HTTP client was not called"
 
             request_data = call_args.kwargs["json"]
-            print("request body=", json.dumps(request_data, indent=4))
             instance = request_data["instances"][0]
 
-            assert (
-                "context_management" not in instance
-            ), "context_management should not be forwarded to Vertex Gemma"
+            assert "context_management" not in instance, "context_management should not be forwarded to Vertex Gemma"
             assert instance["@requestFormat"] == "chatCompletions"
             assert "messages" in instance
 
@@ -540,9 +551,7 @@ class TestVertexGemmaCompletion:
             messages=[{"role": "user", "content": "hi"}],
             optional_params={
                 "max_tokens": 32,
-                "context_management": [
-                    {"type": "compaction", "compact_threshold": 200000}
-                ],
+                "context_management": [{"type": "compaction", "compact_threshold": 200000}],
             },
             litellm_params={},
             headers={},
@@ -553,3 +562,395 @@ class TestVertexGemmaCompletion:
         assert instance["@requestFormat"] == "chatCompletions"
         assert "context_management" not in instance
         assert instance.get("max_tokens") == 32
+
+    def test_sync_completion_makes_http_call(self):
+        """
+        Regression test for the synchronous path.
+
+        A refactor once dropped the `response = http_handler.post(...)` line,
+        so every sync Vertex Gemma call raised
+        `NameError: name 'response' is not defined` before any response
+        handling could run. This drives the real sync code path through
+        litellm.completion() and asserts a fully parsed response comes back,
+        which only happens if the HTTP call is actually issued.
+        """
+        vertex_response = _make_gemma_vertex_response(
+            content="Machine learning is a field of AI.",
+            response_id="chatcmpl-sync-regression",
+        )
+
+        with (
+            patch("litellm.llms.vertex_ai.vertex_gemma_models.transformation._get_httpx_client") as mock_get_client,
+            patch(
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
+                return_value=("fake-access-token", "PROJECT_ID"),
+            ),
+        ):
+            mock_client = Mock()
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = vertex_response
+            mock_client.post = Mock(return_value=mock_response)
+            mock_get_client.return_value = mock_client
+
+            response = litellm.completion(
+                model="vertex_ai/gemma/gemma-3-12b-it-1222199011122",
+                messages=[{"role": "user", "content": "What is machine learning?"}],
+                max_tokens=100,
+                api_base="https://32277599999999999.us-central1-10582012152.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict",
+                vertex_project="PROJECT_ID",
+                vertex_location="us-central1",
+            )
+
+            # The HTTP call must have been made exactly once
+            mock_get_client.assert_called_once()
+            mock_client.post.assert_called_once()
+            call_args = mock_client.post.call_args
+            assert call_args.kwargs["url"].endswith(":predict")
+            instance = call_args.kwargs["json"]["instances"][0]
+            assert instance["@requestFormat"] == "chatCompletions"
+
+            # And the response must be parsed from what the endpoint returned
+            assert response.id == "chatcmpl-sync-regression"
+            assert response.model == "gemma-3-12b-it-1222199011122"
+            assert response.choices[0].message.content == "Machine learning is a field of AI."
+            assert response.usage.total_tokens == 114
+
+    def test_sync_completion_uses_provided_client(self):
+        """A caller-supplied sync HTTPHandler must be routed through, not replaced."""
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        vertex_response = _make_gemma_vertex_response(content="hi from sync client")
+
+        custom_client = Mock(spec=HTTPHandler)
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = vertex_response
+        custom_client.post = Mock(return_value=mock_response)
+
+        with patch(
+            "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
+            return_value=("fake-access-token", "PROJECT_ID"),
+        ):
+            response = litellm.completion(
+                model="vertex_ai/gemma/gemma-3-12b-it-1222199011122",
+                messages=[{"role": "user", "content": "Test"}],
+                api_base="https://test.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict",
+                vertex_project="PROJECT_ID",
+                vertex_location="us-central1",
+                client=custom_client,
+            )
+
+        custom_client.post.assert_called_once()
+        assert response.choices[0].message.content == "hi from sync client"
+
+    @pytest.mark.asyncio
+    async def test_acompletion_uses_provided_async_client(self):
+        """
+        A caller-supplied AsyncHTTPHandler must flow through the public API and
+        be used. This also guards the entry-point `client` type accepting async
+        clients, not just sync ones.
+        """
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+        vertex_response = _make_gemma_vertex_response(content="hi from async client")
+
+        custom_client = Mock(spec=AsyncHTTPHandler)
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = vertex_response
+        custom_client.post = AsyncMock(return_value=mock_response)
+
+        with patch(
+            "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
+            return_value=("fake-access-token", "PROJECT_ID"),
+        ):
+            response = await litellm.acompletion(
+                model="vertex_ai/gemma/gemma-3-12b-it-1222199011122",
+                messages=[{"role": "user", "content": "Test"}],
+                api_base="https://test.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict",
+                vertex_project="PROJECT_ID",
+                vertex_location="us-central1",
+                client=custom_client,
+            )
+
+        custom_client.post.assert_awaited_once()
+        assert response.choices[0].message.content == "hi from async client"
+
+    def test_sync_completion_honors_raw_httpx_client_transport(self):
+        """
+        Regression for the reviewer's concern: a caller-supplied
+        httpx.Client(transport=MockTransport(...)) must be honored on the sync
+        path. Before the fix the isinstance(client, HTTPHandler) check failed
+        for a raw httpx client, so a brand-new default handler was created and
+        the caller's transport was silently dropped, sending the request to the
+        real Vertex endpoint.
+        """
+        import httpx
+
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+        from litellm.llms.vertex_ai.vertex_gemma_models.transformation import (
+            VertexGemmaConfig,
+        )
+        from litellm.types.utils import ModelResponse
+
+        captured = {}
+
+        def transport_handler(request):
+            captured["count"] = captured.get("count", 0) + 1
+            captured["url"] = str(request.url)
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(
+                status_code=200,
+                json=_make_gemma_vertex_response(content="from mock transport"),
+            )
+
+        mock_client = httpx.Client(transport=httpx.MockTransport(transport_handler))
+
+        try:
+            with patch.object(
+                HTTPHandler,
+                "__init__",
+                side_effect=AssertionError("raw httpx.Client must not be wrapped"),
+            ):
+                response = VertexGemmaConfig().completion(
+                    model="gemma-3-12b-it",
+                    messages=[{"role": "user", "content": "hi"}],
+                    api_base="https://should-not-be-reached.invalid/v1:predict",
+                    api_key="fake-token",
+                    custom_prompt_dict={},
+                    model_response=ModelResponse(),
+                    print_verbose=lambda *args, **kwargs: None,
+                    logging_obj=Mock(),
+                    optional_params={},
+                    acompletion=False,
+                    litellm_params={},
+                    client=mock_client,
+                )
+
+                assert not mock_client.is_closed
+
+                second_response = VertexGemmaConfig().completion(
+                    model="gemma-3-12b-it",
+                    messages=[{"role": "user", "content": "hi again"}],
+                    api_base="https://should-not-be-reached.invalid/v1:predict",
+                    api_key="fake-token",
+                    custom_prompt_dict={},
+                    model_response=ModelResponse(),
+                    print_verbose=lambda *args, **kwargs: None,
+                    logging_obj=Mock(),
+                    optional_params={},
+                    acompletion=False,
+                    litellm_params={},
+                    client=mock_client,
+                )
+        finally:
+            mock_client.close()
+
+        assert captured["count"] == 2
+        assert captured.get("url") == "https://should-not-be-reached.invalid/v1:predict"
+        assert captured["body"]["instances"][0]["@requestFormat"] == "chatCompletions"
+        assert isinstance(response, ModelResponse)
+        assert response.choices[0].message.content == "from mock transport"
+        assert response.usage.total_tokens == 114
+        assert second_response.choices[0].message.content == "from mock transport"
+
+    def test_sync_completion_ignores_async_client_for_backwards_compatibility(self):
+        import asyncio
+        import httpx
+
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+        from litellm.llms.vertex_ai.vertex_gemma_models.transformation import (
+            VertexGemmaConfig,
+        )
+        from litellm.types.utils import ModelResponse
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = _make_gemma_vertex_response(content="default sync fallback")
+        mock_client = httpx.AsyncClient(transport=httpx.MockTransport(Mock()))
+
+        try:
+            with patch.object(
+                VertexGemmaConfig,
+                "_sync_post",
+                return_value=mock_response,
+            ) as mock_sync_post:
+                response = VertexGemmaConfig().completion(
+                    model="gemma-3-12b-it",
+                    messages=[{"role": "user", "content": "hi"}],
+                    api_base="https://should-not-be-reached.invalid/v1:predict",
+                    api_key="fake-token",
+                    custom_prompt_dict={},
+                    model_response=ModelResponse(),
+                    print_verbose=lambda *args, **kwargs: None,
+                    logging_obj=Mock(),
+                    optional_params={},
+                    acompletion=False,
+                    litellm_params={},
+                    client=mock_client,
+                )
+        finally:
+            asyncio.run(mock_client.aclose())
+
+        mock_sync_post.assert_called_once()
+        assert mock_sync_post.call_args.kwargs["client"] is None
+        assert response.choices[0].message.content == "default sync fallback"
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = _make_gemma_vertex_response(content="default sync handler fallback")
+        with patch.object(
+            VertexGemmaConfig,
+            "_sync_post",
+            return_value=mock_response,
+        ) as mock_sync_post:
+            response = VertexGemmaConfig().completion(
+                model="gemma-3-12b-it",
+                messages=[{"role": "user", "content": "hi"}],
+                api_base="https://should-not-be-reached.invalid/v1:predict",
+                api_key="fake-token",
+                custom_prompt_dict={},
+                model_response=ModelResponse(),
+                print_verbose=lambda *args, **kwargs: None,
+                logging_obj=Mock(),
+                optional_params={},
+                acompletion=False,
+                litellm_params={},
+                client=Mock(spec=AsyncHTTPHandler),
+            )
+
+        mock_sync_post.assert_called_once()
+        assert mock_sync_post.call_args.kwargs["client"] is None
+        assert response.choices[0].message.content == "default sync handler fallback"
+
+    @pytest.mark.asyncio
+    async def test_async_completion_honors_raw_httpx_client_transport(self):
+        """Async counterpart: a raw httpx.AsyncClient transport must be honored."""
+        import httpx
+
+        from litellm.llms.vertex_ai.vertex_gemma_models.transformation import (
+            VertexGemmaConfig,
+        )
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+        from litellm.types.utils import ModelResponse
+
+        captured = {}
+
+        def transport_handler(request):
+            captured["url"] = str(request.url)
+            captured["body"] = json.loads(request.content)
+            captured["timeout"] = request.extensions.get("timeout")
+            return httpx.Response(
+                status_code=200,
+                json=_make_gemma_vertex_response(content="async from mock transport"),
+            )
+
+        mock_client = httpx.AsyncClient(
+            timeout=5.0,
+            transport=httpx.MockTransport(transport_handler),
+        )
+
+        try:
+            with patch.object(
+                AsyncHTTPHandler,
+                "__init__",
+                side_effect=AssertionError("raw AsyncClient must not be wrapped"),
+            ):
+                response = await VertexGemmaConfig().completion(
+                    model="gemma-3-12b-it",
+                    messages=[{"role": "user", "content": "hi"}],
+                    api_base="https://should-not-be-reached.invalid/v1:predict",
+                    api_key="fake-token",
+                    custom_prompt_dict={},
+                    model_response=ModelResponse(),
+                    print_verbose=lambda *args, **kwargs: None,
+                    logging_obj=Mock(),
+                    optional_params={},
+                    acompletion=True,
+                    litellm_params={},
+                    client=mock_client,
+                )
+        finally:
+            await mock_client.aclose()
+
+        assert captured.get("url") == "https://should-not-be-reached.invalid/v1:predict"
+        assert captured["body"]["instances"][0]["@requestFormat"] == "chatCompletions"
+        assert isinstance(response, ModelResponse)
+        assert response.choices[0].message.content == "async from mock transport"
+        assert response.usage.total_tokens == 114
+        assert captured["timeout"] == {
+            "connect": 5.0,
+            "read": 5.0,
+            "write": 5.0,
+            "pool": 5.0,
+        }
+
+    @pytest.mark.asyncio
+    async def test_async_completion_ignores_sync_client_for_backwards_compatibility(self):
+        import httpx
+
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+        from litellm.llms.vertex_ai.vertex_gemma_models.transformation import (
+            VertexGemmaConfig,
+        )
+        from litellm.types.utils import ModelResponse
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = _make_gemma_vertex_response(content="default async fallback")
+        mock_client = httpx.Client(transport=httpx.MockTransport(Mock()))
+
+        try:
+            with patch.object(
+                VertexGemmaConfig,
+                "_async_post",
+                new=AsyncMock(return_value=mock_response),
+            ) as mock_async_post:
+                response = await VertexGemmaConfig().completion(
+                    model="gemma-3-12b-it",
+                    messages=[{"role": "user", "content": "hi"}],
+                    api_base="https://should-not-be-reached.invalid/v1:predict",
+                    api_key="fake-token",
+                    custom_prompt_dict={},
+                    model_response=ModelResponse(),
+                    print_verbose=lambda *args, **kwargs: None,
+                    logging_obj=Mock(),
+                    optional_params={},
+                    acompletion=True,
+                    litellm_params={},
+                    client=mock_client,
+                )
+        finally:
+            mock_client.close()
+
+        mock_async_post.assert_awaited_once()
+        assert mock_async_post.call_args.kwargs["client"] is None
+        assert response.choices[0].message.content == "default async fallback"
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = _make_gemma_vertex_response(content="default async handler fallback")
+        with patch.object(
+            VertexGemmaConfig,
+            "_async_post",
+            new=AsyncMock(return_value=mock_response),
+        ) as mock_async_post:
+            response = await VertexGemmaConfig().completion(
+                model="gemma-3-12b-it",
+                messages=[{"role": "user", "content": "hi"}],
+                api_base="https://should-not-be-reached.invalid/v1:predict",
+                api_key="fake-token",
+                custom_prompt_dict={},
+                model_response=ModelResponse(),
+                print_verbose=lambda *args, **kwargs: None,
+                logging_obj=Mock(),
+                optional_params={},
+                acompletion=True,
+                litellm_params={},
+                client=Mock(spec=HTTPHandler),
+            )
+
+        mock_async_post.assert_awaited_once()
+        assert mock_async_post.call_args.kwargs["client"] is None
+        assert response.choices[0].message.content == "default async handler fallback"

@@ -13,6 +13,33 @@ How it solves it:
 - <blah>
 - ...
 
+## User Flow
+
+<!-- Two ordered lists, Before and After, walking the same end user through the same task, written strictly from that user's seat
+     Read the linked issue, ticket, or customer thread first so the flow reflects the real application and the routes its users actually hit; don't invent a generic scenario
+     Lead each list with one plain sentence saying where the flow fails (Before) or succeeds (After), then number the steps
+     Every step is something the user does or observes: the HTTP method and full URL they hit, what they sent, and what visibly came back (status code, error text, the shape of an ID). UI steps name the page URL and what is on screen
+     No LiteLLM internals: never name functions, files, DB tables, config classes, hooks, callbacks, or code paths. "The upload hands back an ID that looks like OpenAI's own `file-abc123` instead of the scrambled one the gateway returned" is right, "no managed-file row was registered" is wrong
+     Keep the two lists step-for-step identical until they diverge, so the changed step is obvious
+     If the bug had a security or authorization consequence, end each list with what another user could or could no longer do
+     Regenerate this section whenever new commits change the PR's behavior, so it never describes an older revision
+
+Example:
+
+Before: a developer whose app streams chat completions gets no token counts back, so their cost dashboard reads zero
+
+1. They send POST https://litellm-domain/v1/chat/completions with `"stream": true` and no `stream_options`
+2. The last SSE chunk arrives with `"usage": null`, so their app records 0 prompt and 0 completion tokens
+3. They open https://litellm-domain/ui/?page=logs and see the request logged at $0 spend
+
+After: the same request comes back with real token counts, so the dashboard shows real spend
+
+1. The proxy admin sets `always_include_stream_usage: true` and restarts the proxy
+2. The developer sends the same POST https://litellm-domain/v1/chat/completions with `"stream": true` and no `stream_options`
+3. The last SSE chunk now carries a `usage` object with real prompt and completion token counts
+4. https://litellm-domain/ui/?page=logs shows that request at non-zero spend
+-->
+
 ## Relevant issues
 
 <!-- e.g., "Fixes #000" -->
@@ -40,6 +67,7 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
      The proof must be completely e2e with no mocks, using, for example, actual LLM calls costing real $. `pytest` commands are not enough
      For bug fixes: show reproduction before the fix and passing behavior after
      Include the commit hash each proof was captured at, for both the before and the after runs
+     If the change applies to all three LLM endpoints (/v1/responses, /v1/chat/completions, /v1/messages), include proof for every single one of them, not just one
      For new features: show the feature working end-to-end
      For UI changes: include before/after screenshots -->
 
@@ -55,7 +83,11 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 🚄 Infrastructure
 ✅ Test
 
-## Changes
+## Caveats (if any)
+
+<!-- Short bullet points, just like the TLDR: one line per bullet, roughly 10 words max
+     Call out known limitations, follow-up work, or anything a reviewer should watch out for
+     Leave this section empty if there are none -->
 
 ## QA runbook
 

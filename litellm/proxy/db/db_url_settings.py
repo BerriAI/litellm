@@ -41,13 +41,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # AWS-touching token mint stays patchable at its canonical location in tests.
 from litellm.proxy.auth import rds_iam_token
 
-_IAM_ENV_KEY = "IAM_TOKEN_DB_AUTH"
-_DEFAULT_PG_PORT = "5432"
+_IAM_ENV_KEY: Final = "IAM_TOKEN_DB_AUTH"
+_DEFAULT_PG_PORT: Final = "5432"
 
 # schema.prisma pins `provider = "postgresql"`, so these are the only schemes
 # Prisma can actually connect with.
 SUPPORTED_DB_SCHEMES: Final[frozenset[str]] = frozenset({"postgresql", "postgres"})
-_MISSING_SCHEME = "<missing scheme>"
+_MISSING_SCHEME: Final = "<missing scheme>"
 
 
 def unsupported_db_scheme(database_url: str) -> str | None:
@@ -63,7 +63,7 @@ def unsupported_db_scheme(database_url: str) -> str | None:
     the ``_MISSING_SCHEME`` placeholder rather than the raw URL, so callers that
     log the return value never echo embedded credentials.
     """
-    scheme = urllib.parse.urlsplit(database_url).scheme.lower()
+    scheme: Final = urllib.parse.urlsplit(database_url).scheme.lower()
     if scheme in SUPPORTED_DB_SCHEMES:
         return None
     return scheme or _MISSING_SCHEME
@@ -130,7 +130,7 @@ class DatabaseURLSettings(BaseSettings):
         from this and a clear startup error beats a Prisma connect failure.
         """
         if self.iam_token_db_auth:
-            missing = [
+            missing: Final = [
                 env
                 for env, val in (
                     ("DATABASE_HOST", self.database_host),
@@ -145,12 +145,12 @@ class DatabaseURLSettings(BaseSettings):
                     f"are unset: {', '.join(missing)}. Set them so the writer "
                     "DATABASE_URL can be assembled with a minted IAM token."
                 )
-            host = cast(str, self.database_host)
-            user = cast(str, self.database_user)
-            name = cast(str, self.database_name)
+            host: Final = cast(str, self.database_host)
+            user: Final = cast(str, self.database_user)
+            name: Final = cast(str, self.database_name)
             # IAM token is already URL-quoted by generate_iam_auth_token;
             # user/name embedded raw (parity with proxy_cli.py / IAMEndpoint).
-            token = rds_iam_token.generate_iam_auth_token(db_host=host, db_port=self.database_port, db_user=user)
+            token: Final = rds_iam_token.generate_iam_auth_token(db_host=host, db_port=self.database_port, db_user=user)
             url = f"postgresql://{user}:{token}@{host}:{self.database_port}/{name}"
             if self.database_schema:
                 url += f"?schema={self.database_schema}"
@@ -182,15 +182,15 @@ class DatabaseURLSettings(BaseSettings):
         if self.database_url_read_replica:
             return None  # never clobber an operator-supplied reader URL
 
-        host = self.database_host_read_replica
-        port = self.database_port_read_replica or self.database_port
+        host: Final = self.database_host_read_replica
+        port: Final = self.database_port_read_replica or self.database_port
         user = self.database_user_read_replica or self.database_user
         name = self.database_name_read_replica or self.database_name
-        schema = self.database_schema_read_replica or self.database_schema
-        password = self.database_password_read_replica or self.database_password
+        schema: Final = self.database_schema_read_replica or self.database_schema
+        password: Final = self.database_password_read_replica or self.database_password
 
         if self.iam_token_db_auth:
-            missing = [
+            missing: Final = [
                 env
                 for env, val in (
                     ("DATABASE_USER[_READ_REPLICA]", user),
@@ -208,7 +208,7 @@ class DatabaseURLSettings(BaseSettings):
                 )
             user = cast(str, user)
             name = cast(str, name)
-            token = rds_iam_token.generate_iam_auth_token(db_host=host, db_port=port, db_user=user)
+            token: Final = rds_iam_token.generate_iam_auth_token(db_host=host, db_port=port, db_user=user)
             url = f"postgresql://{user}:{token}@{host}:{port}/{name}"
             if schema:
                 url += f"?schema={schema}"
@@ -240,9 +240,9 @@ class DatabaseURLSettings(BaseSettings):
         Parity with ``construct_database_url_from_env_vars`` in
         ``proxy/utils.py``; ``password`` may be empty for a passwordless URL.
         """
-        quote = urllib.parse.quote_plus
-        user_p = quote(user)
-        name_p = quote(name)
+        quote: Final = urllib.parse.quote_plus
+        user_p: Final = quote(user)
+        name_p: Final = quote(name)
         if password:
             url = f"postgresql://{user_p}:{quote(password)}@{host}:{port}/{name_p}"
         else:
@@ -280,7 +280,7 @@ class DatabaseURLSettings(BaseSettings):
         """
         self._raise_for_unsupported_scheme()
         wrote_writer = False
-        writer_url = self.build_writer_url()
+        writer_url: Final = self.build_writer_url()
         if writer_url is not None:
             os.environ["DATABASE_URL"] = writer_url
             if self.iam_token_db_auth:
@@ -289,7 +289,7 @@ class DatabaseURLSettings(BaseSettings):
                 os.environ[_IAM_ENV_KEY] = "True"
             wrote_writer = True
 
-        reader_url = self.build_reader_url()
+        reader_url: Final = self.build_reader_url()
         if reader_url is not None:
             os.environ["DATABASE_URL_READ_REPLICA"] = reader_url
 

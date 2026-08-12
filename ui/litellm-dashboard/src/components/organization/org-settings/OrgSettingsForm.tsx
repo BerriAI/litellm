@@ -78,7 +78,7 @@ export const OrgSettingsForm = ({
   });
 
   return (
-    <form onSubmit={onSubmit}>
+    <form onSubmit={onSubmit} noValidate>
       <FieldGroup>
         <FormField control={form.control} name="organization_alias" label="Organization Name">
           {({ ref, ...field }) => <Input {...field} ref={ref} />}
@@ -96,7 +96,7 @@ export const OrgSettingsForm = ({
         </FormField>
 
         <FormField control={form.control} name="max_budget" label="Max Budget (USD)">
-          {({ ref, ...field }) => <Input {...field} ref={ref} type="number" step={0.01} min={0} />}
+          {({ ref, ...field }) => <Input {...field} ref={ref} type="number" step="any" min={0} />}
         </FormField>
 
         <FormField control={form.control} name="budget_duration" label="Reset Budget">

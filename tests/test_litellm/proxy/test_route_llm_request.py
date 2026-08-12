@@ -8,6 +8,8 @@ sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to 
 
 from unittest.mock import MagicMock
 
+from fastapi import HTTPException
+
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError, route_request
 
 
@@ -471,38 +473,186 @@ async def test_route_request_with_router_settings_override_preserves_existing():
     assert call_kwargs["timeout"] == 30
 
 
-def test_mock_testing_kwarg_names_matches_dataclass():
-    """``_MOCK_TESTING_KWARG_NAMES`` is hardcoded to avoid a cyclic import
-    against ``litellm.types.router``. This test guards against drift —
-    if a new ``mock_testing_*`` field is added to ``MockRouterTestingParams``
-    the strip list must be updated to keep covering it."""
+def test_gated_mock_params_cover_mock_router_testing_params():
+    """``GATED_MOCK_PARAM_NAMES`` is hardcoded to avoid a cyclic import
+    against ``litellm.types.router``. This test guards against drift — if a
+    new ``mock_testing_*`` field is added to ``MockRouterTestingParams`` the
+    gate must be updated to keep covering it. The gate is a superset: it also
+    covers params consumed outside that dataclass."""
     from dataclasses import fields
 
-    from litellm.proxy.route_llm_request import _MOCK_TESTING_KWARG_NAMES
+    from litellm.proxy.route_llm_request import GATED_MOCK_PARAM_NAMES
     from litellm.types.router import MockRouterTestingParams
 
-    assert set(_MOCK_TESTING_KWARG_NAMES) == {f.name for f in fields(MockRouterTestingParams)}
+    assert {f.name for f in fields(MockRouterTestingParams)} <= set(GATED_MOCK_PARAM_NAMES)
+    assert {"mock_testing_rate_limit_error", "mock_timeout", "mock_delay"} <= set(GATED_MOCK_PARAM_NAMES)
 
 
-@pytest.mark.asyncio
+def test_e2e_proxy_config_opts_in_to_the_mock_params_its_suite_sends():
+    """The ``build_and_test`` CI job runs the top-level ``tests/test_*.py`` suite
+    against a proxy mounted with ``proxy_server_config.yaml``. Several of those
+    tests drive fallback, retry and timeout paths by asking the proxy to
+    fabricate a failure, which the gate rejects with a 400 unless the config
+    opts in. Without the opt-in the positive cases fail outright and the
+    negative ones pass for the wrong reason, so the suite and the config it
+    runs against have to move together."""
+    from pathlib import Path
+
+    import yaml
+
+    from litellm.proxy.route_llm_request import (
+        GATED_MOCK_PARAM_NAMES,
+        MOCK_TESTING_CONFIG_KEY,
+    )
+
+    repo_root = Path(__file__).parents[3]
+    suite_sources = tuple(
+        (path, path.read_text(encoding="utf-8")) for path in sorted(repo_root.glob("tests/test_*.py"))
+    )
+    senders = frozenset(
+        f"{path.name}:{param}"
+        for path, source in suite_sources
+        for param in GATED_MOCK_PARAM_NAMES
+        if f"{param}=" in source or f'"{param}"' in source
+    )
+    assert senders, "expected the E2E suite to still exercise the gated mock testing params"
+
+    config = yaml.safe_load((repo_root / "proxy_server_config.yaml").read_text(encoding="utf-8"))
+    general_settings = config.get("general_settings") or {}
+
+    assert general_settings.get(MOCK_TESTING_CONFIG_KEY) is True, (
+        f"proxy_server_config.yaml must set general_settings.{MOCK_TESTING_CONFIG_KEY}: true — "
+        f"the E2E suite sends gated mock testing params ({', '.join(sorted(senders))}) "
+        "and the proxy rejects them with a 400 otherwise"
+    )
+
+
 @pytest.mark.parametrize(
-    "mock_flag",
+    "mock_param",
     [
         "mock_testing_fallbacks",
         "mock_testing_context_fallbacks",
         "mock_testing_content_policy_fallbacks",
+        "mock_testing_rate_limit_error",
+        "mock_timeout",
+        "mock_delay",
     ],
 )
-async def test_route_request_strips_mock_testing_flags(mock_flag):
-    """VERIA-44: router-internal testing flags must not survive a
-    user-supplied request body. Without this strip, an attacker can
-    combine ``mock_testing_fallbacks=true`` with an unauthorized fallback
-    in ``router_settings_override`` to deterministically execute requests
-    against restricted models."""
+def test_mock_params_rejected_when_not_allowed(mock_param):
+    """Every gated param must be rejected by name when the proxy has not
+    opted in, and the error must point the caller at the config key."""
+    from litellm.proxy.route_llm_request import (
+        MOCK_TESTING_CONFIG_KEY,
+        raise_if_mock_testing_params_disallowed,
+    )
+
+    data = {"model": "gpt-3.5-turbo", mock_param: True}
+
+    with pytest.raises(HTTPException) as exc_info:
+        raise_if_mock_testing_params_disallowed(data, allowed=False)
+
+    assert exc_info.value.status_code == 400
+    error_message = exc_info.value.detail["error"]
+    assert mock_param in error_message
+    assert MOCK_TESTING_CONFIG_KEY in error_message
+
+
+@pytest.mark.parametrize(
+    "mock_param",
+    [
+        "mock_testing_fallbacks",
+        "mock_testing_context_fallbacks",
+        "mock_testing_content_policy_fallbacks",
+        "mock_testing_rate_limit_error",
+        "mock_timeout",
+        "mock_delay",
+    ],
+)
+def test_mock_params_pass_through_when_allowed(mock_param):
+    """With the opt-in set, gated params must survive untouched — a gate that
+    rejects correctly but strips anyway would leave the feature unusable."""
+    from litellm.proxy.route_llm_request import raise_if_mock_testing_params_disallowed
+
+    data = {"model": "gpt-3.5-turbo", mock_param: True}
+
+    raise_if_mock_testing_params_disallowed(data, allowed=True)
+
+    assert data[mock_param] is True
+
+
+def test_mock_param_gate_reports_every_param_present():
+    """A request carrying several gated params must name all of them, so a
+    caller fixing one is not surprised by the next."""
+    from litellm.proxy.route_llm_request import raise_if_mock_testing_params_disallowed
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "mock_testing_fallbacks": True,
+        "mock_delay": 30,
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        raise_if_mock_testing_params_disallowed(data, allowed=False)
+
+    error_message = exc_info.value.detail["error"]
+    assert "mock_testing_fallbacks" in error_message
+    assert "mock_delay" in error_message
+
+
+def test_ordinary_request_is_not_rejected_by_the_mock_param_gate():
+    """The gate must not fire on a request that carries no gated param."""
+    from litellm.proxy.route_llm_request import raise_if_mock_testing_params_disallowed
+
     data = {
         "model": "gpt-3.5-turbo",
         "messages": [{"role": "user", "content": "Hello"}],
-        mock_flag: True,
+        "mock_response": "hi",
+    }
+
+    raise_if_mock_testing_params_disallowed(data, allowed=False)
+
+
+@pytest.mark.asyncio
+async def test_route_request_rejects_mock_params_by_default(monkeypatch):
+    """End-to-end through ``route_request``: with no opt-in configured the
+    request is rejected before it ever reaches the router."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {}, raising=False)
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "mock_testing_fallbacks": True,
+    }
+    llm_router = MagicMock()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await route_request(data, llm_router, None, "acompletion")
+
+    assert exc_info.value.status_code == 400
+    llm_router.acompletion.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_route_request_forwards_mock_params_when_opted_in(monkeypatch):
+    """End-to-end through ``route_request``: with the opt-in set the param
+    reaches the router, which is what makes a fallback drill possible."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    from litellm.proxy.route_llm_request import MOCK_TESTING_CONFIG_KEY
+
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {MOCK_TESTING_CONFIG_KEY: True},
+        raising=False,
+    )
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "mock_testing_fallbacks": True,
     }
     llm_router = MagicMock()
     llm_router.acompletion.return_value = "ok"
@@ -510,10 +660,7 @@ async def test_route_request_strips_mock_testing_flags(mock_flag):
     await route_request(data, llm_router, None, "acompletion")
 
     call_kwargs = llm_router.acompletion.call_args[1]
-    assert mock_flag not in call_kwargs
-    # The flag is also gone from the original data dict so any subsequent
-    # processing (e.g. logging) doesn't see it either.
-    assert mock_flag not in data
+    assert call_kwargs["mock_testing_fallbacks"] is True
 
 
 @pytest.mark.parametrize("route_type", ["agenerate_content", "agenerate_content_stream"])
@@ -944,3 +1091,27 @@ async def test_route_request_rejects_chat_completion_without_messages():
     assert exc_info.value.status_code == 400
     assert exc_info.value.param == "messages"
     llm_router.acompletion.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_route_request_routing_group_name_passes_model_gate():
+    from unittest.mock import AsyncMock, patch
+
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "member-a", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"}},
+            {"model_name": "member-b", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}},
+        ],
+        routing_groups=[
+            {"group_name": "grouped-quality", "models": ["member-a", "member-b"], "routing_strategy": "simple-shuffle"}
+        ],
+    )
+    data = {"model": "grouped-quality", "messages": [{"role": "user", "content": "hi"}]}
+
+    with patch.object(router, "acompletion", new=AsyncMock(return_value="group_response")) as spy:
+        response = await (await route_request(data, router, None, "acompletion"))
+
+    assert response == "group_response"
+    spy.assert_called_once_with(**data)
