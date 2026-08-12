@@ -3,8 +3,8 @@ Regression tests for Azure AI Foundry Fireworks (FW-*) model cost map entries.
 
 Prices for Data Zone pay-per-token meters come from the Azure retail prices API
 (product "Azure Fireworks Models"). Kimi K3 rates come from the Microsoft Foundry
-announcement. GLM-5.2-Fast uses Fireworks serverless Fast rates when Azure does
-not publish a dedicated meter yet.
+announcement. Models without dedicated Azure meters use published Fireworks
+serverless rates.
 """
 
 import json
@@ -45,6 +45,13 @@ FW_MODELS = {
         "max_output_tokens": 131072,
         "supports_vision": True,
     },
+    "azure_ai/FW-Inkling": {
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 4.05e-06,
+        "cache_read_input_token_cost": 1.7e-07,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+    },
     "azure_ai/FW-DeepSeek-V3.2": {
         "input_cost_per_token": 6.2e-07,
         "output_cost_per_token": 1.85e-06,
@@ -73,6 +80,13 @@ FW_MODELS = {
         "cache_read_input_token_cost": 3.3e-08,
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
+    },
+    "azure_ai/FW-Nemotron-3-Ultra-NVFP4": {
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 2.4e-06,
+        "cache_read_input_token_cost": 1.19e-07,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
     },
     "azure_ai/FW-GLM-5.2-Fast": {
         "input_cost_per_token": 2.1e-06,
@@ -160,6 +174,8 @@ def test_azure_ai_fw_model_info(use_local_model_cost_map, model_key, expected):
         ("FW-GLM-5.2", 1.54, 4.84),
         ("FW-Kimi-K3", 3.3, 16.5),
         ("FW-MiniMax-M2.5", 0.33, 1.32),
+        ("FW-Inkling", 1.0, 4.05),
+        ("FW-Nemotron-3-Ultra-NVFP4", 0.6, 2.4),
     ],
 )
 def test_azure_ai_fw_cost_per_token(
