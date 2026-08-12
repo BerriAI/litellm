@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -139,9 +139,24 @@ describe("DefaultTeamSettingsForm", () => {
     const { updateSettings } = renderForm();
 
     await enterEditMode(user);
-    fireEvent.change(await screen.findByLabelText("TPM Limit"), { target: { value: "12.5" } });
+    await user.clear(await screen.findByLabelText("TPM Limit"));
+    await user.type(screen.getByLabelText("TPM Limit"), "12.5");
     await user.click(await saveButton());
 
+    expect(await screen.findByText("Must be a non-negative whole number")).toBeInTheDocument();
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("keeps number-ish junk visible and rejects it instead of silently clearing the limit", async () => {
+    const user = userEvent.setup();
+    const { updateSettings } = renderForm();
+
+    await enterEditMode(user);
+    await user.clear(await screen.findByLabelText("TPM Limit"));
+    await user.type(screen.getByLabelText("TPM Limit"), "12e");
+    await user.click(await saveButton());
+
+    expect(screen.getByLabelText("TPM Limit")).toHaveValue("12e");
     expect(await screen.findByText("Must be a non-negative whole number")).toBeInTheDocument();
     expect(updateSettings).not.toHaveBeenCalled();
   });
@@ -223,7 +238,7 @@ describe("DefaultTeamSettingsForm", () => {
       expect(NotificationsManager.fromBackend).toHaveBeenCalledWith("Set `'STORE_MODEL_IN_DB='True'` in your env."),
     );
     expect(await saveButton()).toBeEnabled();
-    expect(screen.getByLabelText("Max Budget (USD)")).toHaveValue(250);
+    expect(screen.getByLabelText("Max Budget (USD)")).toHaveValue("250");
   });
 
   it("discards edits and returns to the read-only view when Cancel is pressed", async () => {
@@ -240,7 +255,7 @@ describe("DefaultTeamSettingsForm", () => {
     expect(updateSettings).not.toHaveBeenCalled();
 
     await enterEditMode(user);
-    expect(screen.getByLabelText("Max Budget (USD)")).toHaveValue(100);
+    expect(screen.getByLabelText("Max Budget (USD)")).toHaveValue("100");
     expect(await saveButton()).toBeDisabled();
   });
 });

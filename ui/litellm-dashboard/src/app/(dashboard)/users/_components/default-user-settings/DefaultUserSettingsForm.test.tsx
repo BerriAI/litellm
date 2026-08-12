@@ -161,6 +161,20 @@ describe("DefaultUserSettingsForm", () => {
     expect(updateSettings).toHaveBeenCalledWith({ ...SAVED_BODY, max_budget: null });
   });
 
+  it("keeps number-ish junk visible and rejects it instead of silently clearing the budget", async () => {
+    const user = userEvent.setup();
+    const { updateSettings } = renderForm();
+
+    await enterEditMode(user);
+    await user.clear(await screen.findByLabelText("Max Budget (USD)"));
+    await user.type(screen.getByLabelText("Max Budget (USD)"), "12e");
+    await user.click(await saveButton());
+
+    expect(screen.getByLabelText("Max Budget (USD)")).toHaveValue("12e");
+    expect(await screen.findByText("Must be a non-negative number")).toBeInTheDocument();
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
   it("sends the models selection through unchanged, sentinel values included", async () => {
     const user = userEvent.setup();
     const { updateSettings } = renderForm();
@@ -275,7 +289,7 @@ describe("DefaultUserSettingsForm", () => {
       expect(NotificationsManager.fromBackend).toHaveBeenCalledWith("Team(s) not found: team-alhpa."),
     );
     expect(await saveButton()).toBeEnabled();
-    expect(screen.getByLabelText("Max Budget (USD)")).toHaveValue(250);
+    expect(screen.getByLabelText("Max Budget (USD)")).toHaveValue("250");
   });
 
   it("discards edits and returns to the read-only view when Cancel is pressed", async () => {
@@ -293,7 +307,7 @@ describe("DefaultUserSettingsForm", () => {
     expect(updateSettings).not.toHaveBeenCalled();
 
     await enterEditMode(user);
-    expect(screen.getByLabelText("Max Budget (USD)")).toHaveValue(100);
+    expect(screen.getByLabelText("Max Budget (USD)")).toHaveValue("100");
     expect(await saveButton()).toBeDisabled();
   });
 });

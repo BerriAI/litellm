@@ -175,7 +175,7 @@ const SettingsForm = ({ initialValues, updateSettings, onCancel, onSaved }: Sett
           label="Max Budget (USD)"
           description="Default maximum budget for new teams"
         >
-          {({ ref, ...field }) => <Input {...field} ref={ref} type="number" step={0.01} min={0} />}
+          {({ ref, ...field }) => <Input {...field} ref={ref} type="text" inputMode="decimal" />}
         </FormField>
 
         <FormField
@@ -210,7 +210,7 @@ const SettingsForm = ({ initialValues, updateSettings, onCancel, onSaved }: Sett
           label="TPM Limit"
           description="Default tokens-per-minute limit for new teams"
         >
-          {({ ref, ...field }) => <Input {...field} ref={ref} type="number" step={1} min={0} />}
+          {({ ref, ...field }) => <Input {...field} ref={ref} type="text" inputMode="numeric" />}
         </FormField>
 
         <FormField
@@ -219,7 +219,7 @@ const SettingsForm = ({ initialValues, updateSettings, onCancel, onSaved }: Sett
           label="RPM Limit"
           description="Default requests-per-minute limit for new teams"
         >
-          {({ ref, ...field }) => <Input {...field} ref={ref} type="number" step={1} min={0} />}
+          {({ ref, ...field }) => <Input {...field} ref={ref} type="text" inputMode="numeric" />}
         </FormField>
 
         <FormField
