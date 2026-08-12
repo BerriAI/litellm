@@ -9707,6 +9707,7 @@
         "output_cost_per_token": 2.22e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
@@ -9830,6 +9831,7 @@
         "output_cost_per_token": 2.22e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
@@ -9922,6 +9924,7 @@
         "output_cost_per_token": 2.22e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
@@ -10007,6 +10010,7 @@
         "output_cost_per_token": 2.22e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
@@ -10410,6 +10414,7 @@
         "output_cost_per_token": 2.22e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
@@ -10624,6 +10629,7 @@
         "output_cost_per_token": 1.85e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
@@ -10701,6 +10707,7 @@
         "output_cost_per_token": 1.85e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
@@ -11262,6 +11269,7 @@
         "output_cost_per_token": 1.85e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
@@ -35769,6 +35777,7 @@
         "output_cost_per_token": 1.85e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true
     },
     "eu.deepseek.v3.2": {
@@ -35781,6 +35790,7 @@
         "output_cost_per_token": 2.22e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true
     },
     "us.meta.llama3-1-405b-instruct-v1:0": {
@@ -46057,6 +46067,7 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
@@ -46071,6 +46082,7 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
