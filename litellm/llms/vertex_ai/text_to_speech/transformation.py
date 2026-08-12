@@ -500,7 +500,7 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
         optional_params: dict,
         voice: str | dict | None = None,
         drop_params: bool = False,
-        kwargs: dict = {},
+        kwargs: dict | None = None,
     ) -> tuple[str | None, dict]:
         mapped_params = dict(optional_params)
         base_model = model.removeprefix("vertex_ai/")
