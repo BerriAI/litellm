@@ -1,3 +1,3 @@
 from .transformation import VertexAIInteractionsConfig
 
-__all__ = ["VertexAIInteractionsConfig"]
+__all__ = ("VertexAIInteractionsConfig",)

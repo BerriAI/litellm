@@ -6,7 +6,7 @@ from typing import Any, Final, Literal, cast, get_type_hints
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -25,12 +25,12 @@ from litellm.utils import supports_response_schema, supports_system_messages
 
 
 class VertexAILyriaModelInfo(TypedDict):
-    vertex_ai_audio_api: Literal["lyria_predict", "lyria_interactions"]
-    supported_audio_formats: tuple[Literal["mp3", "wav"], ...]
-    output_cost_per_image: NotRequired[float]
+    vertex_ai_audio_api: ReadOnly[Literal["lyria_predict", "lyria_interactions"]]
+    supported_audio_formats: ReadOnly[tuple[Literal["mp3", "wav"], ...]]
+    output_cost_per_image: NotRequired[ReadOnly[float]]
 
 
-_VERTEX_AI_LYRIA_MODEL_INFO_ADAPTER = TypeAdapter(VertexAILyriaModelInfo)
+_VERTEX_AI_LYRIA_MODEL_INFO_ADAPTER: Final = TypeAdapter(VertexAILyriaModelInfo)
 
 
 def _validate_vertex_ai_lyria_model_info(raw_model_info: object) -> VertexAILyriaModelInfo | None:
@@ -46,13 +46,13 @@ def _validate_vertex_ai_lyria_model_info(raw_model_info: object) -> VertexAILyri
 def _get_bundled_vertex_ai_lyria_model_info(model_key: str) -> VertexAILyriaModelInfo | None:
     from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
-    bundled_model_info = GetModelCostMap.load_local_model_cost_map().get(model_key)
+    bundled_model_info: Final = GetModelCostMap.load_local_model_cost_map().get(model_key)
     return _validate_vertex_ai_lyria_model_info(bundled_model_info)
 
 
 def get_vertex_ai_lyria_model_info(model: str) -> VertexAILyriaModelInfo | None:
-    model_key = model if model.startswith("vertex_ai/") else f"vertex_ai/{model}"
-    runtime_model_info = _validate_vertex_ai_lyria_model_info(litellm.model_cost.get(model_key))
+    model_key: Final = model if model.startswith("vertex_ai/") else f"vertex_ai/{model}"
+    runtime_model_info: Final = _validate_vertex_ai_lyria_model_info(litellm.model_cost.get(model_key))
     return runtime_model_info or _get_bundled_vertex_ai_lyria_model_info(model_key)
 
 
