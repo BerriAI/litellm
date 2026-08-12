@@ -3773,10 +3773,16 @@ class TestAutoRouterClassifierDefaultPrompt:
             response = await get_auto_router_classifier_default_prompt(context_window_size=5, rubric=preset)
             assert response.system_prompt == classification_system_prompt(5, rubric=preset)
 
-        agentic = await get_auto_router_classifier_default_prompt(context_window_size=5)
+        agentic = await get_auto_router_classifier_default_prompt(
+            context_window_size=5, rubric=RubricPreset.AGENTIC
+        )
         chat = await get_auto_router_classifier_default_prompt(context_window_size=5, rubric=RubricPreset.CHAT)
+        unset = await get_auto_router_classifier_default_prompt(context_window_size=5)
         assert "Calibration on engineering tasks" in agentic.system_prompt
         assert "Calibration on engineering tasks" not in chat.system_prompt
+        assert "Calibration examples:" in chat.system_prompt
+        # An unset preset must prefill the editor with the rubric an unconfigured router still sends.
+        assert "Calibration" not in unset.system_prompt
 
     @pytest.mark.asyncio
     async def test_context_window_size_changes_the_closing_line(self):

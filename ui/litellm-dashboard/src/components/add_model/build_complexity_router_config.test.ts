@@ -455,9 +455,9 @@ describe("classifier prompt and fallback", () => {
     expect(config.classifier_llm_config).toEqual({ model: "haiku-classifier", timeout_ms: 400, rubric: "chat" });
   });
 
-  it("omits the preset when the operator never touched the picker, so the backend default applies", () => {
-    // Sending a copy of the default the dropdown displays would pin this router to today's default
-    // and make UI-built routers behave differently from hand-written config.
+  it("omits the preset when none is set, leaving an existing router on the rubric it already had", () => {
+    // An unset preset means the pre-calibration rubric on the backend. Materializing a value here
+    // would change the tier decisions, and the bill, of a router the operator only opened to edit.
     const config = buildComplexityRouterConfig(llmParams);
     expect(config.classifier_llm_config).not.toHaveProperty("rubric");
   });

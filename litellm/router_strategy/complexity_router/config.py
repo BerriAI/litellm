@@ -25,11 +25,15 @@ class ComplexityTier(str, Enum):
 class RubricPreset(str, Enum):
     """Which calibration examples the built-in classifier rubric carries."""
 
+    LEGACY = "legacy"
     AGENTIC = "agentic"
     CHAT = "chat"
 
 
-DEFAULT_RUBRIC_PRESET: Final[RubricPreset] = RubricPreset.AGENTIC
+# Unset means LEGACY, so upgrading never moves an existing router's tier decisions or its bill. A
+# router created through the dashboard is stamped with a preset at create time, which is how new
+# routers get the calibrated rubric without changing what is already running.
+DEFAULT_RUBRIC_PRESET: Final[RubricPreset] = RubricPreset.LEGACY
 
 
 TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (

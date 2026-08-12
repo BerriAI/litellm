@@ -32061,7 +32061,7 @@ export interface components {
          * @description Which calibration examples the built-in classifier rubric carries.
          * @enum {string}
          */
-        RubricPreset: "agentic" | "chat";
+        RubricPreset: "legacy" | "agentic" | "chat";
         /**
          * Run
          * @description Represents a run from the OpenAI Evals API

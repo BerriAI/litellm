@@ -11,6 +11,7 @@ import {
   DEFAULT_CLASSIFIER_FALLBACK,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
   DEFAULT_RUBRIC_PRESET,
+  NEW_CLASSIFIER_RUBRIC_PRESET,
   RUBRIC_PRESET_DESCRIPTIONS,
   RUBRIC_PRESET_KEYS,
   RubricPreset,
@@ -77,7 +78,11 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
       classifier_type: classifierType,
       classifier_llm_config:
         classifierType === "llm"
-          ? value.classifier_llm_config ?? { model: "", timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS }
+          ? value.classifier_llm_config ?? {
+              model: "",
+              timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS,
+              rubric: NEW_CLASSIFIER_RUBRIC_PRESET,
+            }
           : undefined,
       classifier_context_window_size:
         classifierType === "llm"

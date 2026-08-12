@@ -24,13 +24,28 @@ export interface ComplexityTiers {
   REASONING: string[];
 }
 
-export type RubricPreset = "agentic" | "chat";
+export type RubricPreset = "legacy" | "agentic" | "chat";
 
-export const DEFAULT_RUBRIC_PRESET: RubricPreset = "agentic";
+/** What an unset preset means, matching the backend: the rubric as it shipped before calibration. */
+export const DEFAULT_RUBRIC_PRESET: RubricPreset = "legacy";
+
+/**
+ * Stamped on a classifier being switched on for the first time. There is no prior tier behaviour to
+ * preserve at that moment, so a newly configured classifier gets the calibrated rubric while every
+ * router already running an LLM classifier keeps the one it has.
+ */
+export const NEW_CLASSIFIER_RUBRIC_PRESET: RubricPreset = "agentic";
 
 export const RUBRIC_PRESET_DESCRIPTIONS: Record<RubricPreset, { label: string; description: string }> = {
+  legacy: {
+    label: "Legacy (uncalibrated)",
+    description:
+      "The rubric as it shipped before calibration examples, with no worked examples at all. Routers created " +
+      "before this setting existed use it, so their tier decisions and spend are unchanged. It over-routes " +
+      "ordinary engineering to the most expensive tier.",
+  },
   agentic: {
-    label: "Agentic (default)",
+    label: "Agentic",
     description:
       "Anchors routine installs, builds, multi-file edits, and standard debugging at " +
       "Medium, so ordinary engineering does not route to your most expensive tier. Suits agent, terminal, and " +

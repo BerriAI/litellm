@@ -102,7 +102,7 @@ describe("ComplexityRouterConfig", () => {
     const expectedValue: ComplexityRouterConfigValue = {
       ...defaultValue,
       classifier_type: "llm",
-      classifier_llm_config: { model: "", timeout_ms: 3000 },
+      classifier_llm_config: { model: "", timeout_ms: 3000, rubric: "agentic" },
       classifier_context_window_size: 3,
       classifier_context_per_turn_chars: 200,
     };
@@ -548,9 +548,33 @@ describe("ComplexityRouterConfig classifier rubric", () => {
     return onChange;
   };
 
-  it("defaults to the agentic preset, matching the backend field default", () => {
+  it("shows an existing router with no stored preset as legacy, not as the calibrated default", () => {
+    // This router predates the setting. Displaying a calibrated preset it does not have would tell the
+    // operator their traffic is graded by examples the classifier never receives, and saving the form
+    // unchanged would then move its tier decisions.
     openClassificationPanel(llmValue);
-    expect(screen.getByText("Agentic (default)")).toBeInTheDocument();
+    expect(screen.getByText("Legacy (uncalibrated)")).toBeInTheDocument();
+    expect(screen.getByText(/tier decisions and spend are unchanged/)).toBeInTheDocument();
+  });
+
+  it("stamps the calibrated preset on a classifier being switched on for the first time", () => {
+    // A heuristic router turning on the LLM classifier has no prior tier behaviour to preserve, so a
+    // newly configured classifier starts on the calibrated rubric rather than the legacy one.
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    fireEvent.click(screen.getByText("LLM Classifier"));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ classifier_llm_config: expect.objectContaining({ rubric: "agentic" }) }),
+    );
+  });
+
+  it("shows the calibrated preset when a router stores one", () => {
+    openClassificationPanel({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, rubric: "agentic" },
+    });
+    expect(screen.getByText("Agentic")).toBeInTheDocument();
     expect(screen.getByText(/does not route to your most expensive tier/)).toBeInTheDocument();
   });
 
