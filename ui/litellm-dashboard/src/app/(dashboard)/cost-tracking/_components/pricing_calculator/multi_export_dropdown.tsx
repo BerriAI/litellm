@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect } from "react";
-import { Button } from "@tremor/react";
-import { DownloadOutlined, FilePdfOutlined, FileExcelOutlined } from "@ant-design/icons";
+import React, { useEffect, useRef, useState } from "react";
+import { Download, FileSpreadsheet, FileText } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { MultiModelResult } from "./types";
 import { exportMultiToPDF, exportMultiToCSV } from "./multi_export_utils";
 
@@ -25,9 +25,7 @@ const MultiExportDropdown: React.FC<MultiExportDropdownProps> = ({ multiResult }
       document.addEventListener("mousedown", handleClickOutside);
     }
 
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [isOpen]);
 
   if (!hasResults) {
@@ -35,33 +33,46 @@ const MultiExportDropdown: React.FC<MultiExportDropdownProps> = ({ multiResult }
   }
 
   return (
-    <div className="relative inline-block" ref={menuRef}>
-      <Button size="xs" variant="secondary" icon={DownloadOutlined} onClick={() => setIsOpen(!isOpen)}>
+    <div ref={menuRef} className="relative inline-block">
+      <Button
+        size="xs"
+        variant="secondary"
+        aria-expanded={isOpen}
+        aria-haspopup="menu"
+        onClick={() => setIsOpen(!isOpen)}
+      >
+        <Download />
         Export
       </Button>
-
       {isOpen && (
-        <div className="absolute right-0 mt-1 w-44 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
-          <button
-            className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+        <div
+          role="menu"
+          className="absolute right-0 z-50 mt-1 w-44 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
+        >
+          <Button
+            role="menuitem"
+            variant="ghost"
+            className="w-full justify-start px-3 font-normal"
             onClick={() => {
               exportMultiToPDF(multiResult);
               setIsOpen(false);
             }}
           >
-            <FilePdfOutlined className="mr-3 text-red-500" />
+            <FileText className="text-muted-foreground" />
             Export as PDF
-          </button>
-          <button
-            className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+          </Button>
+          <Button
+            role="menuitem"
+            variant="ghost"
+            className="w-full justify-start px-3 font-normal"
             onClick={() => {
               exportMultiToCSV(multiResult);
               setIsOpen(false);
             }}
           >
-            <FileExcelOutlined className="mr-3 text-green-600" />
+            <FileSpreadsheet className="text-muted-foreground" />
             Export as CSV
-          </button>
+          </Button>
         </div>
       )}
     </div>
