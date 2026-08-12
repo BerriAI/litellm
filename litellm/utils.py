@@ -3431,13 +3431,9 @@ def get_optional_params_embeddings(
 
     drop_params = passed_params.pop("drop_params", None)
     if drop_params is None:
-        drop_params = special_params.pop("drop_params", None)
-    if drop_params is None:
         drop_params = litellm.drop_params or False
 
     additional_drop_params = passed_params.pop("additional_drop_params", None)
-    if additional_drop_params is None:
-        additional_drop_params = special_params.pop("additional_drop_params", None)
 
     allowed_openai_params = passed_params.pop("allowed_openai_params", None) or []
     # Remove function objects from passed_params to avoid JSON serialization errors
