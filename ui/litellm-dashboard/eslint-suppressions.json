@@ -2278,16 +2278,6 @@
       "count": 2
     }
   },
-  "src/components/TeamSSOSettings.test.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    }
-  },
-  "src/components/TeamSSOSettings.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/Teams.test.tsx": {
     "max-nested-callbacks": {
       "count": 4
