@@ -1195,3 +1195,89 @@ async def test_aiohttp_session_never_replays_one_upstreams_cookie_to_another():
     assert len(jar) == 0
     assert dict(jar.filter_cookies(URL("https://upstream-a.example.com"))) == {}
     await session.close()
+
+
+def _mint_session_on_dead_loop(handler: AsyncHTTPHandler) -> ClientSession:
+    """Create the transport's real ClientSession on a loop that then closes.
+
+    This is the lifecycle of every client minted for a short-lived event loop
+    (the loop-id-keyed LLM client cache creates one handler per loop): the
+    session outlives its loop and can only ever be disposed loop-lessly.
+    """
+    transport = handler.client._transport
+    assert isinstance(transport, LiteLLMAiohttpTransport)
+    loop = asyncio.new_event_loop()
+
+    async def _create() -> ClientSession:
+        return transport._get_valid_client_session()
+
+    session = loop.run_until_complete(_create())
+    loop.close()
+    return session
+
+
+def test_finalizer_without_running_loop_closes_dead_loop_session():
+    """A handler finalized with no running event loop must still dispose its
+    aiohttp session.
+
+    The async close can never run in that context; without the synchronous
+    fallback the session and its connector are abandoned to GC and emit
+    "Unclosed client session" / "Unclosed connector" warnings."""
+    handler = AsyncHTTPHandler(timeout=61.0)
+    session = _mint_session_on_dead_loop(handler)
+    assert not session.closed
+
+    del handler
+    gc.collect()
+
+    assert session.closed
+
+
+@pytest.mark.asyncio
+async def test_finalizer_with_running_loop_schedules_close_and_holds_task_ref():
+    """With a running loop, finalization schedules an async close and must keep
+    a strong reference to the task until it completes — a bare create_task()
+    result may be collected before it runs, leaving the session unclosed."""
+    handler = AsyncHTTPHandler(timeout=61.0)
+    transport = handler.client._transport
+    assert isinstance(transport, LiteLLMAiohttpTransport)
+    session = transport._get_valid_client_session()
+    assert not session.closed
+    del transport
+
+    baseline_tasks = set(AsyncHTTPHandler._finalizer_close_tasks)
+    del handler
+    gc.collect()
+
+    scheduled = AsyncHTTPHandler._finalizer_close_tasks - baseline_tasks
+    assert len(scheduled) == 1
+
+    await asyncio.gather(*scheduled)
+    assert session.closed
+    assert not (AsyncHTTPHandler._finalizer_close_tasks & scheduled)
+
+
+@pytest.mark.asyncio
+async def test_sync_close_helper_respects_session_ownership():
+    """The loop-less fallback closes only sessions the transport owns; a
+    shared session (e.g. the proxy's) must never be closed by a handler."""
+    owned_handler = AsyncHTTPHandler(timeout=61.0)
+    owned_transport = owned_handler.client._transport
+    assert isinstance(owned_transport, LiteLLMAiohttpTransport)
+    owned_session = owned_transport._get_valid_client_session()
+
+    owned_handler._close_aiohttp_session_sync()
+    assert owned_session.closed
+
+    shared_session = ClientSession()
+    shared_handler = AsyncHTTPHandler(timeout=61.0, shared_session=shared_session)
+    shared_transport = shared_handler.client._transport
+    assert isinstance(shared_transport, LiteLLMAiohttpTransport)
+    assert shared_transport._owns_session is False
+
+    shared_handler._close_aiohttp_session_sync()
+    assert not shared_session.closed
+
+    await shared_session.close()
+    await shared_handler.close()
+    await owned_handler.close()
