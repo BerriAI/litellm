@@ -2239,14 +2239,6 @@
   "src/components/Settings/AdminSettings/HashicorpVault/HashicorpVault.tsx": {
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/Settings/AdminSettings/HashicorpVault/HashicorpVaultEmptyPlaceholder.tsx": {
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/Settings/AdminSettings/LoggingSettings/LoggingSettings.tsx": {
@@ -2298,9 +2290,6 @@
   "src/components/Settings/AdminSettings/SSOSettings/RedactableField.tsx": {
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/Settings/AdminSettings/SSOSettings/RoleMappings.tsx": {
@@ -2308,39 +2297,13 @@
       "count": 1
     }
   },
-  "src/components/Settings/AdminSettings/SSOSettings/SSOSettings.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/Settings/AdminSettings/SSOSettings/SSOSettingsEmptyPlaceholder.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/Settings/AdminSettings/SSOSettings/SSOSettingsLoadingSkeleton.test.tsx": {
-    "max-nested-callbacks": {
-      "count": 4
-    }
-  },
-  "src/components/Settings/AdminSettings/SSOSettings/SSOSettingsLoadingSkeleton.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/Settings/AdminSettings/UISettings/PageVisibilitySettings.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-render": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/Settings/AdminSettings/UISettings/UISettings.tsx": {
     "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
