@@ -1223,11 +1223,13 @@ class LiteLLMCompletionResponsesConfig:
         if not raw_arguments and function_call.get("type") == "custom_tool_call":
             raw_input: Final = function_call.get("input") or ""
             raw_arguments = json.dumps({"content": raw_input}) if raw_input else ""
+        raw_name: Final = function_call.get("name") or ""
+        namespace: Final = function_call.get("namespace") or ""
         tool_call: Final = ChatCompletionToolCallChunk(
             id=function_call.get("call_id") or function_call.get("id") or "",
             type="function",
             function=ChatCompletionToolCallFunctionChunk(
-                name=function_call.get("name") or "",
+                name=f"{namespace}__{raw_name}" if namespace else raw_name,
                 arguments=str(raw_arguments or ""),
             ),
             index=0,
