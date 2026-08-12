@@ -20,6 +20,7 @@ SEARCH_PROVIDERS = [
     "duckduckgo",
     "searchapi",
     "serper",
+    "serpapi",
     "apiserpent",
     "tinyfish",
 ]

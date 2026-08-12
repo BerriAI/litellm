@@ -2405,6 +2405,13 @@
         "search": true
       }
     },
+    "serpapi": {
+      "display_name": "SerpApi (`serpapi`)",
+      "url": "https://serpapi.com/search-api",
+      "endpoints": {
+        "search": true
+      }
+    },
     "you_com": {
       "display_name": "You.com (`you_com`)",
       "url": "https://docs.litellm.ai/docs/search/you_com"
