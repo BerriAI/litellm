@@ -2890,6 +2890,24 @@ async def test_router_selecting_tag_is_consumed_on_litellm_metadata_shaped_reque
     assert deployment["model_info"]["id"] == "tier-gemini-flash"
 
 
+def test_model_group_with_consumed_request_tags_names_the_routed_group_only_on_a_tag_match():
+    from litellm.types.router import PreRoutingHookResponse
+
+    router = _tagged_marker_router()
+    strategy = router.auto_routers["gpt4o"][0]
+    rewrite = PreRoutingHookResponse(model="gemini-flash", messages=None)
+
+    consumed = router._model_group_with_consumed_request_tags(
+        selected_strategy=strategy, pre_routing_hook_response=rewrite, request_tags=["route"]
+    )
+    unmatched = router._model_group_with_consumed_request_tags(
+        selected_strategy=strategy, pre_routing_hook_response=rewrite, request_tags=["other"]
+    )
+
+    assert consumed == "gemini-flash"
+    assert unmatched is None
+
+
 @pytest.mark.asyncio()
 async def test_tagged_request_direct_to_plain_group_still_rejected():
     # Sent straight to the tier, no router selection consumed the tag, so strict
