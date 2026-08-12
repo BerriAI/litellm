@@ -3384,9 +3384,6 @@
   "src/components/organization/organization_view.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/page_utils.test.ts": {
