@@ -4062,6 +4062,46 @@ def test_get_deployment_credentials_with_provider_bedrock_batch_fields():
     assert credentials["aws_batch_role_arn"] == "arn:aws:iam::123:role/batch-role"
 
 
+def test_get_deployment_credentials_with_provider_preserves_aws_auth_params():
+    """
+    Test that get_deployment_credentials_with_provider preserves every AWS auth
+    selector (session token, assume-role, web identity, profile) so bedrock
+    files/batches deployments using temporary or role-based credentials do not
+    silently fall back to the server's ambient identity (#36155).
+    """
+    aws_auth_params = {
+        "aws_access_key_id": "deployment-access-key",
+        "aws_secret_access_key": "deployment-secret",
+        "aws_session_token": "deployment-session-token",
+        "aws_region_name": "us-west-2",
+        "aws_session_name": "deployment-session",
+        "aws_profile_name": "deployment-profile",
+        "aws_role_name": "arn:aws:iam::123:role/deployment-role",
+        "aws_web_identity_token": "deployment-web-identity",
+        "aws_sts_endpoint": "https://sts.us-west-2.amazonaws.com",
+        "aws_external_id": "deployment-external-id",
+    }
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    **aws_auth_params,
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="bedrock-batch-model"
+    )
+
+    assert credentials is not None
+    for key, value in aws_auth_params.items():
+        assert credentials.get(key) == value, key
+
+
 def _team_wildcard_model(api_key: str, model_id: str = "team-wildcard-id") -> dict:
     return {
         "model_name": f"model_name_team-1_{model_id}",
@@ -6758,6 +6798,68 @@ async def test_acreate_batch_disable_fallbacks_surfaces_owning_provider_error():
 
 
 @pytest.mark.asyncio
+async def test_acreate_batch_surfaces_owning_provider_error_without_disable_fallbacks():
+    """The router itself has to keep a batch inside the group that owns the input file:
+    the proxy only sets disable_fallbacks on the managed-files route, so the caller
+    otherwise gets the fallback provider's error for a file it never received."""
+    from litellm.types.utils import LiteLLMBatch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "owning-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-owning",
+                },
+            },
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4o-mini",
+                    "api_key": "sk-fallback",
+                    "api_base": "https://fallback.openai.azure.com",
+                    "api_version": "2024-08-01-preview",
+                },
+            },
+        ],
+        fallbacks=[{"owning-model": ["fallback-model"]}],
+        num_retries=0,
+    )
+    attempted_models = []
+
+    async def _acreate_batch(model, **kwargs):
+        attempted_models.append(model)
+        if model == "owning-model":
+            raise litellm.APIConnectionError(
+                message="Connection error - openai is unreachable",
+                model="openai/gpt-4o-mini",
+                llm_provider="openai",
+            )
+        return LiteLLMBatch(
+            id="batch-created-on-the-wrong-provider",
+            completion_window="24h",
+            created_at=0,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-owned-by-openai",
+            object="batch",
+            status="validating",
+        )
+
+    with patch.object(router, "_acreate_batch", _acreate_batch):
+        with pytest.raises(litellm.APIConnectionError, match="openai is unreachable"):
+            await router.acreate_batch(
+                model="owning-model",
+                input_file_id="file-owned-by-openai",
+                endpoint="/v1/chat/completions",
+                completion_window="24h",
+                metadata={"team": "batch-jobs"},
+            )
+
+    assert attempted_models == ["owning-model"]
+
+
+@pytest.mark.asyncio
 async def test_acreate_batch_request_bedrock_tags_override_deployment_tags():
     import httpx
 
@@ -7419,6 +7521,47 @@ class TestAutoRouterMaxInputCharsWiring:
         assert self._registered_auto_router(router).max_input_chars == DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
 
 
+class TestGetAllowedFailsFromPolicy:
+    def _make_router(self, **policy_kwargs) -> litellm.Router:
+        from litellm.types.router import AllowedFailsPolicy
+
+        return litellm.Router(
+            model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4", "api_key": "fake"}}],
+            allowed_fails_policy=AllowedFailsPolicy(**policy_kwargs),
+        )
+
+    def test_no_policy_returns_none(self):
+        router = litellm.Router(
+            model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4", "api_key": "fake"}}],
+        )
+        assert router.get_allowed_fails_from_policy(litellm.RateLimitError("429", "openai", "gpt-4")) is None
+
+    def test_internal_server_error_allowed_fails(self):
+        router = self._make_router(InternalServerErrorAllowedFails=7)
+        exc = litellm.InternalServerError("500", "openai", "gpt-4")
+        assert router.get_allowed_fails_from_policy(exc) == 7
+
+    def test_service_unavailable_error_allowed_fails(self):
+        router = self._make_router(ServiceUnavailableErrorAllowedFails=4)
+        exc = litellm.ServiceUnavailableError("503", "openai", "gpt-4")
+        assert router.get_allowed_fails_from_policy(exc) == 4
+
+    def test_bad_gateway_error_allowed_fails(self):
+        router = self._make_router(BadGatewayErrorAllowedFails=2)
+        exc = litellm.BadGatewayError("502", "openai", "gpt-4")
+        assert router.get_allowed_fails_from_policy(exc) == 2
+
+    def test_not_found_error_allowed_fails(self):
+        router = self._make_router(NotFoundErrorAllowedFails=1)
+        exc = litellm.NotFoundError("404", "openai", "gpt-4")
+        assert router.get_allowed_fails_from_policy(exc) == 1
+
+    def test_unmatched_exception_returns_none(self):
+        router = self._make_router(InternalServerErrorAllowedFails=5)
+        exc = litellm.RateLimitError("429", "openai", "gpt-4")
+        assert router.get_allowed_fails_from_policy(exc) is None
+
+
 class _LogCapture(logging.Handler):
     def __init__(self, level):
         super().__init__(level=level)
@@ -7550,6 +7693,8 @@ async def test_fallback_failure_detail_from_upstream_is_bounded():
     assert capture.messages, "the fallback failure path did not log at ERROR"
     assert huge_message not in "".join(capture.messages)
     assert max(len(message) for message in capture.messages) < 5_000
+
+
 def test_stamp_or_clear_metadata_key_writes_and_clears_both_buckets():
     request_kwargs = {"metadata": {}}
     litellm.Router._stamp_or_clear_metadata_key(request_kwargs=request_kwargs, key="probe", value=7)

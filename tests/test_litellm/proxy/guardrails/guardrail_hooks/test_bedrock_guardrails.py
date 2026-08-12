@@ -987,6 +987,134 @@ async def test_bedrock_apply_guardrail_with_only_tool_calls_response():
         print("✅ apply_guardrail with tool_calls test passed - no API call made")
 
 
+def _anthropic_tool_result_conversation(
+    extra_blocks: tuple[dict[str, str], ...] = (),
+) -> list[dict[str, object]]:
+    """Anthropic /v1/messages history whose latest user turn is a tool_result follow-up."""
+    return [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01A", "name": "get_weather", "input": {"city": "Paris"}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_01A", "content": "18C and sunny"},
+                *extra_blocks,
+            ],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_skips_bedrock_call_for_tool_result_only_turn():
+    """A tool_result-only latest user turn must not post an empty content list to Bedrock.
+
+    Regression for `400: At least one GuardrailContentBlock must be provided` on
+    /v1/messages: with experimental_use_latest_role_message_only the scanned turn is the
+    Anthropic tool_result block, which carries no text, so ApplyGuardrail rejected the call.
+    """
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-result",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+        experimental_use_latest_role_message_only=True,
+    )
+    data = {"model": "claude-sonnet-4-5", "messages": _anthropic_tool_result_conversation()}
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.anthropic_messages.value,
+        )
+
+    mock_post.assert_not_called()
+    assert data["messages"] == _anthropic_tool_result_conversation()
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_still_scans_tool_result_turn_carrying_text():
+    """The skip must be limited to turns with nothing to scan, never to tool_result turns as such."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-result-text",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+        experimental_use_latest_role_message_only=True,
+    )
+    data = {
+        "model": "claude-sonnet-4-5",
+        "messages": _anthropic_tool_result_conversation(({"type": "text", "text": "now summarize that"},)),
+    }
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+
+    with (
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+    ):
+        mock_post.return_value = mock_response
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.anthropic_messages.value,
+        )
+
+    mock_post.assert_called_once()
+    sent = mock_post.call_args.kwargs["data"].decode()
+    assert "now summarize that" in sent
+    # tool_result text is not extracted by this path (https://github.com/BerriAI/litellm/issues/33086)
+    assert "18C and sunny" not in sent
+
+
+@pytest.mark.asyncio
+async def test_make_apply_guardrail_request_skips_output_scan_without_response_text():
+    """A tool-calls-only assistant response yields no OUTPUT content, so it must not be posted."""
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+    response = ModelResponse(
+        choices=[
+            litellm.Choices(
+                index=0,
+                message=litellm.Message(role="assistant", content=None, tool_calls=[]),
+                finish_reason="tool_calls",
+            )
+        ]
+    )
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
+        bedrock_response = await guardrail.make_bedrock_api_request(source="OUTPUT", response=response)
+
+    mock_post.assert_not_called()
+    assert bedrock_response == {}
+
+
+@pytest.mark.asyncio
+async def test_make_apply_guardrail_request_skips_scan_without_credentials():
+    """Skipping happens before credential resolution, so an empty scan costs no AWS work."""
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+
+    with (
+        patch.object(guardrail, "_load_credentials", side_effect=AssertionError("credentials must not be loaded")),
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+    ):
+        await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=[{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "out"}]}],
+        )
+
+    mock_post.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_bedrock_apply_guardrail_response_uses_OUTPUT_source():
     """input_type='response' must call Bedrock with source=OUTPUT and assistant content.
