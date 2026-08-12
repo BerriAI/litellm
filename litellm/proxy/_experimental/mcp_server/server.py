@@ -3737,6 +3737,8 @@ if MCP_AVAILABLE:
                 # preemptive challenge and let downstream authorization
                 # return 403.
                 continue
+            if server is not None:
+                server = await global_mcp_server_manager.ensure_oauth_metadata_discovered(server)
             if server and server.auth_type == MCPAuth.oauth2:
                 # The challenge decision is per oauth2 sub-mode, not per header:
                 # gateway-managed modes (M2M and interactive authorization_code)
