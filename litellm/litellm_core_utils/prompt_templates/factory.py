@@ -5378,9 +5378,7 @@ def _parse_tool_call_arguments(raw: Any, tool_name: str | None, context: str) ->
     )
 
     try:
-        parsed: Final = parse_tool_call_arguments(
-            normalized_raw, tool_name=tool_name, context=context
-        )
+        parsed: Final = parse_tool_call_arguments(normalized_raw, tool_name=tool_name, context=context)
     except ValueError as e:
         verbose_logger.warning("Failed to parse tool call arguments: %s", e)
         return {}
