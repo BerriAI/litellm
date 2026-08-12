@@ -688,9 +688,9 @@ class TestPerformRedaction:
 
         Binary/HTTP response bodies (batch output, file content, audio) hold an
         unpicklable ``_thread.lock``. Copying one raises TypeError inside
-        ``Logging.success_handler``, which aborts every success callback with it - so the
-        spend row for a completed batch is never written. The copy is also pointless:
-        an unrecognized shape returns the placeholder and the copy is discarded.
+        ``Logging.success_handler``, which aborts the handler body at the redaction call so
+        everything after it is skipped. The copy is also pointless: an unrecognized shape
+        returns the placeholder and the copy is discarded.
 
         The lock is the assertion. If a deepcopy is ever reintroduced ahead of the type
         check, this raises instead of returning.

@@ -258,13 +258,6 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
             # For async objects, return a simple redacted response without deepcopy
             return {"text": "redacted-by-litellm"}
 
-        # Only the shapes handled below can be redacted; every other type falls through
-        # to the placeholder return at the end of this block, which discards the copy.
-        # Deciding that before copying keeps the deepcopy off objects it cannot help:
-        # binary/HTTP response bodies (batch output, file content) hold an unpicklable
-        # `_thread.lock` and raise TypeError here, which aborts success logging and every
-        # spend callback with it, and a large batch body would be copied only to be thrown
-        # away.
         if not (
             isinstance(result, (litellm.ModelResponse, litellm.ResponsesAPIResponse, litellm.EmbeddingResponse))
             or (isinstance(result, dict) and ("choices" in result or "output" in result))
