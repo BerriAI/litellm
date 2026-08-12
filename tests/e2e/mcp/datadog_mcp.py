@@ -52,3 +52,5 @@ def register_datadog_mcp(
     )
     resources.defer(lambda: client.delete_server(server_id))
     return server_id
+
+# e2e gate proof 3: tier-2 suite-dir selection from a non-test helper (throwaway)
