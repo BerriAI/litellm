@@ -1,7 +1,7 @@
 import os
 import sys
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from prisma.errors import DataError, UniqueViolationError
@@ -103,3 +103,60 @@ async def test_a_stalled_pool_sample_does_not_delay_the_database_call():
     for task in asyncio.all_tasks():
         if task is not asyncio.current_task() and task.get_coro().__name__ == "_hang":
             task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_one_pool_timeout_is_counted_once_across_nested_decorated_calls():
+    """get_object_permission carries @log_db_metrics and is called from inside
+    get_key_object, which also carries it, so a single P2024 passes through
+    several except blocks on its way up. Counting per block would inflate the
+    exhaustion metric by the nesting depth."""
+    from litellm.proxy.db.log_db_metrics import log_db_metrics
+
+    logger = MagicMock()
+    error = _pool_timeout_error()
+
+    @log_db_metrics
+    async def inner(**kwargs):
+        raise error
+
+    @log_db_metrics
+    async def outer(**kwargs):
+        return await inner(**kwargs)
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
+
+    with (
+        patch("litellm.proxy.db.log_db_metrics._prometheus_logger", return_value=logger),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
+    ):
+        with pytest.raises(DataError):
+            await outer(table_name="x")
+
+    assert logger.record_db_pool_timeout.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_two_separate_pool_timeouts_are_counted_separately():
+    """The dedup must key on the exception instance, not suppress the metric."""
+    from litellm.proxy.db.log_db_metrics import log_db_metrics
+
+    logger = MagicMock()
+
+    @log_db_metrics
+    async def failing(**kwargs):
+        raise _pool_timeout_error()
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
+
+    with (
+        patch("litellm.proxy.db.log_db_metrics._prometheus_logger", return_value=logger),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
+    ):
+        for _ in range(2):
+            with pytest.raises(DataError):
+                await failing(table_name="x")
+
+    assert logger.record_db_pool_timeout.call_count == 2

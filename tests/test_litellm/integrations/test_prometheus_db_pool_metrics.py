@@ -225,3 +225,37 @@ def test_the_gauge_publishes_the_corrected_pending_not_the_raw_engine_reading(lo
     )
 
     assert _value("litellm_db_pool_pending_acquirers") == 0.0
+
+
+def test_get_instance_finds_a_logger_registered_via_success_callback(logger):
+    """litellm_settings.success_callback: ["prometheus"] is an equally supported
+    registration and lands the logger on the success-callback lists rather than
+    litellm.callbacks. Searching only the latter left every pool metric
+    registered and permanently at zero, verified on a live proxy."""
+    import litellm
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    saved_callbacks = litellm.callbacks
+    saved_success = litellm.success_callback
+    try:
+        litellm.callbacks = []
+        litellm.success_callback = [logger]
+        assert PrometheusLogger.get_instance() is logger
+    finally:
+        litellm.callbacks = saved_callbacks
+        litellm.success_callback = saved_success
+
+
+def test_get_instance_returns_none_when_prometheus_is_not_registered(logger):
+    import litellm
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    saved_callbacks = litellm.callbacks
+    saved_success = litellm.success_callback
+    try:
+        litellm.callbacks = []
+        litellm.success_callback = []
+        assert PrometheusLogger.get_instance() is None
+    finally:
+        litellm.callbacks = saved_callbacks
+        litellm.success_callback = saved_success

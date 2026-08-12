@@ -20,6 +20,10 @@ if TYPE_CHECKING:
     from litellm.integrations.prometheus import PrometheusLogger
     from litellm.proxy.db.db_pool_metrics import SupportsPoolSample
 
+# Marks a P2024 that has already been counted, so nested decorated helpers do
+# not each count the same timeout.
+_POOL_TIMEOUT_COUNTED: Final = "_litellm_db_pool_timeout_counted"
+
 # One sampler per process. The pool it reads is per-process too, so there is
 # nothing to key this by.
 _pool_metrics_sampler: Final = DBPoolMetricsSampler()
@@ -66,15 +70,25 @@ async def _sample_db_pool_metrics() -> None:
 
 
 def _record_db_pool_timeout_if_exhausted(e: Exception) -> None:
-    """Count a pool exhaustion, without ever displacing the error that caused it.
+    """Count a pool exhaustion once, without ever displacing the error itself.
 
-    The caller re-raises the original exception after this returns. Anything
-    that escaped here would replace a P2024 with a metrics error, during the
-    incident this counter exists to record.
+    Decorated database helpers nest: ``get_object_permission`` is called from
+    inside ``get_key_object``, and both carry this decorator. One P2024 therefore
+    passes through several ``except`` blocks on its way up, so the exception is
+    marked the first time it is counted and skipped afterwards.
+
+    The caller re-raises after this returns. Anything escaping here would replace
+    a P2024 with a metrics error, during the incident this counter exists to
+    record.
     """
     try:
         if not PrismaDBExceptionHandler.is_connection_pool_timeout_error(e):
             return
+        if getattr(e, _POOL_TIMEOUT_COUNTED, False):
+            return
+        # rebind-ok: marking the in-flight exception is how an outer decorator
+        # learns this timeout was already counted by an inner one
+        setattr(e, _POOL_TIMEOUT_COUNTED, True)
         logger: Final = _prometheus_logger()
         if logger is not None:
             logger.record_db_pool_timeout()

@@ -159,12 +159,20 @@ class PrometheusLogger(CustomLogger):
 
     @staticmethod
     def get_instance() -> PrometheusLogger | None:
-        """Find the PrometheusLogger instance from litellm.callbacks, if registered."""
+        """The registered PrometheusLogger, however it was registered.
+
+        Searching ``litellm.callbacks`` alone misses the equally supported
+        ``litellm_settings.success_callback: ["prometheus"]``, which lands the
+        logger on the success-callback lists instead. Callers of this method
+        publish metrics from outside the request hooks, so a miss shows up as a
+        metric that registers and then never leaves zero.
+        """
         import litellm
 
-        for cb in litellm.callbacks:
-            if isinstance(cb, PrometheusLogger):
-                return cb
+        instances: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=PrometheusLogger)
+        for instance in instances:
+            if isinstance(instance, PrometheusLogger):
+                return instance
         return None
 
     def __init__(
