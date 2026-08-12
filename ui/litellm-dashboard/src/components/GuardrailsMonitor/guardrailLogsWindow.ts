@@ -5,14 +5,14 @@ export interface UtcInstantRange {
   end: string;
 }
 
+const UTC_INSTANT = "YYYY-MM-DDTHH:mm:ss.SSS[Z]";
+
 /**
- * `/guardrails/usage/logs` filters `start_time`, a real timestamp column, but pads a
- * bare `YYYY-MM-DD` out to `T00:00:00+00:00` / `T23:59:59+00:00`. Sending the picker's
- * local calendar date therefore shifts the window by the viewer's UTC offset. Resolving
- * the local day here and sending instants keeps the bound exact; the endpoint already
- * parses a value carrying a `T`.
+ * `/guardrails/usage/logs` pads a bare `YYYY-MM-DD` to a whole UTC day, so the picker's
+ * local date lands the viewer's offset away from the range they chose. Milliseconds are
+ * kept because the inclusive end bound otherwise drops the final 999ms of that day.
  */
 export const toUtcInstantRange = (startDate: string, endDate: string): UtcInstantRange => ({
-  start: moment(startDate).startOf("day").utc().format(),
-  end: moment(endDate).endOf("day").utc().format(),
+  start: moment(startDate).startOf("day").utc().format(UTC_INSTANT),
+  end: moment(endDate).endOf("day").utc().format(UTC_INSTANT),
 });

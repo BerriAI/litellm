@@ -20,8 +20,8 @@ describe("toUtcInstantRange, east of UTC (Asia/Kolkata, +05:30)", () => {
 
   it("resolves the local day to instants rather than the UTC day", () => {
     expect(toUtcInstantRange("2026-08-10", "2026-08-10")).toEqual({
-      start: "2026-08-09T18:30:00Z",
-      end: "2026-08-10T18:29:59Z",
+      start: "2026-08-09T18:30:00.000Z",
+      end: "2026-08-10T18:29:59.999Z",
     });
   });
 
@@ -46,10 +46,16 @@ describe("toUtcInstantRange, east of UTC (Asia/Kolkata, +05:30)", () => {
     expect(Date.parse(end)).toBeGreaterThan(Date.parse("2026-08-10T12:00:00Z"));
   });
 
+  it("keeps a row in the final millisecond of the local day", () => {
+    const { end } = toUtcInstantRange("2026-08-10", "2026-08-10");
+    // 23:59:59.500 local. Truncating the inclusive bound to whole seconds drops it.
+    expect(Date.parse(end)).toBeGreaterThanOrEqual(Date.parse("2026-08-10T18:29:59.500Z"));
+  });
+
   it("spans a multi-day range end to end", () => {
     expect(toUtcInstantRange("2026-08-03", "2026-08-10")).toEqual({
-      start: "2026-08-02T18:30:00Z",
-      end: "2026-08-10T18:29:59Z",
+      start: "2026-08-02T18:30:00.000Z",
+      end: "2026-08-10T18:29:59.999Z",
     });
   });
 });
@@ -59,8 +65,8 @@ describe("toUtcInstantRange, west of UTC (America/Los_Angeles, -07:00 in August)
 
   it("resolves the local day to instants rather than the UTC day", () => {
     expect(toUtcInstantRange("2026-08-10", "2026-08-10")).toEqual({
-      start: "2026-08-10T07:00:00Z",
-      end: "2026-08-11T06:59:59Z",
+      start: "2026-08-10T07:00:00.000Z",
+      end: "2026-08-11T06:59:59.999Z",
     });
   });
 
@@ -80,8 +86,8 @@ describe("toUtcInstantRange, on UTC", () => {
 
   it("matches the day the endpoint would have assumed", () => {
     expect(toUtcInstantRange("2026-08-10", "2026-08-10")).toEqual({
-      start: "2026-08-10T00:00:00Z",
-      end: "2026-08-10T23:59:59Z",
+      start: "2026-08-10T00:00:00.000Z",
+      end: "2026-08-10T23:59:59.999Z",
     });
   });
 });

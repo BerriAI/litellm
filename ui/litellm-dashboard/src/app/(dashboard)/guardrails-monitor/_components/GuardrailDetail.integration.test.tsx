@@ -51,8 +51,8 @@ describe("GuardrailDetail sends the viewer's local day as instants", () => {
     const params = usageLogsQuery();
 
     // 00:00 and 23:59:59 on 2026-08-10 in IST, expressed as instants.
-    expect(params?.get("start_date")).toBe("2026-08-09T18:30:00Z");
-    expect(params?.get("end_date")).toBe("2026-08-10T18:29:59Z");
+    expect(params?.get("start_date")).toBe("2026-08-09T18:30:00.000Z");
+    expect(params?.get("end_date")).toBe("2026-08-10T18:29:59.999Z");
   });
 
   it("never sends a bare calendar date, which the endpoint would read as UTC", async () => {
