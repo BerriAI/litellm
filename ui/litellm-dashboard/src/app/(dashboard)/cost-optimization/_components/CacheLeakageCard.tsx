@@ -107,7 +107,8 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
               <CardTitle>Cache leakage by {dimension === "model" ? "model" : "virtual key"}</CardTitle>
               <p className="mt-1 text-sm text-muted-foreground line-clamp-2">
                 {subject} sending large volumes of uncached input with a low cache hit rate are likely missing prompt
-                caching. Potential savings is approximate: uncached input priced at the realized cache-read discount.
+                caching. Potential savings is approximate: uncached input priced at what your cached traffic nets per
+                cached token, after cache-write premiums.
               </p>
             </div>
             <div className="shrink-0">
@@ -148,7 +149,7 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
                   <SortableHead
                     column="potentialSavings"
                     label="Potential savings"
-                    info="About how much you'd save if this uncached input used prompt caching. Estimated as uncached input tokens times the per-token discount your cached traffic already gets (realized cache savings ÷ cache-read tokens)."
+                    info="About how much you'd save if this uncached input used prompt caching. Estimated as uncached input tokens times what your cached traffic already nets per cached token (realized cache savings, after write premiums, ÷ cache read and write tokens). Blank when caching is not currently saving anything overall."
                     sort={sort}
                     onSort={onSort}
                   />

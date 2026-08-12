@@ -30,6 +30,7 @@ export interface BuildComplexityRouterConfigParams {
   classifierContextIncludeAssistantTurns: boolean | undefined;
   classifierFallback: ClassifierFallback | undefined;
   sessionAffinity: boolean;
+  deploymentAffinity: boolean;
   customTechnicalKeywords: string[];
   keywordTierRules: KeywordTierRule[];
   semanticMatchingEnabled: boolean;
@@ -53,6 +54,7 @@ export interface ComplexityRouterConfigPayload {
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
   session_affinity: boolean;
+  deployment_affinity: boolean;
   custom_technical_keywords?: string[];
   keyword_tier_rules?: { keywords: string[]; tier: KeywordTierRule["tier"] }[];
   semantic_keyword_matching?: boolean;
@@ -137,6 +139,7 @@ export const buildComplexityRouterConfig = ({
   classifierContextIncludeAssistantTurns,
   classifierFallback,
   sessionAffinity,
+  deploymentAffinity,
   customTechnicalKeywords,
   keywordTierRules,
   semanticMatchingEnabled,
@@ -173,6 +176,7 @@ export const buildComplexityRouterConfig = ({
         classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
       }),
     session_affinity: sessionAffinity,
+    deployment_affinity: deploymentAffinity,
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
     ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
     escalation_keywords: cleanedEscalationKeywords,
