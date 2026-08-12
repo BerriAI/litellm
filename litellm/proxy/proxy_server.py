@@ -11439,7 +11439,7 @@ async def audio_transcriptions(
         if data.get("stream") is True:
             if not hasattr(response, "__aiter__"):
                 raise TypeError(f"Streaming transcription returned {type(response).__name__}, expected an async stream")
-            stream_response = cast(AsyncIterator[TranscriptionStreamEvent], response)
+            stream_response: Final = cast(AsyncIterator[TranscriptionStreamEvent], response)
 
             async def transcription_event_stream(
                 stream: AsyncIterator[TranscriptionStreamEvent],
@@ -11448,9 +11448,9 @@ async def audio_transcriptions(
                     async for event in stream:
                         yield f"data: {event.model_dump_json()}\n\n"
                 finally:
-                    close = getattr(stream, "aclose", None) or getattr(stream, "close", None)
+                    close: Final = getattr(stream, "aclose", None) or getattr(stream, "close", None)
                     if callable(close):
-                        close_result = close()
+                        close_result: Final = close()
                         if inspect.isawaitable(close_result):
                             await close_result
 
@@ -11663,8 +11663,8 @@ async def realtime_websocket_endpoint(
     if requested_protocols:
         accept_kwargs["subprotocol"] = requested_protocols[0]
 
-    is_translation = websocket.url.path.endswith("/realtime/translations")
-    route_model = _resolve_realtime_route_model(model, intent, is_translation)
+    is_translation: Final = websocket.url.path.endswith("/realtime/translations")
+    route_model: Final = _resolve_realtime_route_model(model, intent, is_translation)
     if route_model is None:
         await _reject_realtime_session(
             websocket, user_api_key_dict, code=1008, reason="model query parameter is required"
