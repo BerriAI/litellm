@@ -31,4 +31,14 @@ describe("SearchToolSelector", () => {
     expect(await screen.findByRole("option", { name: "search-one" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "search-two" })).toBeInTheDocument();
   });
+
+  it("should clear all selected search tools", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderWithProviders(<SearchToolSelector accessToken="" value={["search-one", "search-two"]} onChange={onChange} />);
+
+    await user.click(screen.getByRole("button", { name: "Clear all search tools" }));
+
+    expect(onChange).toHaveBeenCalledWith([]);
+  });
 });

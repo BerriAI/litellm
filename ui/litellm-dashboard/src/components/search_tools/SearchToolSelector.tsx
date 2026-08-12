@@ -4,6 +4,7 @@ import {
   ComboboxChip,
   ComboboxChips,
   ComboboxChipsInput,
+  ComboboxClear,
   ComboboxContent,
   ComboboxEmpty,
   ComboboxItem,
@@ -82,6 +83,7 @@ const SearchToolSelector: React.FC<SearchToolSelectorProps> = ({
           aria-label={placeholder}
           disabled={disabled}
         />
+        {value && value.length > 0 && <ComboboxClear aria-label="Clear all search tools" disabled={disabled} />}
       </ComboboxChips>
       <ComboboxContent>
         <ComboboxEmpty>{loading ? "Loading search tools…" : "No search tools found"}</ComboboxEmpty>
