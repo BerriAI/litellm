@@ -2077,7 +2077,7 @@ def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
     assert "$defs" not in tool_schema, "$defs should be removed after expansion"
 
 
-def test_anthropic_messages_pt_file_block_preserves_cache_control():
+def test_anthropic_messages_pt_file_block_cache_control_with_explicit_provider():
     """
     Test that cache_control on file-type content blocks is preserved
     when translating to Anthropic message format.

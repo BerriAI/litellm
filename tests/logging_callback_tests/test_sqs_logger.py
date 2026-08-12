@@ -151,7 +151,7 @@ async def test_async_sqs_logger_error_flush():
 
 
 @pytest.mark.asyncio
-async def test_async_log_success_event_adds_to_queue(monkeypatch):
+async def test_async_log_success_event_adds_to_queue_with_real_create_task(monkeypatch):
     monkeypatch.setattr("litellm.aws_sqs_callback_params", {})
     logger = SQSLogger(sqs_queue_url="https://example.com", sqs_region_name="us-west-2")
 
@@ -163,7 +163,7 @@ async def test_async_log_success_event_adds_to_queue(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_async_log_failure_event_adds_to_queue(monkeypatch):
+async def test_async_log_failure_event_adds_to_queue_with_real_create_task(monkeypatch):
     monkeypatch.setattr("litellm.aws_sqs_callback_params", {})
     logger = SQSLogger(sqs_queue_url="https://example.com", sqs_region_name="us-west-2")
 
@@ -180,7 +180,7 @@ async def test_async_log_failure_event_adds_to_queue(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_async_send_batch_triggers_tasks(monkeypatch):
+async def test_async_send_batch_does_not_await_send_directly(monkeypatch):
     monkeypatch.setattr("litellm.aws_sqs_callback_params", {})
     logger = SQSLogger(sqs_queue_url="https://example.com", sqs_region_name="us-west-2")
     logger.async_send_message = AsyncMock()
