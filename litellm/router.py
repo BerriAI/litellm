@@ -43,7 +43,7 @@ from litellm.caching.caching import (
     RedisClusterCache,
 )
 from litellm.constants import (
-    CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY,
+    CONSUMED_REQUEST_TAGS_METADATA_KEY,
     DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
@@ -172,6 +172,7 @@ from litellm.types.router import (
     AlertingConfig,
     AllowedFailsPolicy,
     AssistantsTypedDict,
+    ConsumedRequestTagsStamp,
     CredentialLiteLLMParams,
     CustomRoutingStrategyBase,
     Deployment,
@@ -11402,7 +11403,7 @@ class Router:
                 request_kwargs=request_kwargs, key=SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, value=None
             )
             self._stamp_or_clear_metadata_key(
-                request_kwargs=request_kwargs, key=CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY, value=None
+                request_kwargs=request_kwargs, key=CONSUMED_REQUEST_TAGS_METADATA_KEY, value=None
             )
             return None
 
@@ -11424,8 +11425,8 @@ class Router:
         )
         self._stamp_or_clear_metadata_key(
             request_kwargs=request_kwargs,
-            key=CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY,
-            value=self._model_group_with_consumed_request_tags(
+            key=CONSUMED_REQUEST_TAGS_METADATA_KEY,
+            value=self._consumed_request_tags_stamp(
                 selected_strategy=selected_strategy,
                 pre_routing_hook_response=pre_routing_hook_response,
                 request_tags=_get_tags_from_request_kwargs(request_kwargs),
@@ -11449,25 +11450,27 @@ class Router:
 
         return pre_routing_hook_response
 
-    def _model_group_with_consumed_request_tags(
+    def _consumed_request_tags_stamp(
         self,
         selected_strategy: "TaggedPreRoutingStrategy[PreRoutingStrategy]",
         pre_routing_hook_response: PreRoutingHookResponse | None,
         request_tags: Sequence[str],
-    ) -> str | None:
-        """Name the model group whose deployment selection must skip request-body tags, or None.
+    ) -> ConsumedRequestTagsStamp | None:
+        """Record which tags picked the router and which model group it rewrote to, or None.
 
         A request whose tags matched the selected strategy's tags has already spent those
         tags on picking the router; re-applying them to the routed tier's model group would
-        empty the pool unless every tier deployment repeats the marker's tag. Key/team
-        policy tags are untouched: tag filtering separately re-applies whatever
+        empty the pool unless every tier deployment repeats the marker's tag. Only the
+        strategy's own tags are spent: the request's other tags keep constraining
+        deployment selection inside the routed group, and key/team policy tags are
+        untouched because tag filtering separately re-applies whatever
         `metadata.inherited_tags` carries for the stamped group.
         """
         if pre_routing_hook_response is None or not selected_strategy.tags or not request_tags:
             return None
         if not is_valid_deployment_tag(selected_strategy.tags, request_tags, self.tag_filtering_match_any):
             return None
-        return pre_routing_hook_response.model
+        return ConsumedRequestTagsStamp(model_group=pre_routing_hook_response.model, tags=selected_strategy.tags)
 
     @staticmethod
     def _record_routing_decision(

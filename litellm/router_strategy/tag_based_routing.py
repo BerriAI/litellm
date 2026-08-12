@@ -13,9 +13,9 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from litellm._logging import verbose_logger
-from litellm.constants import CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY
+from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
-from litellm.types.router import RouterErrors
+from litellm.types.router import ConsumedRequestTagsStamp, RouterErrors
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -394,15 +394,22 @@ def _tag_known_to_group(
 
 
 def _request_tags_after_router_consumption(metadata: Mapping[Any, Any], model: str) -> Sequence[str] | None:
-    # The pre-routing hook stamps the model group it rewrote the request to when the
-    # request's tags were what selected that router: those tags already did their job
-    # and must not also constrain deployment choice inside the routed group. Key/team
-    # policy keeps applying there, so the inherited_tags snapshot replaces the merged
-    # tag list rather than clearing it. Every other model group keeps the full list.
-    if metadata.get(CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY) != model:
+    # The pre-routing hook stamps which tags selected the router it rewrote the request
+    # to: those tags already did their job and must not also constrain deployment choice
+    # inside the routed group. The request's other tags still apply there, on top of the
+    # inherited_tags snapshot that keeps key/team policy applying. Every other model
+    # group keeps the full list.
+    stamp: Final = metadata.get(CONSUMED_REQUEST_TAGS_METADATA_KEY)
+    if not isinstance(stamp, ConsumedRequestTagsStamp) or stamp.model_group != model:
         return metadata.get("tags")
+    request_tags: Final = metadata.get("tags")
+    leftover: Final = tuple(
+        tag for tag in (request_tags if isinstance(request_tags, (list, tuple)) else ()) if tag not in stamp.tags
+    )
     inherited_tags: Final = metadata.get("inherited_tags")
-    return inherited_tags if isinstance(inherited_tags, (list, tuple)) else None
+    if not isinstance(inherited_tags, (list, tuple)):
+        return leftover or None
+    return tuple(dict.fromkeys((*leftover, *inherited_tags)))
 
 
 async def get_deployments_for_tag(

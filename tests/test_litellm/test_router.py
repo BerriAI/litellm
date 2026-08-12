@@ -7510,29 +7510,35 @@ class TestConsumedRequestTagsStamp:
 
     @pytest.mark.asyncio
     async def test_stamps_the_rewritten_group_when_request_tags_selected_the_router(self):
-        from litellm.constants import CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY
+        from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+        from litellm.types.router import ConsumedRequestTagsStamp
 
         router = self._router()
         request_kwargs = {"metadata": {"tags": ["route"]}}
 
         await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
 
-        assert request_kwargs["metadata"][CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY] == "gemini-flash"
+        assert request_kwargs["metadata"][CONSUMED_REQUEST_TAGS_METADATA_KEY] == ConsumedRequestTagsStamp(
+            model_group="gemini-flash", tags=("route",)
+        )
 
     @pytest.mark.asyncio
     async def test_stamps_into_litellm_metadata_when_the_request_uses_that_bucket(self):
-        from litellm.constants import CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY
+        from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+        from litellm.types.router import ConsumedRequestTagsStamp
 
         router = self._router()
         request_kwargs = {"litellm_metadata": {"tags": ["route"]}}
 
         await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
 
-        assert request_kwargs["litellm_metadata"][CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY] == "gemini-flash"
+        assert request_kwargs["litellm_metadata"][CONSUMED_REQUEST_TAGS_METADATA_KEY] == ConsumedRequestTagsStamp(
+            model_group="gemini-flash", tags=("route",)
+        )
 
     @pytest.mark.asyncio
     async def test_fallback_reentry_with_a_plain_group_clears_the_stale_stamp(self):
-        from litellm.constants import CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY
+        from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
 
         router = self._router()
         request_kwargs = {"metadata": {"tags": ["route"]}}
@@ -7540,29 +7546,29 @@ class TestConsumedRequestTagsStamp:
         await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
         await router.async_pre_routing_hook(model="gemini-flash", request_kwargs=request_kwargs)
 
-        assert CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY not in request_kwargs["metadata"]
+        assert CONSUMED_REQUEST_TAGS_METADATA_KEY not in request_kwargs["metadata"]
 
     @pytest.mark.asyncio
     async def test_no_stamp_when_the_request_is_untagged(self):
-        from litellm.constants import CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY
+        from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
 
         router = self._router()
         request_kwargs = {"metadata": {}}
 
         await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
 
-        assert CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY not in request_kwargs["metadata"]
+        assert CONSUMED_REQUEST_TAGS_METADATA_KEY not in request_kwargs["metadata"]
 
     @pytest.mark.asyncio
     async def test_no_stamp_when_the_selected_strategy_carries_no_tags(self):
-        from litellm.constants import CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY
+        from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
 
         router = self._router(marker_tags=())
         request_kwargs = {"metadata": {"tags": ["route"]}}
 
         await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
 
-        assert CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY not in request_kwargs["metadata"]
+        assert CONSUMED_REQUEST_TAGS_METADATA_KEY not in request_kwargs["metadata"]
 
 
 class TestAutoRouterMaxInputCharsWiring:
