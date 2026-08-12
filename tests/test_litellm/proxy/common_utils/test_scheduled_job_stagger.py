@@ -14,6 +14,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from litellm.constants import PTU_ROLLUP_JOB_ID, PTU_ROLLUP_LOCK_TTL_SECONDS
 from litellm.proxy._types import ScheduledJobStaggerSettings
 from litellm.proxy.common_utils.scheduled_job_stagger import (
+    _offset_for,
     apply_scheduled_job_stagger,
     attach_job_timing_logger,
     offset_seconds,
@@ -21,6 +22,7 @@ from litellm.proxy.common_utils.scheduled_job_stagger import (
     resolve_stagger_identity,
     stagger_trigger,
 )
+from litellm.proxy.common_utils.single_owner_job import SINGLE_OWNER_JOB_IDS
 
 OPERATOR_CRON_JOB_ID = "spend_log_cleanup_job"
 SHARED_INTERVAL_JOB_IDS = ("periodic_reload_job", "get_credentials_job", "add_deployment_job")
@@ -303,3 +305,78 @@ def test_job_timing_is_logged_with_scheduled_and_actual_start(caplog):
     assert f"scheduled_run_time={scheduled.isoformat()}" in message
     assert "actual_start_time=" in message
     assert "delay=2." in message
+
+
+# ---------------------------------------------------------------------------
+# Single-owner jobs: same instant on every replica, different instant per job
+
+
+def _single_owner_offsets(job_id: str, **overrides) -> list[int]:
+    return [
+        _offset_for(
+            job_id=job_id,
+            period_seconds=86400,
+            staggerable=True,
+            settings=_settings(**overrides),
+            identity=identity,
+        )
+        for identity in ("pod-a:1", "pod-b:1", "pod-c:1", "pod-a:2")
+    ]
+
+
+@pytest.mark.parametrize("job_id", sorted(SINGLE_OWNER_JOB_IDS))
+def test_every_replica_of_a_single_owner_job_shares_one_instant(job_id: str):
+    """An elected job must not be spread across replicas.
+
+    Its lease is released when the body returns, so it dedupes for that body's runtime
+    and not for the lock's TTL. Replicas placed further apart than that each find the
+    lock free and each run, which is how a once-a-day job becomes once per replica per
+    day. Firing them together is what lets the election settle it.
+    """
+    assert len(set(_single_owner_offsets(job_id))) == 1
+
+
+@pytest.mark.parametrize("job_id", ("update_spend_job", "periodic_reload_job", "update_gateway_requests_job"))
+def test_a_per_pod_job_is_still_spread_across_replicas(job_id: str):
+    """Jobs that drain their own queues do the work on every pod, so they still need
+    separating; this is the property the single-owner case deliberately gives up."""
+    assert len(set(_single_owner_offsets(job_id))) > 1
+
+
+def test_single_owner_jobs_still_land_on_different_instants_from_each_other():
+    """Pod invariance must not collapse the jobs onto one instant: the elected replica
+    would then run every one of them at once, which is the burst being staggered away."""
+    per_job = {job_id: _single_owner_offsets(job_id)[0] for job_id in SINGLE_OWNER_JOB_IDS}
+
+    assert len(set(per_job.values())) == len(per_job)
+
+
+@pytest.mark.parametrize(
+    "job_id",
+    ("check_batch_cost_job", "check_responses_cost_job", "reset_budget_job"),
+)
+def test_a_lockless_job_is_never_treated_as_single_owner(job_id: str):
+    """These are skipped by a serving pod and still take no lock.
+
+    Membership is "elects an owner", not "a serving pod skips it". Pinning a lockless job
+    to one instant is strictly worse than spreading it, because every replica then does the
+    whole job at once instead of at staggered times. reset_budget_job is the sharpest case:
+    its sweep rewrites the entire due population, and synchronising that across a fleet is
+    the thundering herd the reset work exists to remove. It joins this set when its own
+    entry point elects, not before.
+    """
+    assert job_id not in SINGLE_OWNER_JOB_IDS
+    assert len(set(_single_owner_offsets(job_id))) > 1, "a lockless job must stay spread across replicas"
+
+
+def test_an_operator_offset_override_still_wins_for_a_single_owner_job():
+    """The override is the operator's explicit instruction and predates this rule."""
+    overridden = _offset_for(
+        job_id="key_rotation_job",
+        period_seconds=86400,
+        staggerable=True,
+        settings=_settings(offsets={"key_rotation_job": 17}),
+        identity="pod-a:1",
+    )
+
+    assert overridden == 17

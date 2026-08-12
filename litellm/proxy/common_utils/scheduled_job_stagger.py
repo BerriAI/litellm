@@ -15,6 +15,13 @@ instant after a restart. Hashing rather than randomising keeps a given process's
 stable for its whole life and lets the applied offsets be logged once and reasoned about
 later.
 
+A job that elects an owner is the exception: it drops ``identity`` and offsets by job id
+alone. Only one replica does its work, so spreading it wins nothing, and spreading it
+costs correctness, because a lease released when the body returns dedupes for that body's
+runtime rather than for the lock's TTL. Replicas placed further apart than that each find
+the lock free and each run. Sharing one instant per job keeps the burst apart job by job,
+which is what this module is for, while letting the election do the rest.
+
 The offset lives in the trigger rather than in a one-off ``next_run_time`` because a cron
 trigger recomputes each fire from the wall clock and would otherwise snap straight back
 onto the shared instant after its first shifted run.
@@ -51,17 +58,19 @@ from litellm.constants import (
     PTU_ROLLUP_LOCK_TTL_SECONDS,
 )
 from litellm.proxy._types import ScheduledJobStaggerSettings
+from litellm.proxy.common_utils.single_owner_job import SINGLE_OWNER_JOB_IDS
 
 GENERAL_SETTINGS_KEY: Final = "scheduled_job_stagger"
 
 #: Cron schedules LiteLLM picks on the operator's behalf, so shifting them changes nothing the
 #: operator asked for. Every other cron trigger is an operator-supplied crontab, preserved exactly.
 #:
-#: The value is the span over which a second firing would redo work the first already did, which
-#: is how long each job's leader-election lock stays held. Two replicas further apart than that
-#: both find the key free and both run, which for the spend report means the customer gets it
-#: twice. Offsets for these jobs are bounded by it, so widening the window cannot resurrect the
-#: duplicate-work failure this feature exists to avoid.
+#: The value bounds how far apart two replicas may be placed. It is a second line of defence
+#: rather than the mechanism: an id in ``SINGLE_OWNER_JOB_IDS`` gets a pod-invariant offset, so
+#: its replicas share one instant and the election settles it regardless of this bound. That
+#: matters because the bound alone cannot be sized correctly for a job whose lease is released
+#: when its body returns, which dedupes only for that body's runtime rather than for the lock's
+#: TTL, so no non-zero spread would be safe.
 DEFAULT_CRON_DEDUPE_SECONDS: Final = MappingProxyType(
     {
         MONTHLY_SPEND_REPORT_JOB_ID: 3600,
@@ -238,7 +247,7 @@ def _offset_for(
         return 0
     return offset_seconds(
         job_id=job_id,
-        identity=identity,
+        identity="" if job_id in SINGLE_OWNER_JOB_IDS else identity,
         window_seconds=_window_for(job_id=job_id, period_seconds=period_seconds, settings=settings),
     )
 

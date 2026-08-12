@@ -13,10 +13,43 @@ from enum import Enum
 from typing import Final, TypeVar
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import SINGLE_OWNER_JOB_RENEWAL_DIVISOR
+from litellm.constants import (
+    EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME,
+    MONTHLY_SPEND_REPORT_JOB_ID,
+    PROMETHEUS_FALLBACK_STATS_JOB_ID,
+    PTU_ROLLUP_JOB_ID,
+    SINGLE_OWNER_JOB_RENEWAL_DIVISOR,
+    WEEKLY_SPEND_REPORT_JOB_ID,
+)
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 
 T = TypeVar("T")
+
+#: Scheduler ids of jobs that elect an owner before touching the database, so on any
+#: given tick one replica does the work and the rest cost a single Redis read.
+#:
+#: These are the ids whose phase offset must NOT vary by pod. A per-pod offset spreads
+#: replicas across the stagger window, and a lease released when its body returns only
+#: dedupes for that body's runtime, so replicas further apart than that each find the
+#: lock free and each run. Offsetting by job id alone keeps different jobs on different
+#: instants, which is what staggering is for, while leaving every replica of one job on
+#: the same instant, which is what lets the election do its job.
+#:
+#: Membership is "this job elects an owner", not "a serving pod skips it". The two differ:
+#: the batch and responses cost pollers and the budget reset sweep are all role-gated while
+#: taking no lock, so firing them together would have every replica do the work at once
+#: rather than one. Add a job here only once its own entry point elects.
+SINGLE_OWNER_JOB_IDS: Final = frozenset(
+    {
+        "spend_log_cleanup_job",
+        "key_rotation_job",
+        EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME,
+        PTU_ROLLUP_JOB_ID,
+        WEEKLY_SPEND_REPORT_JOB_ID,
+        MONTHLY_SPEND_REPORT_JOB_ID,
+        PROMETHEUS_FALLBACK_STATS_JOB_ID,
+    }
+)
 
 
 class JobRole(Enum):
