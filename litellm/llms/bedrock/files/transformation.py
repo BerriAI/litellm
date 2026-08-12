@@ -1035,17 +1035,16 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         # S3 PUT responses may not include Content-Length, so fall back
         # to the actual content size captured during request transformation.
-        file_size: int = int(content_length) if content_length.isdigit() else 0
-        if file_size == 0:
-            file_size = litellm_params.get("_file_content_size", 0)
+        _content_length: Final = int(content_length) if content_length.isdigit() else 0
+        file_size: Final[int] = _content_length or int(litellm_params.get("_file_content_size", 0))
 
         # Use the actual upload URL that was used for the S3 upload
         upload_url: Final = litellm_params.get("upload_url")
-        file_id: str = ""
-        filename: str = ""
+        file_id: str = ""  # rebind-ok: reassigned below if upload_url present
+        filename: str = ""  # rebind-ok: reassigned below if upload_url present
         if upload_url:
             # Convert HTTPS S3 URL to s3:// URI format
-            file_id, filename = self._convert_https_url_to_s3_uri(upload_url)
+            file_id, filename = self._convert_https_url_to_s3_uri(upload_url)  # rebind-ok: intentional unpacking reassignment
 
         return OpenAIFileObject(
             purpose="batch",  # Default purpose for Bedrock files
