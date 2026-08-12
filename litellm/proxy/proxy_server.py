@@ -348,6 +348,7 @@ from litellm.proxy.common_utils.periodic_reload_schedule import (
 )
 from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
+from litellm.proxy.common_utils.scheduled_job_metrics import ScheduledJobMetricsListener
 from litellm.proxy.common_utils.scheduled_job_stagger import (
     apply_scheduled_job_stagger,
     attach_job_timing_logger,
@@ -9134,6 +9135,8 @@ class ProxyStartupEvent:
             scheduler=scheduler,
             settings=parse_stagger_settings(general_settings),
         )
+        # Registered before start so the first run of every job is observed.
+        ScheduledJobMetricsListener().register(scheduler)
 
         # Start the scheduler immediately without processing backlogs
         scheduler.start(paused=False)

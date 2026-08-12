@@ -15,6 +15,24 @@ else:
     ProxyLogging = Any
 
 
+def _record_lock_attempt(cronjob_id: str, acquired: bool | None) -> None:
+    """Publish the outcome of one single-owner lock attempt.
+
+    ``None`` means no Redis is configured, which is a different operational
+    state from losing the race, so it gets its own result rather than being
+    folded into a failure.
+    """
+    result: Final = "no_redis" if acquired is None else ("acquired" if acquired else "not_acquired")
+    try:
+        from litellm.integrations.prometheus import PrometheusLogger
+
+        logger = PrometheusLogger.get_instance()
+        if logger is not None:
+            logger.record_cronjob_lock_attempt(cronjob_id, result)
+    except Exception as e:  # noqa: BLE001  # telemetry must not stop a job from running
+        verbose_proxy_logger.debug("cronjob lock metric failed: %s", e)
+
+
 class PodLockManager:
     """
     Manager for acquiring and releasing locks for cron jobs using Redis.
@@ -40,6 +58,21 @@ end
         return f"cronjob_lock:{cronjob_id}"
 
     async def acquire_lock(
+        self,
+        cronjob_id: str,
+        ttl: int | None = None,
+        allow_reentrant: bool = True,
+    ) -> bool | None:
+        """Attempt the lock and record the outcome, then hand back the raw result.
+
+        Wraps the attempt rather than instrumenting each of its exits, so the
+        three-state contract below reaches callers untouched.
+        """
+        acquired: Final = await self._attempt_acquire_lock(cronjob_id, ttl=ttl, allow_reentrant=allow_reentrant)
+        _record_lock_attempt(cronjob_id, acquired)
+        return acquired
+
+    async def _attempt_acquire_lock(
         self,
         cronjob_id: str,
         ttl: int | None = None,

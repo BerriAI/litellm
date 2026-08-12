@@ -7,6 +7,7 @@ import asyncio
 import math
 import os
 import sys
+import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast
@@ -59,6 +60,7 @@ if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from prometheus_client.metrics import MetricWrapperBase
 
+    from litellm.proxy.common_utils.scheduled_job_metrics import JobRun
     from litellm.proxy.db.db_pool_metrics import DBPoolMetricsUpdate
 else:
     AsyncIOScheduler = Any
@@ -77,6 +79,8 @@ _NON_ENUM_METRIC_LABELS: Final[frozenset[str]] = frozenset(
         "purpose",
         "file_type",
         "result",
+        "job_name",
+        "cronjob_id",
     )
 )
 
@@ -711,6 +715,51 @@ class PrometheusLogger(CustomLogger):
                 "litellm_check_batch_cost_last_run_timestamp",
                 "Unix timestamp of the last CheckBatchCost job run",
                 labelnames=[],
+            )
+
+            ########################################
+            # Scheduled background jobs
+            ########################################
+            self.litellm_scheduled_job_runs_total = self._counter_factory(
+                name="litellm_scheduled_job_runs_total",
+                documentation=(
+                    "Scheduled background job runs by outcome. result is one of success, error, missed, "
+                    "max_instances; max_instances means the previous run had not finished"
+                ),
+                labelnames=("job_name", "result"),
+            )
+
+            self.litellm_scheduled_job_duration_seconds = self._histogram_factory(
+                "litellm_scheduled_job_duration_seconds",
+                "Wall-clock duration of a scheduled background job run",
+                labelnames=("job_name",),
+                buckets=self.latency_buckets,
+            )
+
+            self.litellm_scheduled_job_last_run_timestamp = self._gauge_factory(
+                "litellm_scheduled_job_last_run_timestamp",
+                "Unix timestamp of the last completed run of a scheduled background job",
+                labelnames=("job_name",),
+                multiprocess_mode="livemax",
+            )
+
+            self.litellm_scheduled_job_items_processed_total = self._counter_factory(
+                name="litellm_scheduled_job_items_processed_total",
+                documentation=(
+                    "Items scheduled background jobs reported processing. A counter, not a last-value gauge: "
+                    "queues drain between runs, so the most recent cycle is usually zero and a gauge would hide "
+                    "the bursts"
+                ),
+                labelnames=("job_name",),
+            )
+
+            self.litellm_cronjob_lock_acquisitions_total = self._counter_factory(
+                name="litellm_cronjob_lock_acquisitions_total",
+                documentation=(
+                    "Attempts to take the single-owner lock for a cron job. result is one of acquired, "
+                    "not_acquired, no_redis; no_redis means no Redis is configured, so no pod can be elected"
+                ),
+                labelnames=("cronjob_id", "result"),
             )
 
             ########################################
@@ -3140,8 +3189,6 @@ class PrometheusLogger(CustomLogger):
             jobs_polled: Number of unprocessed batches found
             processed_models: List of (model, api_provider) tuples for processed jobs
         """
-        import time
-
         try:
             self.litellm_check_batch_cost_last_run_timestamp.set(time.time())
             self.litellm_check_batch_cost_jobs_polled.set(jobs_polled)
@@ -3154,6 +3201,19 @@ class PrometheusLogger(CustomLogger):
                     ).inc()
         except Exception as e:
             verbose_logger.warning("Error recording check batch cost metrics: %s", e)
+
+    def record_scheduled_job_run(self, run: JobRun) -> None:
+        """Publish one completed run of a scheduled background job."""
+        self.litellm_scheduled_job_runs_total.labels(job_name=run.job_name, result=run.result.value).inc()
+        self.litellm_scheduled_job_last_run_timestamp.labels(job_name=run.job_name).set(time.time())
+        if run.duration_seconds is not None:
+            self.litellm_scheduled_job_duration_seconds.labels(job_name=run.job_name).observe(run.duration_seconds)
+        if run.items_processed:
+            self.litellm_scheduled_job_items_processed_total.labels(job_name=run.job_name).inc(run.items_processed)
+
+    def record_cronjob_lock_attempt(self, cronjob_id: str, result: str) -> None:
+        """Publish the outcome of one single-owner lock attempt."""
+        self.litellm_cronjob_lock_acquisitions_total.labels(cronjob_id=cronjob_id, result=result).inc()
 
     def record_db_pool_sample(self, update: DBPoolMetricsUpdate) -> None:
         """Publish one reading of this worker's Prisma connection pool."""

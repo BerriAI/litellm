@@ -4,7 +4,10 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import CLOUDZERO_EXPORT_INTERVAL_MINUTES
+from litellm.constants import (
+    CLOUDZERO_EXPORT_INTERVAL_MINUTES,
+    CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME,
+)
 from litellm.integrations.custom_logger import CustomLogger
 
 if TYPE_CHECKING:
@@ -360,5 +363,7 @@ class CloudZeroLogger(CustomLogger):
             scheduler.add_job(
                 cloudzero_logger.initialize_cloudzero_export_job,
                 "interval",
+                id=CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME,
+                replace_existing=True,
                 minutes=CLOUDZERO_EXPORT_INTERVAL_MINUTES,
             )

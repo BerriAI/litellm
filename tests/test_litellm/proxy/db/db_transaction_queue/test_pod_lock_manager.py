@@ -456,3 +456,51 @@ async def test_acquire_lock_own_lock_not_reentrant(pod_lock_manager, mock_redis)
 
     assert await pod_lock_manager.acquire_lock(cronjob_id="test_job", allow_reentrant=False) is False
     assert await pod_lock_manager.acquire_lock(cronjob_id="test_job") is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "redis_cache, granted, expected_result",
+    [
+        (None, None, "no_redis"),
+        ("present", True, "acquired"),
+        ("present", False, "not_acquired"),
+    ],
+)
+async def test_every_lock_outcome_is_recorded_under_its_own_result(redis_cache, granted, expected_result):
+    """no_redis is a different operational state from losing the race: one means
+    no pod can ever be elected, the other means another pod won."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+
+    cache = None
+    if redis_cache == "present":
+        cache = MagicMock()
+        cache.async_set_cache = AsyncMock(return_value=granted)
+        cache.async_get_cache = AsyncMock(return_value="some-other-pod")
+
+    manager = PodLockManager(redis_cache=cache)
+    logger = MagicMock()
+
+    with patch("litellm.integrations.prometheus.PrometheusLogger.get_instance", return_value=logger):
+        await manager.acquire_lock(cronjob_id="db_spend_update_job")
+
+    logger.record_cronjob_lock_attempt.assert_called_once_with("db_spend_update_job", expected_result)
+
+
+@pytest.mark.asyncio
+async def test_recording_the_lock_outcome_never_blocks_the_job():
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+
+    cache = MagicMock()
+    cache.async_set_cache = AsyncMock(return_value=True)
+    manager = PodLockManager(redis_cache=cache)
+
+    with patch(
+        "litellm.integrations.prometheus.PrometheusLogger.get_instance",
+        side_effect=RuntimeError("metrics down"),
+    ):
+        assert await manager.acquire_lock(cronjob_id="db_spend_update_job") is True

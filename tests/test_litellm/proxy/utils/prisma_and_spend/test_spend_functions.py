@@ -581,3 +581,53 @@ def test_raise_failed_update_spend_exception_raises_original_error() -> None:
 
     with pytest.raises(ValueError, match="specific"):
         asyncio.run(_runner())
+
+
+@pytest.mark.asyncio
+async def test_update_spend_reports_what_it_drained_not_what_was_queued():
+    """The scheduled-job listener publishes this as an items-processed count, so
+    a queue that only partially drains must not be reported as fully processed."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy.utils import update_spend
+
+    prisma_client = MagicMock()
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler = AsyncMock()
+
+    # 10 queued on entry, 4 still queued after the drain
+    with (
+        patch("litellm.proxy.utils._total_queued_spend_transactions", AsyncMock(side_effect=[10, 4])),
+        patch("litellm.proxy.utils.update_spend_logs_job", AsyncMock()),
+    ):
+        drained = await update_spend(
+            prisma_client=prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert drained == 6, f"expected the drained count, got {drained}"
+
+
+@pytest.mark.asyncio
+async def test_update_spend_reports_zero_when_nothing_was_queued():
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy.utils import update_spend
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler = AsyncMock()
+    logs_job = AsyncMock()
+
+    with (
+        patch("litellm.proxy.utils._total_queued_spend_transactions", AsyncMock(return_value=0)),
+        patch("litellm.proxy.utils.update_spend_logs_job", logs_job),
+    ):
+        drained = await update_spend(
+            prisma_client=MagicMock(),
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert drained == 0
+    logs_job.assert_not_awaited()

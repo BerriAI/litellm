@@ -273,6 +273,12 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     # MCP tool call metrics
     "litellm_mcp_tool_calls_total",
     "litellm_mcp_tool_call_spend_metric",
+    # Scheduled background jobs
+    "litellm_scheduled_job_runs_total",
+    "litellm_scheduled_job_duration_seconds",
+    "litellm_scheduled_job_last_run_timestamp",
+    "litellm_scheduled_job_items_processed_total",
+    "litellm_cronjob_lock_acquisitions_total",
     # Database connection pool saturation
     "litellm_db_pool_connections_max",
     "litellm_db_pool_connections_busy",
@@ -775,6 +781,17 @@ class PrometheusMetricLabels:
     litellm_check_batch_cost_errors_total: list[str] = []  # label: error_type (custom)
 
     litellm_check_batch_cost_last_run_timestamp: list[str] = []
+
+    # Scheduled background jobs. Labels are closed sets fixed at startup: job ids
+    # come from the scheduler registration, cronjob ids from the lock call sites,
+    # and results from an enum. No pod label: pod identity is unbounded, and the
+    # lock result already distinguishes the pod that owns a job from the ones
+    # that skipped it.
+    litellm_scheduled_job_runs_total: tuple[str, ...] = ()
+    litellm_scheduled_job_duration_seconds: tuple[str, ...] = ()
+    litellm_scheduled_job_last_run_timestamp: tuple[str, ...] = ()
+    litellm_scheduled_job_items_processed_total: tuple[str, ...] = ()
+    litellm_cronjob_lock_acquisitions_total: tuple[str, ...] = ()
 
     # Unlabelled: the pool is per-worker, so key/team/user labels would only add
     # cardinality.

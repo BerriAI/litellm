@@ -6068,9 +6068,11 @@ async def update_spend(
     prisma_client: PrismaClient,
     db_writer_client: AsyncHTTPHandler | None,
     proxy_logging_obj: ProxyLogging,
-):
+) -> int:
     """
-    Batch write updates to db.
+    Batch write updates to db. Returns how many queued spend transactions this
+    cycle actually drained, which the scheduled-job listener publishes as the
+    run's item count.
 
     Triggered every minute.
 
@@ -6100,12 +6102,19 @@ async def update_spend(
     # See update_spend_logs_job and _monitor_spend_logs_queue for the new behavior.
     # Safe to keep: under high concurrency this can take up to ~30s to run,
     # so it's unlikely to overlap with monitor_spend_logs_queue.
-    if queue_size > 0:
-        await update_spend_logs_job(
-            prisma_client=prisma_client,
-            db_writer_client=db_writer_client,
-            proxy_logging_obj=proxy_logging_obj,
-        )
+    if queue_size == 0:
+        return 0
+
+    await update_spend_logs_job(
+        prisma_client=prisma_client,
+        db_writer_client=db_writer_client,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    # What actually drained, not what was pending on entry: a partial failure or
+    # a queue that refilled mid-run would otherwise be reported as processed.
+    remaining: Final = await _total_queued_spend_transactions(prisma_client)
+    return max(0, queue_size - remaining)
 
 
 async def _total_queued_spend_transactions(prisma_client: PrismaClient) -> int:

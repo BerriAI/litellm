@@ -125,6 +125,8 @@ class VantageLogger(FocusLogger):
         trigger_kwargs: Final = vantage_logger._build_scheduler_trigger()
         scheduler.add_job(
             vantage_logger.initialize_focus_export_job,
+            id=VANTAGE_USAGE_DATA_JOB_NAME,
+            replace_existing=True,
             **trigger_kwargs,
         )
 
