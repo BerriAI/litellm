@@ -7,7 +7,7 @@ import KeywordTable from "./KeywordTable";
 import PatternTable from "./PatternTable";
 
 describe("content filter tables", () => {
-  it("renders category details and removes a category", async () => {
+  it("should render category details in the shared table and remove a category", async () => {
     const onRemove = vi.fn();
     const user = userEvent.setup();
 
@@ -28,6 +28,7 @@ describe("content filter tables", () => {
 
     expect(screen.getByRole("columnheader", { name: "Category" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Severity Threshold" })).toBeInTheDocument();
+    expect(screen.getByRole("table")).toHaveAttribute("data-slot", "table");
     expect(screen.getByText("Self Harm")).toBeInTheDocument();
     expect(screen.getByText("self_harm")).toBeInTheDocument();
 
@@ -36,7 +37,7 @@ describe("content filter tables", () => {
     expect(onRemove).toHaveBeenCalledWith("category-1");
   });
 
-  it("renders keyword details and removes a keyword", async () => {
+  it("should render keyword details in the shared table and remove a keyword", async () => {
     const onRemove = vi.fn();
     const user = userEvent.setup();
 
@@ -50,6 +51,7 @@ describe("content filter tables", () => {
 
     expect(screen.getByRole("columnheader", { name: "Keyword" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Description" })).toBeInTheDocument();
+    expect(screen.getByRole("table")).toHaveAttribute("data-slot", "table");
     expect(screen.getByText("secret")).toBeInTheDocument();
     expect(screen.getByText("Sensitive term")).toBeInTheDocument();
 
@@ -58,7 +60,7 @@ describe("content filter tables", () => {
     expect(onRemove).toHaveBeenCalledWith("keyword-1");
   });
 
-  it("renders pattern details and removes a pattern", async () => {
+  it("should render pattern details in the shared table and remove a pattern", async () => {
     const onRemove = vi.fn();
     const user = userEvent.setup();
 
@@ -81,6 +83,7 @@ describe("content filter tables", () => {
 
     expect(screen.getByRole("columnheader", { name: "Pattern name" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Regex pattern" })).toBeInTheDocument();
+    expect(screen.getByRole("table")).toHaveAttribute("data-slot", "table");
     expect(screen.getByText("Email address")).toBeInTheDocument();
     expect(screen.getByText(/\[a-z\]\+@example/)).toBeInTheDocument();
 
@@ -89,7 +92,7 @@ describe("content filter tables", () => {
     expect(onRemove).toHaveBeenCalledWith("pattern-1");
   });
 
-  it("renders selected topic details and removes a blocked topic", async () => {
+  it("should render selected topic details in the shared table and remove a blocked topic", async () => {
     const onCategoryRemove = vi.fn();
     const user = userEvent.setup();
 
@@ -120,6 +123,7 @@ describe("content filter tables", () => {
 
     expect(screen.getByRole("columnheader", { name: "Category" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Severity Threshold" })).toBeInTheDocument();
+    expect(screen.getByRole("table")).toHaveAttribute("data-slot", "table");
     expect(screen.getByText("Violent content")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /remove/i }));
