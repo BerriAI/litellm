@@ -27,6 +27,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import ValidationError
+from pydantic_core import PydanticUndefined
 
 sys.path.insert(0, os.path.abspath("../.."))
 
@@ -81,6 +82,29 @@ def test_update_router_config_rejects_malformed_model_group_retry_policy():
         UpdateRouterConfig(
             model_group_retry_policy={"gpt-4": {"RateLimitErrorRetries": "x"}}
         )
+
+
+def test_update_router_config_omits_unset_model_group_alias():
+    """A payload that touches only retry fields must not resurrect
+    ``model_group_alias`` in its ``exclude_none`` dump. ``/config/update``
+    merges that dump over the stored ``router_settings`` row, so a non-None
+    default here (the old ``= {}``) would overwrite a configured alias map
+    with an empty dict on every unrelated save."""
+    dumped = UpdateRouterConfig(retry_policy={"BadRequestErrorRetries": 5}).model_dump(exclude_none=True)
+    assert "model_group_alias" not in dumped
+
+
+def test_update_router_config_has_no_non_none_field_defaults():
+    """Recurrence guard for the model_group_alias overwrite bug: every field
+    must default to None (or be required) so ``/config/update``'s
+    ``dict(exclude_none=True)`` merge carries only keys the caller actually
+    sent. A field added later with ``= {}`` / ``= []`` / a ``default_factory``
+    would silently clobber that key in the stored router_settings row."""
+    for name, field in UpdateRouterConfig.model_fields.items():
+        assert field.default is None or field.default is PydanticUndefined, (
+            f"{name} has non-None default {field.default!r}"
+        )
+        assert field.default_factory is None, f"{name} uses a default_factory"
 
 
 # ---------------------------------------------------------------------------
@@ -283,3 +307,48 @@ async def test_config_update_persists_and_reads_back_retry_policy(monkeypatch):
     assert read_back.BadRequestErrorRetries == 5
     assert read_back.TimeoutErrorRetries == 3
     assert read_back.RateLimitErrorRetries == 7
+
+
+@pytest.mark.asyncio
+async def test_config_update_retry_policy_preserves_model_group_alias(monkeypatch):
+    """Saving only retry_policy through /config/update must not wipe a
+    previously configured model_group_alias. Both live in the single
+    ``router_settings`` LiteLLM_Config JSON row, and the merge writes the
+    ``UpdateRouterConfig`` ``exclude_none`` dump over it. A non-None
+    ``model_group_alias`` default used to leak ``{}`` into that dump and
+    overwrite the stored map; the poisoned row then flows through
+    ``update_settings`` and wipes the live router too, so both are asserted."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ConfigYAML, LitellmUserRoles, UserAPIKeyAuth
+
+    router = _build_router()
+
+    fake_table = _FakeConfigTable()
+    fake_table.rows["router_settings"] = _FakeConfigRow(
+        "router_settings", {"model_group_alias": {"gpt-4": "azure-gpt-4"}}
+    )
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_config = fake_table
+
+    async def _apply_router_settings(*args, **kwargs):
+        await proxy_server.proxy_config._add_router_settings_from_db_config(
+            config_data={}, llm_router=router, prisma_client=prisma_client
+        )
+
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server.proxy_config, "add_deployment", _apply_router_settings)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+
+    await proxy_server.update_config(
+        config_info=ConfigYAML(router_settings=UpdateRouterConfig(retry_policy=RetryPolicy(RateLimitErrorRetries=7))),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"),
+    )
+
+    persisted = fake_table.rows["router_settings"].param_value
+    assert persisted["model_group_alias"] == {"gpt-4": "azure-gpt-4"}
+    assert persisted["retry_policy"]["RateLimitErrorRetries"] == 7
+
+    assert router.model_group_alias == {"gpt-4": "azure-gpt-4"}
+    assert isinstance(router.retry_policy, RetryPolicy)
+    assert router.retry_policy.RateLimitErrorRetries == 7
