@@ -1,4 +1,5 @@
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import useCan from "@/app/(dashboard)/hooks/useCan";
 import AvailableTeamsPanel from "@/components/team/AvailableTeamsPanel";
 import TeamInfoView from "@/components/team/TeamInfo";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
@@ -42,6 +43,7 @@ interface TeamProps {
 
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { teamCreateCall } from "./networking";
+import { normalizeTeamModelSelection } from "./team/teamModelAccess";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
 
 const canCreateOrManageTeams = (
@@ -107,6 +109,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const [isTeamDeleting, setIsTeamDeleting] = useState(false);
   // Add this state near the other useState declarations
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const canViewPolicies = useCan("viewPolicies");
   const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
@@ -167,8 +170,8 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     };
 
     fetchGuardrails();
-    fetchPolicies();
-  }, [accessToken]);
+    if (canViewPolicies) fetchPolicies();
+  }, [accessToken, canViewPolicies]);
 
   const handleOk = () => {
     setIsTeamModalVisible(false);
@@ -351,7 +354,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           }
         }
 
-        await teamCreateCall(accessToken, formValues);
+        await teamCreateCall(accessToken, { ...formValues, models: normalizeTeamModelSelection(formValues.models) });
         NotificationsManager.success("Team created");
         await refreshTeams();
         form.resetFields();
@@ -618,17 +621,11 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                 label={
                   <span>
                     Models{" "}
-                    <Tooltip title="These are the models that your selected team has access to">
+                    <Tooltip title="These are the models that your selected team has access to. Leave empty to grant no models directly, e.g. when the team gets its models from access groups">
                       <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                     </Tooltip>
                   </span>
                 }
-                rules={[
-                  {
-                    required: true,
-                    message: "Please select at least one model",
-                  },
-                ]}
                 name="models"
               >
                 <ModelSelect
@@ -800,36 +797,38 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                       }
                     />
                   </Form.Item>
-                  <Form.Item
-                    label={
-                      <span>
-                        Policies{" "}
-                        <Tooltip title="Apply policies to this team to control guardrails and other settings">
-                          <a
-                            href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                          </a>
-                        </Tooltip>
-                      </span>
-                    }
-                    name="policies"
-                    className="mt-8"
-                    help="Select existing policies or enter new ones"
-                  >
-                    <Select
-                      mode="tags"
-                      style={{ width: "100%" }}
-                      placeholder="Select or enter policies"
-                      options={policiesList.map((name) => ({
-                        value: name,
-                        label: name,
-                      }))}
-                    />
-                  </Form.Item>
+                  {canViewPolicies && (
+                    <Form.Item
+                      label={
+                        <span>
+                          Policies{" "}
+                          <Tooltip title="Apply policies to this team to control guardrails and other settings">
+                            <a
+                              href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </a>
+                          </Tooltip>
+                        </span>
+                      }
+                      name="policies"
+                      className="mt-8"
+                      help="Select existing policies or enter new ones"
+                    >
+                      <Select
+                        mode="tags"
+                        style={{ width: "100%" }}
+                        placeholder="Select or enter policies"
+                        options={policiesList.map((name) => ({
+                          value: name,
+                          label: name,
+                        }))}
+                      />
+                    </Form.Item>
+                  )}
                   <Form.Item
                     label={
                       <span>

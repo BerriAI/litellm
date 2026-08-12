@@ -252,26 +252,40 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
 # --------------------------------------------------------------------------- #
  
  
-def mutable_names_in(annotation: ast.expr) -> Iterator[str]:
+def _is_literal_subscript(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Subscript):
+        return False
+    base: Final = node.value
+    return (isinstance(base, ast.Name) and base.id == "Literal") or (
+        isinstance(base, ast.Attribute) and base.attr == "Literal"
+    )
+
+
+def mutable_names_in(annotation: ast.AST) -> Iterator[str]:
     """Yield mutable-collection names anywhere inside an annotation expression.
 
     Matches bare names (`dict`, `MutableMapping`) and dotted access (`typing.Dict`,
     `collections.deque`, `collections.abc.MutableMapping`), descends through nesting
     (`Mapping[str, list[int]]`, `tuple[set[int], ...]`) and string forward references.
+    Skips `Literal[...]` subtrees: their string arguments are values, not forward
+    references, so `Literal["list"]` is not the `list` type.
     """
-    for node in ast.walk(annotation):
-        if isinstance(node, ast.Name) and node.id in MUTABLE_COLLECTIONS:
-            yield node.id
-        elif isinstance(node, ast.Attribute) and node.attr in MUTABLE_COLLECTIONS:
-            yield node.attr
-        elif isinstance(node, ast.Constant):
-            value: object = node.value  # forward references arrive as string constants
-            if isinstance(value, str):
-                try:
-                    inner = ast.parse(value, mode="eval").body
-                except SyntaxError:
-                    continue
-                yield from mutable_names_in(inner)
+    if _is_literal_subscript(annotation):
+        return
+    if isinstance(annotation, ast.Name) and annotation.id in MUTABLE_COLLECTIONS:
+        yield annotation.id
+    elif isinstance(annotation, ast.Attribute) and annotation.attr in MUTABLE_COLLECTIONS:
+        yield annotation.attr
+    elif isinstance(annotation, ast.Constant):
+        value: object = annotation.value  # forward references arrive as string constants
+        if isinstance(value, str):
+            try:
+                inner = ast.parse(value, mode="eval").body
+            except SyntaxError:
+                return
+            yield from mutable_names_in(inner)
+    for child in ast.iter_child_nodes(annotation):
+        yield from mutable_names_in(child)
  
  
 def _mutable_ann(path: Path, line: int, name: str, where: str) -> Violation:
