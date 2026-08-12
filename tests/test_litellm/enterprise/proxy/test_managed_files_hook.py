@@ -604,8 +604,8 @@ async def test_create_still_upserts_and_claims_attribution():
 
 @pytest.mark.asyncio
 async def test_default_callers_still_create_their_rows():
-    """create_if_missing defaults to True, so the fine-tune, Responses and Anthropic
-    callers, none of which pass it, keep upserting exactly as before."""
+    """create_if_missing defaults to True, so the fine-tune, Responses and managed
+    /v1/batches callers, none of which passes it, keep upserting exactly as before."""
     managed_files, mock_prisma = _make_object_store_instance()
 
     await managed_files.store_unified_object_id(

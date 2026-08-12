@@ -1060,6 +1060,31 @@ async def _read_request_body_deferring_parse_failure(
     return populate_request_with_path_params(request_data=parsed_body, request=request), None
 
 
+async def _record_unparsable_body_failure(
+    user_api_key_dict: UserAPIKeyAuth,
+    body_parse_exception: ProxyException,
+    route: str,
+) -> None:
+    """Record the 400 an unparsable body earns as a failed request log.
+
+    The endpoint never runs for these, so no downstream failure hook writes the
+    spend log row the Admin UI reads. Logging must not change what the caller
+    sees, so a failure here is swallowed and the 400 is raised either way.
+    """
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    try:
+        await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict in sig
+            request_data={},  # mutable-ok: the failure hook seeds the call id and metadata onto this dict
+            original_exception=body_parse_exception,
+            user_api_key_dict=user_api_key_dict,
+            error_type=ProxyErrorTypes.bad_request_error,
+            route=route,
+        )
+    except Exception as e:  # noqa: BLE001  # any logging failure must leave the caller's 400 untouched
+        verbose_proxy_logger.exception("Failed to log the request rejected for an unparsable body: %s", e)
+
+
 async def _user_api_key_auth_builder(
     request: Request,
     api_key: str,
@@ -2673,6 +2698,11 @@ async def user_api_key_auth(
     user_api_key_auth_obj.request_route = normalize_request_route(route)
 
     if body_parse_exception is not None:
+        await _record_unparsable_body_failure(
+            user_api_key_dict=user_api_key_auth_obj,
+            body_parse_exception=body_parse_exception,
+            route=route,
+        )
         raise body_parse_exception
 
     # Resolve caller identity once, here at the seam, into a single per-request
