@@ -2948,7 +2948,8 @@ async def test_streaming_hook_block_stream_keeps_upstream_identity():
         delivered = await _drain_streaming_hook(guardrail)
 
     body = b"".join(delivered)
-    assert b'"id": "msg_1"' in body
+    # the shared block builder mints a new message id: the block is not the upstream message
+    assert b'"id": "msg_' in body
     assert b'"model": "claude"' in body
     assert b"my-proxy-alias" not in body
 

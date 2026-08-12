@@ -30,6 +30,7 @@ from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.exceptions import ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
+from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
 )
@@ -2632,6 +2633,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     yield error_frame
                 return
             except ModifyResponseException as e:
+                if raw_sse:
+                    # the shared per-endpoint block builder the unified guardrail path uses; it
+                    # mints a fresh message id because the block is not the upstream message, but
+                    # it reports exc.model, which defaults to the guardrail name rather than the model
+                    e.model = _pre_block_response.model or e.model  # rebind-ok: local synthetic block payload
+                    if e.original_response is None:
+                        # the builder reads usage off this; the upstream call was already paid for
+                        e.original_response = _pre_block_response  # rebind-ok: local synthetic block payload
+                    for block_chunk in AnthropicMessagesHandler().build_block_sse_chunks(e, stream_started=False):
+                        yield block_chunk
+                    return
                 # Preserve upstream usage from the LLM call we already
                 # consumed. Non-streaming blocks carry it via
                 # ModifyResponseException.original_response +
