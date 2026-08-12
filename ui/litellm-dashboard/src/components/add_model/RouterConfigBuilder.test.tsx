@@ -211,6 +211,24 @@ describe("RouterConfigBuilder", () => {
     });
   });
 
+  it("should deduplicate utterances within a multiline paste", async () => {
+    const onChange = vi.fn();
+    const value = {
+      routes: [{ name: "gpt-4", utterances: ["hello"], description: "", score_threshold: 0.5 }],
+    };
+    render(<RouterConfigBuilder modelInfo={MOCK_MODEL_INFO} value={value} onChange={onChange} />);
+
+    const utteranceInput = await screen.findByRole("textbox", { name: "Example Utterances" });
+    fireEvent.paste(utteranceInput, {
+      clipboardData: { getData: () => "hello\nworld\nworld" },
+    });
+
+    await waitFor(() => {
+      const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1];
+      expect(lastCall[0].routes[0].utterances).toEqual(["hello", "world"]);
+    });
+  });
+
   it("should add multiple routes", async () => {
     const user = userEvent.setup();
     render(<RouterConfigBuilder modelInfo={MOCK_MODEL_INFO} />);
