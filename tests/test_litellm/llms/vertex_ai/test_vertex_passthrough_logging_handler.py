@@ -2,9 +2,9 @@ from datetime import datetime
 from unittest.mock import MagicMock
 
 import httpx
-import litellm
 import pytest
 
+import litellm
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
