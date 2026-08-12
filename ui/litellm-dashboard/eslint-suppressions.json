@@ -1373,9 +1373,6 @@
     },
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/policies/_components/impact_preview_alert.tsx": {
