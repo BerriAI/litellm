@@ -138,9 +138,7 @@ class TestParallelAISearch:
             json_data = mock_post.call_args.kwargs.get("json")
             assert json_data["mode"] == "basic"
 
-    @pytest.mark.parametrize(
-        "processor,expected_mode", [("base", "basic"), ("pro", "advanced")]
-    )
+    @pytest.mark.parametrize("processor,expected_mode", [("base", "basic"), ("pro", "advanced")])
     @pytest.mark.asyncio
     async def test_legacy_processor_maps_to_mode(self, processor, expected_mode):
         with patch(
@@ -225,9 +223,7 @@ class TestParallelAISearch:
                 "arxiv.org",
                 "nature.com",
             ]
-            assert advanced_settings["source_policy"]["exclude_domains"] == [
-                "reddit.com"
-            ]
+            assert advanced_settings["source_policy"]["exclude_domains"] == ["reddit.com"]
             assert advanced_settings["excerpt_settings"]["max_chars_per_result"] == 1500
 
             assert "max_results" not in json_data
@@ -309,10 +305,7 @@ class TestParallelAISearch:
             )
 
             call_args = mock_post.call_args
-            assert (
-                call_args.kwargs["url"]
-                == "https://proxy.internal.example.com/v1/search"
-            )
+            assert call_args.kwargs["url"] == "https://proxy.internal.example.com/v1/search"
 
     @pytest.mark.asyncio
     async def test_caller_api_base_without_key_is_refused(self, monkeypatch):
@@ -341,3 +334,61 @@ class TestParallelAISearch:
                 query="AI developments",
                 search_provider="parallel_ai",
             )
+
+    @pytest.mark.asyncio
+    async def test_flat_source_and_fetch_params_nest_under_advanced_settings(self):
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = _mock_response()
+
+            await litellm.asearch(
+                query="AI developments",
+                search_provider="parallel_ai",
+                objective="find peer-reviewed AI research",
+                include_domains=["arxiv.org"],
+                after_date="2026-01-01",
+                location="gb",
+                fetch_policy={"max_age_seconds": 600, "disable_cache_fallback": True},
+                client_model="claude-fable-5",
+            )
+
+            json_data = mock_post.call_args.kwargs.get("json")
+            assert json_data["objective"] == "find peer-reviewed AI research"
+            assert json_data["client_model"] == "claude-fable-5"
+
+            advanced_settings = json_data["advanced_settings"]
+            assert advanced_settings["location"] == "gb"
+            assert advanced_settings["fetch_policy"] == {
+                "max_age_seconds": 600,
+                "disable_cache_fallback": True,
+            }
+            assert advanced_settings["source_policy"]["include_domains"] == ["arxiv.org"]
+            assert advanced_settings["source_policy"]["after_date"] == "2026-01-01"
+
+            assert "include_domains" not in json_data
+            assert "after_date" not in json_data
+            assert "location" not in json_data
+            assert "fetch_policy" not in json_data
+
+    @pytest.mark.asyncio
+    async def test_response_preserves_raw_parallel_fields(self):
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = _mock_response()
+
+            response = await litellm.asearch(
+                query="AI developments",
+                search_provider="parallel_ai",
+            )
+
+            dumped = response.model_dump()
+            assert dumped["search_id"] == "search_abc123"
+            assert dumped["session_id"] == "session_xyz"
+            assert dumped["parallel_usage"] == [{"name": "search_advanced", "count": 1}]
+
+            first = response.results[0].model_dump()
+            assert first["excerpts"] == ["First excerpt.", "Second excerpt."]

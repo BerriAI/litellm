@@ -5620,6 +5620,7 @@ def completion(
             or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
+            or custom_llm_provider == "parallel_ai"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
             or custom_llm_provider == "baseten"

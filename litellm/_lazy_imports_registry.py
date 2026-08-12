@@ -238,6 +238,7 @@ LLM_CONFIG_NAMES: Final = (
     "HostedVLLMResponsesAPIConfig",
     "VolcEngineResponsesAPIConfig",
     "PerplexityResponsesConfig",
+    "ParallelAIResponsesConfig",
     "DatabricksResponsesAPIConfig",
     "OpenRouterResponsesAPIConfig",
     "BedrockMantleResponsesAPIConfig",
@@ -291,6 +292,7 @@ LLM_CONFIG_NAMES: Final = (
     "LmStudioEmbeddingConfig",
     "NscaleConfig",
     "PerplexityChatConfig",
+    "ParallelAIChatConfig",
     "AzureOpenAIO1Config",
     "IBMWatsonXAIConfig",
     "IBMWatsonXChatConfig",
@@ -961,6 +963,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         ".llms.perplexity.responses.transformation",
         "PerplexityResponsesConfig",
     ),
+    "ParallelAIResponsesConfig": (
+        ".llms.parallel_ai.responses.transformation",
+        "ParallelAIResponsesConfig",
+    ),
     "DatabricksResponsesAPIConfig": (
         ".llms.databricks.responses.transformation",
         "DatabricksResponsesAPIConfig",
@@ -1109,6 +1115,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "PerplexityChatConfig": (
         ".llms.perplexity.chat.transformation",
         "PerplexityChatConfig",
+    ),
+    "ParallelAIChatConfig": (
+        ".llms.parallel_ai.chat.transformation",
+        "ParallelAIChatConfig",
     ),
     "AzureOpenAIO1Config": (
         ".llms.azure.chat.o_series_transformation",

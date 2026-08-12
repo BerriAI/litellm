@@ -534,6 +534,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "ollama_chat",
     "deepinfra",
     "perplexity",
+    "parallel_ai",
     "mistral",
     "groq",
     "gigachat",
@@ -713,6 +714,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES: Final = {
 
 openai_compatible_endpoints: Final[list] = [
     "api.perplexity.ai",
+    "api.parallel.ai",
     "api.endpoints.anyscale.com/v1",
     "api.deepinfra.com/v1/openai",
     "api.mistral.ai/v1",
@@ -772,6 +774,7 @@ openai_compatible_providers: Final[list] = [
     "tencent",
     "deepinfra",
     "perplexity",
+    "parallel_ai",
     "xinference",
     "xai",
     "zai",

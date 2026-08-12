@@ -1778,6 +1778,9 @@ if TYPE_CHECKING:
     from .llms.manus.responses.transformation import (
         ManusResponsesAPIConfig as ManusResponsesAPIConfig,
     )
+    from .llms.parallel_ai.responses.transformation import (
+        ParallelAIResponsesConfig as ParallelAIResponsesConfig,
+    )
     from .llms.perplexity.responses.transformation import (
         PerplexityResponsesConfig as PerplexityResponsesConfig,
     )
@@ -1850,6 +1853,9 @@ if TYPE_CHECKING:
     from .llms.azure.chat.o_series_transformation import (
         AzureOpenAIO1Config as _AzureOpenAIO1Config,
     )
+    from .llms.parallel_ai.chat.transformation import (
+        ParallelAIChatConfig as _ParallelAIChatConfig,
+    )
     from .llms.perplexity.chat.transformation import (
         PerplexityChatConfig as _PerplexityChatConfig,
     )
@@ -1888,6 +1894,7 @@ if TYPE_CHECKING:
     GenAIHubEmbeddingConfig: Type[_GenAIHubEmbeddingConfig]
     AzureOpenAIO1Config: Type[_AzureOpenAIO1Config]
     PerplexityChatConfig: Type[_PerplexityChatConfig]
+    ParallelAIChatConfig: Type[_ParallelAIChatConfig]
     NscaleConfig: Type[_NscaleConfig]
     IBMWatsonXChatConfig: Type[_IBMWatsonXChatConfig]
     IBMWatsonXAIConfig: Type[_IBMWatsonXAIConfig]

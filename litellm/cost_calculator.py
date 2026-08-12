@@ -645,7 +645,11 @@ def cost_per_token(
     else:
         model_info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
 
-        if (model_info.get("input_cost_per_token") or 0.0) > 0 or (model_info.get("output_cost_per_token") or 0.0) > 0:
+        if (
+            (model_info.get("input_cost_per_token") or 0.0) > 0
+            or (model_info.get("output_cost_per_token") or 0.0) > 0
+            or (model_info.get("input_cost_per_request") or 0.0) > 0
+        ):
             return generic_cost_per_token(
                 model=model,
                 usage=usage_block,

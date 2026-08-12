@@ -233,6 +233,9 @@ def get_llm_provider(
                     if endpoint == "api.perplexity.ai":
                         custom_llm_provider = "perplexity"
                         dynamic_api_key = get_secret_str("PERPLEXITYAI_API_KEY")
+                    elif endpoint == "api.parallel.ai":
+                        custom_llm_provider = "parallel_ai"
+                        dynamic_api_key = get_secret_str("PARALLEL_AI_API_KEY") or get_secret_str("PARALLEL_API_KEY")
                     elif endpoint == "api.endpoints.anyscale.com/v1":
                         custom_llm_provider = "anyscale"
                         dynamic_api_key = get_secret_str("ANYSCALE_API_KEY")
@@ -547,6 +550,12 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.PerplexityChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
+    elif custom_llm_provider == "parallel_ai":
+        # parallel_ai is openai compatible, hosted at https://api.parallel.ai
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.ParallelAIChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "aiohttp_openai":
         return model, "aiohttp_openai", api_key, api_base
     elif custom_llm_provider == "anyscale":
