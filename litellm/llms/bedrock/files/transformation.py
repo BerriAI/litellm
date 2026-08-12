@@ -863,7 +863,13 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         litellm_params["upload_url"] = api_base
         # Store file size for response transformation (S3 PUT response
         # doesn't include Content-Length, so we pass it through).
-        litellm_params["_file_content_size"] = len(file_content) if isinstance(file_content, (str, bytes)) else 0
+        # Use UTF-8 byte length, not decoded string length, so multi-byte
+        # characters are counted correctly.
+        if isinstance(file_content, bytes):
+            _file_content_bytes = len(file_content)
+        else:
+            _file_content_bytes = len(file_content.encode("utf-8"))
+        litellm_params["_file_content_size"] = _file_content_bytes
 
         # Return a dict that tells the HTTP handler exactly what to do
         return {
