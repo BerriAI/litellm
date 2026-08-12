@@ -670,6 +670,64 @@ class TestLiteLLMCompletionResponsesConfig:
         assert tool_calls[0].namespace == "collaboration"
         assert tool_calls[0].arguments == '{"message":"hello"}'
 
+    def test_transform_chat_completion_response_plain_tool_call_has_no_namespace(self):
+        """A non-namespace function call must not gain a namespace attribute, matching
+        the streaming path which only sets it when a namespace was restored."""
+        tool_call_id = "call_plain_no_namespace"
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="gpt-4o",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id=tool_call_id,
+                                type="function",
+                                function=Function(
+                                    name="get_weather",
+                                    arguments='{"city":"Paris"}',
+                                ),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        try:
+            responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="What is the weather in Paris?",
+                responses_api_request={
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "get_weather",
+                            "parameters": {"type": "object", "properties": {}},
+                        }
+                    ]
+                },
+                chat_completion_response=chat_completion_response,
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+
+        tool_calls = [
+            item
+            for item in responses_api_response.output
+            if item.type == "function_call"
+        ]
+        assert len(tool_calls) == 1
+        assert tool_calls[0].name == "get_weather"
+        assert tool_calls[0].namespace is None
+        assert "namespace" not in tool_calls[0].model_fields_set
+
 
     def test_transform_top_level_function_collision_stays_unnamespaced(self):
         tool_call_id = "call_top_level_collision"
