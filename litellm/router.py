@@ -529,12 +529,13 @@ class Router:
         redis_cache = None
         cache_config: dict[str, Any] = {}
 
-        cache_config.update(cache_kwargs)
-        cache_type = cache_config.pop("type", cache_type)
-
         self.client_ttl = client_ttl
         if redis_url is not None or (redis_host is not None and redis_port is not None):
             cache_type = "redis"
+
+            # Seed with cache_kwargs first, then let explicit constructor
+            # arguments override so they always win when both are provided.
+            cache_config.update(cache_kwargs)
 
             if redis_url is not None:
                 cache_config["url"] = redis_url
@@ -555,6 +556,11 @@ class Router:
                 cache_config["db"] = str(redis_db)
 
             redis_cache = self._create_redis_cache(cache_config)
+        else:
+            # No Redis configured: honor cache_kwargs for non-Redis backends
+            # (e.g. disk). Explicit Redis params above take precedence when set.
+            cache_config.update(cache_kwargs)
+            cache_type = cache_config.pop("type", cache_type)
 
         if cache_responses:
             if litellm.cache is None:

@@ -3360,6 +3360,32 @@ async def test_router_cache_kwargs_applied_without_redis():
 
 
 @pytest.mark.asyncio
+async def test_router_explicit_redis_params_override_cache_kwargs():
+    """Explicit Redis constructor args must win over cache_kwargs when both set.
+
+    Regression test for Greptile review on #36309: cache_kwargs applied before
+    the explicit Redis block previously let a cache_kwargs 'url' override the
+    explicit redis_url.
+    """
+    with patch("litellm.Router._create_redis_cache") as mock_create:
+        mock_create.return_value = None
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "test",
+                    "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-test"},
+                }
+            ],
+            redis_url="redis://explicit-host:6379",
+            cache_kwargs={"url": "redis://kwargs-host:6379", "type": "redis"},
+        )
+        # Explicit redis_url must take precedence over cache_kwargs url
+        mock_create.assert_called_once()
+        passed_config = mock_create.call_args[0][0]
+        assert passed_config["url"] == "redis://explicit-host:6379"
+
+
+@pytest.mark.asyncio
 async def test_aresponses_enforces_context_window_pre_call_check():
     """
     End-to-end router regression: a Responses API call whose `input` exceeds the
