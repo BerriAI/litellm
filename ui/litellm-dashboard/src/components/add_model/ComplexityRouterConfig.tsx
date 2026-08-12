@@ -1,5 +1,5 @@
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Select as AntdSelect, Card, Collapse, Divider, Space, Switch, Tooltip, Typography } from "antd";
+import { Select as AntdSelect, Card, Collapse, Divider, Input, Space, Switch, Tooltip, Typography } from "antd";
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
@@ -14,6 +14,8 @@ export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 3000;
 export const DEFAULT_TIER_DISTANCE_PENALTY = 0.5;
 export const DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE = 3;
 export const DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS = 200;
+export const DEFAULT_SESSION_AFFINITY = false;
+export const DEFAULT_DEPLOYMENT_AFFINITY = true;
 
 export interface ComplexityTiers {
   SIMPLE: string[];
@@ -25,9 +27,14 @@ export interface ComplexityTiers {
 export interface ClassifierLLMConfig {
   model: string;
   timeout_ms: number;
+  system_prompt?: string;
 }
 
 export type ClassifierType = "heuristic" | "llm";
+
+export type ClassifierFallback = "heuristic" | "default_model";
+
+export const DEFAULT_CLASSIFIER_FALLBACK: ClassifierFallback = "heuristic";
 
 export interface AdaptiveRouterWeights {
   quality: number;
@@ -38,12 +45,19 @@ export const DEFAULT_ADAPTIVE_WEIGHTS: AdaptiveRouterWeights = { quality: 0.3, c
 
 export type AdaptiveEligible = "all" | "classified_tier";
 
+export type ComplexityTierLabels = Partial<Record<keyof ComplexityTiers, string>>;
+
 export interface ComplexityRouterConfigValue {
   tiers: ComplexityTiers;
+  tier_labels?: ComplexityTierLabels;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
   classifier_context_window_size?: number;
   classifier_context_per_turn_chars?: number;
+  classifier_context_include_assistant_turns?: boolean;
+  classifier_fallback?: ClassifierFallback;
+  session_affinity?: boolean;
+  deployment_affinity?: boolean;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;
@@ -72,7 +86,10 @@ interface ComplexityRouterConfigProps {
   showValidationErrors?: boolean;
 }
 
-const TIER_DESCRIPTIONS: Record<keyof ComplexityTiers, { label: string; description: string; examples: string }> = {
+export const TIER_DESCRIPTIONS: Record<
+  keyof ComplexityTiers,
+  { label: string; description: string; examples: string }
+> = {
   SIMPLE: {
     label: "Simple",
     description: "Basic questions, greetings, simple factual queries",
@@ -95,6 +112,11 @@ const TIER_DESCRIPTIONS: Record<keyof ComplexityTiers, { label: string; descript
   },
 };
 
+export const TIER_KEYS = Object.keys(TIER_DESCRIPTIONS) as Array<keyof ComplexityTiers>;
+
+export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: ComplexityTierLabels | undefined): string =>
+  tierLabels?.[tier]?.trim() || TIER_DESCRIPTIONS[tier].label;
+
 const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   modelInfo,
   value,
@@ -113,6 +135,12 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onEscalationKeywordsChange,
   showValidationErrors = false,
 }) => {
+  // The deployment's default model is derived from the tiers on submit, mirroring the order
+  // add_auto_router_tab uses, so the fallback option is offered exactly when one will exist.
+  const hasDefaultModel = Boolean(
+    value.tiers.MEDIUM[0] || value.tiers.SIMPLE[0] || value.tiers.COMPLEX[0] || value.tiers.REASONING[0],
+  );
+
   // Embedding models can't serve a chat-completion role, so they're excluded here.
   const modelOptions = modelInfo
     .filter((model) => model.mode !== "embedding")
@@ -125,6 +153,13 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
     onChange({
       ...value,
       tiers: { ...value.tiers, [tier]: models },
+    });
+  };
+
+  const handleTierLabelChange = (tier: keyof ComplexityTiers, label: string) => {
+    onChange({
+      ...value,
+      tier_labels: { ...value.tier_labels, [tier]: label },
     });
   };
 
@@ -144,9 +179,17 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
         &lt;1ms latency). Configure which model(s) handle each tier.
       </Text>
 
+      <Text type="secondary" style={{ display: "block", marginBottom: 16, fontSize: 12 }}>
+        Rename a tier to use your own vocabulary in the dashboard and your spend logs. Renaming doesn&apos;t change how
+        requests are classified, and callers never see these names.
+        {value.classifier_type === "llm" &&
+          " Your classifier model reads these names, so clearer ones can sharpen its choices."}
+      </Text>
+
       <Card>
-        {(Object.keys(TIER_DESCRIPTIONS) as Array<keyof ComplexityTiers>).map((tier, index) => {
+        {TIER_KEYS.map((tier, index) => {
           const tierInfo = TIER_DESCRIPTIONS[tier];
+          const label = effectiveTierLabel(tier, value.tier_labels);
           const tierMissing = showValidationErrors && value.tiers[tier].length === 0;
           return (
             <div key={tier}>
@@ -154,20 +197,31 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
               <div className="mb-4">
                 <div className="flex items-center gap-2 mb-2">
                   <Text strong style={{ fontSize: 16 }}>
-                    {tierInfo.label} Tier
+                    {label} Tier
                   </Text>
                   <Tooltip title={tierInfo.description}>
                     <InfoCircleOutlined className="text-gray-400" />
                   </Tooltip>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    Tier {index + 1} of {TIER_KEYS.length} &middot; {tier}
+                  </Text>
                 </div>
                 <Text type="secondary" style={{ display: "block", marginBottom: 8, fontSize: 12 }}>
                   Examples: {tierInfo.examples}
                 </Text>
+                <Input
+                  value={value.tier_labels?.[tier] ?? ""}
+                  onChange={(event) => handleTierLabelChange(tier, event.target.value)}
+                  placeholder={`Display name (default: ${tierInfo.label})`}
+                  aria-label={`Display name for the ${tierInfo.label} tier`}
+                  style={{ marginBottom: 8 }}
+                  allowClear
+                />
                 <AntdSelect
                   mode="multiple"
                   value={value.tiers[tier]}
                   onChange={(models) => handleTierChange(tier, models)}
-                  placeholder={`Select model(s) for ${tierInfo.label.toLowerCase()} queries`}
+                  placeholder={`Select model(s) for ${label.toLowerCase()} queries`}
                   showSearch
                   style={{ width: "100%" }}
                   options={modelOptions}
@@ -181,7 +235,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 )}
                 {tierMissing && (
                   <Text type="danger" style={{ fontSize: 12 }}>
-                    This tier is required
+                    The {label} tier is required
                   </Text>
                 )}
               </div>
@@ -211,6 +265,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 customTechnicalKeywords={customTechnicalKeywords}
                 onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
                 showValidationErrors={showValidationErrors}
+                hasDefaultModel={hasDefaultModel}
               />
             ),
           },
@@ -222,6 +277,42 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
               </Text>
             ),
             children: <AdaptiveRoutingConfig value={value} onChange={onChange} />,
+          },
+          {
+            key: "affinity",
+            label: (
+              <Text strong style={{ color: "#374151" }}>
+                Advanced: Affinity
+              </Text>
+            ),
+            children: (
+              <>
+                <div className="flex items-center gap-2 mb-2">
+                  <Switch
+                    checked={value.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY}
+                    onChange={(deploymentAffinity) => onChange({ ...value, deployment_affinity: deploymentAffinity })}
+                    aria-label="Pin a session to one deployment per model group"
+                  />
+                  <Text strong>Pin a session to one deployment per model group</Text>
+                </div>
+                <Text type="secondary" style={{ display: "block", fontSize: 12, marginBottom: 12 }}>
+                  Keeps a session on the same deployment within a group, so provider prompt caches stay warm. Turn off
+                  to load-balance every turn.
+                </Text>
+                <div className="flex items-center gap-2 mb-2">
+                  <Switch
+                    checked={value.session_affinity ?? DEFAULT_SESSION_AFFINITY}
+                    onChange={(sessionAffinity) => onChange({ ...value, session_affinity: sessionAffinity })}
+                    aria-label="Pin a session to its first model"
+                  />
+                  <Text strong>Pin a session to its first model</Text>
+                </div>
+                <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
+                  Keeps a session on its first turn&apos;s model instead of re-classifying each turn. Also pins the
+                  deployment.
+                </Text>
+              </>
+            ),
           },
           {
             key: "response",
@@ -270,7 +361,11 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   children: (
                     <>
                       {onKeywordTierRulesChange && (
-                        <KeywordTierRules rules={keywordTierRules} onChange={onKeywordTierRulesChange} />
+                        <KeywordTierRules
+                          rules={keywordTierRules}
+                          onChange={onKeywordTierRulesChange}
+                          tierLabels={value.tier_labels}
+                        />
                       )}
                       {onKeywordTierRulesChange && onSemanticMatchingEnabledChange && (
                         <Divider style={{ margin: "16px 0" }} />

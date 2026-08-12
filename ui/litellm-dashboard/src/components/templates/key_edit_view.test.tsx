@@ -3,8 +3,13 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
-import { modelAvailableCall } from "../networking";
+import { getPoliciesList, getPromptsList, modelAvailableCall } from "../networking";
 import { KeyEditView } from "./key_edit_view";
+
+const can = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
+  default: (...args: unknown[]) => can(...args),
+}));
 
 vi.mock("../networking", async () => {
   const actual = await vi.importActual("../networking");
@@ -212,6 +217,45 @@ describe("KeyEditView", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    can.mockReturnValue(true);
+  });
+
+  describe("policy and prompt fields", () => {
+    const renderAs = (userRole: string) =>
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="user-123"
+          userRole={userRole}
+          premiumUser={true}
+        />,
+      );
+
+    it("should render both fields and load prompts for an admin", async () => {
+      renderAs("Admin");
+
+      await waitFor(() => {
+        expect(getPromptsList).toHaveBeenCalledWith("test-token");
+      });
+      expect(screen.getByText("Prompts", { selector: "label" })).toBeInTheDocument();
+      expect(screen.getByText("Policies")).toBeInTheDocument();
+    });
+
+    it("should omit both fields and fire neither admin-only request for an internal user", async () => {
+      renderAs("Internal User");
+
+      await waitFor(() => {
+        expect(modelAvailableCall).toHaveBeenCalled();
+      });
+
+      expect(getPromptsList).not.toHaveBeenCalled();
+      expect(getPoliciesList).not.toHaveBeenCalled();
+      expect(screen.queryByText("Prompts", { selector: "label" })).not.toBeInTheDocument();
+      expect(screen.queryByText("Policies")).not.toBeInTheDocument();
+    });
   });
 
   it("should call onCancel when cancel button is clicked", async () => {
@@ -363,6 +407,36 @@ describe("KeyEditView", () => {
 
     await waitFor(() => {
       expect(onSubmitMock).toHaveBeenCalledWith(expect.objectContaining({ throttle_on_budget_exceeded: true }));
+    });
+  });
+
+  it("should initialize and submit enable_prompt_caching from key metadata", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithPromptCaching = {
+      ...MOCK_KEY_DATA,
+      metadata: { ...MOCK_KEY_DATA.metadata, enable_prompt_caching: true },
+    };
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithPromptCaching}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Enable Prompt Caching")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalledWith(expect.objectContaining({ enable_prompt_caching: true }));
     });
   });
 
@@ -777,6 +851,65 @@ describe("KeyEditView", () => {
     });
   });
 
+  it("should send an explicit null budget_duration when a previously-set Reset Budget is cleared", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const resetBudgetItem = (await screen.findByText("Reset Budget")).closest(".ant-form-item") as HTMLElement;
+    const clearIcon = resetBudgetItem.querySelector(".ant-select-clear");
+    expect(clearIcon).not.toBeNull();
+    fireEvent.mouseDown(clearIcon as Element);
+
+    await waitFor(() => {
+      expect(within(resetBudgetItem).getByText("Never resets")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+    });
+    const callArgs = onSubmitMock.mock.calls[0][0];
+    expect(callArgs.budget_duration).toBeNull();
+    expect(JSON.stringify({ ...callArgs })).toContain('"budget_duration":null');
+  });
+
+  it("should send an explicit null budget_duration when a legacy word-form Reset Budget is cleared", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const legacyKeyData = { ...MOCK_KEY_DATA, budget_duration: "monthly" };
+    renderWithProviders(
+      <KeyEditView
+        keyData={legacyKeyData}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const resetBudgetItem = (await screen.findByText("Reset Budget")).closest(".ant-form-item") as HTMLElement;
+    fireEvent.mouseDown(resetBudgetItem.querySelector(".ant-select-clear") as Element);
+
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+    });
+    expect(onSubmitMock.mock.calls[0][0].budget_duration).toBeNull();
+  });
+
   it("should omit budget_limits when existing windows are left untouched (issue #33246)", async () => {
     // The backend treats any budget_limits in the payload as an admin-only
     // budget change, so re-sending untouched windows 403s a non-admin owner.
@@ -1007,7 +1140,7 @@ describe("KeyEditView", () => {
     });
 
     it("should disable the organization dropdown for non-admin users", async () => {
-      const { container } = renderWithProviders(
+      renderWithProviders(
         <KeyEditView
           keyData={MOCK_KEY_DATA}
           onCancel={() => {}}
@@ -1029,7 +1162,7 @@ describe("KeyEditView", () => {
     });
 
     it("should not disable the organization dropdown for admin users", async () => {
-      const { container } = renderWithProviders(
+      renderWithProviders(
         <KeyEditView
           keyData={MOCK_KEY_DATA}
           onCancel={() => {}}
@@ -1287,6 +1420,137 @@ describe("KeyEditView", () => {
       await waitFor(() => {
         expect(findOption("gpt-4")?.classList.contains("ant-select-item-option-disabled")).toBe(true);
       });
+    });
+  });
+
+  describe("estimated output tokens", () => {
+    const renderEditView = (
+      keyData: KeyResponse,
+      onSubmit: (values: any) => Promise<void>,
+      userRole: string = "Admin",
+    ) =>
+      renderWithProviders(
+        <KeyEditView
+          keyData={keyData}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={userRole}
+          premiumUser={false}
+        />,
+      );
+
+    it("loads the estimates from key metadata and resubmits them unchanged", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderEditView(
+        {
+          ...MOCK_KEY_DATA,
+          metadata: {
+            ...MOCK_KEY_DATA.metadata,
+            default_estimated_output_tokens: 512,
+            default_estimated_output_tokens_per_model: { "gpt-4": 4096 },
+          },
+        },
+        onSubmitMock,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Estimated Output Tokens")).toHaveValue(512);
+      });
+      expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toHaveValue('{"gpt-4":4096}');
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.default_estimated_output_tokens).toBe(512);
+      expect(callArgs.default_estimated_output_tokens_per_model).toEqual({ "gpt-4": 4096 });
+    });
+
+    it("submits edited estimates as a number and a parsed object", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderEditView(MOCK_KEY_DATA, onSubmitMock);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Estimated Output Tokens")).toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByLabelText("Estimated Output Tokens"), { target: { value: "2048" } });
+      fireEvent.change(screen.getByLabelText("Estimated Output Tokens Per Model"), {
+        target: { value: '{"gpt-5": 8192}' },
+      });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.default_estimated_output_tokens).toBe(2048);
+      expect(callArgs.default_estimated_output_tokens_per_model).toEqual({ "gpt-5": 8192 });
+    });
+
+    it("omits both estimates from the payload when the controls are blank", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderEditView(MOCK_KEY_DATA, onSubmitMock);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toHaveValue("");
+      });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs).not.toHaveProperty("default_estimated_output_tokens");
+      expect(callArgs).not.toHaveProperty("default_estimated_output_tokens_per_model");
+    });
+
+    it.each(["Internal User", "Admin Viewer", "org_admin"])(
+      "leaves both controls read-only for %s and still resubmits the stored values",
+      async (userRole) => {
+        const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+        renderEditView(
+          {
+            ...MOCK_KEY_DATA,
+            metadata: {
+              ...MOCK_KEY_DATA.metadata,
+              default_estimated_output_tokens: 512,
+              default_estimated_output_tokens_per_model: { "gpt-4": 4096 },
+            },
+          },
+          onSubmitMock,
+          userRole,
+        );
+
+        await waitFor(() => {
+          expect(screen.getByLabelText("Estimated Output Tokens")).toBeDisabled();
+        });
+        expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toBeDisabled();
+
+        await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+        await waitFor(() => {
+          expect(onSubmitMock).toHaveBeenCalled();
+        });
+        const callArgs = onSubmitMock.mock.calls[0][0];
+        expect(callArgs.default_estimated_output_tokens).toBe(512);
+        expect(callArgs.default_estimated_output_tokens_per_model).toEqual({ "gpt-4": 4096 });
+      },
+    );
+
+    it.each(["Admin", "proxy_admin"])("leaves both controls editable for %s", async (userRole) => {
+      renderEditView(MOCK_KEY_DATA, vi.fn().mockResolvedValue(undefined), userRole);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Estimated Output Tokens")).toBeEnabled();
+      });
+      expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toBeEnabled();
     });
   });
 });

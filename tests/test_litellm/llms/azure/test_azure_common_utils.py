@@ -1430,7 +1430,7 @@ def test_token_provider_returns_non_string(setup_mocks):
 
     # Verify the error was logged
     setup_mocks["logger"].error.assert_any_call(
-        "Azure AD token provider returned non-string value: <class 'int'>"
+        "Azure AD token provider returned non-string value: %s", int
     )
 
 
@@ -2034,3 +2034,74 @@ def test_azure_traditional_api_uses_azure_openai_client():
         assert isinstance(
             async_client, AsyncAzureOpenAI
         ), f"Expected AsyncAzureOpenAI client for api_version={api_version}"
+
+
+def test_evicting_an_azure_client_built_on_the_callers_session_leaves_it_open(monkeypatch):
+    """`initialize_azure_sdk_client` puts `litellm.aclient_session` on the SDK client.
+
+    That session belongs to the caller. `AsyncAzureOpenAI.close()` closes whatever
+    http client it was handed, so treating the wrapper as litellm's to close would
+    close the caller's shared session out from under them.
+    """
+    import httpx
+
+    from litellm.caching.evicted_client_closer import EvictedClientCloser
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
+    shared_session = httpx.AsyncClient()
+    closer = EvictedClientCloser(grace_seconds=0.0)
+    monkeypatch.setattr(litellm, "aclient_session", shared_session)
+    monkeypatch.setattr(
+        litellm,
+        "in_memory_llm_clients_cache",
+        LLMClientCache(evicted_client_closer=closer),
+    )
+
+    wrapper = BaseAzureLLM().get_azure_openai_client(
+        api_key="not-a-real-key",
+        api_base="https://litellm.openai.azure.com",
+        api_version="2024-02-01",
+        litellm_params={},
+        _is_async=True,
+    )
+
+    assert wrapper is not None
+    assert wrapper._client is shared_session, "the wrapper should be built on the caller's session"
+
+    closer.schedule(wrapper)
+    closer.reap()
+
+    assert closer.pending_count == 0, "a wrapper around the caller's session must never be queued"
+    assert shared_session.is_closed is False, "closed the session the caller configured"
+
+
+def test_an_azure_client_litellm_built_its_own_http_client_for_is_still_closed(monkeypatch):
+    """The ownership check must not turn the reclaim off for the ordinary case."""
+    from litellm.caching.evicted_client_closer import EvictedClientCloser
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
+    closer = EvictedClientCloser(grace_seconds=0.0)
+    monkeypatch.setattr(litellm, "aclient_session", None)
+    monkeypatch.setattr(litellm, "client_session", None)
+    monkeypatch.setattr(
+        litellm,
+        "in_memory_llm_clients_cache",
+        LLMClientCache(evicted_client_closer=closer),
+    )
+
+    wrapper = BaseAzureLLM().get_azure_openai_client(
+        api_key="not-a-real-key",
+        api_base="https://litellm.openai.azure.com",
+        api_version="2024-02-01",
+        litellm_params={},
+        _is_async=False,
+    )
+
+    assert wrapper is not None
+    closer.schedule(wrapper)
+
+    assert closer.pending_count == 1, "litellm built this client's http client, so it owns it"
+
+    closer.reap()
+
+    assert wrapper.is_closed() is True

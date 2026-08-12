@@ -3051,3 +3051,147 @@ def test_list_files_key_allowed_openai_model_still_resolves_team_credentials(
         mocker, monkeypatch, _team_openai_plus_global_anthropic_router(), ["team-gpt"]
     )
     assert captured_kwargs.get("api_key") == "team-openai-key"
+
+
+@pytest.mark.parametrize(
+    "http_method, url, patched_litellm_call",
+    [
+        ("get", "/v1/files/file-victim-abc123", "litellm.afile_retrieve"),
+        ("get", "/v1/files/file-victim-abc123/content", "litellm.afile_content"),
+        ("delete", "/v1/files/file-victim-abc123", "litellm.afile_delete"),
+    ],
+)
+def test_require_managed_files_rejects_raw_provider_file_id(
+    mocker: MockerFixture,
+    monkeypatch,
+    llm_router: Router,
+    http_method: str,
+    url: str,
+    patched_litellm_call: str,
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    monkeypatch.setattr("litellm.require_managed_files", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    setup_proxy_logging_object(monkeypatch, llm_router)
+
+    mock_call = mocker.patch(patched_litellm_call, new=mocker.AsyncMock())
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="attacker-user"
+    )
+
+    try:
+        response = getattr(client, http_method)(
+            url, headers={"Authorization": "Bearer test-key"}
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+        monkeypatch.setattr("litellm.require_managed_files", False)
+
+    assert response.status_code == 400, response.text
+    mock_call.assert_not_called()
+
+
+def _unified_managed_file_id() -> str:
+    import base64
+
+    from litellm.types.utils import SpecialEnums
+
+    unified_id = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+        "application/json", "victim-unified-id", "gpt-3.5-turbo", "file-victim-abc123", "gpt-3.5-turbo-id"
+    )
+    return base64.urlsafe_b64encode(unified_id.encode()).decode().rstrip("=")
+
+
+class _ManagedResourceAccessCheckerStub:
+    async def can_user_call_unified_file_id(
+        self,
+        unified_file_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> bool:
+        return True
+
+    async def can_user_call_unified_object_id(
+        self,
+        unified_object_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> bool:
+        return True
+
+
+@pytest.mark.asyncio
+async def test_require_managed_files_allows_owned_unified_managed_file_id(monkeypatch):
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        validate_managed_id_requirement,
+    )
+
+    monkeypatch.setattr("litellm.require_managed_files", True)
+
+    await validate_managed_id_requirement(
+        resource_id=_unified_managed_file_id(),
+        resource_kind="file",
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="owner-user"),
+        managed_files_obj=_ManagedResourceAccessCheckerStub(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_managed_file_id_requirement_is_opt_in(monkeypatch):
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        validate_managed_id_requirement,
+    )
+
+    monkeypatch.setattr("litellm.require_managed_files", False)
+
+    await validate_managed_id_requirement(
+        resource_id="file-victim-abc123",
+        resource_kind="file",
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        managed_files_obj=None,
+    )
+
+
+def test_raw_provider_file_id_retrieve_allowed_when_managed_files_not_required(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    monkeypatch.setattr("litellm.require_managed_files", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    setup_proxy_logging_object(monkeypatch, llm_router)
+
+    mock_retrieve = mocker.patch(
+        "litellm.afile_retrieve",
+        new=mocker.AsyncMock(
+            return_value=OpenAIFileObject(
+                id="file-victim-abc123",
+                object="file",
+                bytes=3,
+                created_at=1234567890,
+                filename="test.txt",
+                purpose="user_data",
+                status="uploaded",
+            )
+        ),
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="some-user"
+    )
+
+    try:
+        response = client.get(
+            "/v1/files/file-victim-abc123", headers={"Authorization": "Bearer test-key"}
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    mock_retrieve.assert_called_once()

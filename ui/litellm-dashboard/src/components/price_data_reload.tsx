@@ -60,9 +60,7 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [hours, setHours] = useState<number>(6);
   const [reloadStatus, setReloadStatus] = useState<ReloadStatus | null>(null);
-  const [loadingStatus, setLoadingStatus] = useState(false);
   const [sourceInfo, setSourceInfo] = useState<CostMapSourceInfo | null>(null);
-  const [loadingSource, setLoadingSource] = useState(false);
 
   // Fetch status on component mount and periodically
   useEffect(() => {
@@ -81,7 +79,6 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
   const fetchReloadStatus = async () => {
     if (!accessToken) return;
 
-    setLoadingStatus(true);
     try {
       const status = await getModelCostMapReloadStatus(accessToken);
       setReloadStatus(status);
@@ -94,22 +91,17 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
         last_run: null,
         next_run: null,
       });
-    } finally {
-      setLoadingStatus(false);
     }
   };
 
   const fetchSourceInfo = async () => {
     if (!accessToken) return;
 
-    setLoadingSource(true);
     try {
       const info = await getModelCostMapSource(accessToken);
       setSourceInfo(info);
     } catch (error) {
       console.error("Failed to fetch cost map source info:", error);
-    } finally {
-      setLoadingSource(false);
     }
   };
 

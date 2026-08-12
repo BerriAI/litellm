@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Final
 
 from litellm.llms.openai.image_generation import GPTImageGenerationConfig
 
@@ -16,9 +16,9 @@ class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
 
     @staticmethod
     def get_flux2_image_generation_url(
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
-        api_version: Optional[str],
+        api_version: str | None,
     ) -> str:
         """
         Constructs the complete URL for Azure AI FLUX 2 image generation.
@@ -62,5 +62,5 @@ class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
         Returns:
             True if the model is a FLUX 2 model
         """
-        model_lower = model.lower().replace(".", "-").replace("_", "-")
+        model_lower: Final = model.lower().replace(".", "-").replace("_", "-")
         return "flux-2" in model_lower or "flux2" in model_lower

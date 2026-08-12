@@ -488,6 +488,45 @@ def test_gated_mock_params_cover_mock_router_testing_params():
     assert {"mock_testing_rate_limit_error", "mock_timeout", "mock_delay"} <= set(GATED_MOCK_PARAM_NAMES)
 
 
+def test_e2e_proxy_config_opts_in_to_the_mock_params_its_suite_sends():
+    """The ``build_and_test`` CI job runs the top-level ``tests/test_*.py`` suite
+    against a proxy mounted with ``proxy_server_config.yaml``. Several of those
+    tests drive fallback, retry and timeout paths by asking the proxy to
+    fabricate a failure, which the gate rejects with a 400 unless the config
+    opts in. Without the opt-in the positive cases fail outright and the
+    negative ones pass for the wrong reason, so the suite and the config it
+    runs against have to move together."""
+    from pathlib import Path
+
+    import yaml
+
+    from litellm.proxy.route_llm_request import (
+        GATED_MOCK_PARAM_NAMES,
+        MOCK_TESTING_CONFIG_KEY,
+    )
+
+    repo_root = Path(__file__).parents[3]
+    suite_sources = tuple(
+        (path, path.read_text(encoding="utf-8")) for path in sorted(repo_root.glob("tests/test_*.py"))
+    )
+    senders = frozenset(
+        f"{path.name}:{param}"
+        for path, source in suite_sources
+        for param in GATED_MOCK_PARAM_NAMES
+        if f"{param}=" in source or f'"{param}"' in source
+    )
+    assert senders, "expected the E2E suite to still exercise the gated mock testing params"
+
+    config = yaml.safe_load((repo_root / "proxy_server_config.yaml").read_text(encoding="utf-8"))
+    general_settings = config.get("general_settings") or {}
+
+    assert general_settings.get(MOCK_TESTING_CONFIG_KEY) is True, (
+        f"proxy_server_config.yaml must set general_settings.{MOCK_TESTING_CONFIG_KEY}: true — "
+        f"the E2E suite sends gated mock testing params ({', '.join(sorted(senders))}) "
+        "and the proxy rejects them with a 400 otherwise"
+    )
+
+
 @pytest.mark.parametrize(
     "mock_param",
     [
@@ -1052,3 +1091,27 @@ async def test_route_request_rejects_chat_completion_without_messages():
     assert exc_info.value.status_code == 400
     assert exc_info.value.param == "messages"
     llm_router.acompletion.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_route_request_routing_group_name_passes_model_gate():
+    from unittest.mock import AsyncMock, patch
+
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "member-a", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"}},
+            {"model_name": "member-b", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}},
+        ],
+        routing_groups=[
+            {"group_name": "grouped-quality", "models": ["member-a", "member-b"], "routing_strategy": "simple-shuffle"}
+        ],
+    )
+    data = {"model": "grouped-quality", "messages": [{"role": "user", "content": "hi"}]}
+
+    with patch.object(router, "acompletion", new=AsyncMock(return_value="group_response")) as spy:
+        response = await (await route_request(data, router, None, "acompletion"))
+
+    assert response == "group_response"
+    spy.assert_called_once_with(**data)

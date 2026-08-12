@@ -20,14 +20,11 @@ const deepParse = (input: any) => {
 // TableClickableErrorField component with copy-to-clipboard functionality
 const TableClickableErrorField: React.FC<{ label: string; value: string | null | undefined }> = ({ label, value }) => {
   const [isExpanded, setIsExpanded] = React.useState(false);
-  const [copied, setCopied] = React.useState(false);
   const safeValue = value?.toString() || "N/A";
   const truncated = safeValue.length > 50 ? safeValue.substring(0, 50) + "..." : safeValue;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(safeValue);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
   };
 
   return (

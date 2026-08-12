@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,6 +12,13 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
+from litellm._logging import (
+    CorrelationContextFilter,
+    JsonFormatter,
+    session_id_var,
+    trace_id_var,
+    verbose_logger,
+)
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.utils import (
     CallTypes,
@@ -21,12 +29,15 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
+from litellm.types.utils import all_litellm_params
 from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
     _check_provider_match,
     _is_streaming_request,
+    get_api_key,
     get_llm_provider,
+    get_non_default_completion_params,
     get_optional_params_image_gen,
     get_prompt_cache_min_tokens,
     is_cached_message,
@@ -910,6 +921,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_response_schema": {"type": "boolean"},
                 "supports_system_messages": {"type": "boolean"},
                 "supports_tool_choice": {"type": "boolean"},
+                "supports_tool_search": {"type": "boolean"},
                 "supports_video_input": {"type": "boolean"},
                 "supports_vision": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
@@ -5015,3 +5027,263 @@ async def test_builtin_string_callback_registers_when_subclass_already_active(
     )
 
     assert any(type(cb) is S3Logger for cb in litellm._async_success_callback)
+
+
+def test_reapply_runtime_registrations_replays_register_model_overrides(monkeypatch):
+    """
+    register_model is the documented way to override pricing for a model. A
+    price-data reload swaps litellm.model_cost for a freshly fetched catalog,
+    so without replaying those registrations the override is silently lost and
+    the model reverts to upstream pricing.
+    """
+    from litellm import utils as litellm_utils
+    from litellm.utils import (
+        _invalidate_model_cost_lowercase_map,
+        reapply_runtime_model_cost_registrations,
+    )
+
+    monkeypatch.setattr(
+        litellm_utils,
+        "_runtime_registered_model_cost",
+        dict(litellm_utils._runtime_registered_model_cost),
+    )
+    # Only the recorded half is under test here; the live-router rebuild is covered
+    # in test_router_model_cost_isolation.py. Routers built by earlier tests in this
+    # process stay in the weak set until they are collected, so leaving the callback
+    # installed would make this depend on when that happens.
+    monkeypatch.setattr(litellm_utils._LiveDeploymentReplay, "callback", None)
+
+    saved_model_cost = litellm.model_cost
+    try:
+        litellm.register_model(
+            model_cost={
+                "openai/gpt-4o": {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "input_cost_per_token": 0.000123,
+                }
+            }
+        )
+
+        litellm.model_cost = {
+            "openai/gpt-4o": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 0.000999,
+                "max_input_tokens": 4242,
+            }
+        }
+        _invalidate_model_cost_lowercase_map()
+        reapply_runtime_model_cost_registrations()
+
+        assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == 0.000123
+        assert litellm.model_cost["openai/gpt-4o"]["max_input_tokens"] == 4242
+    finally:
+        litellm.model_cost = saved_model_cost
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkeypatch):
+    """
+    Per-request custom pricing describes one call, so it must not be re-asserted
+    over every future catalog. Replaying it would let a one-off price outlive
+    the catalog generation it was applied to and silently beat fresh upstream
+    pricing forever, while a durable override registered alongside it survives.
+    """
+    from litellm import utils as litellm_utils
+    from litellm.utils import (
+        _invalidate_model_cost_lowercase_map,
+        reapply_runtime_model_cost_registrations,
+    )
+
+    monkeypatch.setattr(
+        litellm_utils,
+        "_runtime_registered_model_cost",
+        dict(litellm_utils._runtime_registered_model_cost),
+    )
+
+    saved_model_cost = litellm.model_cost
+    try:
+        litellm.register_model(
+            model_cost={"openai/gpt-4o": {"litellm_provider": "openai", "input_cost_per_token": 0.000111}},
+            persist_across_reloads=True,
+        )
+        litellm.register_model(
+            model_cost={"openai/gpt-4o-mini": {"litellm_provider": "openai", "input_cost_per_token": 0.000222}},
+            persist_across_reloads=False,
+        )
+
+        litellm.model_cost = {
+            "openai/gpt-4o": {"litellm_provider": "openai", "input_cost_per_token": 0.000999},
+            "openai/gpt-4o-mini": {"litellm_provider": "openai", "input_cost_per_token": 0.000888},
+        }
+        _invalidate_model_cost_lowercase_map()
+        reapply_runtime_model_cost_registrations()
+
+        assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == 0.000111
+        assert litellm.model_cost["openai/gpt-4o-mini"]["input_cost_per_token"] == 0.000888
+    finally:
+        litellm.model_cost = saved_model_cost
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_ai21_api_key_is_resolved_from_the_documented_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ai21 branch resolved a misspelled env var, so the name every other ai21 code path
+    reads, and the only name documented, was ignored."""
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "ai21_key", None)
+    monkeypatch.delenv("AI211_API_KEY", raising=False)
+    monkeypatch.setenv("AI21_API_KEY", "sk-ai21-resolved-from-env")
+
+    assert get_api_key(llm_provider="ai21", dynamic_api_key=None) == "sk-ai21-resolved-from-env"
+
+
+class _JsonCapture(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.formatter = JsonFormatter()
+        self.records: list[dict] = []
+        self.addFilter(CorrelationContextFilter())
+
+    def emit(self, record):
+        self.records.append(json.loads(self.formatter.format(record)))
+
+
+def _make_capture_logger(name: str) -> tuple[logging.Logger, _JsonCapture]:
+    lg = logging.getLogger(name)
+    cap = _JsonCapture()
+    lg.addHandler(cap)
+    lg.setLevel(logging.DEBUG)
+    return lg, cap
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_restores_originating_task_context_after_success(monkeypatch):
+    """A successful acompletion() dispatches async_success_handler via
+    asyncio.create_task + the global logging worker - a different Task than the
+    one running acompletion() itself (this test's own task). That handler's own
+    restore only fixes up the detached child task it runs in; wrapper_async's own
+    finally block (in litellm/utils.py) must separately restore the *originating*
+    task's trace_id/session_id, since nothing else does.
+    """
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    trace_id_var.set("outer-trace-wrapper-test")
+    session_id_var.set("outer-session-wrapper-test")
+    try:
+        await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello there!",
+            litellm_session_id="mock-call-session",
+            num_retries=0,
+        )
+        assert trace_id_var.get() == "outer-trace-wrapper-test"
+        assert session_id_var.get() == "outer-session-wrapper-test"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_function_setup_failure_after_logging_construction_restores_context(monkeypatch):
+    """If function_setup() constructs Logging() (which already mutated
+    trace_id_var/session_id_var in __init__) but then raises before returning,
+    the caller's wrapper() never gets a logging_obj reference to restore from.
+    function_setup()'s own except block must restore the correlation context
+    itself in that case, or it leaks into every subsequent log line in this
+    thread/task until something unrelated happens to reset it."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+
+    def _boom(self, *args, **kwargs):
+        raise RuntimeError("simulated failure after Logging() construction")
+
+    monkeypatch.setattr(Logging, "update_environment_variables", _boom)
+
+    trace_id_var.set("pre-setup-failure-trace")
+    session_id_var.set("pre-setup-failure-session")
+    try:
+        with pytest.raises(RuntimeError, match="simulated failure"):
+            litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response="Hello there!",
+                litellm_session_id="doomed-call-session",
+                num_retries=0,
+            )
+        assert trace_id_var.get() == "pre-setup-failure-trace"
+        assert session_id_var.get() == "pre-setup-failure-session"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_function_setup_failure_log_line_shows_outer_not_doomed_ids(monkeypatch):
+    """The 'Error in function_setup' diagnostic log line itself must be stamped
+    with the outer/pre-call correlation ids, not the doomed call's own ids -
+    restoring context must happen *before* logging the exception, not after,
+    since the failed call never produces a usable logging object for anything
+    else to be attributed to."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+
+    def _boom(self, *args, **kwargs):
+        raise RuntimeError("simulated failure after Logging() construction")
+
+    monkeypatch.setattr(Logging, "update_environment_variables", _boom)
+
+    lg, cap = _make_capture_logger("test.function_setup_failure_log_order")
+    # verbose_logger is a distinct, module-level logger from our throwaway one -
+    # temporarily attach the same capture handler so we see its own emitted record.
+    verbose_logger.addHandler(cap)
+    try:
+        trace_id_var.set("outer-trace")
+        session_id_var.set("outer-session")
+        with pytest.raises(RuntimeError, match="simulated failure"):
+            litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response="Hello there!",
+                litellm_session_id="doomed-call-session",
+                num_retries=0,
+            )
+        setup_failure_records = [r for r in cap.records if "Error in function_setup" in r.get("message", "")]
+        assert len(setup_failure_records) == 1
+        record = setup_failure_records[0]
+        assert record.get("session_id") == "outer-session"
+        assert record.get("trace_id") == "outer-trace"
+    finally:
+        verbose_logger.removeHandler(cap)
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+WEBSEARCH_INTERNAL_CONTROL_FIELDS = (
+    "_websearch_interception_emit_native_blocks",
+    "_websearch_interception_converted_stream",
+)
+
+
+def test_websearch_interception_control_fields_never_reach_the_provider():
+    """The web-search interception hooks stamp these onto kwargs to carry state
+    across the agentic loop. Anything the param builder does not recognize is
+    swept into the provider request, and a provider that validates its body
+    rejects the whole call: Bedrock Converse answers
+    `_websearch_interception_emit_native_blocks: Extra inputs are not permitted`
+    with a 400, so enabling interception breaks every request it touches.
+
+    Their code-interpreter counterparts are already registered; these were not.
+    """
+    kwargs = {
+        "a_real_provider_specific_param": 1,
+        **{field: True for field in WEBSEARCH_INTERNAL_CONTROL_FIELDS},
+    }
+
+    non_default = get_non_default_completion_params(kwargs)
+
+    assert non_default == {"a_real_provider_specific_param": 1}, (
+        "web-search interception control fields leaked into the provider params: "
+        f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
+    )
+    assert set(WEBSEARCH_INTERNAL_CONTROL_FIELDS) <= set(all_litellm_params)

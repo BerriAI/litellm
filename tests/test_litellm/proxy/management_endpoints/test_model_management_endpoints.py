@@ -3477,6 +3477,140 @@ class TestStrategyRouterWriteValidation:
             is None
         )
 
+    def test_create_with_empty_keyword_rule_rejected(self):
+        """LIT-5133: the router refuses to build a rule with no keyword, but only at load time.
+        Without this the row is written, dropped on reload, and the caller gets a 500 plus a
+        deployment that can never come back."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+
+        violation = _strategy_router_write_violation(
+            incoming_params=LiteLLM_Params(
+                model="auto_router/complexity_router",
+                complexity_router_default_model="gpt-4o-mini",
+                complexity_router_config={
+                    "tiers": {"SIMPLE": ["gpt-4o-mini"]},
+                    "keyword_tier_rules": [{"keywords": [], "tier": "COMPLEX"}],
+                },
+            ),
+            existing_params=None,
+        )
+        assert violation is not None
+        assert "complexity_router_config is invalid" in violation
+        assert "keyword_tier_rules" in violation
+
+    def test_patch_that_only_renames_does_not_judge_the_stored_config(self):
+        """Only a config the write actually carries is judged. A row stored before this validation
+        existed is already unloadable, and holding its rename hostage would break the restore path
+        this function documents; the repair is a write that supplies a good config."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        stored_bad = LiteLLM_Params(
+            model="auto_router/complexity_router",
+            complexity_router_config={
+                "tiers": {"SIMPLE": ["gpt-4o-mini"]},
+                "keyword_tier_rules": [{"keywords": ["  "], "tier": "COMPLEX"}],
+            },
+        )
+        assert (
+            _strategy_router_write_violation(
+                incoming_params=updateLiteLLMParams(model="auto_router/complexity_router"),
+                existing_params=stored_bad,
+            )
+            is None
+        )
+
+    def test_incoming_config_replaces_stored_rather_than_merging(self):
+        """The field is written wholesale, so a good incoming config must clear a bad stored one."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        stored_bad = LiteLLM_Params(
+            model="auto_router/complexity_router",
+            complexity_router_config={
+                "tiers": {"SIMPLE": ["gpt-4o-mini"]},
+                "keyword_tier_rules": [{"keywords": [], "tier": "COMPLEX"}],
+            },
+        )
+        assert (
+            _strategy_router_write_violation(
+                incoming_params=updateLiteLLMParams(
+                    model="auto_router/complexity_router",
+                    complexity_router_config={
+                        "tiers": {"SIMPLE": ["gpt-4o-mini"]},
+                        "keyword_tier_rules": [{"keywords": ["invoice"], "tier": "COMPLEX"}],
+                    },
+                ),
+                existing_params=stored_bad,
+            )
+            is None
+        )
+
+    def test_config_only_patch_is_judged_without_a_model_in_the_payload(self):
+        """A patch may carry a config and no model, which is what a caller updating only the
+        routing rules sends. That path skipped the naming contract, so it has to be judged on the
+        config alone against the stored model, or it overwrites a working router with one that
+        cannot load and takes it out of service."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        violation = _strategy_router_write_violation(
+            incoming_params=updateLiteLLMParams(
+                complexity_router_config={
+                    "tiers": {"SIMPLE": ["gpt-4o-mini"]},
+                    "keyword_tier_rules": [{"keywords": [], "tier": "COMPLEX"}],
+                }
+            ),
+            existing_params=self._stored_complexity_params(),
+        )
+        assert violation is not None
+        assert "complexity_router_config is invalid" in violation
+
+    def test_config_only_patch_with_a_loadable_config_is_allowed(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        assert (
+            _strategy_router_write_violation(
+                incoming_params=updateLiteLLMParams(
+                    complexity_router_config={
+                        "tiers": {"SIMPLE": ["gpt-4o-mini"]},
+                        "keyword_tier_rules": [{"keywords": ["invoice"], "tier": "COMPLEX"}],
+                    }
+                ),
+                existing_params=self._stored_complexity_params(),
+            )
+            is None
+        )
+
+    def test_config_only_patch_is_judged_on_the_config_alone(self):
+        """The stored model is encrypted at rest, so a patch that names no model cannot be
+        classified from the row. An unloadable config is rejected on its own merits instead,
+        which is also the only reading that closes the path regardless of what is stored."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        violation = _strategy_router_write_violation(
+            incoming_params=updateLiteLLMParams(
+                complexity_router_config={"keyword_tier_rules": [{"keywords": [], "tier": "COMPLEX"}]}
+            ),
+            existing_params=LiteLLM_Params(model="c2VjcmV0-encrypted-at-rest"),
+        )
+        assert violation is not None
+        assert "complexity_router_config is invalid" in violation
+
     def test_create_semantic_router_missing_embedding_rejected(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             _strategy_router_write_violation,
@@ -3609,3 +3743,85 @@ class TestStrategyRouterWriteValidation:
                 )
             assert "does not start with" in str(exc_info.value.message)
             mock_prisma.db.litellm_proxymodeltable.update.assert_not_awaited()
+
+
+class TestAutoRouterClassifierDefaultPrompt:
+    """The dashboard's prompt editor prefills from this endpoint, so it must serve the rubric the
+    router actually sends rather than a frontend copy that drifts."""
+
+    @pytest.mark.asyncio
+    async def test_returns_the_prompt_the_router_would_send(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            get_auto_router_classifier_default_prompt,
+        )
+        from litellm.router_strategy.complexity_router import classification_system_prompt
+
+        response = await get_auto_router_classifier_default_prompt(context_window_size=5)
+        assert response.system_prompt == classification_system_prompt(5)
+        assert "Tiers:" in response.system_prompt
+
+    @pytest.mark.asyncio
+    async def test_context_window_size_changes_the_closing_line(self):
+        """The editor must prefill the prompt matching the configured window, not a fixed one."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            get_auto_router_classifier_default_prompt,
+        )
+
+        with_conversation = await get_auto_router_classifier_default_prompt(context_window_size=5)
+        single_message = await get_auto_router_classifier_default_prompt(context_window_size=0)
+        assert with_conversation.system_prompt != single_message.system_prompt
+        assert "earlier turns" in with_conversation.system_prompt
+        assert "earlier turns" not in single_message.system_prompt
+
+    @pytest.mark.asyncio
+    async def test_negative_context_window_size_is_rejected(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            get_auto_router_classifier_default_prompt,
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await get_auto_router_classifier_default_prompt(context_window_size=-1)
+        assert "non-negative" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_renamed_tiers_prefill_the_rubric_the_router_actually_sends(self):
+        """A router with tier_labels sends a rubric naming those labels, and the classifier must
+        return them, so prefilling the canonical names would hand the operator a prompt whose tier
+        names their router rejects."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            get_auto_router_classifier_default_prompt,
+        )
+
+        renamed = await get_auto_router_classifier_default_prompt(
+            context_window_size=5, tier_labels='{"SIMPLE": "Cheap", "REASONING": "Deep"}'
+        )
+        assert "- Cheap:" in renamed.system_prompt
+        assert "- Deep:" in renamed.system_prompt
+        assert "- SIMPLE:" not in renamed.system_prompt
+        assert "- MEDIUM:" in renamed.system_prompt
+
+    @pytest.mark.asyncio
+    async def test_malformed_tier_labels_are_rejected_rather_than_silently_ignored(self):
+        """An unparseable or invalid rename must not fall back to the canonical rubric: that would
+        prefill tier names the router does not accept while looking like it worked."""
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            get_auto_router_classifier_default_prompt,
+        )
+
+        for bad in ("not-json", '{"SIMPLE": "  "}', '{"SIMPLE": "MEDIUM"}', '{"SIMPLE": "X", "MEDIUM": "X"}'):
+            with pytest.raises(ProxyException) as exc_info:
+                await get_auto_router_classifier_default_prompt(context_window_size=5, tier_labels=bad)
+            assert "tier_labels" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_omitted_tier_labels_are_byte_identical_to_the_default_rubric(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            get_auto_router_classifier_default_prompt,
+        )
+        from litellm.router_strategy.complexity_router import classification_system_prompt
+
+        for empty in (None, "", "{}"):
+            response = await get_auto_router_classifier_default_prompt(context_window_size=5, tier_labels=empty)
+            assert response.system_prompt == classification_system_prompt(5)
