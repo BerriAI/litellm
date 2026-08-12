@@ -1,4 +1,6 @@
+import ast
 import asyncio
+import hashlib
 import importlib
 import json
 import os
@@ -10798,3 +10800,92 @@ async def test_ptu_rollup_job_not_registered_without_opt_in(monkeypatch):
 
     assert scheduler.get_job(PTU_ROLLUP_JOB_ID) is None
     assert len(scheduler.get_jobs()) > 0
+
+
+def _hash_tree(root: Path) -> dict:
+    return {
+        str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(root.rglob("*"))
+        if p.is_file()
+    }
+
+
+def _write_fake_ui_bundle(root: Path) -> None:
+    (root / "_next" / "static").mkdir(parents=True)
+    (root / "index.html").write_text(
+        '<script src="/litellm-asset-prefix/_next/static/app.js"></script>'
+        '<link href="/litellm/.well-known/litellm-ui-config"/>',
+        encoding="utf-8",
+    )
+    (root / "_next" / "static" / "app.js").write_text(
+        'fetch("/litellm-asset-prefix/_next/static/chunk.js")', encoding="utf-8"
+    )
+    (root / "favicon.ico").write_bytes(b"\x00\x01/litellm-asset-prefix\xff")
+
+
+def test_apply_server_root_path_rewrites_copy_and_leaves_packaged_bundle_untouched(tmp_path):
+    """The rewrite must land on the runtime copy only.
+
+    Regression: an example script under tests/ set SERVER_ROOT_PATH at import time, so importing
+    proxy_server rewrote the committed bundle in litellm/proxy/_experimental/out/ in place and
+    left ~475 tracked files dirty.
+    """
+    packaged_bundle = Path(proxy_server_module.packaged_ui_path)
+    assert packaged_bundle.is_dir(), "packaged UI bundle missing; this guard would be inert"
+    packaged_before = _hash_tree(packaged_bundle)
+    assert packaged_before, "packaged UI bundle is empty; this guard would be inert"
+
+    runtime_copy = tmp_path / "out"
+    _write_fake_ui_bundle(runtime_copy)
+
+    proxy_server_module._apply_server_root_path_to_ui_assets(
+        str(runtime_copy), "/my-custom-path", "/litellm-asset-prefix"
+    )
+
+    index_html = (runtime_copy / "index.html").read_text(encoding="utf-8")
+    assert '<script src="/my-custom-path/_next/static/app.js"></script>' in index_html
+    assert '<link href="/my-custom-path/.well-known/litellm-ui-config"/>' in index_html
+    assert "litellm-asset-prefix" not in index_html
+    assert "litellm-asset-prefix" not in (runtime_copy / "_next" / "static" / "app.js").read_text(encoding="utf-8")
+    assert (runtime_copy / "favicon.ico").read_bytes() == b"\x00\x01/litellm-asset-prefix\xff"
+
+    assert _hash_tree(packaged_bundle) == packaged_before
+
+
+@pytest.mark.parametrize("root_path", ["/", ""])
+def test_apply_server_root_path_is_a_noop_for_root_deployments(tmp_path, root_path):
+    """A root-mounted deployment must not touch the bundle at all."""
+    runtime_copy = tmp_path / "out"
+    _write_fake_ui_bundle(runtime_copy)
+    before = _hash_tree(runtime_copy)
+
+    proxy_server_module._apply_server_root_path_to_ui_assets(
+        str(runtime_copy), root_path, "/litellm-asset-prefix"
+    )
+
+    assert _hash_tree(runtime_copy) == before
+
+
+def test_no_proxy_test_module_sets_server_root_path_at_import_time():
+    """Import-time SERVER_ROOT_PATH in a collected module rewrites the committed UI bundle.
+
+    proxy_server applies the asset-prefix rewrite at module scope, so any test module that sets
+    the variable before pytest imports proxy_server corrupts litellm/proxy/_experimental/out/ for
+    the whole run and leaks the value into every sibling test.
+    """
+    proxy_tests_root = Path(__file__).parent
+    module_scope_writes = (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Expr)
+    offenders = sorted(
+        str(module_path.relative_to(proxy_tests_root))
+        for module_path in proxy_tests_root.rglob("*.py")
+        if any(
+            "SERVER_ROOT_PATH" in ast.dump(node)
+            for node in ast.parse(module_path.read_text(encoding="utf-8")).body
+            if isinstance(node, module_scope_writes)
+        )
+    )
+
+    assert offenders == [], (
+        f"module-scope SERVER_ROOT_PATH assignment in {offenders}; set it inside a test with "
+        "monkeypatch.setenv so it cannot rewrite the committed UI bundle at import time"
+    )

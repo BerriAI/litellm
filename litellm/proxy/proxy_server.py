@@ -1710,6 +1710,58 @@ def _get_cors_config(
 origins, allow_cors_credentials = _get_cors_config()
 
 
+_UI_NON_TEXT_ASSET_SUFFIXES: Final = (
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".ico",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".eot",
+)
+
+
+def _apply_server_root_path_to_ui_assets(ui_dir: str, server_root_path: str, asset_prefix: str) -> None:
+    """Rewrite ``asset_prefix`` to ``server_root_path`` in the exported UI under ``ui_dir``.
+
+    Rewrites in place, so ``ui_dir`` must be a runtime-owned copy of the bundle and never the
+    packaged one when that is a read-only or version-controlled checkout.
+    """
+    if not server_root_path or server_root_path == "/":
+        return
+
+    if not os.access(ui_dir, os.W_OK):
+        verbose_proxy_logger.warning(
+            "Cannot apply server_root_path replacements to UI at %s: path is not writable. Ensure server_root_path is '/' or pre-process UI files in Dockerfile with custom server_root_path.",
+            ui_dir,
+        )
+        return
+
+    for current_root, _, files in os.walk(ui_dir):
+        for filename in files:
+            if filename.endswith(_UI_NON_TEXT_ASSET_SUFFIXES):
+                continue
+
+            file_path = os.path.join(current_root, filename)
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+
+                modified_content = content.replace(asset_prefix, server_root_path).replace(
+                    "/litellm/.well-known/litellm-ui-config",
+                    f"{server_root_path}/.well-known/litellm-ui-config",
+                )
+                if modified_content == content:
+                    continue
+
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(modified_content)
+            except (UnicodeDecodeError, PermissionError, OSError):
+                continue
+
+
 # get current directory
 try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1888,57 +1940,7 @@ try:
     if not _validate_ui_directory(ui_path):
         verbose_proxy_logger.error("Selected UI path %s is invalid or incomplete. UI may not work correctly.", ui_path)
 
-    # Only modify files if a custom server root path is set AND filesystem is writable
-    if server_root_path and server_root_path != "/":
-        # Check if UI path is writable
-        is_writable = os.access(ui_path, os.W_OK)
-
-        if not is_writable:
-            verbose_proxy_logger.warning(
-                "Cannot apply server_root_path replacements to UI at %s: path is not writable. Ensure server_root_path is '/' or pre-process UI files in Dockerfile with custom server_root_path.",
-                ui_path,
-            )
-        else:
-            # Iterate through files in the UI directory
-            for root, dirs, files in os.walk(ui_path):
-                for filename in files:
-                    file_path = os.path.join(root, filename)
-                    # Skip binary files and files that don't need path replacement
-                    if filename.endswith(
-                        (
-                            ".png",
-                            ".jpg",
-                            ".jpeg",
-                            ".gif",
-                            ".ico",
-                            ".woff",
-                            ".woff2",
-                            ".ttf",
-                            ".eot",
-                        )
-                    ):
-                        continue
-                    try:
-                        with open(file_path, "r", encoding="utf-8") as f:
-                            content = f.read()
-
-                        # Replace the asset prefix with the server root path
-                        modified_content = content.replace(
-                            f"{litellm_asset_prefix}",
-                            f"{server_root_path}",
-                        )
-
-                        # Replace the /.well-known/litellm-ui-config with the server root path
-                        modified_content = modified_content.replace(
-                            "/litellm/.well-known/litellm-ui-config",
-                            f"{server_root_path}/.well-known/litellm-ui-config",
-                        )
-
-                        with open(file_path, "w", encoding="utf-8") as f:
-                            f.write(modified_content)
-                    except (UnicodeDecodeError, PermissionError, OSError):
-                        # Skip binary files or files we can't write to
-                        continue
+    _apply_server_root_path_to_ui_assets(ui_path, server_root_path, litellm_asset_prefix)
 
     # # Mount the _next directory at the root level
     app.mount(
