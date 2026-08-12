@@ -1,2 +1,3 @@
 Phase-0 Buildkite trigger-permission spike. Throwaway file, PR will be closed.
 commit A
+commit B: author email deliberately not associated with any Buildkite user
