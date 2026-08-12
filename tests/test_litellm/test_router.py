@@ -7596,6 +7596,18 @@ class TestTaggedAutoRouterOnSharedModelName:
         assert response is not None
         assert response.model == "gemini-flash"
 
+    @pytest.mark.asyncio
+    async def test_untagged_selection_never_lands_on_the_marker_deployment(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=True)
+
+        for _ in range(20):
+            deployment = await router.async_get_available_deployment(
+                model="gpt4o",
+                request_kwargs={},
+                messages=[{"role": "user", "content": "What is the capital of France?"}],
+            )
+            assert deployment["litellm_params"]["model"] == "openai/gpt-4o"
+
 
 class TestGetAllowedFailsFromPolicy:
     def _make_router(self, **policy_kwargs) -> litellm.Router:
