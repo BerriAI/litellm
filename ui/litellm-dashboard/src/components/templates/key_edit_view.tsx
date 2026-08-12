@@ -6,7 +6,7 @@ import PolicySelector from "@/components/policies/PolicySelector";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { TextInput, Button as TremorButton } from "@tremor/react";
 import { Form, Input, Select, Switch, Tooltip } from "antd";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { hasCapability } from "../../utils/capabilities";
 import { isProxyAdminRole, rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
@@ -17,6 +17,8 @@ import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import OrganizationDropdown from "../common_components/OrganizationDropdown";
+import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
+import { routerSettingsEditorValue, routerSettingsUpdate } from "../common_components/routerSettingsPayload";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { estimateFields, estimateRules, estimateTooltips, withNormalizedEstimates } from "./estimatedOutputTokens";
 import { canonicalBudgetDuration, keyTypeFromRoutes } from "./keyEditFieldNormalizers";
@@ -91,6 +93,7 @@ export function KeyEditView({
   const [budgetFallbacks, setBudgetFallbacks] = useState<Record<string, string[]>>(
     keyData.budget_fallbacks && typeof keyData.budget_fallbacks === "object" ? keyData.budget_fallbacks : {},
   );
+  const routerSettingsRef = useRef<RouterSettingsAccordionRef>(null);
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
@@ -284,6 +287,14 @@ export function KeyEditView({
         values.budget_fallbacks = budgetFallbacks;
       } else if (hadExistingFallbacks) {
         values.budget_fallbacks = {};
+      }
+
+      const routerSettings = routerSettingsUpdate(
+        routerSettingsRef.current?.getValue()?.router_settings,
+        keyData.router_settings,
+      );
+      if (routerSettings) {
+        values.router_settings = routerSettings;
       }
 
       await onSubmit(withNormalizedEstimates(values));
@@ -799,6 +810,15 @@ export function KeyEditView({
           <Input value={projectDisplay ?? ""} disabled />
         </Form.Item>
       )}
+      <Form.Item label="Router Settings">
+        <RouterSettingsAccordion
+          ref={routerSettingsRef}
+          accessToken={accessToken || ""}
+          teamId={keyData.team_id}
+          value={routerSettingsEditorValue(keyData.router_settings)}
+        />
+      </Form.Item>
+
       <Form.Item label="Logging Settings" name="logging_settings">
         <EditLoggingSettings
           value={form.getFieldValue("logging_settings")}
