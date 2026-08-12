@@ -40,9 +40,9 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
 
     def map_generate_content_optional_params(
         self,
-        generate_content_config_dict: dict[str, Any],
+        generate_content_config_dict: dict[str, Any],  # mutable-ok: inherited provider interface accepts a request dict
         model: str,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any]:  # mutable-ok: inherited provider interface returns a request dict
         return super().map_generate_content_optional_params(
             generate_content_config_dict=generate_content_config_dict,
             model=model,

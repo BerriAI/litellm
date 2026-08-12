@@ -4,7 +4,9 @@ Type definitions for Vertex AI Text-to-Speech API
 Reference: https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text/synthesize
 """
 
-from typing_extensions import TypedDict
+from collections.abc import Sequence
+
+from typing_extensions import ReadOnly, TypedDict
 
 
 class VertexTextToSpeechInput(TypedDict, total=False):
@@ -16,16 +18,16 @@ class VertexTextToSpeechInput(TypedDict, total=False):
 
     text: str | None
     ssml: str | None
-    prompt: str | None
+    prompt: ReadOnly[str | None]
 
 
 class VertexTextToSpeechSpeakerVoiceConfig(TypedDict):
-    speakerAlias: str
-    speakerId: str
+    speakerAlias: ReadOnly[str]
+    speakerId: ReadOnly[str]
 
 
 class VertexTextToSpeechMultiSpeakerVoiceConfig(TypedDict):
-    speakerVoiceConfigs: list[VertexTextToSpeechSpeakerVoiceConfig]
+    speakerVoiceConfigs: ReadOnly[Sequence[VertexTextToSpeechSpeakerVoiceConfig]]
 
 
 class VertexTextToSpeechVoice(TypedDict, total=False):
@@ -39,8 +41,8 @@ class VertexTextToSpeechVoice(TypedDict, total=False):
 
     languageCode: str
     name: str
-    modelName: str
-    multiSpeakerVoiceConfig: VertexTextToSpeechMultiSpeakerVoiceConfig
+    modelName: ReadOnly[str]
+    multiSpeakerVoiceConfig: ReadOnly[VertexTextToSpeechMultiSpeakerVoiceConfig]
 
 
 class VertexTextToSpeechAudioConfig(TypedDict, total=False):
@@ -54,7 +56,7 @@ class VertexTextToSpeechAudioConfig(TypedDict, total=False):
 
     audioEncoding: str
     speakingRate: str
-    sampleRateHertz: int
+    sampleRateHertz: ReadOnly[int]
 
 
 class VertexTextToSpeechRequest(TypedDict, total=False):

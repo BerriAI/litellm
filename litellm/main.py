@@ -8009,7 +8009,7 @@ def speech(
     kwargs.pop("tags", [])
 
     optional_params = {}
-    original_voice = voice
+    original_voice: Final = voice
     if response_format is not None:
         optional_params["response_format"] = response_format
     if speed is not None:
@@ -8242,10 +8242,13 @@ def speech(
         generic_optional_params: Final = GenericLiteLLMParams(**kwargs)
 
         # Handle Gemini models separately (they use speech_to_completion_bridge)
-        if litellm.utils.is_gemini_tts_model(
-            model,
-            custom_llm_provider=custom_llm_provider,
-        ) and response_format is None:
+        if (
+            litellm.utils.is_gemini_tts_model(
+                model,
+                custom_llm_provider=custom_llm_provider,
+            )
+            and response_format is None
+        ):
             from .endpoints.speech.speech_to_completion_bridge.handler import (
                 speech_to_completion_bridge_handler,
             )

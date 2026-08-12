@@ -11232,8 +11232,9 @@ async def audio_speech(
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
+        error_msg: Final = str(e)
         raise ProxyException(
-            message=getattr(e, "message", f"{e}"),
+            message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
             openai_code=getattr(e, "code", None),

@@ -706,16 +706,21 @@ def is_gemini_tts_model(model: str, custom_llm_provider: str | None = None) -> b
             else model
         )
         bundled_model_cost: Final = _get_bundled_model_cost_map()
-        bundled_model_info: Final = bundled_model_cost.get(provider_model) or bundled_model_cost.get(model) or {}
-        return bundled_model_info.get("mode") == "audio_speech" and bundled_model_info.get("litellm_provider") in {
-            "gemini",
-            "vertex_ai-language-models",
-        }
+        bundled_model_info: Final = bundled_model_cost.get(provider_model) or bundled_model_cost.get(model)
+        return (
+            bundled_model_info is not None
+            and bundled_model_info.get("mode") == "audio_speech"
+            and bundled_model_info.get("litellm_provider")
+            in (
+                "gemini",
+                "vertex_ai-language-models",
+            )
+        )
 
-    return runtime_model_info.get("mode") == "audio_speech" and runtime_model_info.get("litellm_provider") in {
+    return runtime_model_info.get("mode") == "audio_speech" and runtime_model_info.get("litellm_provider") in (
         "gemini",
         "vertex_ai-language-models",
-    }
+    )
 
 
 def _remove_thought_signature_from_id(tool_call_id: str, separator: str) -> str:

@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import partial
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
 
 import httpx
@@ -108,27 +109,31 @@ else:
     StreamingChoices = Any
 
 
-_GEMINI_SPEECH_CONFIG_KEY_MAP: dict[str, str] = {
-    "multi_speaker_voice_config": "multiSpeakerVoiceConfig",
-    "speaker_voice_configs": "speakerVoiceConfigs",
-    "voice_config": "voiceConfig",
-    "prebuilt_voice_config": "prebuiltVoiceConfig",
-    "voice_name": "voiceName",
-    "language_code": "languageCode",
-}
+_GEMINI_SPEECH_CONFIG_KEY_MAP: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "multi_speaker_voice_config": "multiSpeakerVoiceConfig",
+        "speaker_voice_configs": "speakerVoiceConfigs",
+        "voice_config": "voiceConfig",
+        "prebuilt_voice_config": "prebuiltVoiceConfig",
+        "voice_name": "voiceName",
+        "language_code": "languageCode",
+    }
+)
 
 
 def _normalize_gemini_speech_config_item(value: object) -> object:
     if isinstance(value, Mapping):
-        normalized: dict[str, object] | list[object] = {}  # mutable-ok: the iterative walk fills the normalized tree
+        normalized: (  # mutable-ok: the iterative walk fills exactly one normalized provider payload
+            dict[str, object] | list[object]
+        ) = {}  # mutable-ok: the iterative walk fills the normalized tree; rebind-ok: each shape branch initializes the shared result
     elif isinstance(value, list):
-        normalized = []  # mutable-ok: the iterative walk fills the normalized tree
+        normalized = []  # mutable-ok: the iterative walk fills the normalized tree; rebind-ok: each shape branch initializes the shared result
     else:
         return value
 
-    pending: list[tuple[dict[str, object] | list[object], Mapping[object, object] | list[object]]] = [
-        (normalized, value)
-    ]  # mutable-ok: explicit worklist avoids recursive traversal
+    pending: Final[  # mutable-ok: the explicit worklist must grow while avoiding recursive traversal
+        list[tuple[dict[str, object] | list[object], Mapping[object, object] | list[object]]]
+    ] = [(normalized, value)]
     while pending:
         target, source = pending.pop()
         items = source.items() if isinstance(source, Mapping) else enumerate(source)
@@ -160,11 +165,15 @@ def _normalize_gemini_speech_config_item(value: object) -> object:
     return normalized
 
 
-def normalize_gemini_speech_config(value: Mapping[str, object]) -> dict[str, object]:
-    normalized_value = _normalize_gemini_speech_config_item(value)
+def normalize_gemini_speech_config(
+    value: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
+    normalized_value: Final = _normalize_gemini_speech_config_item(value)
     if isinstance(normalized_value, dict):
-        return cast(dict[str, object], normalized_value)
-    return {}
+        return cast(  # cast-ok: the runtime dict check establishes the normalizer's concrete result shape
+            dict[str, object], normalized_value
+        )
+    return {}  # mutable-ok: provider request serialization requires a concrete empty dict
 
 
 class VertexAIBaseConfig:
@@ -1090,24 +1099,32 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 speech_config: Final = normalize_gemini_speech_config(speech_config_value)
                 language_code: Final = value.get("language_code", value.get("languageCode"))
                 if language_code is not None and "languageCode" not in speech_config:
-                    return {**speech_config, "languageCode": language_code}
+                    return {  # mutable-ok: provider request serialization requires a concrete dict
+                        **speech_config,
+                        "languageCode": language_code,
+                    }
                 return speech_config
 
-        speech_config_without_language: Final[dict[str, object]] = (
-            {
-                "voiceConfig": {
-                    "prebuiltVoiceConfig": {
+        speech_config_without_language: Final[  # mutable-ok: provider request serialization requires a concrete dict
+            dict[str, object]  # mutable-ok: provider request serialization requires a concrete dict
+        ] = (
+            {  # mutable-ok: provider request serialization requires a concrete dict
+                "voiceConfig": {  # mutable-ok: nested provider payload is serialized as a dict
+                    "prebuiltVoiceConfig": {  # mutable-ok: nested provider payload is serialized as a dict
                         "voiceName": value["voice"],
                     }
                 }
             }
             if "voice" in value
-            else {}
+            else {}  # mutable-ok: provider request serialization requires a concrete empty dict
         )
 
         language_code: Final = value.get("language_code", value.get("languageCode"))
         if language_code is not None:
-            return {**speech_config_without_language, "languageCode": language_code}
+            return {  # mutable-ok: provider request serialization requires a concrete dict
+                **speech_config_without_language,
+                "languageCode": language_code,
+            }
 
         return speech_config_without_language
 
