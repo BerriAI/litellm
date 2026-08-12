@@ -44,7 +44,7 @@ import secrets
 from base64 import urlsafe_b64encode
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
-from typing import Literal, TypeVar
+from typing import Final, Literal, TypeVar
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import HTTPException, Request
@@ -78,62 +78,62 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 
-GATEWAY_DCR_CLIENT_ID_PREFIX = "llm_dcrc_"
+GATEWAY_DCR_CLIENT_ID_PREFIX: Final = "llm_dcrc_"
 """Marker prefix on every gateway-issued DCR client_id so the root authorize/token
 endpoints can route an aggregate-flow request without decrypting, and existing per-server
 flows (whose client_ids are upstream-issued) are never captured by the aggregate arm."""
 
-GATEWAY_AUTH_CODE_PREFIX = "llm_gcode_"
+GATEWAY_AUTH_CODE_PREFIX: Final = "llm_gcode_"
 """Marker prefix on the gateway-sealed authorization code, distinct from the bridge
 ``llm_bcode_`` so neither flow can consume the other's codes."""
 
-CONNECT_FLOW_COOKIE_PREFIX = "mcp_connect_flow_"
+CONNECT_FLOW_COOKIE_PREFIX: Final = "mcp_connect_flow_"
 """Per-flow HttpOnly cookie holding the sealed connect flow, keyed by a short random
 handle carried in the connect-page URL (the same handle-plus-cookie pattern as the
 ``mcp_oauth_state_`` upstream relay, for the same reasons: replica-safe with no
 server-side session store, and the sealed value never appears in a URL)."""
 
-CONNECT_FLOW_TTL_SECONDS = 600
-GATEWAY_AUTH_CODE_TTL_SECONDS = 120
-MANUAL_DELIVERY_AUTH_CODE_TTL_SECONDS = 300
+CONNECT_FLOW_TTL_SECONDS: Final = 600
+GATEWAY_AUTH_CODE_TTL_SECONDS: Final = 120
+MANUAL_DELIVERY_AUTH_CODE_TTL_SECONDS: Final = 300
 """Lifetime of a code the user delivers by hand (headless/remote client, LIT-4863 class):
 copy-pasting a callback URL from a laptop browser to an SSH session is slower than a
 browser redirect, so manual-delivery codes get 5 minutes instead of 2, still well under
 the 10-minute ceiling RFC 6749 section 4.1.2 recommends. Single-use and PKCE binding are
 unchanged, so the longer window only extends how long the legitimate holder has to paste
 it, not what an observer could do with it."""
-_CLAIM_TTL_BUFFER_SECONDS = 60
-_USED_CODE_CACHE_PREFIX = "mcp_gateway_dcr_code_used:"
-_USED_FLOW_CACHE_PREFIX = "mcp_gateway_dcr_flow_used:"
-_USED_REFRESH_CACHE_PREFIX = "mcp_gateway_dcr_refresh_used:"
+_CLAIM_TTL_BUFFER_SECONDS: Final = 60
+_USED_CODE_CACHE_PREFIX: Final = "mcp_gateway_dcr_code_used:"
+_USED_FLOW_CACHE_PREFIX: Final = "mcp_gateway_dcr_flow_used:"
+_USED_REFRESH_CACHE_PREFIX: Final = "mcp_gateway_dcr_refresh_used:"
 
-MAX_REDIRECT_URIS = 3
-MAX_REDIRECT_URI_LENGTH = 256
-MAX_CLIENT_ID_LENGTH = 2048
+MAX_REDIRECT_URIS: Final = 3
+MAX_REDIRECT_URI_LENGTH: Final = 256
+MAX_CLIENT_ID_LENGTH: Final = 2048
 """Registration bounds. They exist to bound the sealed client_id, which rides inside
 every session-token claim set: 3 URIs of 256 bytes seal to roughly 1.2KB, comfortably
 under this cap and under the session token's own 4KB ceiling. Claude Desktop and MCP
 Inspector register one or two redirect URIs."""
 
-MAX_STATE_LENGTH = 1024
+MAX_STATE_LENGTH: Final = 1024
 """Bound on the client ``state`` sealed into the flow cookie and echoed on the auth-code
 redirect. An unbounded ``state`` can push the sealed cookie past the browser's ~4KB cap
 (silently dropped, breaking the flow); spec clients send a short opaque value."""
 
-MIN_CODE_VERIFIER_LENGTH = 43
-MAX_CODE_VERIFIER_LENGTH = 128
+MIN_CODE_VERIFIER_LENGTH: Final = 43
+MAX_CODE_VERIFIER_LENGTH: Final = 128
 """RFC 7636 section 4.1 bounds for the PKCE ``code_verifier``. Enforced so an out-of-range
 verifier gets a clean ``invalid_request`` instead of an opaque PKCE-mismatch."""
 
-_UNPREFIXED = ""
+_UNPREFIXED: Final = ""
 """Prefix for a sealed value that carries no wire marker because it is never routed by
 prefix (the connect flow lives only in its own per-handle cookie, opened by that one
 handle). Named so the empty-string argument to ``_seal`` / ``_open_sealed`` reads as
 deliberate rather than a typo."""
 
-_CLIENT_RECORD_DEBUG_KEY = "gateway_dcr_client"
-_CONNECT_FLOW_DEBUG_KEY = "gateway_connect_flow"
-_AUTH_CODE_DEBUG_KEY = "gateway_authorization_code"
+_CLIENT_RECORD_DEBUG_KEY: Final = "gateway_dcr_client"
+_CONNECT_FLOW_DEBUG_KEY: Final = "gateway_connect_flow"
+_AUTH_CODE_DEBUG_KEY: Final = "gateway_authorization_code"
 
 ReloadUserFailure = Literal["unresolvable", "unavailable", "no_active_key"]
 ReloadUser = Callable[[str], Awaitable[ReloadUserFailure | None]]
@@ -215,7 +215,7 @@ def _open_sealed(value: str, prefix: str, model: type[_SealedModelT], debug_key:
     or does not validate returns ``None`` for the caller to map onto an OAuth error."""
     if not value.startswith(prefix):
         return None
-    decrypted = decrypt_value_helper(value[len(prefix) :], debug_key, return_original_value=False)
+    decrypted: Final = decrypt_value_helper(value[len(prefix) :], debug_key, return_original_value=False)
     if not isinstance(decrypted, str):
         return None
     try:
@@ -250,7 +250,7 @@ async def register_aggregate_client(request: Request, request_body: Mapping[str,
     controls are mandatory S256 PKCE plus the consent screen showing the client origin.
     http is confined to loopback per RFC 8252 section 7.3.
     """
-    raw_uris = request_body.get("redirect_uris")
+    raw_uris: Final = request_body.get("redirect_uris")
     if not isinstance(raw_uris, list) or not raw_uris or len(raw_uris) > MAX_REDIRECT_URIS:
         return _oauth_error(
             400,
@@ -279,8 +279,8 @@ async def register_aggregate_client(request: Request, request_body: Mapping[str,
             "invalid_redirect_uri",
             "each redirect URI must be https, http on a loopback host, or a registered native callback",
         )
-    now = datetime.now(timezone.utc)
-    client_id = _seal(
+    now: Final = datetime.now(timezone.utc)
+    client_id: Final = _seal(
         GATEWAY_DCR_CLIENT_ID_PREFIX, GatewayDcrClient(redirect_uris=tuple(raw_uris), iat=int(now.timestamp()))
     )
     if len(client_id) > MAX_CLIENT_ID_LENGTH:
@@ -303,20 +303,20 @@ def _flow_cookie_name(handle: str) -> str:
 
 
 def _cookie_path_and_secure(request: Request) -> tuple[str, bool]:
-    parsed = urlparse(get_request_base_url(request))
+    parsed: Final = urlparse(get_request_base_url(request))
     return parsed.path or "/", parsed.scheme == "https"
 
 
 def _append_query_params(url: str, params: dict[str, str]) -> str:
-    parsed = urlparse(url)
-    query = parse_qsl(parsed.query, keep_blank_values=True) + list(params.items())
+    parsed: Final = urlparse(url)
+    query: Final = parse_qsl(parsed.query, keep_blank_values=True) + list(params.items())
     return urlunparse(parsed._replace(query=urlencode(query)))
 
 
 def relative_request_url(request: Request) -> str:
     """The request's own path and query as a same-origin ``return_to`` target for the
     login round-trip; relative by construction, so it can never leave the gateway."""
-    path = request.url.path
+    path: Final = request.url.path
     return f"{path}?{request.url.query}" if request.url.query else path
 
 
@@ -338,7 +338,7 @@ def aggregate_authorize(
     section 4.1.2.1 an unvalidated redirect URI must not receive an error redirect, and
     once the client is at fault there is no trusted place to send the browser.
     """
-    client = open_gateway_dcr_client(client_id)
+    client: Final = open_gateway_dcr_client(client_id)
     if client is None:
         return _oauth_error(400, "invalid_client", "unknown or malformed client_id")
     if redirect_uri not in client.redirect_uris:
@@ -353,13 +353,13 @@ def aggregate_authorize(
         )
     if len(state) > MAX_STATE_LENGTH:
         return _oauth_error(400, "invalid_request", f"state must be at most {MAX_STATE_LENGTH} characters")
-    base_url = get_request_base_url(request)
+    base_url: Final = get_request_base_url(request)
     if session_user_id is None:
-        login_url = f"{base_url}/sso/key/generate?{urlencode({'return_to': relative_request_url(request)})}"
+        login_url: Final = f"{base_url}/sso/key/generate?{urlencode({'return_to': relative_request_url(request)})}"
         return RedirectResponse(login_url, status_code=303)
-    now = datetime.now(timezone.utc)
-    handle = secrets.token_urlsafe(24)
-    flow = _ConnectFlow(
+    now: Final = datetime.now(timezone.utc)
+    handle: Final = secrets.token_urlsafe(24)
+    flow: Final = _ConnectFlow(
         user_id=session_user_id,
         client_id=client_id,
         redirect_uri=redirect_uri,
@@ -368,11 +368,11 @@ def aggregate_authorize(
         jti=secrets.token_urlsafe(24),
         exp=int(now.timestamp()) + CONNECT_FLOW_TTL_SECONDS,
     )
-    connect_url = _append_query_params(
+    connect_url: Final = _append_query_params(
         f"{base_url}/ui/connect",
         {"connect_flow": handle, "connect_client": _origin_only(redirect_uri)},
     )
-    response = RedirectResponse(connect_url, status_code=303)
+    response: Final = RedirectResponse(connect_url, status_code=303)
     path, secure = _cookie_path_and_secure(request)
     response.set_cookie(
         key=_flow_cookie_name(handle),
@@ -389,7 +389,7 @@ def aggregate_authorize(
 def _origin_only(url: str) -> str:
     """Scheme+host for display on the connect page; never the full redirect URI, whose
     path or query could carry values that do not belong in a page URL or logs."""
-    parsed = urlparse(url)
+    parsed: Final = urlparse(url)
     return f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else ""
 
 
@@ -426,13 +426,13 @@ async def complete_connect_flow(
     """
     if delivery not in (None, "redirect", "manual"):
         return _oauth_error(400, "invalid_request", "delivery must be 'redirect' or 'manual'")
-    sealed_flow = request.cookies.get(_flow_cookie_name(flow_handle))
+    sealed_flow: Final = request.cookies.get(_flow_cookie_name(flow_handle))
     if sealed_flow is None:
         return _oauth_error(400, "invalid_request", "unknown or expired connect flow")
-    flow = _open_sealed(sealed_flow, _UNPREFIXED, _ConnectFlow, _CONNECT_FLOW_DEBUG_KEY)
+    flow: Final = _open_sealed(sealed_flow, _UNPREFIXED, _ConnectFlow, _CONNECT_FLOW_DEBUG_KEY)
     if flow is None:
         return _oauth_error(400, "invalid_request", "unknown or expired connect flow")
-    now = datetime.now(timezone.utc)
+    now: Final = datetime.now(timezone.utc)
     if now.timestamp() >= flow.exp:
         return _oauth_error(400, "invalid_request", "the connect flow has expired; restart the connection")
     if session_user_id is None:
@@ -443,9 +443,9 @@ async def complete_connect_flow(
         f"{_USED_FLOW_CACHE_PREFIX}{flow.jti}", CONNECT_FLOW_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS
     ):
         return _oauth_error(400, "invalid_request", "this connect flow was already completed; restart the connection")
-    manual_delivery = delivery == "manual" and is_loopback_redirect_host(urlparse(flow.redirect_uri))
-    code_ttl = MANUAL_DELIVERY_AUTH_CODE_TTL_SECONDS if manual_delivery else GATEWAY_AUTH_CODE_TTL_SECONDS
-    code = _seal(
+    manual_delivery: Final = delivery == "manual" and is_loopback_redirect_host(urlparse(flow.redirect_uri))
+    code_ttl: Final = MANUAL_DELIVERY_AUTH_CODE_TTL_SECONDS if manual_delivery else GATEWAY_AUTH_CODE_TTL_SECONDS
+    code: Final = _seal(
         GATEWAY_AUTH_CODE_PREFIX,
         _GatewayAuthCode(
             user_id=flow.user_id,
@@ -457,9 +457,9 @@ async def complete_connect_flow(
             exp=int(now.timestamp()) + code_ttl,
         ),
     )
-    params = {"code": code, **({"state": flow.state} if flow.state else {})}
-    callback_url = _append_query_params(flow.redirect_uri, params)
-    response: Response = (
+    params: Final = {"code": code, **({"state": flow.state} if flow.state else {})}
+    callback_url: Final = _append_query_params(flow.redirect_uri, params)
+    response: Final[Response] = (
         _manual_delivery_response(callback_url) if manual_delivery else RedirectResponse(callback_url, status_code=303)
     )
     path, secure = _cookie_path_and_secure(request)
@@ -477,9 +477,9 @@ def _manual_delivery_response(callback_url: str) -> Response:
     correct across POSIX shells, cmd.exe, and PowerShell (cmd.exe ignores single quotes
     and percent-expands inside double quotes), so any command string this page suggested
     would be wrong for some shell the user might paste it into."""
-    safe_url = html.escape(callback_url, quote=True)
-    minutes = MANUAL_DELIVERY_AUTH_CODE_TTL_SECONDS // 60
-    body = (
+    safe_url: Final = html.escape(callback_url, quote=True)
+    minutes: Final = MANUAL_DELIVERY_AUTH_CODE_TTL_SECONDS // 60
+    body: Final = (
         "<html><head><title>Finish connecting</title></head><body>"
         "<h2>Almost done</h2>"
         "<p>Your MCP client runs on a different machine, so this browser cannot deliver the"
@@ -500,8 +500,8 @@ def _pkce_verifier_matches(code_verifier: str, code_challenge: str) -> bool:
     authorize request) simply fails to match instead of raising ``TypeError`` the way
     ``hmac.compare_digest`` does on two ``str`` with non-ASCII content. The verifier is
     ASCII per spec; a compliant client's challenge is base64url and matches."""
-    digest = hashlib.sha256(code_verifier.encode("ascii", "replace")).digest()
-    computed = urlsafe_b64encode(digest).rstrip(b"=")
+    digest: Final = hashlib.sha256(code_verifier.encode("ascii", "replace")).digest()
+    computed: Final = urlsafe_b64encode(digest).rstrip(b"=")
     return hmac.compare_digest(computed, code_challenge.encode("utf-8"))
 
 
@@ -538,7 +538,7 @@ class _SingleUseGuard:
         # (off by default), so a guard that read its injected cache silently degraded every claim to
         # a per-worker count on a stock multi-worker deployment. redis_usage_cache is the store the
         # proxy already treats as cross-worker, so no call site can wire the guarantee away.
-        redis_cache = redis_usage_cache or getattr(self._cache, "redis_cache", None)
+        redis_cache: Final = redis_usage_cache or getattr(self._cache, "redis_cache", None)
         if redis_cache is not None:
             # Shared, atomic authority for multi-replica deployments. Claim ONLY against Redis and fail
             # CLOSED on any Redis fault (async_increment re-raises) rather than fall back to the
@@ -557,8 +557,8 @@ class _SingleUseGuard:
 
 
 def _session_token_pair(principal: SessionPrincipal, keys: SessionKeys, now: datetime) -> Response:
-    access = mint_session_token(principal, keys, now)
-    refresh = mint_session_refresh_token(principal, keys, now)
+    access: Final = mint_session_token(principal, keys, now)
+    refresh: Final = mint_session_refresh_token(principal, keys, now)
     if not isinstance(access, MintedSessionToken) or not isinstance(refresh, MintedSessionToken):
         return _oauth_error(500, "server_error", "failed to mint the session credential")
     return JSONResponse(
@@ -605,8 +605,8 @@ async def aggregate_token(
     if master_key is None:
         verbose_logger.error("mcp_gateway_dcr token grant rejected: no master_key configured")
         return _oauth_error(500, "server_error", "the gateway has no master key configured")
-    keys = session_keys_from_master_key(master_key)
-    now = datetime.now(timezone.utc)
+    keys: Final = session_keys_from_master_key(master_key)
+    now: Final = datetime.now(timezone.utc)
     if grant_type == "authorization_code":
         return await _authorization_code_grant(
             code=code,
@@ -644,7 +644,7 @@ async def _authorization_code_grant(
         return _oauth_error(400, "invalid_request", "code, redirect_uri, and code_verifier are required")
     if not MIN_CODE_VERIFIER_LENGTH <= len(code_verifier) <= MAX_CODE_VERIFIER_LENGTH:
         return _oauth_error(400, "invalid_request", "code_verifier must be 43 to 128 characters (RFC 7636)")
-    parsed = _open_sealed(code, GATEWAY_AUTH_CODE_PREFIX, _GatewayAuthCode, _AUTH_CODE_DEBUG_KEY)
+    parsed: Final = _open_sealed(code, GATEWAY_AUTH_CODE_PREFIX, _GatewayAuthCode, _AUTH_CODE_DEBUG_KEY)
     if parsed is None:
         return _oauth_error(400, "invalid_grant", "the authorization code is invalid")
     if now.timestamp() >= parsed.exp:
@@ -655,7 +655,7 @@ async def _authorization_code_grant(
         return _oauth_error(400, "invalid_grant", "PKCE verification failed")
     # Revalidate the user BEFORE claiming the code, so a transient DB outage (a retryable
     # 503) does not consume a still-valid code and force the client to restart sign-in.
-    failure = await reload_user(parsed.user_id)
+    failure: Final = await reload_user(parsed.user_id)
     if failure is not None:
         return _reload_failure_response(failure)
     # Atomic single-use claim is the gate: on a concurrent double-redeem exactly one caller
@@ -679,10 +679,10 @@ async def _refresh_token_grant(
 ) -> Response:
     if not refresh_token:
         return _oauth_error(400, "invalid_request", "refresh_token is required")
-    opened = open_session_refresh_bearer(refresh_token, keys, now, expected_client_id=client_id)
+    opened: Final = open_session_refresh_bearer(refresh_token, keys, now, expected_client_id=client_id)
     if not isinstance(opened, SessionRefreshOpened):
         return _oauth_error(400, "invalid_grant", "the refresh token is invalid for this client")
-    failure = await reload_user(opened.principal.user_id)
+    failure: Final = await reload_user(opened.principal.user_id)
     if failure is not None:
         return _reload_failure_response(failure)
     # Refresh-token rotation (OAuth 2.0 Security BCP section 4.13): the presented refresh token is

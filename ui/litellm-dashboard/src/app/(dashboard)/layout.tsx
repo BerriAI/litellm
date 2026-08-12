@@ -10,6 +10,7 @@ import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
 import { LicenseExpiryBanner } from "@/components/LicenseExpiryBanner";
+import { UserBanner } from "@/components/UserBanner";
 import { MIGRATED_PAGES, migratedHref, legacyPageHref, legacyKeyForPathname } from "@/utils/migratedPages";
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
 import { createApiClient } from "@/lib/http/client";
@@ -120,6 +121,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <Navbar accessToken={accessToken} isPublicPage={false} />
         <DebugWarningBanner accessToken={accessToken} />
         <LicenseExpiryBanner accessToken={accessToken} />
+        <UserBanner accessToken={accessToken} />
         <main className="flex min-h-0 flex-1 overflow-hidden">
           <AgentControlPlaneView />
         </main>
@@ -142,6 +144,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <DashboardHeader page={page} />
         <DebugWarningBanner accessToken={accessToken} />
         <LicenseExpiryBanner accessToken={accessToken} />
+        <UserBanner accessToken={accessToken} />
         <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
       </div>
     </div>

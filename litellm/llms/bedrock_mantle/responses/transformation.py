@@ -15,7 +15,7 @@ role / access key / profile / web identity), signed via the shared
 BaseAWSLLM._sign_request after the request body is finalized.
 """
 
-from typing import Any
+from typing import Any, Final
 
 import litellm
 from litellm._logging import verbose_logger
@@ -35,7 +35,7 @@ from litellm.types.utils import LlmProviders
 
 # Checked longest/most-specific first so a full endpoint URL collapses to host
 # in one pass and the appended path never doubles.
-_BASE_SUFFIXES_TO_STRIP = (
+_BASE_SUFFIXES_TO_STRIP: Final = (
     "/openai/v1/responses",
     "/v1/responses",
     "/responses",
@@ -46,9 +46,9 @@ _BASE_SUFFIXES_TO_STRIP = (
 # Per Bedrock Mantle Responses API validation errors.
 _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES = frozenset({"function", "mcp", "custom", "namespace", "tool_search"})
 
-_BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS = frozenset({"auto", "default"})
+_BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS: Final = frozenset({"auto", "default"})
 
-_CODEX_ADDITIONAL_TOOLS_INPUT_ITEM_TYPE = "additional_tools"
+_CODEX_ADDITIONAL_TOOLS_INPUT_ITEM_TYPE: Final = "additional_tools"
 
 
 class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPIConfig):
@@ -70,7 +70,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         api_base: str | None,
         litellm_params: dict,
     ) -> str:
-        region = self._resolve_region({**litellm_params, "api_base": api_base})
+        region: Final = self._resolve_region({**litellm_params, "api_base": api_base})
         base = api_base or get_secret_str("BEDROCK_MANTLE_API_BASE") or f"https://bedrock-mantle.{region}.api.aws"
         base = base.rstrip("/")
         for suffix in _BASE_SUFFIXES_TO_STRIP:
@@ -82,12 +82,12 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         # single resolved region so aws_region_name wins; preserve custom proxy hosts.
         if MANTLE_HOST_RE.match(base):
             base = f"https://bedrock-mantle.{region}.api.aws"
-        path = "/openai/v1/responses" if self.use_openai_path else "/v1/responses"
+        path: Final = "/openai/v1/responses" if self.use_openai_path else "/v1/responses"
         return f"{base}{path}"
 
     def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
-        bearer = self._resolve_bearer_token(litellm_params.api_key)
+        bearer: Final = self._resolve_bearer_token(litellm_params.api_key)
         if bearer:
             headers["Authorization"] = f"Bearer {bearer}"
         if litellm_params.aws_bedrock_project_id:
@@ -103,8 +103,8 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
     @staticmethod
     def _filter_unsupported_tools(tools: list[Any]) -> list[Any]:
         """Keep only tool types Mantle's Responses API accepts."""
-        kept: list[Any] = []
-        dropped_types: list[str] = []
+        kept: Final[list[Any]] = []
+        dropped_types: Final[list[str]] = []
         for tool in tools:
             if not isinstance(tool, dict):
                 kept.append(tool)
@@ -126,7 +126,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
 
     @staticmethod
     def _handle_unsupported_service_tier(params: dict, drop_params: bool) -> dict:
-        service_tier = params.get("service_tier")
+        service_tier: Final = params.get("service_tier")
         if service_tier is None or service_tier in _BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS:
             return params
         if not drop_params:
@@ -155,7 +155,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         headers: dict,
     ) -> dict:
         remaining_input, hoisted_tools = self._hoist_codex_additional_tools(input)
-        request_params = (
+        request_params: Final = (
             {
                 **response_api_optional_request_params,
                 "tools": [
@@ -180,7 +180,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
 
     @staticmethod
     def _tools_of_additional_tools_item(item: "dict[str, Any]") -> "list[Any]":
-        tools = item.get("tools")
+        tools: Final = item.get("tools")
         return tools if isinstance(tools, list) else []
 
     @classmethod
@@ -197,10 +197,10 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         """
         if not isinstance(input, list):
             return input, []
-        additional_tools_items = [item for item in input if cls._is_codex_additional_tools_item(item)]
+        additional_tools_items: Final = [item for item in input if cls._is_codex_additional_tools_item(item)]
         if not additional_tools_items:
             return input, []
-        remaining_input = [item for item in input if not cls._is_codex_additional_tools_item(item)]
+        remaining_input: Final = [item for item in input if not cls._is_codex_additional_tools_item(item)]
         hoisted_tools = [tool for item in additional_tools_items for tool in cls._tools_of_additional_tools_item(item)]
         verbose_logger.debug(
             "Bedrock Mantle Responses API: hoisting %d tool(s) out of %d 'additional_tools' input item(s) "
@@ -216,7 +216,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         model: str,
         drop_params: bool,
     ) -> dict:
-        params = self._handle_unsupported_service_tier(
+        params: Final = self._handle_unsupported_service_tier(
             super().map_openai_params(
                 response_api_optional_params=response_api_optional_params,
                 model=model,
@@ -225,12 +225,12 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             drop_params=drop_params,
         )
 
-        tools = params.get("tools")
+        tools: Final = params.get("tools")
         if not tools:
             return params
 
-        tools_list = tools if isinstance(tools, list) else [tools]
-        filtered = self._filter_unsupported_tools(tools_list)
+        tools_list: Final = tools if isinstance(tools, list) else [tools]
+        filtered: Final = self._filter_unsupported_tools(tools_list)
         if filtered:
             params["tools"] = filtered
         else:

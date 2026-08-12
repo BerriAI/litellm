@@ -11,7 +11,7 @@ becomes an outcome, never a second failure.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Literal, NamedTuple, NoReturn, TypeAlias
+from typing import Final, Literal, NamedTuple, NoReturn, TypeAlias
 
 import httpx
 from mcp.types import Tool as MCPTool
@@ -53,7 +53,7 @@ class ServerListFault(BaseModel):
 
 ServerOutcome: TypeAlias = ServerListOk | ServerListFault
 
-SERVER_OUTCOMES_META_KEY = "litellm.ai/server_outcomes"
+SERVER_OUTCOMES_META_KEY: Final = "litellm.ai/server_outcomes"
 """The tools/list result ``_meta`` key carrying per-server outcomes. Prefixed with the litellm.ai
 domain per the MCP spec's ``_meta`` key format so it cannot collide with spec-reserved names."""
 
@@ -103,7 +103,7 @@ def raise_classified_list_failure(
     a classified fault. Every fetch site delegates here so the two channels cannot drift apart per
     call site. ``suppress_challenge`` is for dcr_bridge servers, whose upstream challenge points
     clients at the wrong protected-resource metadata and must never relay."""
-    auth = upstream_auth_challenge(exc)
+    auth: Final = upstream_auth_challenge(exc)
     if auth is not None:
         status_code, challenge = auth
         raise MCPUpstreamAuthError(
@@ -120,20 +120,20 @@ def classify_list_exception(exc: BaseException) -> ServerListFault:
     if isinstance(exc, MCPServerListError) and isinstance(exc.fault, ServerListFault):
         return exc.fault
     if isinstance(exc, MCPUpstreamAuthError):
-        tag = "forbidden" if exc.status_code == 403 else "auth_required"
+        tag: Final = "forbidden" if exc.status_code == 403 else "auth_required"
         return ServerListFault(tag=tag, status_code=exc.status_code)
     if isinstance(exc, TimeoutError):
         return ServerListFault(tag="timeout")
     if isinstance(exc, ConnectionError):
         return ServerListFault(tag="unreachable")
-    auth = upstream_auth_challenge(exc)
+    auth: Final = upstream_auth_challenge(exc)
     if auth is not None:
         status_code, _ = auth
         return ServerListFault(
             tag="forbidden" if status_code == 403 else "auth_required",
             status_code=status_code,
         )
-    response = _find_upstream_response(exc)
+    response: Final = _find_upstream_response(exc)
     if response is not None:
         return ServerListFault(tag="upstream_error", status_code=response.status_code)
     if isinstance(exc, (httpx.TimeoutException,)):

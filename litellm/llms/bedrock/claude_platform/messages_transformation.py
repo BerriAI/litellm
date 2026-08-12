@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -22,7 +22,7 @@ class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicM
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict, str | None]:
-        workspace_id = self._get_workspace_id(optional_params, litellm_params)
+        workspace_id: Final = self._get_workspace_id(optional_params, litellm_params)
         if workspace_id is None:
             raise litellm.AuthenticationError(
                 message=(
@@ -33,7 +33,7 @@ class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicM
                 model=model,
             )
 
-        resolved_api_key = api_key or get_secret_str("ANTHROPIC_AWS_API_KEY")
+        resolved_api_key: Final = api_key or get_secret_str("ANTHROPIC_AWS_API_KEY")
         headers = {
             **headers,
             "anthropic-version": headers.get("anthropic-version", DEFAULT_ANTHROPIC_API_VERSION),

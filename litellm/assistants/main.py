@@ -5,7 +5,7 @@ import contextvars
 import os
 from collections.abc import Coroutine, Iterable
 from functools import partial
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 import httpx
 from openai import AsyncOpenAI, OpenAI
@@ -29,8 +29,8 @@ from ..types.router import *
 from .utils import get_optional_params_add_message
 
 ####### ENVIRONMENT VARIABLES ###################
-openai_assistants_api = OpenAIAssistantsAPI()
-azure_assistants_api = AzureAssistantsAPI()
+openai_assistants_api: Final = OpenAIAssistantsAPI()
+azure_assistants_api: Final = AzureAssistantsAPI()
 
 ### ASSISTANTS ###
 
@@ -40,28 +40,26 @@ async def aget_assistants(
     client: AsyncOpenAI | None = None,
     **kwargs,
 ) -> AsyncCursorPage[Assistant]:
-    loop = asyncio.get_event_loop()
+    loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
     kwargs["aget_assistants"] = True
     try:
         # Use a partial function to pass your keyword arguments
-        func = partial(get_assistants, custom_llm_provider, client, **kwargs)
+        func: Final = partial(get_assistants, custom_llm_provider, client, **kwargs)
 
         # Add the context to the function
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
-            model="", custom_llm_provider=custom_llm_provider
-        )  # type: ignore
+        _, custom_llm_provider, _, _ = get_llm_provider(model="", custom_llm_provider=custom_llm_provider)
 
         # Await normally
-        init_response = await loop.run_in_executor(None, func_with_context)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
             response = init_response
-        return response  # type: ignore
+        return response
     except Exception as e:
         raise exception_type(
             model="",
@@ -80,11 +78,11 @@ def get_assistants(
     api_version: str | None = None,
     **kwargs,
 ) -> SyncCursorPage[Assistant]:
-    aget_assistants: bool | None = kwargs.pop("aget_assistants", None)
+    aget_assistants: Final[bool | None] = kwargs.pop("aget_assistants", None)
     if aget_assistants is not None and not isinstance(aget_assistants, bool):
         raise Exception("Invalid value passed in for aget_assistants. Only bool or None allowed")
-    optional_params = GenericLiteLLMParams(api_key=api_key, api_base=api_base, api_version=api_version, **kwargs)
-    litellm_params_dict = get_litellm_params(**kwargs)
+    optional_params: Final = GenericLiteLLMParams(api_key=api_key, api_base=api_base, api_version=api_version, **kwargs)
+    litellm_params_dict: Final = get_litellm_params(**kwargs)
 
     ### TIMEOUT LOGIC ###
     timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
@@ -95,10 +93,10 @@ def get_assistants(
         and isinstance(timeout, httpx.Timeout)
         and supports_httpx_timeout(custom_llm_provider) is False
     ):
-        read_timeout = timeout.read or 600
+        read_timeout: Final = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
     elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-        timeout = float(timeout)  # type: ignore
+        timeout = float(timeout)
     elif timeout is None:
         timeout = 600.0
 
@@ -111,7 +109,7 @@ def get_assistants(
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
-        organization = (
+        organization: Final = (
             optional_params.organization
             or litellm.organization
             or os.getenv("OPENAI_ORGANIZATION", None)
@@ -132,12 +130,12 @@ def get_assistants(
             max_retries=optional_params.max_retries,
             organization=organization,
             client=client,
-            aget_assistants=aget_assistants,  # type: ignore
-        )  # type: ignore
+            aget_assistants=aget_assistants,
+        )
     elif custom_llm_provider == "azure":
-        api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+        api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")
 
-        api_version = optional_params.api_version or litellm.api_version or get_secret("AZURE_API_VERSION")  # type: ignore
+        api_version = optional_params.api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
 
         api_key = (
             optional_params.api_key
@@ -145,14 +143,14 @@ def get_assistants(
             or litellm.azure_key
             or get_secret("AZURE_OPENAI_API_KEY")
             or get_secret("AZURE_API_KEY")
-        )  # type: ignore
+        )
 
-        extra_body = optional_params.get("extra_body", {})
+        extra_body: Final = optional_params.get("extra_body", {})
         azure_ad_token: str | None = None
         if extra_body is not None:
             azure_ad_token = extra_body.pop("azure_ad_token", None)
         else:
-            azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+            azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
         response = azure_assistants_api.get_assistants(
             api_base=api_base,
@@ -162,7 +160,7 @@ def get_assistants(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             client=client,
-            aget_assistants=aget_assistants,  # type: ignore
+            aget_assistants=aget_assistants,
             litellm_params=litellm_params_dict,
         )
     else:
@@ -173,7 +171,7 @@ def get_assistants(
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),
             ),
         )
 
@@ -185,7 +183,7 @@ def get_assistants(
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),
             ),
         )
 
@@ -197,30 +195,28 @@ async def acreate_assistants(
     client: AsyncOpenAI | None = None,
     **kwargs,
 ) -> Assistant:
-    loop = asyncio.get_event_loop()
+    loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
     kwargs["async_create_assistants"] = True
-    model = kwargs.pop("model", None)
+    model: Final = kwargs.pop("model", None)
     try:
         kwargs["client"] = client
         # Use a partial function to pass your keyword arguments
-        func = partial(create_assistants, custom_llm_provider, model, **kwargs)
+        func: Final = partial(create_assistants, custom_llm_provider, model, **kwargs)
 
         # Add the context to the function
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
-            model=model, custom_llm_provider=custom_llm_provider
-        )  # type: ignore
+        _, custom_llm_provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
 
         # Await normally
-        init_response = await loop.run_in_executor(None, func_with_context)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
             response = init_response
-        return response  # type: ignore
+        return response
     except Exception as e:
         raise exception_type(
             model=model,
@@ -249,11 +245,11 @@ def create_assistants(
     api_version: str | None = None,
     **kwargs,
 ) -> Assistant | Coroutine[Any, Any, Assistant]:
-    async_create_assistants: bool | None = kwargs.pop("async_create_assistants", None)
+    async_create_assistants: Final[bool | None] = kwargs.pop("async_create_assistants", None)
     if async_create_assistants is not None and not isinstance(async_create_assistants, bool):
         raise ValueError("Invalid value passed in for async_create_assistants. Only bool or None allowed")
-    optional_params = GenericLiteLLMParams(api_key=api_key, api_base=api_base, api_version=api_version, **kwargs)
-    litellm_params_dict = get_litellm_params(**kwargs)
+    optional_params: Final = GenericLiteLLMParams(api_key=api_key, api_base=api_base, api_version=api_version, **kwargs)
+    litellm_params_dict: Final = get_litellm_params(**kwargs)
 
     ### TIMEOUT LOGIC ###
     timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
@@ -264,10 +260,10 @@ def create_assistants(
         and isinstance(timeout, httpx.Timeout)
         and supports_httpx_timeout(custom_llm_provider) is False
     ):
-        read_timeout = timeout.read or 600
+        read_timeout: Final = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
     elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-        timeout = float(timeout)  # type: ignore
+        timeout = float(timeout)
     elif timeout is None:
         timeout = 600.0
 
@@ -296,7 +292,7 @@ def create_assistants(
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
-        organization = (
+        organization: Final = (
             optional_params.organization
             or litellm.organization
             or os.getenv("OPENAI_ORGANIZATION", None)
@@ -318,12 +314,12 @@ def create_assistants(
             organization=organization,
             create_assistant_data=create_assistant_data,
             client=client,
-            async_create_assistants=async_create_assistants,  # type: ignore
-        )  # type: ignore
+            async_create_assistants=async_create_assistants,
+        )
     elif custom_llm_provider == "azure":
-        api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+        api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")
 
-        api_version = optional_params.api_version or litellm.api_version or get_secret("AZURE_API_VERSION")  # type: ignore
+        api_version = optional_params.api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
 
         api_key = (
             optional_params.api_key
@@ -331,14 +327,14 @@ def create_assistants(
             or litellm.azure_key
             or get_secret("AZURE_OPENAI_API_KEY")
             or get_secret("AZURE_API_KEY")
-        )  # type: ignore
+        )
 
-        extra_body = optional_params.get("extra_body", {})
+        extra_body: Final = optional_params.get("extra_body", {})
         azure_ad_token: str | None = None
         if extra_body is not None:
             azure_ad_token = extra_body.pop("azure_ad_token", None)
         else:
-            azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+            azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
         if isinstance(client, OpenAI):
             client = None  # only pass client if it's AzureOpenAI
@@ -363,7 +359,7 @@ def create_assistants(
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),
             ),
         )
     if response is None:
@@ -380,29 +376,27 @@ async def adelete_assistant(
     client: AsyncOpenAI | None = None,
     **kwargs,
 ) -> AssistantDeleted:
-    loop = asyncio.get_event_loop()
+    loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
     kwargs["async_delete_assistants"] = True
     try:
         kwargs["client"] = client
         # Use a partial function to pass your keyword arguments
-        func = partial(delete_assistant, custom_llm_provider, **kwargs)
+        func: Final = partial(delete_assistant, custom_llm_provider, **kwargs)
 
         # Add the context to the function
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
-            model="", custom_llm_provider=custom_llm_provider
-        )  # type: ignore
+        _, custom_llm_provider, _, _ = get_llm_provider(model="", custom_llm_provider=custom_llm_provider)
 
         # Await normally
-        init_response = await loop.run_in_executor(None, func_with_context)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
             response = init_response
-        return response  # type: ignore
+        return response
     except Exception as e:
         raise exception_type(
             model="",
@@ -422,11 +416,11 @@ def delete_assistant(
     api_version: str | None = None,
     **kwargs,
 ) -> AssistantDeleted | Coroutine[Any, Any, AssistantDeleted]:
-    optional_params = GenericLiteLLMParams(api_key=api_key, api_base=api_base, api_version=api_version, **kwargs)
+    optional_params: Final = GenericLiteLLMParams(api_key=api_key, api_base=api_base, api_version=api_version, **kwargs)
 
-    litellm_params_dict = get_litellm_params(**kwargs)
+    litellm_params_dict: Final = get_litellm_params(**kwargs)
 
-    async_delete_assistants: bool | None = kwargs.pop("async_delete_assistants", None)
+    async_delete_assistants: Final[bool | None] = kwargs.pop("async_delete_assistants", None)
     if async_delete_assistants is not None and not isinstance(async_delete_assistants, bool):
         raise ValueError("Invalid value passed in for async_delete_assistants. Only bool or None allowed")
 
@@ -439,10 +433,10 @@ def delete_assistant(
         and isinstance(timeout, httpx.Timeout)
         and supports_httpx_timeout(custom_llm_provider) is False
     ):
-        read_timeout = timeout.read or 600
+        read_timeout: Final = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
     elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-        timeout = float(timeout)  # type: ignore
+        timeout = float(timeout)
     elif timeout is None:
         timeout = 600.0
 
@@ -455,7 +449,7 @@ def delete_assistant(
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
-        organization = (
+        organization: Final = (
             optional_params.organization or litellm.organization or os.getenv("OPENAI_ORGANIZATION", None) or None
         )
         # set API KEY
@@ -472,9 +466,9 @@ def delete_assistant(
             async_delete_assistants=async_delete_assistants,
         )
     elif custom_llm_provider == "azure":
-        api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+        api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")
 
-        api_version = optional_params.api_version or litellm.api_version or get_secret("AZURE_API_VERSION")  # type: ignore
+        api_version = optional_params.api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
 
         api_key = (
             optional_params.api_key
@@ -482,14 +476,14 @@ def delete_assistant(
             or litellm.azure_key
             or get_secret("AZURE_OPENAI_API_KEY")
             or get_secret("AZURE_API_KEY")
-        )  # type: ignore
+        )
 
-        extra_body = optional_params.get("extra_body", {})
+        extra_body: Final = optional_params.get("extra_body", {})
         azure_ad_token: str | None = None
         if extra_body is not None:
             azure_ad_token = extra_body.pop("azure_ad_token", None)
         else:
-            azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+            azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
         if isinstance(client, OpenAI):
             client = None  # only pass client if it's AzureOpenAI
@@ -530,28 +524,26 @@ def delete_assistant(
 
 
 async def acreate_thread(custom_llm_provider: Literal["openai", "azure"], **kwargs) -> Thread:
-    loop = asyncio.get_event_loop()
+    loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
     kwargs["acreate_thread"] = True
     try:
         # Use a partial function to pass your keyword arguments
-        func = partial(create_thread, custom_llm_provider, **kwargs)
+        func: Final = partial(create_thread, custom_llm_provider, **kwargs)
 
         # Add the context to the function
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
-            model="", custom_llm_provider=custom_llm_provider
-        )  # type: ignore
+        _, custom_llm_provider, _, _ = get_llm_provider(model="", custom_llm_provider=custom_llm_provider)
 
         # Await normally
-        init_response = await loop.run_in_executor(None, func_with_context)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
             response = init_response
-        return response  # type: ignore
+        return response
     except Exception as e:
         raise exception_type(
             model="",
@@ -592,9 +584,9 @@ def create_thread(
     )
     ```
     """
-    acreate_thread = kwargs.get("acreate_thread", None)
-    optional_params = GenericLiteLLMParams(**kwargs)
-    litellm_params_dict = get_litellm_params(**kwargs)
+    acreate_thread: Final = kwargs.get("acreate_thread", None)
+    optional_params: Final = GenericLiteLLMParams(**kwargs)
+    litellm_params_dict: Final = get_litellm_params(**kwargs)
 
     ### TIMEOUT LOGIC ###
     timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
@@ -605,10 +597,10 @@ def create_thread(
         and isinstance(timeout, httpx.Timeout)
         and supports_httpx_timeout(custom_llm_provider) is False
     ):
-        read_timeout = timeout.read or 600
+        read_timeout: Final = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
     elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-        timeout = float(timeout)  # type: ignore
+        timeout = float(timeout)
     elif timeout is None:
         timeout = 600.0
 
@@ -624,7 +616,7 @@ def create_thread(
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
-        organization = (
+        organization: Final = (
             optional_params.organization
             or litellm.organization
             or os.getenv("OPENAI_ORGANIZATION", None)
@@ -649,7 +641,7 @@ def create_thread(
             acreate_thread=acreate_thread,
         )
     elif custom_llm_provider == "azure":
-        api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+        api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")
 
         api_key = (
             optional_params.api_key
@@ -657,16 +649,16 @@ def create_thread(
             or litellm.azure_key
             or get_secret("AZURE_OPENAI_API_KEY")
             or get_secret("AZURE_API_KEY")
-        )  # type: ignore
+        )
 
-        api_version: str | None = optional_params.api_version or litellm.api_version or get_secret("AZURE_API_VERSION")  # type: ignore
+        api_version: str | None = optional_params.api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
 
-        extra_body = optional_params.get("extra_body", {})
+        extra_body: Final = optional_params.get("extra_body", {})
         azure_ad_token: str | None = None
         if extra_body is not None:
             azure_ad_token = extra_body.pop("azure_ad_token", None)
         else:
-            azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+            azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
         if isinstance(client, OpenAI):
             client = None  # only pass client if it's AzureOpenAI
@@ -692,10 +684,10 @@ def create_thread(
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),
             ),
         )
-    return response  # type: ignore
+    return response
 
 
 async def aget_thread(
@@ -704,28 +696,26 @@ async def aget_thread(
     client: AsyncOpenAI | None = None,
     **kwargs,
 ) -> Thread:
-    loop = asyncio.get_event_loop()
+    loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
     kwargs["aget_thread"] = True
     try:
         # Use a partial function to pass your keyword arguments
-        func = partial(get_thread, custom_llm_provider, thread_id, client, **kwargs)
+        func: Final = partial(get_thread, custom_llm_provider, thread_id, client, **kwargs)
 
         # Add the context to the function
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
-            model="", custom_llm_provider=custom_llm_provider
-        )  # type: ignore
+        _, custom_llm_provider, _, _ = get_llm_provider(model="", custom_llm_provider=custom_llm_provider)
 
         # Await normally
-        init_response = await loop.run_in_executor(None, func_with_context)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
             response = init_response
-        return response  # type: ignore
+        return response
     except Exception as e:
         raise exception_type(
             model="",
@@ -743,9 +733,9 @@ def get_thread(
     **kwargs,
 ) -> Thread:
     """Get the thread object, given a thread_id"""
-    aget_thread = kwargs.pop("aget_thread", None)
-    optional_params = GenericLiteLLMParams(**kwargs)
-    litellm_params_dict = get_litellm_params(**kwargs)
+    aget_thread: Final = kwargs.pop("aget_thread", None)
+    optional_params: Final = GenericLiteLLMParams(**kwargs)
+    litellm_params_dict: Final = get_litellm_params(**kwargs)
     ### TIMEOUT LOGIC ###
     timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
     # set timeout for 10 minutes by default
@@ -755,10 +745,10 @@ def get_thread(
         and isinstance(timeout, httpx.Timeout)
         and supports_httpx_timeout(custom_llm_provider) is False
     ):
-        read_timeout = timeout.read or 600
+        read_timeout: Final = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
     elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-        timeout = float(timeout)  # type: ignore
+        timeout = float(timeout)
     elif timeout is None:
         timeout = 600.0
     api_base: str | None = None
@@ -772,7 +762,7 @@ def get_thread(
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
-        organization = (
+        organization: Final = (
             optional_params.organization
             or litellm.organization
             or os.getenv("OPENAI_ORGANIZATION", None)
@@ -797,9 +787,9 @@ def get_thread(
             aget_thread=aget_thread,
         )
     elif custom_llm_provider == "azure":
-        api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+        api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")
 
-        api_version: str | None = optional_params.api_version or litellm.api_version or get_secret("AZURE_API_VERSION")  # type: ignore
+        api_version: str | None = optional_params.api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
 
         api_key = (
             optional_params.api_key
@@ -807,14 +797,14 @@ def get_thread(
             or litellm.azure_key
             or get_secret("AZURE_OPENAI_API_KEY")
             or get_secret("AZURE_API_KEY")
-        )  # type: ignore
+        )
 
-        extra_body = optional_params.get("extra_body", {})
+        extra_body: Final = optional_params.get("extra_body", {})
         azure_ad_token: str | None = None
         if extra_body is not None:
             azure_ad_token = extra_body.pop("azure_ad_token", None)
         else:
-            azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+            azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
         if isinstance(client, OpenAI):
             client = None  # only pass client if it's AzureOpenAI
@@ -839,10 +829,10 @@ def get_thread(
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),
             ),
         )
-    return response  # type: ignore
+    return response
 
 
 ### MESSAGES ###
@@ -858,12 +848,12 @@ async def a_add_message(
     client=None,
     **kwargs,
 ) -> OpenAIMessage:
-    loop = asyncio.get_event_loop()
+    loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
     kwargs["a_add_message"] = True
     try:
         # Use a partial function to pass your keyword arguments
-        func = partial(
+        func: Final = partial(
             add_message,
             custom_llm_provider,
             thread_id,
@@ -876,21 +866,19 @@ async def a_add_message(
         )
 
         # Add the context to the function
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
-            model="", custom_llm_provider=custom_llm_provider
-        )  # type: ignore
+        _, custom_llm_provider, _, _ = get_llm_provider(model="", custom_llm_provider=custom_llm_provider)
 
         # Await normally
-        init_response = await loop.run_in_executor(None, func_with_context)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
             # Call the synchronous function using run_in_executor
             response = init_response
-        return response  # type: ignore
+        return response
     except Exception as e:
         raise exception_type(
             model="",
@@ -912,12 +900,12 @@ def add_message(
     **kwargs,
 ) -> OpenAIMessage:
     ### COMMON OBJECTS ###
-    a_add_message = kwargs.pop("a_add_message", None)
-    _message_data = MessageData(role=role, content=content, attachments=attachments, metadata=metadata)
-    litellm_params_dict = get_litellm_params(**kwargs)
-    optional_params = GenericLiteLLMParams(**kwargs)
+    a_add_message: Final = kwargs.pop("a_add_message", None)
+    _message_data: Final = MessageData(role=role, content=content, attachments=attachments, metadata=metadata)
+    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    optional_params: Final = GenericLiteLLMParams(**kwargs)
 
-    message_data = get_optional_params_add_message(
+    message_data: Final = get_optional_params_add_message(
         role=_message_data["role"],
         content=_message_data["content"],
         attachments=_message_data["attachments"],
@@ -934,10 +922,10 @@ def add_message(
         and isinstance(timeout, httpx.Timeout)
         and supports_httpx_timeout(custom_llm_provider) is False
     ):
-        read_timeout = timeout.read or 600
+        read_timeout: Final = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
     elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-        timeout = float(timeout)  # type: ignore
+        timeout = float(timeout)
     elif timeout is None:
         timeout = 600.0
     api_key: str | None = None
@@ -951,7 +939,7 @@ def add_message(
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
-        organization = (
+        organization: Final = (
             optional_params.organization
             or litellm.organization
             or os.getenv("OPENAI_ORGANIZATION", None)
@@ -976,9 +964,9 @@ def add_message(
             a_add_message=a_add_message,
         )
     elif custom_llm_provider == "azure":
-        api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+        api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")
 
-        api_version: str | None = optional_params.api_version or litellm.api_version or get_secret("AZURE_API_VERSION")  # type: ignore
+        api_version: str | None = optional_params.api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
 
         api_key = (
             optional_params.api_key
@@ -986,14 +974,14 @@ def add_message(
             or litellm.azure_key
             or get_secret("AZURE_OPENAI_API_KEY")
             or get_secret("AZURE_API_KEY")
-        )  # type: ignore
+        )
 
-        extra_body = optional_params.get("extra_body", {})
+        extra_body: Final = optional_params.get("extra_body", {})
         azure_ad_token: str | None = None
         if extra_body is not None:
             azure_ad_token = extra_body.pop("azure_ad_token", None)
         else:
-            azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+            azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
         response = azure_assistants_api.add_message(
             thread_id=thread_id,
@@ -1016,11 +1004,11 @@ def add_message(
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),
             ),
         )
 
-    return response  # type: ignore
+    return response
 
 
 async def aget_messages(
@@ -1029,12 +1017,12 @@ async def aget_messages(
     client: AsyncOpenAI | None = None,
     **kwargs,
 ) -> AsyncCursorPage[OpenAIMessage]:
-    loop = asyncio.get_event_loop()
+    loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
     kwargs["aget_messages"] = True
     try:
         # Use a partial function to pass your keyword arguments
-        func = partial(
+        func: Final = partial(
             get_messages,
             custom_llm_provider,
             thread_id,
@@ -1043,21 +1031,19 @@ async def aget_messages(
         )
 
         # Add the context to the function
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
-            model="", custom_llm_provider=custom_llm_provider
-        )  # type: ignore
+        _, custom_llm_provider, _, _ = get_llm_provider(model="", custom_llm_provider=custom_llm_provider)
 
         # Await normally
-        init_response = await loop.run_in_executor(None, func_with_context)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
             # Call the synchronous function using run_in_executor
             response = init_response
-        return response  # type: ignore
+        return response
     except Exception as e:
         raise exception_type(
             model="",
@@ -1074,9 +1060,9 @@ def get_messages(
     client: Any | None = None,
     **kwargs,
 ) -> SyncCursorPage[OpenAIMessage]:
-    aget_messages = kwargs.pop("aget_messages", None)
-    optional_params = GenericLiteLLMParams(**kwargs)
-    litellm_params_dict = get_litellm_params(**kwargs)
+    aget_messages: Final = kwargs.pop("aget_messages", None)
+    optional_params: Final = GenericLiteLLMParams(**kwargs)
+    litellm_params_dict: Final = get_litellm_params(**kwargs)
 
     ### TIMEOUT LOGIC ###
     timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
@@ -1087,10 +1073,10 @@ def get_messages(
         and isinstance(timeout, httpx.Timeout)
         and supports_httpx_timeout(custom_llm_provider) is False
     ):
-        read_timeout = timeout.read or 600
+        read_timeout: Final = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
     elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-        timeout = float(timeout)  # type: ignore
+        timeout = float(timeout)
     elif timeout is None:
         timeout = 600.0
 
@@ -1105,7 +1091,7 @@ def get_messages(
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
-        organization = (
+        organization: Final = (
             optional_params.organization
             or litellm.organization
             or os.getenv("OPENAI_ORGANIZATION", None)
@@ -1129,9 +1115,9 @@ def get_messages(
             aget_messages=aget_messages,
         )
     elif custom_llm_provider == "azure":
-        api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+        api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")
 
-        api_version: str | None = optional_params.api_version or litellm.api_version or get_secret("AZURE_API_VERSION")  # type: ignore
+        api_version: str | None = optional_params.api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
 
         api_key = (
             optional_params.api_key
@@ -1139,14 +1125,14 @@ def get_messages(
             or litellm.azure_key
             or get_secret("AZURE_OPENAI_API_KEY")
             or get_secret("AZURE_API_KEY")
-        )  # type: ignore
+        )
 
-        extra_body = optional_params.get("extra_body", {})
+        extra_body: Final = optional_params.get("extra_body", {})
         azure_ad_token: str | None = None
         if extra_body is not None:
             azure_ad_token = extra_body.pop("azure_ad_token", None)
         else:
-            azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+            azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
         response = azure_assistants_api.get_messages(
             thread_id=thread_id,
@@ -1168,11 +1154,11 @@ def get_messages(
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),
             ),
         )
 
-    return response  # type: ignore
+    return response
 
 
 ### RUNS ###
@@ -1182,7 +1168,7 @@ def arun_thread_stream(
     **kwargs,
 ) -> AsyncAssistantStreamManager[AsyncAssistantEventHandler]:
     kwargs["arun_thread"] = True
-    return run_thread(stream=True, event_handler=event_handler, **kwargs)  # type: ignore
+    return run_thread(stream=True, event_handler=event_handler, **kwargs)
 
 
 async def arun_thread(
@@ -1198,12 +1184,12 @@ async def arun_thread(
     client: Any | None = None,
     **kwargs,
 ) -> Run:
-    loop = asyncio.get_event_loop()
+    loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
     kwargs["arun_thread"] = True
     try:
         # Use a partial function to pass your keyword arguments
-        func = partial(
+        func: Final = partial(
             run_thread,
             custom_llm_provider,
             thread_id,
@@ -1219,21 +1205,19 @@ async def arun_thread(
         )
 
         # Add the context to the function
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
-            model="", custom_llm_provider=custom_llm_provider
-        )  # type: ignore
+        _, custom_llm_provider, _, _ = get_llm_provider(model="", custom_llm_provider=custom_llm_provider)
 
         # Await normally
-        init_response = await loop.run_in_executor(None, func_with_context)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
             # Call the synchronous function using run_in_executor
             response = init_response
-        return response  # type: ignore
+        return response
     except Exception as e:
         raise exception_type(
             model="",
@@ -1249,7 +1233,7 @@ def run_thread_stream(
     event_handler: AssistantEventHandler | None = None,
     **kwargs,
 ) -> AssistantStreamManager[AssistantEventHandler]:
-    return run_thread(stream=True, event_handler=event_handler, **kwargs)  # type: ignore
+    return run_thread(stream=True, event_handler=event_handler, **kwargs)
 
 
 def run_thread(
@@ -1267,9 +1251,9 @@ def run_thread(
     **kwargs,
 ) -> Run:
     """Run a given thread + assistant."""
-    arun_thread = kwargs.pop("arun_thread", None)
-    optional_params = GenericLiteLLMParams(**kwargs)
-    litellm_params_dict = get_litellm_params(**kwargs)
+    arun_thread: Final = kwargs.pop("arun_thread", None)
+    optional_params: Final = GenericLiteLLMParams(**kwargs)
+    litellm_params_dict: Final = get_litellm_params(**kwargs)
 
     ### TIMEOUT LOGIC ###
     timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
@@ -1280,10 +1264,10 @@ def run_thread(
         and isinstance(timeout, httpx.Timeout)
         and supports_httpx_timeout(custom_llm_provider) is False
     ):
-        read_timeout = timeout.read or 600
+        read_timeout: Final = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
     elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-        timeout = float(timeout)  # type: ignore
+        timeout = float(timeout)
     elif timeout is None:
         timeout = 600.0
 
@@ -1296,7 +1280,7 @@ def run_thread(
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
-        organization = (
+        organization: Final = (
             optional_params.organization
             or litellm.organization
             or os.getenv("OPENAI_ORGANIZATION", None)
@@ -1329,9 +1313,9 @@ def run_thread(
             event_handler=event_handler,
         )
     elif custom_llm_provider == "azure":
-        api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+        api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")
 
-        api_version = optional_params.api_version or litellm.api_version or get_secret("AZURE_API_VERSION")  # type: ignore
+        api_version = optional_params.api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
 
         api_key = (
             optional_params.api_key
@@ -1339,14 +1323,14 @@ def run_thread(
             or litellm.azure_key
             or get_secret("AZURE_OPENAI_API_KEY")
             or get_secret("AZURE_API_KEY")
-        )  # type: ignore
+        )
 
-        extra_body = optional_params.get("extra_body", {})
+        extra_body: Final = optional_params.get("extra_body", {})
         azure_ad_token = None
         if extra_body is not None:
             azure_ad_token = extra_body.pop("azure_ad_token", None)
         else:
-            azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+            azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
         response = azure_assistants_api.run_thread(
             thread_id=thread_id,
@@ -1366,7 +1350,7 @@ def run_thread(
             client=client,
             arun_thread=arun_thread,
             litellm_params=litellm_params_dict,
-        )  # type: ignore
+        )
     else:
         raise litellm.exceptions.BadRequestError(
             message=f"LiteLLM doesn't support {custom_llm_provider} for 'run_thread'. Only 'openai' is supported.",
@@ -1375,7 +1359,7 @@ def run_thread(
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),
             ),
         )
-    return response  # type: ignore
+    return response

@@ -38,10 +38,6 @@ interface DistinctTagResponse {
   tag: string;
 }
 
-interface DistinctTagsResponse {
-  results: DistinctTagResponse[];
-}
-
 interface UserAgentActivityProps {
   accessToken: string | null;
   userRole: string | null;
@@ -59,7 +55,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
   const [mauData, setMauData] = useState<ActiveUsersAnalyticsResponse>({ results: [] });
   const [summaryData, setSummaryData] = useState<TagSummaryResponse>({ results: [] });
 
-  const [userAgentFilter, setUserAgentFilter] = useState<string>("");
+  const [userAgentFilter] = useState<string>("");
 
   // Tag filtering state
   const [availableTags, setAvailableTags] = useState<string[]>([]);

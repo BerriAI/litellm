@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
     from mcp.types import CallToolResult
@@ -11,8 +11,8 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
 
-MCP_TOOL_SEARCH_TOOL_NAME: str = "mcp_tool_search"
-MCP_TOOL_CALL_TOOL_NAME: str = "mcp_tool_call"
+MCP_TOOL_SEARCH_TOOL_NAME: Final[str] = "mcp_tool_search"
+MCP_TOOL_CALL_TOOL_NAME: Final[str] = "mcp_tool_call"
 DEFAULT_MCP_TOOL_SEARCH_TOP_K: int = 5
 
 
@@ -61,13 +61,13 @@ def search_tools(
 ) -> list[dict[str, Any]]:
     if not query:
         return []
-    tokens = query.lower().split()
+    tokens: Final = query.lower().split()
 
     def _score(tool: dict[str, Any]) -> int:
-        haystack = (tool.get("name", "") + " " + tool.get("description", "")).lower()
+        haystack: Final = (tool.get("name", "") + " " + tool.get("description", "")).lower()
         return sum(1 for t in tokens if t in haystack)
 
-    scored = ((s, tool) for tool in tools if (s := _score(tool)) > 0)
+    scored: Final = ((s, tool) for tool in tools if (s := _score(tool)) > 0)
     return [tool for _, tool in sorted(scored, key=lambda x: x[0], reverse=True)[:top_k]]
 
 
@@ -130,7 +130,7 @@ async def handle_mcp_tool_search(
 
     from litellm.proxy._experimental.mcp_server.server import _list_mcp_tools
 
-    mcp_listing = await _list_mcp_tools(
+    mcp_listing: Final = await _list_mcp_tools(
         user_api_key_auth=user_api_key_dict,
         mcp_servers=mcp_servers,
         client_ip=client_ip,
@@ -139,8 +139,8 @@ async def handle_mcp_tool_search(
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
     )
-    mcp_tools = mcp_listing.tools
-    tools = [
+    mcp_tools: Final = mcp_listing.tools
+    tools: Final = [
         {
             "name": t.name,
             "description": t.description or "",
@@ -148,7 +148,7 @@ async def handle_mcp_tool_search(
         }
         for t in mcp_tools
     ]
-    results = search_tools(query, tools, top_k)
+    results: Final = search_tools(query, tools, top_k)
     return CallToolResult(content=[TextContent(type="text", text=json.dumps(results))], isError=False)
 
 
@@ -169,7 +169,7 @@ async def handle_mcp_tool_call(
         execute_mcp_tool,
     )
 
-    allowed_mcp_servers = await _get_allowed_mcp_servers(
+    allowed_mcp_servers: Final = await _get_allowed_mcp_servers(
         user_api_key_auth=user_api_key_dict,
         mcp_servers=mcp_servers,
         client_ip=client_ip,

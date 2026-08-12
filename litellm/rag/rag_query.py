@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.utils import ModelResponse
@@ -19,11 +19,11 @@ class RAGQuery:
         if not messages or len(messages) == 0:
             return None
 
-        last_message = messages[-1]
+        last_message: Final = messages[-1]
         if not isinstance(last_message, dict) or "content" not in last_message:
             return None
 
-        content = last_message["content"]
+        content: Final = last_message["content"]
 
         if isinstance(content, str):
             return content
@@ -90,7 +90,7 @@ class RAGQuery:
         search_response: Any,
     ) -> list[str | dict[str, Any]]:
         """Extract text documents from vector store search response."""
-        documents: list[str | dict[str, Any]] = []
+        documents: Final[list[str | dict[str, Any]]] = []
         for result in search_response.get("data", []):
             content_list = result.get("content", [])
             for content in content_list:
@@ -101,8 +101,8 @@ class RAGQuery:
     @staticmethod
     def get_top_chunks_from_rerank(search_response: Any, rerank_response: Any) -> list[Any]:
         """Get the original search results corresponding to the top reranked results."""
-        top_chunks = []
-        original_results = search_response.get("data", [])
+        top_chunks: Final = []
+        original_results: Final = search_response.get("data", [])
         for result in rerank_response.get("results", []):
             index = result.get("index")
             if index is not None and index < len(original_results):

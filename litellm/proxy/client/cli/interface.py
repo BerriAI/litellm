@@ -1,6 +1,7 @@
 # stdlib imports
 import os
 import sys
+from typing import Final
 
 # third party imports
 import click
@@ -13,39 +14,39 @@ def styled_prompt():
 
     # Get terminal height to ensure we have enough space
     try:
-        terminal_height = os.get_terminal_size().lines
+        terminal_height: Final = os.get_terminal_size().lines
         # Ensure we have at least 5 lines of space (for the box + some buffer)
         if terminal_height < 10:
             # If terminal is too small, just add some newlines to push content up
             click.echo("\n" * 3)
     except Exception as e:
         # Fallback if we can't get terminal size
-        verbose_logger.debug(f"Error getting terminal size: {e}")
+        verbose_logger.debug("Error getting terminal size: %s", e)
         click.echo("\n" * 3)
 
     # ASCII box drawing characters
-    top_left = "+"
-    top_right = "+"
-    bottom_left = "+"
-    bottom_right = "+"
-    horizontal = "-"
-    vertical = "|"
+    top_left: Final = "+"
+    top_right: Final = "+"
+    bottom_left: Final = "+"
+    bottom_right: Final = "+"
+    horizontal: Final = "-"
+    vertical: Final = "|"
 
     # Create the box with increased width
-    width = 80
-    top_line = top_left + horizontal * (width - 2) + top_right
-    bottom_line = bottom_left + horizontal * (width - 2) + bottom_right
+    width: Final = 80
+    top_line: Final = top_left + horizontal * (width - 2) + top_right
+    bottom_line: Final = bottom_left + horizontal * (width - 2) + bottom_right
 
     # Create styled elements
-    left_border = click.style(vertical, fg="blue", bold=True)
-    right_border = click.style(vertical, fg="blue", bold=True)
-    prompt_text = click.style("> ", fg="cyan", bold=True)
+    left_border: Final = click.style(vertical, fg="blue", bold=True)
+    right_border: Final = click.style(vertical, fg="blue", bold=True)
+    prompt_text: Final = click.style("> ", fg="cyan", bold=True)
 
     # Display the complete box structure first to reserve space
     click.echo(click.style(top_line, fg="blue", bold=True))
 
     # Create empty space in the box for input
-    empty_space = " " * (width - 4)
+    empty_space: Final = " " * (width - 4)
     click.echo(f"{left_border} {empty_space} {right_border}")
 
     # Display bottom border to complete the box
@@ -57,7 +58,7 @@ def styled_prompt():
 
     try:
         # Get user input
-        user_input = input().strip()
+        user_input: Final = input().strip()
 
         # Move cursor down to after the box
         click.echo("\033[1B")  # Move cursor down 1 line
@@ -108,7 +109,7 @@ def setup_shell(ctx: click.Context):
     show_banner()
 
     # Show server connection info
-    base_url = ctx.obj.get("base_url")
+    base_url: Final = ctx.obj.get("base_url")
     click.secho(f"Connected to LiteLLM server: {base_url}\n", fg="green")
 
     show_commands()
@@ -137,14 +138,14 @@ def handle_special_commands(user_input: str) -> bool:
 def execute_command(user_input: str, ctx: click.Context):
     """Parse and execute a command."""
     # Parse command and arguments
-    parts = user_input.split()
-    command = parts[0]
-    args = parts[1:] if len(parts) > 1 else []
+    parts: Final = user_input.split()
+    command: Final = parts[0]
+    args: Final = parts[1:] if len(parts) > 1 else []
 
     # Import cli here to avoid circular import
     from . import main
 
-    cli = main.cli
+    cli: Final = main.cli
 
     # Check if command exists
     if command not in cli.commands:
@@ -158,7 +159,7 @@ def execute_command(user_input: str, ctx: click.Context):
         sys.argv = ["lite"] + [command] + args
 
         # Get the command object and invoke it
-        cmd = cli.commands[command]
+        cmd: Final = cli.commands[command]
 
         # Create a new context for the subcommand
         with ctx.scope():

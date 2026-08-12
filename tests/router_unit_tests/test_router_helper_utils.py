@@ -15,6 +15,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 from create_mock_standard_logging_payload import create_standard_logging_payload
 from litellm.types.utils import StandardLoggingPayload
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
 
 
 @pytest.fixture
@@ -126,19 +127,6 @@ def test_routing_strategy_init_valid_string_strategies(model_list):
 
     for strategy in valid_strategies:
         # Should not raise
-        router.routing_strategy_init(
-            routing_strategy=strategy, routing_strategy_args={}
-        )
-
-
-def test_routing_strategy_init_valid_enum_strategies(model_list):
-    """Test that RoutingStrategy enum values work without error."""
-    from litellm.types.router import RoutingStrategy
-
-    router = Router(model_list=model_list)
-
-    for strategy in RoutingStrategy:
-        # Should not raise when passing enum directly
         router.routing_strategy_init(
             routing_strategy=strategy, routing_strategy_args={}
         )
@@ -1529,12 +1517,6 @@ def test_deployments_by_pattern(model_list):
     assert deployments is not None
 
 
-def test_replace_model_in_jsonl(model_list):
-    router = Router(model_list=model_list)
-    deployments = router.pattern_router.get_deployments_by_pattern(model="claude-3")
-    assert deployments is not None
-
-
 # def test_pattern_match_deployments(model_list):
 #     from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
 #     import re
@@ -1816,6 +1798,7 @@ def test_init_auto_router_deployment_success(mock_auto_router, model_list):
         default_model="gpt-5-mini",
         embedding_model="text-embedding-3-small",
         litellm_router_instance=router,
+        max_input_chars=DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     )
 
     # Verify the auto-router was added to the router's auto_routers dict

@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.types.llms.openai import AllMessageValues
@@ -27,7 +29,10 @@ class X42PromptManagement(CustomPromptManagement):
         - non_default_params: dict - update with any optional params (e.g. temperature, max_tokens, etc.) to use (can be pulled from prompt management tool)
         """
         verbose_logger.debug(
-            f"in async get chat completion prompt. Prompt ID: {prompt_id}, Prompt Variables: {prompt_variables}, Dynamic Callback Params: {dynamic_callback_params}"
+            "in async get chat completion prompt. Prompt ID: %s, Prompt Variables: %s, Dynamic Callback Params: %s",
+            prompt_id,
+            prompt_variables,
+            dynamic_callback_params,
         )
 
         return model, messages, non_default_params
@@ -37,4 +42,4 @@ class X42PromptManagement(CustomPromptManagement):
         return "x42-prompt-management"
 
 
-x42_prompt_management = X42PromptManagement()
+x42_prompt_management: Final = X42PromptManagement()

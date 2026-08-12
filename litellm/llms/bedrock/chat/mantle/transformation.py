@@ -8,7 +8,7 @@ at a different endpoint (bedrock-mantle.{region}.api.aws) with AWS SigV4 auth.
 """
 
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
@@ -44,7 +44,7 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        region = self._get_aws_region_name(optional_params=optional_params, model=model)
+        region: Final = self._get_aws_region_name(optional_params=optional_params, model=model)
         return build_mantle_messages_url(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=optional_params.get("aws_bedrock_runtime_endpoint"),
@@ -70,7 +70,7 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
             api_key=api_key,
             api_base=api_base,
         )
-        project_id = litellm_params.get("aws_bedrock_project_id")
+        project_id: Final = litellm_params.get("aws_bedrock_project_id")
         if project_id:
             headers["anthropic-workspace"] = project_id
         return headers
@@ -84,9 +84,9 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         headers: dict,
     ) -> dict:
         # Strip the "mantle/" routing prefix to get the real model ID
-        model_id = model.replace("mantle/", "", 1)
+        model_id: Final = model.replace("mantle/", "", 1)
 
-        request = self._build_bedrock_anthropic_request_base(
+        request: Final = self._build_bedrock_anthropic_request_base(
             model=model_id,
             messages=messages,
             optional_params=optional_params,
@@ -110,9 +110,9 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        model_id = model.replace("mantle/", "", 1)
+        model_id: Final = model.replace("mantle/", "", 1)
 
-        request = self._build_bedrock_anthropic_request_base(
+        request: Final = self._build_bedrock_anthropic_request_base(
             model=model_id,
             messages=messages,
             optional_params=optional_params,
@@ -128,7 +128,7 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
 
     @staticmethod
     def _restore_mantle_body_fields(request: dict, model_id: str, optional_params: dict) -> dict:
-        stream_fields: dict = {"stream": True} if optional_params.get("stream") is True else {}
+        stream_fields: Final[dict] = {"stream": True} if optional_params.get("stream") is True else {}
         return {**request, "model": model_id, **stream_fields}
 
     @property

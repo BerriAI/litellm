@@ -3,7 +3,7 @@
 Azure Prompt Shield Native Guardrail Integrationfor LiteLLM
 """
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from fastapi import HTTPException
 
@@ -58,7 +58,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
             **kwargs,
         )
 
-        verbose_proxy_logger.debug(f"Initialized Azure Prompt Shield Guardrail: {guardrail_name}")
+        verbose_proxy_logger.debug("Initialized Azure Prompt Shield Guardrail: %s", guardrail_name)
 
     async def async_make_request(self, user_prompt: str) -> "AzurePromptShieldGuardrailResponse":
         """
@@ -76,7 +76,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
 
         from .base import AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH
 
-        chunks = self.split_text_by_words(user_prompt, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH)
+        chunks: Final = self.split_text_by_words(user_prompt, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH)
 
         last_response: AzurePromptShieldGuardrailResponse | None = None
 
@@ -120,14 +120,14 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
             "Azure Prompt Shield: Running pre-call prompt scan, on call_type: %s",
             call_type,
         )
-        new_messages: list[AllMessageValues] | None = data.get("messages")
+        new_messages: Final[list[AllMessageValues] | None] = data.get("messages")
         if new_messages is None:
             verbose_proxy_logger.warning("Azure Prompt Shield: not running guardrail. No messages in data")
             return data
-        user_prompt = self.get_user_prompt(new_messages)
+        user_prompt: Final = self.get_user_prompt(new_messages)
 
         if user_prompt:
-            verbose_proxy_logger.debug(f"Azure Prompt Shield: User prompt: {user_prompt}")
+            verbose_proxy_logger.debug("Azure Prompt Shield: User prompt: %s", user_prompt)
             await self.async_make_request(
                 user_prompt=user_prompt,
             )

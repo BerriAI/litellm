@@ -2,7 +2,7 @@
 ## Helper utilities
 import copy
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, Literal, Union
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
     from litellm.types.utils import ModelResponseStream
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
@@ -87,7 +87,7 @@ def coerce_token_limit(value: object) -> int | None:
     return None
 
 
-_FINISH_REASON_MAP: dict[str, OpenAIChatCompletionFinishReason] = {
+_FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     # Anthropic
     "stop_sequence": "stop",
     "end_turn": "stop",
@@ -131,11 +131,14 @@ _FINISH_REASON_MAP: dict[str, OpenAIChatCompletionFinishReason] = {
     "content_filter": "content_filter",
     # Anthropic Sonnet 4
     "content_filtered": "content_filter",
+    # Generic error passthrough (OpenRouter and other OpenAI-compatible providers
+    # emit lowercase "error" when a provider fails mid-stream)
+    "error": "stop",
 }
 
 
 def map_finish_reason(finish_reason: str) -> OpenAIChatCompletionFinishReason:
-    mapped = _FINISH_REASON_MAP.get(finish_reason)
+    mapped: Final = _FINISH_REASON_MAP.get(finish_reason)
     if mapped is None:
         verbose_logger.warning("Unmapped finish_reason '%s', defaulting to 'stop'", finish_reason)
         return "stop"
@@ -170,7 +173,7 @@ def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metad
     PATCH for issue where both `litellm_metadata` and `metadata` are present in the kwargs
     and user_api_key values are in 'metadata'.
     """
-    potential_spend_tracking_metadata_substring = "user_api_key"
+    potential_spend_tracking_metadata_substring: Final = "user_api_key"
     for key, value in metadata.items():
         if potential_spend_tracking_metadata_substring in key:
             litellm_metadata[key] = value
@@ -205,7 +208,7 @@ def get_or_create_metadata_bucket(
     reader of proxy-internal metadata resolves the bucket through here, so a caller that
     supplies its own ``metadata`` field cannot split them across two dicts.
     """
-    metadata_key = get_metadata_variable_name_from_kwargs(request_data)
+    metadata_key: Final = get_metadata_variable_name_from_kwargs(request_data)
     metadata_bucket = request_data.get(metadata_key)
     if not isinstance(metadata_bucket, dict):
         metadata_bucket = {}
@@ -219,9 +222,9 @@ def get_litellm_metadata_from_kwargs(kwargs: dict):
 
     Return `litellm_metadata` if it exists, otherwise return `metadata`
     """
-    litellm_params = kwargs.get("litellm_params", {})
+    litellm_params: Final = kwargs.get("litellm_params", {})
     if litellm_params:
-        metadata = litellm_params.get("metadata", {})
+        metadata: Final = litellm_params.get("metadata", {})
         litellm_metadata = litellm_params.get("litellm_metadata", {})
         if litellm_metadata and metadata:
             litellm_metadata = add_missing_spend_metadata_to_litellm_metadata(litellm_metadata, metadata)
@@ -240,7 +243,7 @@ def reconstruct_model_name(
 ) -> str:
     """Reconstruct full model name with provider prefix for logging."""
     # Check if deployment model name from router metadata is available (has original prefix)
-    deployment_model_name = metadata.get("deployment")
+    deployment_model_name: Final = metadata.get("deployment")
     if deployment_model_name and "/" in deployment_model_name:
         # Use the deployment model name which preserves the original provider prefix
         return deployment_model_name
@@ -259,8 +262,8 @@ def _get_parent_otel_span_from_kwargs(
     try:
         if kwargs is None:
             return None
-        litellm_params = kwargs.get("litellm_params")
-        _metadata = kwargs.get("metadata") or {}
+        litellm_params: Final = kwargs.get("litellm_params")
+        _metadata: Final = kwargs.get("metadata") or {}
         if "litellm_parent_otel_span" in _metadata:
             return _metadata["litellm_parent_otel_span"]
         elif (
@@ -297,10 +300,10 @@ def process_response_headers(
 
     # Raw httpx.Headers objects come directly from provider HTTP responses and
     # must never be treated as LiteLLM-owned, regardless of caller intent.
-    _preserve = preserve_litellm_internal_headers and isinstance(response_headers, dict)
+    _preserve: Final = preserve_litellm_internal_headers and isinstance(response_headers, dict)
 
-    openai_headers = {}
-    processed_headers = {}
+    openai_headers: Final = {}
+    processed_headers: Final = {}
     additional_headers = {}
 
     for k, v in response_headers.items():
@@ -332,7 +335,7 @@ def preserve_upstream_non_openai_attributes(
     Preserve non-OpenAI attributes from the original chunk.
     """
     # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
-    expected_keys = set(type(model_response).model_fields.keys()).union({"usage"})
+    expected_keys: Final = set(type(model_response).model_fields.keys()).union({"usage"})
     for key, value in original_chunk.model_dump().items():
         if key not in expected_keys:
             setattr(model_response, key, value)
@@ -417,12 +420,12 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
     if callable(data) and not isinstance(data, type):
         return None
     # Skip known non-serializable object types (Logging, Router, etc.)
-    obj_type_name = type(data).__name__
+    obj_type_name: Final = type(data).__name__
     if obj_type_name in ["Logging", "LiteLLMLoggingObj", "Router"]:
         return None
 
     if isinstance(data, dict):
-        result: dict[str, Any] = {}
+        result: Final[dict[str, Any]] = {}
         for k, v in data.items():
             # Skip exception and callable values
             if isinstance(v, Exception) or (callable(v) and not isinstance(v, type)):
@@ -436,7 +439,7 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
                 continue
         return result
     elif isinstance(data, list):
-        result_list: list[Any] = []
+        result_list: Final[list[Any]] = []
         for item in data:
             # Skip exception and callable items
             if isinstance(item, Exception) or (callable(item) and not isinstance(item, type)):
@@ -471,7 +474,7 @@ def filter_internal_params(data: dict, additional_internal_params: set | None = 
         return data
 
     # Known internal parameters that should never be sent to provider APIs
-    internal_params = {
+    internal_params: Final = {
         "skip_mcp_handler",
         "mcp_handler_context",
         "_skip_mcp_handler",
@@ -497,14 +500,14 @@ def redact_nested_match_and_regex_keys(
     if payload is None or isinstance(payload, str):
         return payload
     try:
-        redacted: dict | list[Any] | str | None = copy.deepcopy(payload)
+        redacted: Final[dict | list[Any] | str | None] = copy.deepcopy(payload)
     except Exception:
         return payload
 
     # Iterative traversal; `seen` guards against cyclic refs preserved by deepcopy.
     try:
-        seen: set = set()
-        stack: list[Any] = [redacted]
+        seen: Final[set] = set()
+        stack: Final[list[Any]] = [redacted]
         while stack:
             node = stack.pop()
             node_id = id(node)

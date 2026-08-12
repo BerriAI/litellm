@@ -6,7 +6,7 @@ insert into SpendLogGuardrailIndex when spend logs are written.
 import json
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.utils import PrismaClient
@@ -20,7 +20,7 @@ def _guardrail_status_to_action(status: str | None) -> str:
     """Map StandardLogging guardrail_status to blocked/passed/flagged."""
     if not status:
         return "passed"
-    s = (status or "").lower()
+    s: Final = (status or "").lower()
     if "intervened" in s or "block" in s:
         return "blocked"
     if "fail" in s or "error" in s:
@@ -40,7 +40,7 @@ def _parse_guardrail_info_from_payload(payload: dict[str, Any]) -> list[dict[str
             return []
     if not isinstance(meta, dict):
         return []
-    info = meta.get("guardrail_information") or meta.get("standard_logging_guardrail_information")
+    info: Final = meta.get("guardrail_information") or meta.get("standard_logging_guardrail_information")
     if not isinstance(info, list):
         return []
     return info
@@ -64,7 +64,7 @@ async def process_spend_logs_guardrail_usage(
     if not logs_to_process:
         return
     # Aggregate daily metrics by (guardrail_id, date). Latency/score metrics dropped.
-    daily_guardrail: dict[tuple, dict[str, Any]] = defaultdict(
+    daily_guardrail: Final[dict[tuple, dict[str, Any]]] = defaultdict(
         lambda: {
             "requests_evaluated": 0,
             "passed_count": 0,
@@ -72,7 +72,7 @@ async def process_spend_logs_guardrail_usage(
             "flagged_count": 0,
         }
     )
-    index_rows: list[dict[str, Any]] = []
+    index_rows: Final[list[dict[str, Any]]] = []
 
     for payload in logs_to_process:
         request_id = payload.get("request_id")
@@ -115,7 +115,7 @@ async def process_spend_logs_guardrail_usage(
     try:
         # Insert index rows (skip duplicates by request_id + guardrail_id)
         if index_rows:
-            index_data = []
+            index_data: Final = []
             for r in index_rows:
                 st = r["start_time"]
                 if isinstance(st, str):

@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.types.llms.openai import CreateFileRequest
 from litellm.types.utils import ExtractedFileData
 
@@ -6,7 +8,7 @@ from litellm.types.utils import ExtractedFileData
 # batch file must not silently bypass the streaming path just because of its
 # declared type. ``purpose == "batch"`` is the authoritative signal; non-JSONL
 # content still fails loudly when the rows are parsed.
-_BATCH_JSONL_CONTENT_TYPES = frozenset(
+_BATCH_JSONL_CONTENT_TYPES: Final = frozenset(
     {
         "application/jsonl",
         "application/json",
