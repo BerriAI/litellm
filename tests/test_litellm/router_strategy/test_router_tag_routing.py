@@ -2810,3 +2810,158 @@ def test_update_router_config_schema_includes_tag_routing_prefix():
 
     config = UpdateRouterConfig(tag_routing_prefix="route:")
     assert config.model_dump(exclude_none=True)["tag_routing_prefix"] == "route:"
+
+
+# --- issue #36621: the request tags that selected a tagged pre-routing strategy
+# (e.g. an auto_router marker) are consumed by that selection and must not
+# re-apply to the routed tier's model group; key/team-inherited constraints
+# must keep applying there ---
+
+
+class _RewriteToTierStrategy:
+    def __init__(self, rewrite_to: str):
+        self.rewrite_to = rewrite_to
+
+    async def async_pre_routing_hook(
+        self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+    ):
+        from litellm.types.router import PreRoutingHookResponse
+
+        return PreRoutingHookResponse(model=self.rewrite_to, messages=messages)
+
+
+def _tagged_marker_router(tier_tags=None):
+    from litellm.types.router import TaggedPreRoutingStrategy
+
+    tier_params = {"model": "gemini/gemini-3.6-flash"}
+    if tier_tags is not None:
+        tier_params["tags"] = tier_tags
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt4o",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {"id": "plain-gpt4o"},
+            },
+            {
+                "model_name": "gemini-flash",
+                "litellm_params": tier_params,
+                "model_info": {"id": "tier-gemini-flash"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+    router.auto_routers = {
+        "gpt4o": [TaggedPreRoutingStrategy(tags=("route",), strategy=_RewriteToTierStrategy("gemini-flash"))]
+    }
+    return router
+
+
+@pytest.mark.asyncio()
+async def test_router_selecting_tag_is_not_reapplied_to_the_routed_tier():
+    # The exact request the auto-router exists to serve: tags=["route"] selects
+    # the tagged marker, the strategy rewrites to gemini-flash, and the untagged
+    # tier deployment must serve it instead of 401ing on the already-spent tag.
+    router = _tagged_marker_router()
+
+    response = await router.acompletion(
+        model="gpt4o",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        metadata={"tags": ["route"], "inherited_tags": []},
+        mock_response="Paris",
+    )
+
+    assert response._hidden_params["model_id"] == "tier-gemini-flash"
+
+
+@pytest.mark.asyncio()
+async def test_tagged_request_direct_to_plain_group_still_rejected():
+    # Sent straight to the tier, no router selection consumed the tag, so strict
+    # tag filtering must reject exactly as before.
+    router = _tagged_marker_router()
+
+    with pytest.raises(Exception) as exc_info:
+        await router.acompletion(
+            model="gemini-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["route"], "inherited_tags": []},
+            mock_response="hi",
+        )
+
+    from litellm.types.router import RouterErrors
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
+
+
+@pytest.mark.asyncio()
+async def test_caller_forged_consumption_stamp_is_neutralized_by_the_hook():
+    # A caller pre-loading the stamp in metadata must not unlock a plain group:
+    # the pre-routing hook writes-or-clears the stamp on every attempt, and this
+    # group has no registered strategy, so the forged value is cleared before
+    # tag filtering runs.
+    router = _tagged_marker_router()
+
+    with pytest.raises(Exception) as exc_info:
+        await router.acompletion(
+            model="gemini-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={
+                "tags": ["route"],
+                "inherited_tags": [],
+                "_consumed_request_tags_model_group": "gemini-flash",
+            },
+            mock_response="hi",
+        )
+
+    from litellm.types.router import RouterErrors
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
+
+
+@pytest.mark.asyncio()
+async def test_inherited_constraint_still_applies_to_the_routed_tier():
+    # &region:eu comes from key/team policy (present in inherited_tags):
+    # consuming the router-selecting "route" tag must not also discard the
+    # inherited requirement, so a tier without the tag still raises...
+    with pytest.raises(Exception) as exc_info:
+        await _tagged_marker_router().acompletion(
+            model="gpt4o",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["route", "&region:eu"], "inherited_tags": ["&region:eu"]},
+            mock_response="hi",
+        )
+
+    from litellm.types.router import RouterErrors
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
+
+    # ...and a tier carrying it serves the request even though it lacks "route".
+    response = await _tagged_marker_router(tier_tags=["region:eu"]).acompletion(
+        model="gpt4o",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"tags": ["route", "&region:eu"], "inherited_tags": ["&region:eu"]},
+        mock_response="hi",
+    )
+
+    assert response._hidden_params["model_id"] == "tier-gemini-flash"
+
+
+def test_request_tags_after_router_consumption_scopes_to_the_stamped_group():
+    from litellm.constants import CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY
+    from litellm.router_strategy.tag_based_routing import _request_tags_after_router_consumption
+
+    metadata = {
+        "tags": ["route", "&region:eu"],
+        "inherited_tags": ["&region:eu"],
+        CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY: "gemini-flash",
+    }
+    assert _request_tags_after_router_consumption(metadata, "gemini-flash") == ["&region:eu"]
+    assert _request_tags_after_router_consumption(metadata, "other-group") == ["route", "&region:eu"]
+
+
+def test_request_tags_after_router_consumption_without_inherited_info_drops_every_tag():
+    from litellm.constants import CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY
+    from litellm.router_strategy.tag_based_routing import _request_tags_after_router_consumption
+
+    metadata = {"tags": ["route"], CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY: "gemini-flash"}
+    assert _request_tags_after_router_consumption(metadata, "gemini-flash") is None
