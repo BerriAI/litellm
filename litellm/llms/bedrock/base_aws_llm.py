@@ -277,6 +277,9 @@ class BaseAWSLLM:
             aws_external_id,
         )
 
+        if aws_session_tags:
+            aws_session_tags = sorted(aws_session_tags, key=lambda t: t["Key"])
+
         args = {
             k: v
             for k, v in locals().items()
