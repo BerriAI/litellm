@@ -482,6 +482,33 @@ class TestTranslateMessagesToResponsesInput:
         result = _translate_messages(messages)
         assert result[0]["output"] == "Line 1\nLine 2"
 
+    def test_user_tool_result_list_content_preserves_tool_references(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_search",
+                        "content": [
+                            {"type": "text", "text": "Available:"},
+                            {"type": "tool_reference", "tool_name": "get_weather"},
+                        ],
+                    }
+                ],
+            }
+        ]
+
+        result = _translate_messages(messages)
+
+        assert result == [
+            {
+                "type": "function_call_output",
+                "call_id": "call_search",
+                "output": "Available:\n[Loaded tool: get_weather]",
+            }
+        ]
+
     def test_user_tool_result_null_content(self):
         """tool_result with null content becomes empty string output."""
         messages = [

@@ -294,7 +294,11 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                 output_text = inner
                             elif isinstance(inner, list):
                                 parts = [
-                                    c.get("text", "") for c in inner if isinstance(c, dict) and c.get("type") == "text"
+                                    c.get("text", "")
+                                    if c.get("type") == "text"
+                                    else f"[Loaded tool: {c.get('tool_name', '')}]"
+                                    for c in inner
+                                    if isinstance(c, dict) and c.get("type") in {"text", "tool_reference"}
                                 ]
                                 output_text = "\n".join(parts)
                                 image_candidates = tuple(
