@@ -1878,9 +1878,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 3
-    },
     "prefer-const": {
       "count": 1
     },
