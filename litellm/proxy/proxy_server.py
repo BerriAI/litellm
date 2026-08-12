@@ -6486,9 +6486,7 @@ class ProxyConfig:
         window. See ReconcileOutcome.
         """
         async with MODEL_RECONCILE_LOCK:
-            return await self._add_deployment_locked(
-                prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
-            )
+            return await self._add_deployment_locked(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
 
     async def _add_deployment_locked(
         self,
