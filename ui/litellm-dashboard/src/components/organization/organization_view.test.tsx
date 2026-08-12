@@ -156,6 +156,44 @@ test("should display empty state when organization has no members", async () => 
   });
 });
 
+test("should display organization-specific spend and creation details for members", async () => {
+  const createdAt = "2026-01-15T12:00:00.000Z";
+  const orgWithMember = {
+    ...mockOrg,
+    members: [
+      {
+        user_id: "user_123",
+        user_email: "member@example.com",
+        user_role: "org_admin",
+        spend: 12.34567,
+        created_at: createdAt,
+      },
+    ],
+  };
+  mockUseOrganization.mockReturnValue({ data: orgWithMember, isLoading: false } as unknown as ReturnType<
+    typeof useOrganization
+  >);
+
+  const user = userEvent.setup();
+  renderWithProviders(
+    <OrganizationInfoView
+      organizationId="org_123"
+      onClose={() => {}}
+      accessToken="test-token"
+      is_org_admin={false}
+      is_proxy_admin={false}
+      userModels={[]}
+      editOrg={false}
+    />,
+  );
+
+  await user.click(screen.getByRole("tab", { name: "Members" }));
+
+  expect(await screen.findByText("member@example.com")).toBeInTheDocument();
+  expect(screen.getByText("$12.3457")).toBeInTheDocument();
+  expect(screen.getByText(new Date(createdAt).toLocaleString())).toBeInTheDocument();
+});
+
 test("should display team aliases when teams are available", async () => {
   const orgWithTeams = {
     ...mockOrg,
