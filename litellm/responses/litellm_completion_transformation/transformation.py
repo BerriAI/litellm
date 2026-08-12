@@ -1708,7 +1708,8 @@ class LiteLLMCompletionResponsesConfig:
                         type="function_call",
                         status=function_definition.get("status") or "completed",
                     )
-                    output_tool_call.namespace = namespace
+                    if namespace:
+                        output_tool_call.namespace = namespace
 
                     # Pass through provider_specific_fields as-is if present
                     if provider_specific_fields:
