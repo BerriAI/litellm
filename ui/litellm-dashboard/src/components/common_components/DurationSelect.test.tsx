@@ -42,7 +42,7 @@ describe("DurationSelect", () => {
     const dailyOption = dailyLabel.closest('[role="option"]') ?? dailyLabel;
     await user.click(dailyOption);
 
-    expect(onChange.mock.calls.map(([selected]) => selected)).toContain("24h");
+    expect(onChange).toHaveBeenCalledWith("24h", expect.any(Object));
   });
 
   it("should accept and pass value prop to Select", () => {

@@ -3,16 +3,23 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 interface DurationSelectProps {
   className?: string;
   value?: string;
-  onChange?: (value: string) => void;
+  onChange?: (value: string, option: { value: string; label: string }) => void;
 }
+
+const DURATION_OPTIONS = [
+  { value: "24h", label: "Daily" },
+  { value: "7d", label: "Weekly" },
+  { value: "30d", label: "Monthly" },
+];
 
 export default function DurationSelect({ className, value, onChange }: DurationSelectProps) {
   return (
     <Select
       value={value}
       onValueChange={(nextValue) => {
-        if (nextValue !== null) {
-          onChange?.(nextValue);
+        const selectedOption = DURATION_OPTIONS.find((option) => option.value === nextValue);
+        if (selectedOption) {
+          onChange?.(nextValue, selectedOption);
         }
       }}
     >
@@ -20,9 +27,11 @@ export default function DurationSelect({ className, value, onChange }: DurationS
         <SelectValue placeholder="Select duration" />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="24h">Daily</SelectItem>
-        <SelectItem value="7d">Weekly</SelectItem>
-        <SelectItem value="30d">Monthly</SelectItem>
+        {DURATION_OPTIONS.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
       </SelectContent>
     </Select>
   );
