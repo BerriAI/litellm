@@ -489,6 +489,83 @@ class TestBedrockMantleChatAuth:
         assert "/us-east-2/bedrock/aws4_request" in authorization
         assert requests[0]["url"].startswith("https://bedrock-mantle.us-east-2.api.aws")
 
+    def test_completion_per_request_role_reaches_signer_and_not_the_body(
+        self, monkeypatch
+    ):
+        # Per-request aws_role_name/aws_session_name are stripped from optional_params
+        # for non-bedrock providers, so they must be sourced from litellm_params at
+        # signing time, and must never be serialized into the provider request body.
+        from botocore.credentials import Credentials
+
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        for var in (
+            "BEDROCK_MANTLE_API_KEY",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            "BEDROCK_MANTLE_API_BASE",
+        ):
+            monkeypatch.delenv(var, raising=False)
+
+        credential_calls = []
+
+        def fake_get_credentials(self, **kwargs):
+            credential_calls.append(kwargs)
+            return Credentials(
+                access_key="ASIAEXAMPLE",
+                secret_key="YXNzdW1lZC1yb2xlLXNlY3JldC1hc3N1bWVk",
+                token="assumed-session-token",
+            )
+
+        monkeypatch.setattr(BaseAWSLLM, "get_credentials", fake_get_credentials)
+
+        requests = []
+
+        def mock_post(self, url, data=None, headers=None, **kwargs):
+            raw_body = data.decode("utf-8") if isinstance(data, bytes) else data
+            requests.append({"headers": headers or {}, "body": json.loads(raw_body or "{}")})
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 1733529600,
+                    "model": "google.gemma-4-31b",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 1,
+                        "completion_tokens": 1,
+                        "total_tokens": 2,
+                    },
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", mock_post
+        ):
+            litellm.completion(
+                model="bedrock_mantle/google.gemma-4-31b",
+                messages=[{"role": "user", "content": "hello"}],
+                aws_role_name="arn:aws:iam::000000000000:role/attributed-role",
+                aws_session_name="user-123",
+                aws_region_name="us-east-1",
+            )
+
+        assert len(credential_calls) == 1
+        assert (
+            credential_calls[0]["aws_role_name"]
+            == "arn:aws:iam::000000000000:role/attributed-role"
+        )
+        assert credential_calls[0]["aws_session_name"] == "user-123"
+        assert requests[0]["headers"]["Authorization"].startswith("AWS4-HMAC-SHA256")
+        assert not [key for key in requests[0]["body"] if key.startswith("aws_")]
+
 
 class TestBedrockMantleProjectHeader:
     def test_validate_environment_sets_openai_project_header(self):
