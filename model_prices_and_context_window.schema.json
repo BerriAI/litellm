@@ -53,6 +53,11 @@
           "type": "number",
           "minimum": 0
         },
+        "audio_seconds_per_prediction": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Audio duration, in seconds, produced by one prediction."
+        },
         "audio_transcription_config": {
           "type": "string"
         },
@@ -363,6 +368,16 @@
           "type": "string",
           "description": "LiteLLM provider slug; one of https://docs.litellm.ai/docs/providers."
         },
+        "max_audio_length_hours": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Maximum generated audio duration, expressed in hours."
+        },
+        "max_audio_per_prompt": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of audio outputs accepted or generated per prompt."
+        },
         "max_input_tokens": {
           "type": "integer",
           "minimum": 0,
@@ -603,6 +618,17 @@
           "type": "string",
           "description": "URL of the provider pricing/model page this entry was taken from."
         },
+        "supported_audio_formats": {
+          "type": "array",
+          "description": "Audio container formats the model can return.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "mp3",
+              "wav"
+            ]
+          }
+        },
         "supported_endpoints": {
           "type": "array",
           "description": "OpenAI-style API routes this model can be called through, e.g. /v1/chat/completions.",
@@ -825,6 +851,13 @@
         },
         "uses_embed_content": {
           "type": "boolean"
+        },
+        "vertex_ai_audio_api": {
+          "type": "string",
+          "enum": [
+            "lyria_predict",
+            "lyria_interactions"
+          ]
         },
         "web_search_billing_unit": {
           "type": "string",

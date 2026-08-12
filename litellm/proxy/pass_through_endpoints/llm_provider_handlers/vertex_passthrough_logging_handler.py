@@ -343,8 +343,7 @@ class VertexPassthroughLoggingHandler:
             json_response=json_response
         )
         response_cost: Final = (
-            VertexPassthroughLoggingHandler._get_audio_prediction_unit_cost(model=model)
-            or 0.0
+            VertexPassthroughLoggingHandler._get_audio_prediction_unit_cost(model=model) or 0.0
         ) * prediction_count
 
         logging_obj.model = model
