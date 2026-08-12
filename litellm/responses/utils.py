@@ -1041,9 +1041,10 @@ class ResponseAPILoggingUtils:
         Both have the same spec with input_tokens, output_tokens, and
         input_tokens_details (text_tokens, image_tokens).
 
-        Providers that already converted usage to chat Usage (e.g. xAI Responses
-        attaching server_side_tool_usage_details) are returned as-is so the chat
-        completions bridge can re-run this helper without dropping extra fields.
+        Usage inputs are returned as-is so re-running this helper never drops
+        fields. Non-standard provider fields (e.g. xAI's
+        server_side_tool_usage_details) are carried onto the returned Usage so
+        provider cost calculators can read them after normalization.
         """
         if usage_input is None:
             return Usage(
@@ -1095,12 +1096,18 @@ class ResponseAPILoggingUtils:
                 audio_tokens=getattr(output_tokens_details, "audio_tokens", None),
             )
 
+        extra_usage_fields: Final = {
+            key: value
+            for key, value in (response_api_usage.model_extra or {}).items()
+            if key not in ("input_token_details", "output_token_details")
+        }
         chat_usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
             prompt_tokens_details=prompt_tokens_details,
             completion_tokens_details=completion_tokens_details,
+            **extra_usage_fields,
         )
 
         # Preserve cost attribute if it exists on ResponseAPIUsage

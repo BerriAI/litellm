@@ -1,19 +1,16 @@
 import base64
-import json
 import os
 import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import litellm
-from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
-from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIOptionalRequestParams
 from litellm.types.utils import Usage
 
 
@@ -445,8 +442,25 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens_details.text_tokens == 20
         assert result.completion_tokens_details.audio_tokens is None
 
+    def test_transform_response_api_usage_carries_extra_provider_fields(self):
+        """Non-standard usage fields (e.g. xAI tool details) must survive chat normalization."""
+        details = {"web_search_calls": 2, "x_search_calls": 0}
+        usage = ResponseAPIUsage(
+            input_tokens=100,
+            output_tokens=20,
+            total_tokens=120,
+            server_side_tool_usage_details=details,
+        )
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+
+        assert isinstance(result, Usage)
+        assert result.prompt_tokens == 100
+        assert result.completion_tokens == 20
+        assert getattr(result, "server_side_tool_usage_details") == details
+
     def test_transform_already_chat_usage_passthrough_keeps_tool_details(self):
-        """xAI Responses converts usage to chat Usage before the chat bridge re-runs this helper."""
+        """Re-running the bridge on an already-converted chat Usage must not drop fields."""
         details = {"web_search_calls": 2, "x_search_calls": 0}
         usage = Usage(
             prompt_tokens=100,

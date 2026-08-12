@@ -432,7 +432,9 @@ class StandardBuiltInToolCostTracking:
         """
         output: Final = response_object.output
         for output_item in output:
-            _output_type: str | None = getattr(output_item, "type", None)
+            _output_type: str | None = (
+                output_item.get("type") if isinstance(output_item, dict) else getattr(output_item, "type", None)
+            )
             if _output_type == output_type:
                 return True
         return False
