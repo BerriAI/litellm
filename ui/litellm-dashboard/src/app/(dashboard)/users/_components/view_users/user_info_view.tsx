@@ -521,10 +521,10 @@ export default function UserInfoView({
               <Card>
                 <Text>Spend</Text>
                 <div className="mt-2">
-                  <Title>${formatNumberWithCommas(userData.spend || 0, 4)}</Title>
+                  <Title>${formatNumberWithCommas(userData.spend || 0, 2)}</Title>
                   <Text>
                     of{" "}
-                    {userData.max_budget !== null ? `$${formatNumberWithCommas(userData.max_budget, 4)}` : "Unlimited"}
+                    {userData.max_budget !== null ? `$${formatNumberWithCommas(userData.max_budget, 2)}` : "Unlimited"}
                   </Text>
                 </div>
               </Card>

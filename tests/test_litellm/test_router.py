@@ -7475,6 +7475,102 @@ def test_pre_call_checks_keeps_deployment_when_provider_is_unresolvable(monkeypa
     assert len(result) == 1
 
 
+class TestConsumedRequestTagsStamp:
+    """Issue #36621: when a request's tags select a tagged pre-routing strategy, those
+    tags are consumed by the selection; the hook must stamp the rewritten model group so
+    tag filtering skips request-body tags there, and must clear the stamp on every
+    re-entry (fallbacks reuse the same request_kwargs) so it cannot leak elsewhere."""
+
+    class _RewriteStrategy:
+        def __init__(self, rewrite_to: str):
+            self.rewrite_to = rewrite_to
+
+        async def async_pre_routing_hook(
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+        ):
+            from litellm.types.router import PreRoutingHookResponse
+
+            return PreRoutingHookResponse(model=self.rewrite_to, messages=messages)
+
+    @classmethod
+    def _router(cls, marker_tags=("route",)) -> "litellm.Router":
+        from litellm.types.router import TaggedPreRoutingStrategy
+
+        router = litellm.Router(
+            model_list=[
+                {"model_name": "gpt4o", "litellm_params": {"model": "openai/gpt-4o"}},
+                {"model_name": "gemini-flash", "litellm_params": {"model": "gemini/gemini-3.6-flash"}},
+            ],
+            enable_tag_filtering=True,
+        )
+        router.auto_routers = {
+            "gpt4o": [TaggedPreRoutingStrategy(tags=marker_tags, strategy=cls._RewriteStrategy("gemini-flash"))]
+        }
+        return router
+
+    @pytest.mark.asyncio
+    async def test_stamps_the_rewritten_group_when_request_tags_selected_the_router(self):
+        from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+        from litellm.types.router import ConsumedRequestTagsStamp
+
+        router = self._router()
+        request_kwargs = {"metadata": {"tags": ["route"]}}
+
+        await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
+
+        assert request_kwargs["metadata"][CONSUMED_REQUEST_TAGS_METADATA_KEY] == ConsumedRequestTagsStamp(
+            model_group="gemini-flash", tags=("route",)
+        )
+
+    @pytest.mark.asyncio
+    async def test_stamps_into_litellm_metadata_when_the_request_uses_that_bucket(self):
+        from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+        from litellm.types.router import ConsumedRequestTagsStamp
+
+        router = self._router()
+        request_kwargs = {"litellm_metadata": {"tags": ["route"]}}
+
+        await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
+
+        assert request_kwargs["litellm_metadata"][CONSUMED_REQUEST_TAGS_METADATA_KEY] == ConsumedRequestTagsStamp(
+            model_group="gemini-flash", tags=("route",)
+        )
+
+    @pytest.mark.asyncio
+    async def test_fallback_reentry_with_a_plain_group_clears_the_stale_stamp(self):
+        from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+
+        router = self._router()
+        request_kwargs = {"metadata": {"tags": ["route"]}}
+
+        await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
+        await router.async_pre_routing_hook(model="gemini-flash", request_kwargs=request_kwargs)
+
+        assert CONSUMED_REQUEST_TAGS_METADATA_KEY not in request_kwargs["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_no_stamp_when_the_request_is_untagged(self):
+        from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+
+        router = self._router()
+        request_kwargs = {"metadata": {}}
+
+        await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
+
+        assert CONSUMED_REQUEST_TAGS_METADATA_KEY not in request_kwargs["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_no_stamp_when_the_selected_strategy_carries_no_tags(self):
+        from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+
+        router = self._router(marker_tags=())
+        request_kwargs = {"metadata": {"tags": ["route"]}}
+
+        await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
+
+        assert CONSUMED_REQUEST_TAGS_METADATA_KEY not in request_kwargs["metadata"]
+
+
 class TestAutoRouterMaxInputCharsWiring:
     """`auto_router_max_input_chars` on the deployment has to reach the AutoRouter that embeds prompts.
 

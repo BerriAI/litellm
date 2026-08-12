@@ -8,7 +8,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from litellm.proxy._types import LiteLLM_ProxyModelTable, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_ProxyModelTable,
+    LitellmUserRoles,
+    ReconcileOutcome,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _merged_ptu_model_info,
     _raise_if_ptu_cost_attribution_disabled,
@@ -623,7 +628,12 @@ class TestAddNewModelPtuGate:
         add_team_model_to_db = AsyncMock(return_value=db_row)
 
         mock_proxy_config = MagicMock()
-        mock_proxy_config.add_deployment = AsyncMock(return_value=None)
+        # Both fields None: no reconcile state was captured, so the serving verdict
+        # falls back to reading the router live -- which is what mock_router below
+        # drives. These tests are about the PTU gate, not the reload verdict.
+        mock_proxy_config.add_deployment = AsyncMock(
+            return_value=ReconcileOutcome(still_desired=None, live_after=None)
+        )
 
         mock_router = MagicMock()
         mock_router.get_model_ids.return_value = [model_id]

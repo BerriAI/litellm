@@ -43,6 +43,7 @@ from litellm.caching.caching import (
     RedisClusterCache,
 )
 from litellm.constants import (
+    CONSUMED_REQUEST_TAGS_METADATA_KEY,
     DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
@@ -171,6 +172,7 @@ from litellm.types.router import (
     AlertingConfig,
     AllowedFailsPolicy,
     AssistantsTypedDict,
+    ConsumedRequestTagsStamp,
     CredentialLiteLLMParams,
     CustomRoutingStrategyBase,
     Deployment,
@@ -8610,7 +8612,18 @@ class Router:
         Nothing is recorded for replay: a refresh walks the live routers instead,
         so a deleted, repointed or never-added deployment, and a discarded router,
         drop out of the rebuild on their own.
+
+        A strategy-router alias is never the deployment actually called or
+        billed, so custom pricing configured on it must not become a cost-map
+        price: an explicit zero would let ``_is_cost_explicitly_configured``
+        treat the alias as a genuinely free model and waive budget checks for
+        requests that route to (and bill as) a real deployment.
         """
+        if classify_strategy_router_model(model) is not None:
+            model_info = {  # mutable-ok: filtered copy of the caller's entry, handed straight to register_model
+                k: v for k, v in model_info.items() if k not in CustomPricingLiteLLMParams.model_fields
+            }
+
         if model_id is not None:
             litellm.register_model(model_cost={model_id: model_info}, persist_across_reloads=False)
 
@@ -11356,11 +11369,15 @@ class Router:
         indices: Final = self.model_name_to_deployment_indices.get(model) or ()
         return any(not self._is_strategy_marker_deployment(self.model_list[idx]) for idx in indices)
 
-    def _select_pre_routing_strategy(self, model: str, request_kwargs: dict) -> "PreRoutingStrategy | None":
+    def _select_pre_routing_strategy(
+        self, model: str, request_kwargs: dict
+    ) -> "TaggedPreRoutingStrategy[PreRoutingStrategy] | None":
         """
         Resolve the pre-routing strategy for `model`, disambiguating deployments
         that share a `model_name` by matching the request's tags against each
         registered strategy's tags before falling back to the first registered.
+        Returns the tagged registry entry so the caller can tell whether the
+        request's tags were what selected it.
 
         With tag filtering enabled, strategies that all carry real tags matching
         none of the request's do not capture it when the name also has plain
@@ -11382,17 +11399,17 @@ class Router:
                 if tagged.tags and is_valid_deployment_tag(
                     list(tagged.tags), request_tags, self.tag_filtering_match_any
                 ):
-                    return tagged.strategy
+                    return tagged
         for tagged in candidates:
             if "default" in tagged.tags:
-                return tagged.strategy
+                return tagged
         if (
             self.enable_tag_filtering
             and all(tagged.tags for tagged in candidates)
             and self._model_name_has_plain_deployments(model)
         ):
             return None
-        return candidates[0].strategy
+        return candidates[0]
 
     async def async_pre_routing_hook(
         self,
@@ -11416,15 +11433,18 @@ class Router:
         if self.routing_plugins:
             await self._run_routing_plugins(model=model, request_kwargs=request_kwargs, messages=messages)
 
-        router_strategy: Final = self._select_pre_routing_strategy(model=model, request_kwargs=request_kwargs)
-        if router_strategy is None:
+        selected_strategy: Final = self._select_pre_routing_strategy(model=model, request_kwargs=request_kwargs)
+        if selected_strategy is None:
             self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
             self._stamp_or_clear_metadata_key(
                 request_kwargs=request_kwargs, key=SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, value=None
             )
+            self._stamp_or_clear_metadata_key(
+                request_kwargs=request_kwargs, key=CONSUMED_REQUEST_TAGS_METADATA_KEY, value=None
+            )
             return None
 
-        pre_routing_hook_response: Final = await router_strategy.async_pre_routing_hook(
+        pre_routing_hook_response: Final = await selected_strategy.strategy.async_pre_routing_hook(
             model=model,
             request_kwargs=request_kwargs,
             messages=messages,
@@ -11440,6 +11460,15 @@ class Router:
             key=SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
             value=(pre_routing_hook_response.session_affinity_ttl_seconds if pre_routing_hook_response else None),
         )
+        self._stamp_or_clear_metadata_key(
+            request_kwargs=request_kwargs,
+            key=CONSUMED_REQUEST_TAGS_METADATA_KEY,
+            value=self._consumed_request_tags_stamp(
+                selected_strategy=selected_strategy,
+                pre_routing_hook_response=pre_routing_hook_response,
+                request_tags=_get_tags_from_request_kwargs(request_kwargs),
+            ),
+        )
 
         # `model` (the alias, e.g. "smart-router") is never the deployment actually
         # called - apply the alias's own litellm_params (besides `model` itself,
@@ -11447,16 +11476,41 @@ class Router:
         # deployment the hook selected won't have them. Router-only fields
         # (tpm, rpm, weight, complexity_router_config, ...) are excluded from the
         # actual outbound LLM call downstream by litellm.types.utils.all_litellm_params,
-        # not here.
+        # not here. Custom pricing fields ARE call params, so they must be
+        # excluded here: they price the alias, not the deployment the hook
+        # selected, and forwarding them re-registers the routed deployment at
+        # the alias's price (an explicit 0 makes every alias request bill $0).
         if pre_routing_hook_response is not None:
             alias_index: Final = self.model_name_to_deployment_indices.get(model, [])
             if alias_index:
                 alias_litellm_params: Final = self.model_list[alias_index[0]].get("litellm_params", {})
                 for key, value in alias_litellm_params.items():
-                    if key != "model" and value is not None:
+                    if key != "model" and key not in CustomPricingLiteLLMParams.model_fields and value is not None:
                         request_kwargs.setdefault(key, value)
 
         return pre_routing_hook_response
+
+    def _consumed_request_tags_stamp(
+        self,
+        selected_strategy: "TaggedPreRoutingStrategy[PreRoutingStrategy]",
+        pre_routing_hook_response: PreRoutingHookResponse | None,
+        request_tags: Sequence[str],
+    ) -> ConsumedRequestTagsStamp | None:
+        """Record which tags picked the router and which model group it rewrote to, or None.
+
+        A request whose tags matched the selected strategy's tags has already spent those
+        tags on picking the router; re-applying them to the routed tier's model group would
+        empty the pool unless every tier deployment repeats the marker's tag. Only the
+        strategy's own tags are spent: the request's other tags keep constraining
+        deployment selection inside the routed group, and key/team policy tags are
+        untouched because tag filtering separately re-applies whatever
+        `metadata.inherited_tags` carries for the stamped group.
+        """
+        if pre_routing_hook_response is None or not selected_strategy.tags or not request_tags:
+            return None
+        if not is_valid_deployment_tag(selected_strategy.tags, request_tags, self.tag_filtering_match_any):
+            return None
+        return ConsumedRequestTagsStamp(model_group=pre_routing_hook_response.model, tags=selected_strategy.tags)
 
     @staticmethod
     def _record_routing_decision(
