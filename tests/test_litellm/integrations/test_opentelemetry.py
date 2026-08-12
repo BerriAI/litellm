@@ -1,7 +1,9 @@
 import asyncio
+import concurrent.futures
 import json
 import os
 import sys
+import threading
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -20,6 +22,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import litellm
+from litellm.integrations import opentelemetry as otel_module
 from litellm.integrations.opentelemetry import (
     OpenTelemetry,
     OpenTelemetryConfig,
@@ -6007,3 +6010,109 @@ class TestOTELServiceTierAttributes(unittest.TestCase):
             response_obj,
         )
         self.assertEqual(attributes[self.RESPONSE_KEY], "tier-added-by-provider-later")
+
+
+class TestDynamicTracerProviderCache(unittest.TestCase):
+    """Every credential-scoped TracerProvider that owns its exporter also owns a
+    BatchSpanProcessor worker thread that only stops on shutdown, so the cache holding them
+    must be bounded and must shut down whatever it drops (LIT-5437: threads accumulated
+    until pods were OOMKilled)."""
+
+    BSP_THREAD_NAME = "OtelBatchSpanProcessor"
+
+    def _logger(self, cap=3, exporter="console"):
+        logger = OpenTelemetry(
+            config=OpenTelemetryConfig(exporter=exporter, skip_set_global=True),
+            max_dynamic_tracer_providers=cap,
+        )
+        self.addCleanup(logger._tracer_provider.shutdown)
+        self.addCleanup(self._drain, logger)
+        return logger
+
+    def _drain(self, logger):
+        for provider in list(logger._tracer_provider_cache.values()):
+            provider.shutdown()
+        logger._tracer_provider_cache.clear()
+
+    def _live_exporter_threads(self):
+        return [t for t in threading.enumerate() if t.name == self.BSP_THREAD_NAME]
+
+    def _wait_for_exporter_threads(self, expected, timeout=10.0):
+        """Dropped providers are shut down off-thread, so poll instead of sleeping."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            count = len(self._live_exporter_threads())
+            if count <= expected:
+                return count
+            time.sleep(0.05)
+        return len(self._live_exporter_threads())
+
+    def test_distinct_credential_sets_stay_bounded(self):
+        """One tenant per credential set must not mean one live thread per credential set."""
+        logger = self._logger(cap=3)
+        before = len(self._live_exporter_threads())
+
+        for i in range(25):
+            logger._get_tracer_with_dynamic_headers({"authorization": f"Basic tenant-{i}"})
+
+        self.assertEqual(len(logger._tracer_provider_cache), 3)
+        # Guards the thread-name constant: a rename upstream would make this read 0 and the
+        # bound assertion below would pass while measuring nothing.
+        self.assertGreaterEqual(len(self._live_exporter_threads()), 1)
+        self.assertLessEqual(self._wait_for_exporter_threads(before + 3) - before, 3)
+
+    def test_evicted_provider_is_shut_down(self):
+        """An evicted provider is stopped, not silently dropped with its thread running."""
+        logger = self._logger(cap=3)
+        with patch.object(otel_module, "_shutdown_tracer_provider") as mock_shutdown:
+            logger._get_tracer_with_dynamic_headers({"authorization": "Basic evict-me"})
+            evicted = next(iter(logger._tracer_provider_cache.values()))
+
+            for i in range(3):
+                logger._get_tracer_with_dynamic_headers({"authorization": f"Basic keep-{i}"})
+
+            self.assertNotIn(evicted, logger._tracer_provider_cache.values())
+            self._wait_for_call(mock_shutdown)
+            mock_shutdown.assert_called_once_with(evicted)
+
+    def _wait_for_call(self, mock_fn, timeout=10.0):
+        """The shutdown runs on a worker thread, so give it a moment to land."""
+        deadline = time.time() + timeout
+        while time.time() < deadline and not mock_fn.call_args_list:
+            time.sleep(0.05)
+
+    def test_concurrent_first_requests_build_one_provider(self):
+        """Concurrent misses on one credential set race to build; only the winner may survive,
+        and the losers must be shut down rather than orphaned with their threads running."""
+        logger = self._logger(cap=3)
+        before = len(self._live_exporter_threads())
+        headers = {"authorization": "Basic same-tenant"}
+        barrier = threading.Barrier(16)
+
+        def _request_tracer(_):
+            barrier.wait()
+            return logger._get_tracer_with_dynamic_headers(headers)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+            list(pool.map(_request_tracer, range(16)))
+
+        self.assertEqual(len(logger._tracer_provider_cache), 1)
+        self.assertEqual(self._wait_for_exporter_threads(before + 1) - before, 1)
+
+    def test_shared_exporter_instance_survives_dropped_providers(self):
+        """A caller-supplied SpanExporter is shared with the logger's own provider, so a
+        dropped provider must not shut it down and silence the whole process."""
+        shared = InMemorySpanExporter()
+        logger = self._logger(cap=1, exporter=shared)
+        with logger.tracer.start_as_current_span("before"):
+            pass
+
+        for i in range(4):
+            logger._get_tracer_with_dynamic_headers({"authorization": f"Basic tenant-{i}"})
+
+        with logger.tracer.start_as_current_span("after"):
+            pass
+
+        self.assertEqual(
+            [span.name for span in shared.get_finished_spans()], ["before", "after"]
+        )
