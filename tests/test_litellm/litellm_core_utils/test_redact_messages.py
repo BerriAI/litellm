@@ -778,7 +778,11 @@ class TestRedactMcpToolCallMetadata:
 
         assert redacted_mcp_tool_call_metadata(metadata, "redacted-by-litellm") is metadata
 
-    def test_global_redaction_also_strips_the_raw_call_details_copy(self):
+    def test_global_redaction_leaves_the_raw_call_details_for_post_call_scanning(self):
+        """`Logging.post_call` redacts before `async_post_mcp_tool_call_hook` runs, and that
+        hook is what post_mcp_call guardrails scan. Redacting the shared call details there
+        would hand the scanner a placeholder instead of the arguments the user actually sent,
+        so enforcement must keep reading the originals."""
         from litellm.litellm_core_utils.redact_messages import perform_redaction
 
         model_call_details = {
@@ -788,15 +792,25 @@ class TestRedactMcpToolCallMetadata:
                 "arguments": {"city": "TOPSECRETCITY"},
                 "result": {"text": "sensitive"},
             },
-            "standard_logging_object": {"messages": [], "metadata": {}},
+            "standard_logging_object": {
+                "messages": [],
+                "metadata": {
+                    "mcp_tool_call_metadata": {
+                        "name": "get_weather",
+                        "arguments": {"city": "TOPSECRETCITY"},
+                    }
+                },
+            },
         }
 
         perform_redaction(model_call_details, result=None)
 
         raw = model_call_details["mcp_tool_call_metadata"]
-        assert raw["arguments"] == "redacted-by-litellm"
-        assert raw["result"] == "redacted-by-litellm"
-        assert raw["name"] == "get_weather"
+        assert raw["arguments"] == {"city": "TOPSECRETCITY"}
+        assert raw["result"] == {"text": "sensitive"}
+
+        exported = model_call_details["standard_logging_object"]["metadata"]["mcp_tool_call_metadata"]
+        assert exported["arguments"] == "redacted-by-litellm"
 
     def test_payload_without_metadata_does_not_gain_a_metadata_key(self):
         """The callback-logs replay endpoint seeds a payload from an unvalidated

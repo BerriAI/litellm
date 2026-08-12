@@ -177,22 +177,6 @@ def redacted_mcp_tool_call_metadata(metadata: object, redacted_str: str) -> obje
     return {**metadata, "mcp_tool_call_metadata": redacted_call}
 
 
-def _redact_mcp_tool_call_in_place(model_call_details: dict) -> None:
-    """Redact the raw `mcp_tool_call_metadata` the MCP server stamped onto the
-    call details, so callbacks reading it off `kwargs` see the same redaction
-    the standard logging payload gets.
-    """
-    mcp_tool_call: Final = model_call_details.get("mcp_tool_call_metadata")
-    if not isinstance(mcp_tool_call, dict):
-        return
-
-    for key in ("arguments", "result"):
-        if mcp_tool_call.get(key) is not None:
-            # mutable-ok: redacting the shared call details in place is the point; a copy would leave
-            # callbacks that read mcp_tool_call_metadata off kwargs holding the unredacted values
-            mcp_tool_call[key] = "redacted-by-litellm"
-
-
 def _redact_standard_logging_object(model_call_details: dict):
     """Redact messages and response inside standard_logging_object if present."""
     standard_logging_object: Final = model_call_details.get("standard_logging_object")
@@ -278,7 +262,6 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     model_call_details["messages"] = [{"role": "user", "content": "redacted-by-litellm"}]
     model_call_details["prompt"] = ""
     model_call_details["input"] = ""
-    _redact_mcp_tool_call_in_place(model_call_details)
     _redact_standard_logging_object(model_call_details)
     redact_vertex_ai_metadata_from_litellm_params(model_call_details)
 
