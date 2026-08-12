@@ -420,6 +420,38 @@ async def test_apply_guardrail_trusts_ccr_hashes_from_compress_response(
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_ignores_malformed_ccr_hashes(
+    guardrail: HeadroomGuardrail,
+):
+    """A hash goes straight into the retrieval URL, so anything that is not a
+    Headroom hash must not reach the authorized set."""
+    inputs = GenericGuardrailAPIInputs(
+        texts=["A" * 5000],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+    mock_response = _make_compress_response(
+        COMPRESSED_MESSAGES,
+        ccr_hashes=["../../etc/passwd", "", "NOTAHASH", "f3b3d2ef"],
+    )
+    request_data = {"model": "gpt-4o", "litellm_call_id": "call-bad"}
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    assert not has_headroom_retrieve_tool(result.get("tools") or [])
+    assert "call-bad" not in guardrail._issued_hashes_by_call_id
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_no_tool_injected_when_no_hashes(
     guardrail: HeadroomGuardrail,
 ):

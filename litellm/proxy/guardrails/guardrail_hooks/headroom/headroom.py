@@ -50,7 +50,8 @@ HEADROOM_RETRIEVE_TOOL_NAME: Final = "headroom_retrieve"
 # Headroom writes a retrieval hash as either `<<ccr:HASH,type,size>>` or
 # `Retrieve more: hash=HASH`, and its own reader accepts 12 to 24 hex chars
 # (the row-drop path emits SHA-256[:12]).
-_HASH_PATTERN: Final = re.compile(r"(?:<<ccr:|hash=)([a-f0-9]{12,24})(?![a-f0-9])")
+_HASH_VALUE_PATTERN: Final = re.compile(r"[a-f0-9]{12,24}")
+_HASH_PATTERN: Final = re.compile(rf"(?:<<ccr:|hash=)({_HASH_VALUE_PATTERN.pattern})(?![a-f0-9])")
 _HASH_CACHE_TTL_SECONDS: Final = 15 * 60
 
 
@@ -189,7 +190,7 @@ def _read_ccr_hashes(body: Mapping[str, object]) -> tuple[str, ...]:
     raw: Final = body.get("ccr_hashes")
     if not _is_object_list(raw):
         return ()
-    return tuple(item for item in raw if isinstance(item, str) and item)
+    return tuple(item for item in raw if isinstance(item, str) and _HASH_VALUE_PATTERN.fullmatch(item))
 
 
 def extract_hashes_from_messages(messages: list[dict[str, object]]) -> list[str]:
