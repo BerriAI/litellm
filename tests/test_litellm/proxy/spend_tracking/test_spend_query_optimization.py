@@ -194,6 +194,7 @@ async def test_spend_logs_ui_wraps_params_in_at_time_zone_utc(monkeypatch):
         sort_by="startTime",
         sort_order="desc",
         user_api_key_dict=auth,
+        filter_time_by="startTime",
     )
 
     assert mock_prisma.db.query_raw.called, "query_raw should have been called"
@@ -257,6 +258,7 @@ async def test_spend_logs_ui_uses_bounded_count_not_full_scan(monkeypatch):
         sort_by="startTime",
         sort_order="desc",
         user_api_key_dict=auth,
+        filter_time_by="startTime",
     )
 
     mock_prisma.db.litellm_spendlogs.count.assert_not_called()
@@ -321,6 +323,7 @@ async def test_spend_logs_ui_caps_total_for_large_result_sets(monkeypatch):
         sort_by="startTime",
         sort_order="desc",
         user_api_key_dict=auth,
+        filter_time_by="startTime",
     )
 
     assert response["total"] == SPEND_LOGS_PAGINATION_COUNT_CAP
@@ -366,6 +369,7 @@ async def test_spend_logs_ui_empty_page_reports_zero_total(monkeypatch):
         sort_by="startTime",
         sort_order="desc",
         user_api_key_dict=auth,
+        filter_time_by="startTime",
     )
 
     mock_prisma.db.litellm_spendlogs.count.assert_not_called()
@@ -413,6 +417,7 @@ async def test_spend_logs_ui_out_of_range_page_keeps_total(monkeypatch):
         sort_by="startTime",
         sort_order="desc",
         user_api_key_dict=auth,
+        filter_time_by="startTime",
     )
 
     mock_prisma.db.litellm_spendlogs.count.assert_not_called()

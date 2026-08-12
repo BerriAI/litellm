@@ -2305,7 +2305,6 @@ async def ui_view_spend_logs(
             code=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Validate filter_time_by
     valid_filter_fields: Final = ("startTime", "endTime")
     if filter_time_by not in valid_filter_fields:
         raise ProxyException(
