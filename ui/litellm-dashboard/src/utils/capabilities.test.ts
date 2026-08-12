@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { hasCapability, rolesWithCapability, type Capability } from "./capabilities";
+import { capabilityRequiresOrgAdmin, hasCapability, rolesWithCapability, type Capability } from "./capabilities";
 import { effectiveSessionRole } from "./roles";
 
 const ADMIN_ROLES = ["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer"];
@@ -139,5 +139,31 @@ describe("rolesWithCapability", () => {
     const roles = rolesWithCapability("viewToolPolicies");
     const removed = roles.pop();
     expect(hasCapability(removed, "viewToolPolicies")).toBe(true);
+  });
+});
+
+// Callers use this to skip the organization-list fetch that backs the org-admin
+// check when the capability cannot be reopened by an org-admin membership. That
+// keeps role-gated pages like Memory / Workflows / Guardrails Monitor from
+// firing a network request just to compute a denial.
+describe("capabilityRequiresOrgAdmin", () => {
+  it("is true only for viewDeletedTeams, the sole capability that opts org admins in", () => {
+    expect(capabilityRequiresOrgAdmin("viewDeletedTeams")).toBe(true);
+  });
+
+  it.each<Capability>([
+    "viewToolPolicies",
+    "viewAuditLogs",
+    "viewPolicies",
+    "viewPrompts",
+    "viewOrganizationUsage",
+    "viewAgentUsage",
+    "viewGlobalSpend",
+    "viewWorkflowRuns",
+    "viewMemory",
+    "viewGuardrailUsage",
+    "viewProxyWideCostData",
+  ])("is false for %s so useCan can skip the org-list fetch for it", (capability) => {
+    expect(capabilityRequiresOrgAdmin(capability)).toBe(false);
   });
 });
