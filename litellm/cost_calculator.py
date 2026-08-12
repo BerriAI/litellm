@@ -498,16 +498,14 @@ def cost_per_token(
         speech_model_info = litellm.get_model_info(model=model_without_prefix, custom_llm_provider=custom_llm_provider)
         prompt_cost: float = 0.0
         completion_cost: float = 0.0
-        if not speech_model_info.get("input_cost_per_character") and not speech_model_info.get(
-            "input_cost_per_token"
-        ):
+        if not speech_model_info.get("input_cost_per_character") and not speech_model_info.get("input_cost_per_token"):
             output_cost_per_generation: Final = speech_model_info.get("output_cost_per_image")
-            output_cost_per_second: Final = speech_model_info.get("output_cost_per_second")
+            speech_output_cost_per_second: Final = speech_model_info.get("output_cost_per_second")
             audio_seconds_per_prediction: Final = speech_model_info.get("audio_seconds_per_prediction")
             if output_cost_per_generation is not None:
                 return prompt_cost, float(output_cost_per_generation)
-            if output_cost_per_second is not None and audio_seconds_per_prediction is not None:
-                return prompt_cost, float(output_cost_per_second) * float(audio_seconds_per_prediction)
+            if speech_output_cost_per_second is not None and audio_seconds_per_prediction is not None:
+                return prompt_cost, float(speech_output_cost_per_second) * float(audio_seconds_per_prediction)
         cost_metric: Final = select_cost_metric_for_model(speech_model_info)
         if cost_metric == "cost_per_character":
             if prompt_characters is None:

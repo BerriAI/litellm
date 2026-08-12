@@ -168,8 +168,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     default_reasoning_effort: ReadOnly[Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None]
     supports_output_config: bool | None
     supports_image_size: bool | None
-    supported_audio_formats: list[Literal["mp3", "wav"]] | None
-    vertex_ai_audio_api: Literal["lyria_predict", "lyria_interactions"] | None
+    supported_audio_formats: ReadOnly[Sequence[Literal["mp3", "wav"]] | None]
+    vertex_ai_audio_api: ReadOnly[Literal["lyria_predict", "lyria_interactions"] | None]
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
     bedrock_converse_supports_strict_tools: bool | None
 
@@ -312,9 +312,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_video_per_second: float | None  # only for vertex ai models
     output_cost_per_audio_per_second: float | None  # only for vertex ai models
     output_cost_per_second: float | None  # for OpenAI Speech models
-    audio_seconds_per_prediction: float | None
-    max_audio_length_hours: float | None
-    max_audio_per_prompt: int | None
+    audio_seconds_per_prediction: ReadOnly[float | None]
+    max_audio_length_hours: ReadOnly[float | None]
+    max_audio_per_prompt: ReadOnly[int | None]
     output_cost_per_second_1080p: (
         float | None
     )  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p)

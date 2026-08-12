@@ -334,10 +334,10 @@ class VertexPassthroughLoggingHandler:
 
     @staticmethod
     def _handle_audio_predict_response(
-        json_response: dict,
+        json_response: dict,  # mutable-ok: passthrough logging receives the decoded provider response dictionary
         logging_obj: LiteLLMLoggingObj,
         model: str,
-        kwargs: dict,
+        kwargs: dict,  # mutable-ok: passthrough logging enriches the shared callback metadata dictionary
     ) -> PassThroughEndpointLoggingTypedDict:
         prediction_count: Final = VertexPassthroughLoggingHandler._get_audio_prediction_count(
             json_response=json_response
@@ -346,26 +346,41 @@ class VertexPassthroughLoggingHandler:
             VertexPassthroughLoggingHandler._get_audio_prediction_unit_cost(model=model) or 0.0
         ) * prediction_count
 
-        logging_obj.model = model
-        logging_obj.model_call_details["model"] = model
-        logging_obj.model_call_details["custom_llm_provider"] = "vertex_ai"
-        logging_obj.custom_llm_provider = "vertex_ai"
-        logging_obj.model_call_details["response_cost"] = response_cost
+        logging_obj.model = model  # rebind-ok: passthrough attribution records the resolved Vertex model
+        logging_obj.model_call_details[  # rebind-ok: passthrough attribution enriches callback metadata
+            "model"
+        ] = model
+        logging_obj.model_call_details[  # rebind-ok: passthrough attribution enriches callback metadata
+            "custom_llm_provider"
+        ] = "vertex_ai"
+        logging_obj.custom_llm_provider = (  # rebind-ok: attribution records the resolved provider
+            "vertex_ai"
+        )
+        logging_obj.model_call_details[  # rebind-ok: passthrough attribution enriches callback metadata
+            "response_cost"
+        ] = response_cost
 
-        kwargs["response_cost"] = response_cost
-        kwargs["model"] = model
-        kwargs["custom_llm_provider"] = "vertex_ai"
+        kwargs[  # rebind-ok: callback metadata is enriched for downstream hooks
+            "response_cost"
+        ] = response_cost
+        kwargs["model"] = model  # rebind-ok: callback metadata records the resolved model
+        kwargs["custom_llm_provider"] = "vertex_ai"  # rebind-ok: callback metadata records the resolved provider
 
-        standard_pass_through_response_object: Final[StandardPassThroughResponseObject] = {
+        standard_pass_through_response_object: Final[
+            StandardPassThroughResponseObject
+        ] = {  # mutable-ok: callback contract requires a concrete response dictionary
             "response": json_response,
         }
-        return {
+        return {  # mutable-ok: passthrough logging contract requires a concrete result dictionary
             "result": standard_pass_through_response_object,
             "kwargs": kwargs,
         }
 
     @staticmethod
-    def _is_audio_predict_response(model: str, json_response: dict) -> bool:
+    def _is_audio_predict_response(
+        model: str,
+        json_response: dict,  # mutable-ok: predicate inspects the decoded provider response dictionary without mutation
+    ) -> bool:
         return (
             VertexPassthroughLoggingHandler._get_audio_prediction_count(json_response=json_response) > 0
             and VertexPassthroughLoggingHandler._get_audio_prediction_unit_cost(model=model) is not None
@@ -373,7 +388,9 @@ class VertexPassthroughLoggingHandler:
 
     @staticmethod
     def _get_audio_prediction_unit_cost(model: str) -> float | None:
-        model_info: Final = litellm.model_cost.get(f"vertex_ai/{model}", {})
+        model_info: Final = litellm.model_cost.get(f"vertex_ai/{model}")
+        if model_info is None:
+            return None
         output_cost_per_second: Final = model_info.get("output_cost_per_second")
         audio_seconds_per_prediction: Final = model_info.get("audio_seconds_per_prediction")
         if not isinstance(output_cost_per_second, (int, float)) or not isinstance(
@@ -383,7 +400,9 @@ class VertexPassthroughLoggingHandler:
         return float(output_cost_per_second * audio_seconds_per_prediction)
 
     @staticmethod
-    def _get_audio_prediction_count(json_response: dict) -> int:
+    def _get_audio_prediction_count(
+        json_response: dict,  # mutable-ok: counter inspects the decoded provider response dictionary without mutation
+    ) -> int:
         predictions: Final = json_response.get("predictions")
         if not isinstance(predictions, list):
             return 0
