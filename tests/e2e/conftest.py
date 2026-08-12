@@ -145,3 +145,5 @@ def resources(client: ProxyClientProvider) -> Iterator[ResourceManager]:
 def scoped_key(resources: ResourceManager) -> str:
     """A fresh all-models key per test, auto-deleted by the resources teardown."""
     return resources.key()
+
+# e2e gate proof 4: tier-3 full-suite selection from a depth-1 harness file (throwaway)
