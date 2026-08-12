@@ -92,7 +92,9 @@ class OllamaConfig(BaseConfig):
     repeat_penalty: float | None = None
     temperature: float | None = None
     seed: int | None = None
-    stop: list | None = None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
+    stop: list | None = (
+        None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
+    )
     tfs_z: float | None = None
     num_predict: int | None = None
     top_k: int | None = None
@@ -231,10 +233,16 @@ class OllamaConfig(BaseConfig):
           "name": "mistral"
         }'
         """
-        return OllamaModelInfo().get_model_info(model=model, api_base=api_base, api_key=api_key)
+        return OllamaModelInfo().get_model_info(
+            model=model, api_base=api_base, api_key=api_key
+        )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
-        return OllamaError(status_code=status_code, message=error_message, headers=headers)
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict | Headers
+    ) -> BaseLLMException:
+        return OllamaError(
+            status_code=status_code, message=error_message, headers=headers
+        )
 
     def transform_response(
         self,
@@ -285,7 +293,9 @@ class OllamaConfig(BaseConfig):
                                     "id": f"call_{uuid.uuid4()}",
                                     "function": {
                                         "name": function_call["name"],
-                                        "arguments": json.dumps(function_call["arguments"]),
+                                        "arguments": json.dumps(
+                                            function_call["arguments"]
+                                        ),
                                     },
                                     "type": "function",
                                 }
@@ -306,8 +316,12 @@ class OllamaConfig(BaseConfig):
                     reasoning_content: str | None = None
                     content: str | None = None
                     if response_text is not None:
-                        reasoning_content, content = _parse_content_for_reasoning(response_text)
-                    message = litellm.Message(content=content, reasoning_content=reasoning_content)
+                        reasoning_content, content = _parse_content_for_reasoning(
+                            response_text
+                        )
+                    message = litellm.Message(
+                        content=content, reasoning_content=reasoning_content
+                    )
                     model_response.choices[0].message = message
                     model_response.choices[0].finish_reason = "stop"
         else:
@@ -349,7 +363,9 @@ class OllamaConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        custom_prompt_dict: Final = litellm_params.get("custom_prompt_dict") or litellm.custom_prompt_dict
+        custom_prompt_dict: Final = (
+            litellm_params.get("custom_prompt_dict") or litellm.custom_prompt_dict
+        )
 
         text_completion_request: Final = litellm_params.get("text_completion")
         if model in custom_prompt_dict:
@@ -387,7 +403,9 @@ class OllamaConfig(BaseConfig):
         if format is not None:
             data["format"] = format
         if images is not None:
-            data["images"] = [_convert_image(convert_to_ollama_image(image)) for image in images]
+            data["images"] = [
+                _convert_image(convert_to_ollama_image(image)) for image in images
+            ]
         if think is not None:
             data["think"] = think
 
@@ -444,12 +462,17 @@ class OllamaConfig(BaseConfig):
 
 
 class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
-    def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
+    def __init__(
+        self, streaming_response, sync_stream: bool, json_mode: bool | None = False
+    ):
         super().__init__(streaming_response, sync_stream, json_mode)
         self.started_reasoning_content: bool = False
         self.finished_reasoning_content: bool = False
+        self.saw_tool_calls: bool = False
 
-    def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:
+    def _handle_string_chunk(
+        self, str_line: str
+    ) -> GenericStreamingChunk | ModelResponseStream:
         return self.chunk_parser(json.loads(str_line))
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
@@ -464,7 +487,12 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                 text = ""
                 is_finished = True
                 finish_reason = "stop"
-                prompt_eval_count: Final[int | None] = chunk.get("prompt_eval_count", None)
+                # Override finish_reason when tool_calls were detected in the stream
+                if self.saw_tool_calls:
+                    finish_reason = "tool_calls"
+                prompt_eval_count: Final[int | None] = chunk.get(
+                    "prompt_eval_count", None
+                )
                 eval_count: Final[int | None] = chunk.get("eval_count", None)
 
                 usage: ChatCompletionUsageBlock | None = None
@@ -482,6 +510,18 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                 )
             elif chunk["response"]:
                 text = chunk["response"]
+                # Check if this chunk contains a JSON function call
+                if text and self.json_mode:
+                    try:
+                        parsed = json.loads(text)
+                        if (
+                            isinstance(parsed, dict)
+                            and "name" in parsed
+                            and "arguments" in parsed
+                        ):
+                            self.saw_tool_calls = True
+                    except (json.JSONDecodeError, TypeError):
+                        pass
                 reasoning_content: str | None = None
                 content: str | None = None
                 if text is not None:
@@ -492,7 +532,10 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                         text = text.replace("</think>", "")
                         self.finished_reasoning_content = True
 
-                    if self.started_reasoning_content and not self.finished_reasoning_content:
+                    if (
+                        self.started_reasoning_content
+                        and not self.finished_reasoning_content
+                    ):
                         reasoning_content = text
                     else:
                         content = text
@@ -501,7 +544,9 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                     choices=[
                         StreamingChoices(
                             index=0,
-                            delta=Delta(reasoning_content=reasoning_content, content=content),
+                            delta=Delta(
+                                reasoning_content=reasoning_content, content=content
+                            ),
                         )
                     ],
                     finish_reason=finish_reason,

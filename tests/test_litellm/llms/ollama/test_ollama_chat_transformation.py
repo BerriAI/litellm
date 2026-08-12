@@ -906,3 +906,147 @@ class TestOllamaToolCallTransformation:
         assert tool_msg["content"] == "Sunny, 72°F"
         assert "tool_call_id" in tool_msg, "tool_call_id must be forwarded to Ollama"
         assert tool_msg["tool_call_id"] == "call_abc123"
+
+
+class TestOllamaStreamingToolCallId:
+    """Test that streaming chunks share a consistent id and tool_calls get call_ prefix."""
+
+    def test_streaming_chunks_have_consistent_id(self):
+        """All chunks in a streaming response must share the same id (OpenAI spec)."""
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+        first_id = iterator.response_id
+
+        chunk1 = {
+            "model": "qwen3:14b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
+            "message": {"role": "assistant", "content": "Hello"},
+            "done": False,
+        }
+        chunk2 = {
+            "model": "qwen3:14b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
+            "message": {"role": "assistant", "content": " world"},
+            "done": True,
+            "done_reason": "stop",
+            "prompt_eval_count": 5,
+            "eval_count": 2,
+        }
+
+        result1 = iterator.chunk_parser(chunk1)
+        result2 = iterator.chunk_parser(chunk2)
+
+        # Both chunks must have the same id
+        assert (
+            result1.id == first_id
+        ), f"First chunk id {result1.id} != expected {first_id}"
+        assert (
+            result2.id == first_id
+        ), f"Second chunk id {result2.id} != expected {first_id}"
+
+    def test_streaming_tool_call_id_has_call_prefix(self):
+        """Tool call ids in streaming must start with 'call_' like non-streaming."""
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        chunk = {
+            "model": "qwen3:14b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": {"location": "Tokyo"},
+                        }
+                    }
+                ],
+            },
+            "done": True,
+            "done_reason": "stop",
+            "prompt_eval_count": 10,
+            "eval_count": 5,
+        }
+
+        result = iterator.chunk_parser(chunk)
+        tool_call = result.choices[0].delta.tool_calls[0]
+        assert tool_call["id"].startswith(
+            "call_"
+        ), f"Expected 'call_' prefix, got: {tool_call['id']}"
+
+    def test_streaming_finish_reason_tool_calls(self):
+        """finish_reason must be 'tool_calls' when tool_calls present in done chunk."""
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        chunk = {
+            "model": "qwen3:14b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": {"location": "Tokyo"},
+                        }
+                    }
+                ],
+            },
+            "done": True,
+            "done_reason": "stop",
+            "prompt_eval_count": 10,
+            "eval_count": 5,
+        }
+
+        result = iterator.chunk_parser(chunk)
+        assert result.choices[0].finish_reason == "tool_calls"
+
+    def test_streaming_saw_tool_calls_propagates_to_done_chunk(self):
+        """If tool_calls seen in earlier chunk, done chunk must have finish_reason='tool_calls'."""
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        # First chunk: has tool_calls, not done
+        tool_chunk = {
+            "model": "qwen3:14b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": {"location": "Tokyo"},
+                        }
+                    }
+                ],
+            },
+            "done": False,
+        }
+        iterator.chunk_parser(tool_chunk)
+
+        # Second chunk: done, no tool_calls
+        done_chunk = {
+            "model": "qwen3:14b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
+            "message": {"role": "assistant", "content": ""},
+            "done": True,
+            "done_reason": "stop",
+            "prompt_eval_count": 10,
+            "eval_count": 5,
+        }
+        result = iterator.chunk_parser(done_chunk)
+        assert result.choices[0].finish_reason == "tool_calls"
