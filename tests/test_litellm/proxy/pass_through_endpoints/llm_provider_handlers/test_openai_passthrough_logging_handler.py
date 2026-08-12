@@ -586,6 +586,7 @@ class TestOpenAIPassthroughLoggingHandler:
         assert response.usage.input_tokens == 14
         assert response.usage.output_tokens == 2
         assert result["kwargs"]["response_cost"] == 3.3e-06
+        assert result["kwargs"]["standard_logging_object"] is mock_get_standard_logging.return_value
         mock_completion_cost.assert_called_once_with(
             completion_response=response,
             model="gpt-4o-mini",
@@ -657,6 +658,7 @@ class TestOpenAIPassthroughLoggingHandler:
         assert response.status == "incomplete"
         assert response.usage.output_tokens == 32
         assert result["kwargs"]["response_cost"] == 2.1e-06
+        assert result["kwargs"]["standard_logging_object"] is mock_get_standard_logging.return_value
         mock_completion_cost.assert_called_once_with(
             completion_response=response,
             model="gpt-4o-mini",
@@ -714,12 +716,60 @@ class TestOpenAIPassthroughLoggingHandler:
         assert response.status == "failed"
         assert response.usage.total_tokens == 21
         assert result["kwargs"]["response_cost"] == 1.4e-06
+        assert result["kwargs"]["standard_logging_object"] is mock_get_standard_logging.return_value
         mock_completion_cost.assert_called_once_with(
             completion_response=response,
             model="gpt-4o-mini",
             custom_llm_provider="openai",
             call_type="responses",
         )
+
+    @patch(f"{OpenAIPassthroughLoggingHandler.__module__}.get_standard_logging_object_payload", return_value=None)
+    @patch("litellm.completion_cost", return_value=3.3e-06)
+    def test_streaming_responses_none_payload_is_not_attached(self, mock_completion_cost, mock_get_standard_logging):
+        completed_event = {
+            "type": "response.completed",
+            "sequence_number": 8,
+            "response": {
+                "id": "resp_NONEPAYLOADSENTINEL0123456789",
+                "object": "response",
+                "created_at": 1786374786,
+                "status": "completed",
+                "model": "gpt-4o-mini-2024-07-18",
+                "output": [],
+                "usage": {
+                    "input_tokens": 14,
+                    "input_tokens_details": {"cached_tokens": 0},
+                    "output_tokens": 2,
+                    "output_tokens_details": {"reasoning_tokens": 0},
+                    "total_tokens": 16,
+                },
+                "error": None,
+                "incomplete_details": None,
+                "instructions": None,
+                "metadata": {},
+                "parallel_tool_calls": True,
+                "temperature": 1.0,
+                "tool_choice": "auto",
+                "tools": [],
+                "top_p": 1.0,
+            },
+        }
+        logging_obj = self._create_mock_logging_obj()
+
+        result = OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="https://api.openai.com/v1/responses",
+            request_body={"model": "gpt-4o-mini", "stream": True},
+            endpoint_type=MagicMock(),
+            start_time=self.start_time,
+            all_chunks=[f"data: {json.dumps(completed_event)}", "data: [DONE]"],
+            end_time=self.end_time,
+        )
+
+        assert "standard_logging_object" not in result["kwargs"]
+        assert result["kwargs"]["response_cost"] == 3.3e-06
 
     @patch(f"{OpenAIPassthroughLoggingHandler.__module__}.get_standard_logging_object_payload")
     @patch("litellm.completion_cost")
