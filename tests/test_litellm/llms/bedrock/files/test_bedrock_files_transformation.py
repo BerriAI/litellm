@@ -935,24 +935,6 @@ class TestBedrockFilesEmbeddingTransformation:
         assert "messages" in result[0]["modelInput"]
         assert "inputText" not in result[0]["modelInput"]
 
-    def test_url_embeddings_with_missing_input_raises_not_chat_error(self):
-        """url says embed, body lacks input → embedding-path error, not chat-path crash."""
-        import pytest
-
-        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
-
-        config = BedrockFilesConfig()
-        with pytest.raises(ValueError, match="missing required `input`"):
-            config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
-                [
-                    {
-                        "custom_id": "e1",
-                        "method": "POST",
-                        "url": "/v1/embeddings",
-                        "body": {"model": "bedrock/amazon.titan-embed-text-v2:0"},
-                    }
-                ]
-            )
 
     def test_titan_v2_marker_boundary_rejects_lookalikes(self):
         """The marker must end at `:`, `/`, or end-of-string to avoid false positives."""

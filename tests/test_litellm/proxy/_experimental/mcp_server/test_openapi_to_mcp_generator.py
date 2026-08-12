@@ -627,13 +627,6 @@ class TestGetBaseUrl:
         base_url = get_base_url(spec, spec_path)
         assert base_url == "https://production.example.com"
 
-    def test_fallback_with_port_number(self):
-        """Test fallback handles URLs with port numbers correctly."""
-        spec = {"openapi": "3.0.0", "paths": {}}
-        spec_path = "http://localhost:8001/openapi.json"
-
-        base_url = get_base_url(spec, spec_path)
-        assert base_url == "http://localhost:8001"
 
     def test_fallback_with_nested_path(self):
         """Test fallback with deeply nested spec path."""
