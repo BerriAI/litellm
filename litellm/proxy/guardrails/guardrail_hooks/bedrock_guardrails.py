@@ -27,7 +27,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
-from litellm.exceptions import GuardrailRaisedException, ModifyResponseException
+from litellm.exceptions import ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
 from litellm.llms.base_llm.guardrail_translation.utils import (
@@ -2679,12 +2679,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             async for chunk in mock_response:
                 yield chunk
         elif raw_sse:
-            # Forwarding an unscannable stream would silently disable the guardrail, so fail closed
-            # the way tool_permission does
-            raise GuardrailRaisedException(
-                guardrail_name=self.guardrail_name,
-                message="Streamed response could not be assembled for scanning, blocking it",
-            )
+            # Forwarding an unscannable stream would silently disable the guardrail, so fail closed.
+            # A raise cannot reach the client once a keepalive ping has flushed the headers, so the
+            # refusal travels as a frame, matching how a block is delivered above
+            for error_frame in anthropic_sse_error_frames(
+                f"{self.guardrail_name}: streamed response could not be assembled for scanning, blocking it"
+            ):
+                yield error_frame
+            return
         else:
             for chunk in all_chunks:
                 yield chunk

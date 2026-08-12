@@ -2956,23 +2956,27 @@ async def test_streaming_hook_block_stream_keeps_upstream_identity():
 @pytest.mark.asyncio
 async def test_streaming_hook_fails_closed_when_raw_sse_cannot_be_assembled():
     """An unscannable stream must not be delivered: forwarding it silently disables the guardrail."""
-    from litellm.exceptions import GuardrailRaisedException
-
     guardrail = _sse_guardrail()
 
     async def _unparseable_stream():
         yield b'data: {"type":"content_block_delta"}\n\n'
 
     with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
-        with pytest.raises(GuardrailRaisedException):
-            async for _ in guardrail.async_post_call_streaming_iterator_hook(
+        delivered = [
+            chunk
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 response=_unparseable_stream(),
                 request_data={"model": "claude-sonnet-4-5"},
-            ):
-                pass
+            )
+        ]
 
     mock_api.assert_not_called()
+    body = b"".join(delivered)
+    # a raise cannot reach the client once a keepalive ping has flushed the headers
+    assert b"event: error" in body
+    assert b"could not be assembled" in body
+    assert b"content_block_delta" not in body
 
 
 @pytest.mark.asyncio
@@ -2981,8 +2985,6 @@ async def test_streaming_hook_fails_closed_when_assembler_raises_api_error():
 
     That exception message is the exact 500 this fix exists to remove.
     """
-    from litellm.exceptions import GuardrailRaisedException
-
     guardrail = _sse_guardrail()
 
     with patch(
@@ -2996,8 +2998,9 @@ async def test_streaming_hook_fails_closed_when_assembler_raises_api_error():
             model="",
         ),
     ):
-        with pytest.raises(GuardrailRaisedException):
-            await _drain_streaming_hook(guardrail)
+        delivered = await _drain_streaming_hook(guardrail)
+
+    assert b"event: error" in b"".join(delivered)
 
 
 @pytest.mark.asyncio
