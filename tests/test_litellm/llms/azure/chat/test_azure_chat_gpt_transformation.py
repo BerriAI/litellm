@@ -54,3 +54,39 @@ def test_map_openai_params_with_preview_api_version():
     assert config.map_openai_params(
         non_default_params, optional_params, model, drop_params, api_version
     )
+
+
+def test_map_openai_params_sends_only_max_completion_tokens_when_both_set():
+    config = AzureOpenAIConfig()
+    result = config.map_openai_params(
+        non_default_params={"max_tokens": 512, "max_completion_tokens": 256},
+        optional_params={},
+        model="gpt-4o",
+        drop_params=False,
+        api_version="2025-01-01-preview",
+    )
+    assert result == {"max_completion_tokens": 256}
+
+
+def test_map_openai_params_keeps_lone_max_tokens():
+    config = AzureOpenAIConfig()
+    result = config.map_openai_params(
+        non_default_params={"max_tokens": 512},
+        optional_params={},
+        model="gpt-4o",
+        drop_params=False,
+        api_version="2025-01-01-preview",
+    )
+    assert result == {"max_tokens": 512}
+
+
+def test_map_openai_params_keeps_lone_max_completion_tokens():
+    config = AzureOpenAIConfig()
+    result = config.map_openai_params(
+        non_default_params={"max_completion_tokens": 256},
+        optional_params={},
+        model="gpt-4o",
+        drop_params=False,
+        api_version="2025-01-01-preview",
+    )
+    assert result == {"max_completion_tokens": 256}
