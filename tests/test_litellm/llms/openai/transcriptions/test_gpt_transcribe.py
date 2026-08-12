@@ -9,13 +9,13 @@ import pytest
 from openai import AsyncOpenAI, AsyncStream, AzureOpenAI
 
 import litellm
+from litellm.litellm_core_utils.audio_utils.transcription_streaming import wrap_transcription_stream
 from litellm.llms.azure.audio_transcriptions import AzureAudioTranscription
-from litellm.main import _validate_gpt_transcription_request
 from litellm.llms.openai.transcriptions.gpt_transformation import (
     OpenAIGPTTranscribeAudioTranscriptionConfig,
 )
 from litellm.llms.openai.transcriptions.handler import OpenAIAudioTranscription
-from litellm.litellm_core_utils.audio_utils.transcription_streaming import wrap_transcription_stream
+from litellm.main import _validate_gpt_transcription_request
 from litellm.types.utils import TranscriptionResponse
 from litellm.utils import get_optional_params_transcription
 

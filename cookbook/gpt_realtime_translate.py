@@ -15,7 +15,6 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 import websockets
 from websockets.asyncio.client import ClientConnection
 
-
 SAMPLE_RATE = 24_000
 CHANNELS = 1
 SAMPLE_WIDTH = 2
