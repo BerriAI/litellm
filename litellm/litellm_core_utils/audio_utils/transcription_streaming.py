@@ -107,7 +107,7 @@ class LoggingTranscriptionStream(Stream[TranscriptionStreamEvent]):
                 yield event
         except Exception as exception:
             self._failed = True
-            end_time = datetime.datetime.now()
+            end_time = datetime.datetime.now()  # noqa: DTZ005  # callback timestamps use the legacy naive contract
             self._logging_obj.failure_handler(exception, traceback.format_exc(), self._start_time, end_time)
             raise
         finally:
@@ -120,7 +120,7 @@ class LoggingTranscriptionStream(Stream[TranscriptionStreamEvent]):
         self._logging_obj.success_handler(
             self._collector.response(),
             self._start_time,
-            datetime.datetime.now(),
+            datetime.datetime.now(),  # noqa: DTZ005  # callback timestamps use the legacy naive contract
         )
 
     def close(self) -> None:
@@ -155,7 +155,7 @@ class LoggingAsyncTranscriptionStream(AsyncStream[TranscriptionStreamEvent]):
                 yield event
         except Exception as exception:
             self._failed = True
-            end_time = datetime.datetime.now()
+            end_time = datetime.datetime.now()  # noqa: DTZ005  # callback timestamps use the legacy naive contract
             self._logging_obj.failure_handler(exception, traceback.format_exc(), self._start_time, end_time)
             await self._logging_obj.async_failure_handler(
                 exception,
@@ -172,7 +172,7 @@ class LoggingAsyncTranscriptionStream(AsyncStream[TranscriptionStreamEvent]):
             return
         self._finalized = True
         response = self._collector.response()
-        end_time = datetime.datetime.now()
+        end_time = datetime.datetime.now()  # noqa: DTZ005  # callback timestamps use the legacy naive contract
         self._logging_obj.handle_sync_success_callbacks_for_async_calls(
             result=response,
             start_time=self._start_time,

@@ -172,32 +172,16 @@ class OpenAIRealtime(OpenAIChatCompletion):
     ) -> AbstractAsyncContextManager[object]:
         import websockets
 
-        if realtime_mode == "translation":
+        if realtime_mode == "translation" or client is None:
             return websockets.connect(
                 url,
                 additional_headers=headers,
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_config,
             )
-        normalized_api_base = api_base.rstrip("/")
-        if not normalized_api_base.endswith("/v1"):
-            normalized_api_base = f"{normalized_api_base}/v1"
-        owns_client = client is None
-        if client is not None and not isinstance(client, AsyncOpenAI):
+        if not isinstance(client, AsyncOpenAI):
             raise TypeError("client must be an AsyncOpenAI instance")
-        if client is None:
-            resolved_client = self._get_openai_client(
-                is_async=True,
-                api_key=api_key,
-                api_base=normalized_api_base,
-                timeout=timeout or 600,
-                max_retries=0,
-            )
-            if not isinstance(resolved_client, AsyncOpenAI):
-                raise TypeError("OpenAI Realtime requires an AsyncOpenAI client")
-            openai_client = resolved_client
-        else:
-            openai_client = client
+        openai_client = client
         model_query = query_params.get("model")
         extra_query = {  # mutable-ok: OpenAI SDK accepts a mutable query-parameter mapping
             key: value for key, value in query_params.items() if key != "model"
@@ -213,10 +197,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
             },
             max_retries=0,
         )
-        return OpenAIRealtimeSDKConnectionManager(
-            sdk_connection_manager,
-            owned_client=openai_client if owns_client else None,
-        )
+        return OpenAIRealtimeSDKConnectionManager(sdk_connection_manager)
 
     async def async_realtime(
         self,

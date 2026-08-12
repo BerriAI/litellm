@@ -77,6 +77,8 @@ def _with_resolved_session_model(session: dict[str, Any], model_name: str) -> di
                 },
             },
         }
+    if "model" not in session:
+        return session
     return {**session, "model": model_name}
 
 
@@ -179,15 +181,21 @@ async def acreate_realtime_client_secret(
         and req.session.audio.input.transcription is not None
         else None
     )
-    model_name: Final = (
+    provider_qualified_model: Final = (
         req.model
+        if req.model is not None
+        and "/" in req.model
+        and req.model.split("/", 1)[0] in LlmProviders._member_map_.values()
+        else None
+    )
+    model_name: Final = (
+        provider_qualified_model
         or transcription_model
         or (req.session.model if req.session is not None else None)
+        or req.model
         or "gpt-4o-realtime-preview"
     )
-    litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
-    if not isinstance(litellm_logging_obj, LiteLLMLogging):
-        raise TypeError("litellm_logging_obj must be a LiteLLM Logging instance")
+    litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
     model_name, custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
@@ -243,7 +251,7 @@ async def acreate_realtime_translation_client_secret(
     session: Mapping[str, Any] | None = None,
     expires_after: Mapping[str, Any] | None = None,
     timeout: float | None = None,
-    **kwargs,
+    **kwargs,  # noqa: ANN003
 ):
     model_name = model or (session or {}).get("model") or "gpt-realtime-translate"
     session_config = RealtimeSessionConfig(
@@ -452,7 +460,7 @@ async def arealtime_translation_calls(
     model: str | None = None,
     session: Mapping[str, Any] | None = None,
     timeout: float | None = None,
-    **kwargs,
+    **kwargs,  # noqa: ANN003
 ):
     model_name = model or "gpt-realtime-translate"
     litellm_logging_obj = kwargs.get("litellm_logging_obj")

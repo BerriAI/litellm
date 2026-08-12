@@ -16,7 +16,7 @@ dependencies = [
     # Python with: `uv pip install --resolution=lowest-direct .`
     "fastuuid>=0.14.0,<1.0",
     "httpx>=0.28.0,<1.0",
-    "openai>=2.52.0,<3.0.0",
+    "openai>=2.20.0,<3.0.0",
     "python-dotenv>=1.0.0,<2.0",
     "tiktoken>=0.8.0,<1.0",
     "importlib-metadata>=8.0.0,<9.0",
@@ -310,7 +310,6 @@ override-dependencies = [
 default-groups = ["dev"]
 required-version = ">=0.10.9"
 exclude-newer = "3 days"
-exclude-newer-package = { openai = "2026-08-03T00:00:00Z" }
 
 [tool.uv.sources]
 litellm-proxy-extras = { workspace = true }

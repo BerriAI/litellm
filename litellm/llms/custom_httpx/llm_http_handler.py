@@ -6551,9 +6551,7 @@ class BaseLLMHTTPHandler:
                     api_base=api_base, model=model or "", api_version=api_version
                 )
             )
-            headers: dict[str, object] = provider_config.get_realtime_calls_headers(
-                ephemeral_key=openai_ephemeral_key
-            )
+            headers: dict[str, object] = provider_config.get_realtime_calls_headers(ephemeral_key=openai_ephemeral_key)
         else:
             path = "translations/calls" if translation else "calls"
             url = f"{api_base.rstrip('/')}/v1/realtime/{path}"

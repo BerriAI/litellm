@@ -2587,7 +2587,7 @@ def handle_realtime_translation_cost_calculation(
             model=litellm_model_name,
             custom_llm_provider=custom_llm_provider,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001  # unknown model metadata should yield zero translation cost
         return 0.0
     output_cost_per_second = model_info.get("output_cost_per_second")
     if not isinstance(output_cost_per_second, (int, float)):

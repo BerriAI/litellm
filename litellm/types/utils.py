@@ -2623,7 +2623,7 @@ class TranscriptionResponse(OpenAIObject):
     _hidden_params: dict = {}
     _response_headers: dict | None = None
 
-    def __init__(self, text=None, usage=None, languages=None, **kwargs) -> None:
+    def __init__(self, text=None, usage=None, languages=None, **kwargs) -> None:  # noqa: ANN003
         super().__init__(text=text, usage=usage, languages=languages, **kwargs)
 
     def __contains__(self, key) -> bool:
