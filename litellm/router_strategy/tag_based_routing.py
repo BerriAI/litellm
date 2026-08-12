@@ -13,6 +13,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from litellm._logging import verbose_logger
+from litellm.constants import CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY
 from litellm.types.router import RouterErrors
 
 if TYPE_CHECKING:
@@ -46,7 +47,9 @@ def _is_valid_deployment_tag_regex(
     return None
 
 
-def is_valid_deployment_tag(deployment_tags: list[str], request_tags: list[str], match_any: bool = True) -> bool:
+def is_valid_deployment_tag(
+    deployment_tags: Sequence[str], request_tags: Sequence[str], match_any: bool = True
+) -> bool:
     """
     Check if a tag is valid, the matching can be either any or all based on `match_any` flag
     """
@@ -389,6 +392,18 @@ def _tag_known_to_group(
     )
 
 
+def _request_tags_after_router_consumption(metadata: Mapping[Any, Any], model: str) -> Sequence[str] | None:
+    # The pre-routing hook stamps the model group it rewrote the request to when the
+    # request's tags were what selected that router: those tags already did their job
+    # and must not also constrain deployment choice inside the routed group. Key/team
+    # policy keeps applying there, so the inherited_tags snapshot replaces the merged
+    # tag list rather than clearing it. Every other model group keeps the full list.
+    if metadata.get(CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY) != model:
+        return metadata.get("tags")
+    inherited_tags: Final = metadata.get("inherited_tags")
+    return inherited_tags if isinstance(inherited_tags, (list, tuple)) else None
+
+
 async def get_deployments_for_tag(
     llm_router_instance: LitellmRouter,
     model: str,  # used to raise the correct error
@@ -429,7 +444,7 @@ async def get_deployments_for_tag(
     verbose_logger.debug("request metadata: %s", request_kwargs.get(metadata_variable_name))
     if metadata_variable_name in request_kwargs:
         metadata: Final = request_kwargs[metadata_variable_name]
-        request_tags: Final = metadata.get("tags")
+        request_tags: Final = _request_tags_after_router_consumption(metadata, model)
         match_any: Final = llm_router_instance.tag_filtering_match_any
         routing_prefix: Final = llm_router_instance.tag_routing_prefix or ""
 
