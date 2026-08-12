@@ -421,6 +421,7 @@ class OllamaChatConfig(BaseConfig):
 class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
     started_reasoning_content: bool = False
     finished_reasoning_content: bool = False
+    saw_tool_calls: bool = False
 
     def _is_function_call_complete(self, function_args: str | dict) -> bool:
         if isinstance(function_args, dict):
@@ -466,9 +467,12 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             # process tool calls - if complete function arg - add id to tool call
             tool_calls: Final = chunk["message"].get("tool_calls")
             if tool_calls is not None:
+                self.saw_tool_calls = True
                 for tool_call in tool_calls:
                     function_args = tool_call.get("function").get("arguments")
                     if function_args is not None and len(function_args) > 0:
+                        if isinstance(function_args, dict):
+                            tool_call["function"]["arguments"] = json.dumps(function_args)
                         is_function_call_complete = self._is_function_call_complete(function_args)
                         if is_function_call_complete:
                             tool_call["id"] = str(uuid.uuid4())
@@ -506,9 +510,12 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
 
             if chunk["done"] is True:
                 finish_reason = chunk.get("done_reason") or "stop"
-                # Override finish_reason when tool_calls are present
+                # Override finish_reason when tool_calls are present in this
+                # chunk or were seen earlier in the stream.  Ollama sends tool
+                # calls in separate chunks, so the final done chunk may not
+                # contain them.
                 # Fixes: https://github.com/BerriAI/litellm/issues/18922
-                if tool_calls is not None:
+                if tool_calls is not None or self.saw_tool_calls:
                     finish_reason = "tool_calls"
                 choices = [
                     StreamingChoices(
