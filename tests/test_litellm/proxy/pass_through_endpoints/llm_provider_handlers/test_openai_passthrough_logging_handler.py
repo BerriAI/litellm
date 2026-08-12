@@ -1190,6 +1190,8 @@ class TestOpenAIPassthroughIntegration:
         assert self.handler.is_cohere_route("https://api.cohere.com/v1/embed") is True
         assert self.handler.is_cohere_route("https://api.cohere.com/v2/chat") is True
         assert self.handler.is_cohere_route("https://api.openai.com/v1/embeddings") is False
+        assert self.handler.is_cohere_route("https://api.cohere.com/v1/rerank") is False
+        assert self.handler.is_cohere_route("http://localhost:4000/openai_passthrough/v1/embeddings") is False
 
     @patch("litellm.completion_cost")
     @patch("litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload")
@@ -1246,9 +1248,43 @@ class TestOpenAIPassthroughIntegration:
         assert result["kwargs"]["response_cost"] == 2.8e-07
         assert result["kwargs"]["model"] == "text-embedding-3-small"
         assert result["kwargs"]["custom_llm_provider"] == "openai"
+        assert result["result"]._hidden_params["response_cost"] == 2.8e-07
         mock_completion_cost.assert_called_once()
         assert mock_completion_cost.call_args.kwargs["call_type"] == "aembedding"
         assert mock_logging_obj.model_call_details["response_cost"] == 2.8e-07
+
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler.OpenAIPassthroughLoggingHandler.passthrough_chat_handler"
+    )
+    @patch("litellm.completion_cost")
+    def test_openai_passthrough_handler_embeddings_without_model_falls_back(
+        self, mock_completion_cost, mock_chat_handler
+    ):
+        mock_chat_handler.return_value = {"result": None, "kwargs": {}}
+        response_body = {
+            "object": "list",
+            "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}],
+            "usage": {"prompt_tokens": 1, "total_tokens": 1},
+        }
+        result = OpenAIPassthroughLoggingHandler.openai_passthrough_handler(
+            httpx_response=self._create_mock_httpx_response(response_body),
+            response_body=response_body,
+            logging_obj=self._create_mock_logging_obj(),
+            url_route="https://api.openai.com/v1/embeddings",
+            result="",
+            start_time=self.start_time,
+            end_time=self.end_time,
+            cache_hit=False,
+            request_body={"input": "PROOF_SENTINEL_TEXT"},
+            passthrough_logging_payload=PassthroughStandardLoggingPayload(
+                url="https://api.openai.com/v1/embeddings",
+                request_body={"input": "PROOF_SENTINEL_TEXT"},
+                request_method="POST",
+            ),
+        )
+        mock_completion_cost.assert_not_called()
+        mock_chat_handler.assert_called_once()
+        assert result == {"result": None, "kwargs": {}}
 
     @patch(
         "litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler.OpenAIPassthroughLoggingHandler.openai_passthrough_handler"

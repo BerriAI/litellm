@@ -145,12 +145,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
     @staticmethod
     def is_openai_embeddings_route(url_route: str) -> bool:
-        """Check if the URL route is an OpenAI embeddings endpoint.
-
-        Matches `/v1/embeddings` only (same shape as chat/images/responses).
-        Classic Azure deployment paths (`/openai/deployments/{model}/embeddings`)
-        are intentionally out of scope.
-        """
+        """Check if the URL route is an OpenAI embeddings endpoint."""
         if not url_route:
             return False
         parsed_url: Final = urlparse(url_route)
@@ -271,32 +266,6 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         return litellm_model_response, response_cost
 
     @staticmethod
-    def _build_embeddings_response_and_cost(
-        model: str,
-        response_body: dict,
-        custom_llm_provider: str,
-    ) -> tuple[EmbeddingResponse, float]:
-        litellm_model_response: Final = convert_to_model_response_object(
-            response_object=response_body,
-            model_response_object=EmbeddingResponse(),
-            response_type="embedding",
-        )
-        if not isinstance(litellm_model_response, EmbeddingResponse):
-            raise TypeError(
-                f"Expected EmbeddingResponse from convert_to_model_response_object, got {type(litellm_model_response)}"
-            )
-        response_cost: Final = litellm.completion_cost(
-            completion_response=litellm_model_response,
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            call_type="aembedding",
-        )
-        if not hasattr(litellm_model_response, "_hidden_params") or litellm_model_response._hidden_params is None:
-            litellm_model_response._hidden_params = {}
-        litellm_model_response._hidden_params["response_cost"] = response_cost
-        return litellm_model_response, response_cost
-
-    @staticmethod
     def openai_passthrough_handler(
         httpx_response: httpx.Response,
         response_body: dict,
@@ -377,14 +346,22 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     custom_llm_provider=custom_llm_provider,
                 )
             elif is_embeddings:
-                (
-                    litellm_model_response,
-                    response_cost,
-                ) = OpenAIPassthroughLoggingHandler._build_embeddings_response_and_cost(
-                    model=model,
-                    response_body=response_body,
-                    custom_llm_provider=custom_llm_provider,
+                litellm_model_response = convert_to_model_response_object(
+                    response_object=response_body,
+                    model_response_object=EmbeddingResponse(),
+                    response_type="embedding",
                 )
+                if not isinstance(litellm_model_response, EmbeddingResponse):
+                    raise TypeError(
+                        f"Expected EmbeddingResponse from convert_to_model_response_object, got {type(litellm_model_response)}"
+                    )
+                response_cost = litellm.completion_cost(
+                    completion_response=litellm_model_response,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    call_type="aembedding",
+                )
+                litellm_model_response._hidden_params["response_cost"] = response_cost
             elif is_image_generation:
                 # Handle image generation cost calculation
                 response_cost = OpenAIPassthroughLoggingHandler._calculate_image_generation_cost(

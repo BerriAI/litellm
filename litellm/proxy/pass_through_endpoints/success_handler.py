@@ -353,9 +353,6 @@ class PassThroughEndpointLogging:
         for route in self.TRACKED_COHERE_ROUTES:
             if route not in url_route:
                 continue
-            # `/v1/embed` is a prefix of OpenAI's `/v1/embeddings`. Skip the
-            # Cohere match when the longer OpenAI path is present so OpenAI
-            # embeddings cost tracking is not stolen by the Cohere branch.
             if route == "/v1/embed" and "/v1/embeddings" in url_route:
                 continue
             return True
@@ -429,10 +426,6 @@ class PassThroughEndpointLogging:
         outer dispatch filters Responses calls out before reaching the
         handler — the inner branch is then unreachable and Responses
         calls land in `LiteLLM_SpendLogs` with zero tokens / zero spend.
-
-        `/v1/embeddings` is included for the same reason: without it the
-        handler never runs and billable embedding tokens write no spend
-        row at all (budget under-enforcement).
         """
         from .llm_provider_handlers.openai_passthrough_logging_handler import (
             OpenAIPassthroughLoggingHandler,
