@@ -57,7 +57,7 @@ async def _sample_db_pool_metrics() -> None:
     succeeded, so nothing here may turn a working query into a failed one.
     """
     try:
-        update: Final = await _pool_metrics_sampler.maybe_sample(_resolve_pool_client)
+        update: Final = await _pool_metrics_sampler.sample(_resolve_pool_client)
         if update is None:
             return
         logger: Final = _prometheus_logger()
@@ -130,8 +130,9 @@ def log_db_metrics(func):
             # Dispatched, never awaited. Awaiting here would add a suspension
             # point after the query already succeeded, so a client disconnect in
             # that window would discard a completed result and skip the success
-            # hook below. `is_due` keeps this to one task per sample interval.
-            if _pool_metrics_sampler.is_due():
+            # hook below. The claim is atomic, so a burst spawns one task rather
+            # than one per caller.
+            if _pool_metrics_sampler.try_claim():
                 asyncio.create_task(_sample_db_pool_metrics())
 
             if "PROXY" not in func.__name__:

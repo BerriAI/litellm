@@ -117,22 +117,36 @@ class DBPoolMetricsSampler:
         self._pending_baseline: float = 0.0
 
     def is_due(self) -> bool:
-        """Whether enough time has passed to justify reading the engine again."""
+        """Whether a sample is due. Read-only; does not claim."""
         if self._last_sampled_at is None:
             return True
         return (self._monotonic() - self._last_sampled_at) >= self._min_interval_seconds
 
-    async def maybe_sample(self, resolve_client: Callable[[], SupportsPoolSample | None]) -> DBPoolMetricsUpdate | None:
-        """Read the engine's counters, or ``None`` if not yet due.
+    def try_claim(self) -> bool:
+        """Claim the next sample, or return False if one is not due yet.
 
-        The interval is consumed before the client is resolved, so a deployment
-        with nothing to sample throttles the same as one that does. Never raises
-        and never blocks for long; a pool sample is diagnostic.
+        Check and set happen with no await between them, so a burst of callers
+        on the event loop produces exactly one claim and therefore one sample
+        rather than one per caller.
         """
         if not self.is_due():
-            return None
+            return False
         self._last_sampled_at = self._monotonic()
+        return True
 
+    async def maybe_sample(self, resolve_client: Callable[[], SupportsPoolSample | None]) -> DBPoolMetricsUpdate | None:
+        """Claim a sample and take it, or return ``None`` if one is not due."""
+        if not self.try_claim():
+            return None
+        return await self.sample(resolve_client)
+
+    async def sample(self, resolve_client: Callable[[], SupportsPoolSample | None]) -> DBPoolMetricsUpdate | None:
+        """Take a sample the caller has already claimed.
+
+        Never raises and never blocks for long; a pool sample is diagnostic, and
+        an engine that cannot answer one is already the subject of a louder
+        alarm.
+        """
         try:
             client: Final = resolve_client()
             if client is None:

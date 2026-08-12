@@ -185,4 +185,79 @@ async def test_a_proxy_without_prometheus_never_reads_the_query_engine():
         await _sample_db_pool_metrics()
 
     assert reads == []
-    assert _pool_metrics_sampler.is_due() is False, "the interval must still be consumed"
+
+
+@pytest.mark.asyncio
+async def test_the_decorated_path_actually_samples_end_to_end():
+    """The decorator claims the interval and the dispatched task takes the
+    sample. If both claimed, the task's claim would fail and no sample would
+    ever be taken, while every throttle test kept passing."""
+    import asyncio
+
+    from litellm.proxy.db.db_pool_metrics import DBPoolSample
+    from litellm.proxy.db.log_db_metrics import _pool_metrics_sampler, log_db_metrics
+
+    sample = DBPoolSample(
+        busy_connections=2.0,
+        idle_connections=1.0,
+        open_connections=3.0,
+        pending_acquirers=0.0,
+        acquire_wait_seconds_total=0.0,
+        acquire_count_total=0,
+        query_duration_seconds_total=0.0,
+        query_count_total=0,
+    )
+    reads = []
+
+    async def get_pool_sample():
+        reads.append(1)
+        return sample
+
+    prisma_client = MagicMock()
+    prisma_client.db.get_pool_sample = get_pool_sample
+    logger = MagicMock()
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+
+    @log_db_metrics
+    async def fake_db_call(**kwargs):
+        return "rows"
+
+    _pool_metrics_sampler._last_sampled_at = None
+    with (
+        patch("litellm.proxy.db.log_db_metrics._prometheus_logger", return_value=logger),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
+    ):
+        assert await fake_db_call(table_name="x") == "rows"
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if reads:
+                break
+
+    assert reads == [1], f"the dispatched task must take exactly one sample, got {len(reads)}"
+    logger.record_db_pool_sample.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_a_burst_of_database_calls_claims_only_one_sample():
+    """The decorator gates task creation on the claim, so a burst of concurrent
+    database calls must produce one sample rather than one per caller.
+
+    Coroutines only interleave at await points, so this holds as long as the
+    claim stays synchronous. Introducing an await between the due check and the
+    timestamp write is what would break it.
+    """
+    import asyncio
+
+    from litellm.proxy.db.db_pool_metrics import DBPoolMetricsSampler
+
+    sampler = DBPoolMetricsSampler(min_interval_seconds=10.0)
+
+    async def caller() -> bool:
+        await asyncio.sleep(0)  # force a real scheduling point before claiming
+        return sampler.try_claim()
+
+    claims = await asyncio.gather(*[caller() for _ in range(50)])
+
+    assert sum(claims) == 1, f"exactly one caller may claim the interval, got {sum(claims)}"
