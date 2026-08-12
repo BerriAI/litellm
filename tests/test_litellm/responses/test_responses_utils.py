@@ -459,6 +459,25 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens == 20
         assert getattr(result, "server_side_tool_usage_details") == details
 
+    def test_transform_response_api_usage_ignores_chat_shaped_extras(self):
+        """Gemini image usage carries chat-shaped keys as extras; they must not collide with explicit kwargs."""
+        usage = ResponseAPIUsage(
+            input_tokens=35,
+            output_tokens=1716,
+            total_tokens=1751,
+            prompt_tokens=35,
+            prompt_tokens_details={"image_tokens": 5, "text_tokens": 30},
+            completion_tokens=1716,
+            completion_tokens_details={"image_tokens": 1120, "text_tokens": 596},
+            server_side_tool_usage_details={"web_search_calls": 1},
+        )
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+
+        assert result.prompt_tokens == 35
+        assert result.completion_tokens == 1716
+        assert getattr(result, "server_side_tool_usage_details") == {"web_search_calls": 1}
+
     def test_transform_already_chat_usage_passthrough_keeps_tool_details(self):
         """Re-running the bridge on an already-converted chat Usage must not drop fields."""
         details = {"web_search_calls": 2, "x_search_calls": 0}
