@@ -8,6 +8,22 @@ import { PolicyAttachment } from "@/components/policies/types";
 
 vi.mock("@/components/networking");
 
+interface LegacyIconProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  icon: React.ComponentType;
+}
+
+interface LegacyPopoverProps {
+  children: React.ReactElement<React.HTMLAttributes<HTMLElement>>;
+  content: React.ReactNode;
+  onOpenChange?: (open: boolean) => void;
+  title?: React.ReactNode;
+}
+
+interface LegacyTooltipProps {
+  children: React.ReactElement<React.ButtonHTMLAttributes<HTMLButtonElement>>;
+  title?: React.ReactNode;
+}
+
 vi.mock("@heroicons/react/outline", () => ({
   EyeIcon: function EyeIcon() {
     return null;
@@ -18,17 +34,17 @@ vi.mock("@tremor/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tremor/react")>();
   return {
     ...actual,
-    Icon: React.forwardRef<HTMLButtonElement, any>(({ icon: _icon, ...props }, ref) => (
+    Icon: React.forwardRef<HTMLButtonElement, LegacyIconProps>(({ icon: _icon, ...props }, ref) => (
       <button ref={ref} type="button" {...props} />
     )),
   };
 });
 
 vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<any>();
+  const actual = await importOriginal<typeof import("antd")>();
   return {
     ...actual,
-    Popover: ({ children, content, onOpenChange, title }: any) => {
+    Popover: ({ children, content, onOpenChange, title }: LegacyPopoverProps) => {
       const [open, setOpen] = React.useState(false);
       return (
         <>
@@ -48,9 +64,10 @@ vi.mock("antd", async (importOriginal) => {
         </>
       );
     },
-    Tooltip: ({ children, title, ...props }: any) => React.cloneElement(children, { "aria-label": title, ...props }),
+    Tooltip: ({ children, title }: LegacyTooltipProps) =>
+      React.cloneElement(children, { "aria-label": typeof title === "string" ? title : undefined }),
     Spin: () => <span aria-hidden="true" />,
-    Tag: ({ children }: any) => <span>{children}</span>,
+    Tag: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
   };
 });
 
@@ -66,11 +83,9 @@ const makeAttachment = (overrides: Partial<PolicyAttachment> = {}): PolicyAttach
 });
 
 describe("ImpactPopover", () => {
-  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
-
   beforeEach(() => {
     vi.clearAllMocks();
-    consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
   it("should render", () => {
@@ -209,6 +224,6 @@ describe("ImpactPopover", () => {
     await user.click(trigger);
 
     expect(await screen.findByText("sk-recovered")).toBeInTheDocument();
-    expect(consoleErrorSpy).toHaveBeenCalledWith("Failed to load impact:", expect.any(Error));
+    expect(console.error).toHaveBeenCalledWith("Failed to load impact:", expect.any(Error));
   });
 });
