@@ -90,7 +90,8 @@ def test_assistant_message_after_tool_call_is_folded_into_it():
             },
             {
                 "type": "function_call",
-                "name": "mcp__everything__get_sum",
+                "name": "get_sum",
+                "namespace": "mcp__everything",
                 "call_id": "call_1",
                 "arguments": '{"a":21,"b":21}',
             },

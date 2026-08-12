@@ -1843,6 +1843,21 @@ class TestToolTransformation:
 
         assert "mcp__everything__get_sum" in json.dumps(result_tools)
 
+    def test_function_call_echo_requalifies_namespace_tool_name(self):
+        """Codex echoes restored history items as short name plus namespace; the
+        outbound chat tool_call must use the flattened name the provider was given."""
+        messages = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+            function_call={
+                "type": "function_call",
+                "name": "get_sum",
+                "namespace": "mcp__everything",
+                "call_id": "call_1",
+                "arguments": '{"a": 21, "b": 21}',
+            }
+        )
+
+        assert messages[0]["tool_calls"][0]["function"]["name"] == "mcp__everything__get_sum"
+
     @pytest.mark.parametrize("nested", [True, False])
     def test_transform_namespace_tools_preserves_allowed_callers(self, nested):
         function_tool = {
