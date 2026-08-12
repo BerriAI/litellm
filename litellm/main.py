@@ -8146,6 +8146,44 @@ def speech(
             client=client,
             _is_async=aspeech or False,
         )
+    elif custom_llm_provider == "gandr":
+        from litellm.llms.gandr.text_to_speech.transformation import (
+            GandrTextToSpeechConfig,
+        )
+
+        if text_to_speech_provider_config is None:
+            text_to_speech_provider_config = GandrTextToSpeechConfig()
+
+        gandr_config: Final = cast(GandrTextToSpeechConfig, text_to_speech_provider_config)
+
+        voice_id = voice if isinstance(voice, str) else None
+        if voice_id is None or not voice_id.strip():
+            raise litellm.BadRequestError(
+                message="'voice' must resolve to a Gandr voice id for Gandr TTS",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+        voice_id = voice_id.strip()
+
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        response = base_llm_http_handler.text_to_speech_handler(
+            model=model,
+            input=input,
+            voice=voice_id,
+            text_to_speech_provider_config=gandr_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            client=client,
+            _is_async=aspeech or False,
+        )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         from litellm.llms.vertex_ai.text_to_speech.transformation import (
             VertexAITextToSpeechConfig,
