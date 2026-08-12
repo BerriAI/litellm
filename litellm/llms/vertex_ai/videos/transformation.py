@@ -7,6 +7,8 @@ Based on: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-refer
 
 import base64
 import time
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 import httpx
@@ -92,18 +94,22 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
     3. Extract video data (base64) from response
     """
 
-    _OPENAI_VIDEO_SIZE_TO_ASPECT_RATIO: ClassVar[dict[str, str]] = {
-        "1280x720": "16:9",
-        "1920x1080": "16:9",
-        "720x1280": "9:16",
-        "1080x1920": "9:16",
-    }
-    _OPENAI_VIDEO_SIZE_TO_RESOLUTION: ClassVar[dict[str, str]] = {
-        "1280x720": "720p",
-        "1920x1080": "1080p",
-        "720x1280": "720p",
-        "1080x1920": "1080p",
-    }
+    _OPENAI_VIDEO_SIZE_TO_ASPECT_RATIO: ClassVar[Mapping[str, str]] = MappingProxyType(
+        {
+            "1280x720": "16:9",
+            "1920x1080": "16:9",
+            "720x1280": "9:16",
+            "1080x1920": "9:16",
+        }
+    )
+    _OPENAI_VIDEO_SIZE_TO_RESOLUTION: ClassVar[Mapping[str, str]] = MappingProxyType(
+        {
+            "1280x720": "720p",
+            "1920x1080": "1080p",
+            "720x1280": "720p",
+            "1080x1920": "1080p",
+        }
+    )
 
     def __init__(self):
         BaseVideoConfig.__init__(self)
@@ -213,9 +219,9 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
 
     @staticmethod
     def _supports_resolution_inference(model: str) -> bool:
-        model_key = model if model.startswith("vertex_ai/") else f"vertex_ai/{model}"
-        model_info = litellm.model_cost.get(model_key, {})
-        return model_info.get("output_cost_per_second_1080p") is not None
+        model_key: Final = model if model.startswith("vertex_ai/") else f"vertex_ai/{model}"
+        model_info: Final = litellm.model_cost.get(model_key)
+        return model_info is not None and model_info.get("output_cost_per_second_1080p") is not None
 
     def validate_environment(
         self,
