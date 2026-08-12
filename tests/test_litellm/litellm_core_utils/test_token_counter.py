@@ -1160,3 +1160,123 @@ def test_count_content_list_rejects_unknown_type():
     message = str(exc_info.value)
     assert "Invalid content item type: totally_unknown_block" in message
     assert "tool_reference" in message
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="},
+        {"type": "url", "url": "https://example.com/image.png"},
+        {"type": "file", "file_id": "file-abc123"},
+    ],
+    ids=["base64", "url", "file"],
+)
+def test_token_counter_with_anthropic_image_block(source):
+    """
+    Anthropic-native `image` blocks must NOT raise, for every source variant.
+
+    Before this fix `_count_content_list` raised
+    `Invalid content item type: image`. That 500s /v1/messages/count_tokens and
+    /utils/token_counter, and it makes the router's context-window pre-call
+    check swallow the error and return every deployment unfiltered, so an
+    oversized prompt carrying an image is dispatched upstream instead of being
+    rejected locally.
+    """
+    from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this image?"},
+                {"type": "image", "source": source},
+            ],
+        }
+    ]
+
+    tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        messages=messages,
+        use_default_image_token_count=True,
+    )
+    assert tokens > DEFAULT_IMAGE_TOKEN_COUNT, (
+        f"Expected the image block to contribute tokens, got {tokens}"
+    )
+
+
+def test_anthropic_image_block_matches_equivalent_image_url():
+    """
+    An Anthropic `image` block must price identically to the OpenAI `image_url`
+    block carrying the same bytes, so the count does not depend on which
+    endpoint shape the caller used.
+    """
+    anthropic_messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "iVBORw0KGgo=",
+                    },
+                }
+            ],
+        }
+    ]
+    openai_messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+                }
+            ],
+        }
+    ]
+
+    anthropic_tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=anthropic_messages
+    )
+    openai_tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=openai_messages
+    )
+    assert anthropic_tokens == openai_tokens
+
+
+def test_anthropic_image_block_nested_in_tool_result():
+    """
+    An `image` block nested inside a `tool_result.content` list must be counted
+    too. `_count_anthropic_content` recurses back into `_count_content_list`, so
+    the nested case failed for the same reason the top-level one did.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "iVBORw0KGgo=",
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+    ]
+
+    tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        messages=messages,
+        use_default_image_token_count=True,
+    )
+    assert tokens > 0
