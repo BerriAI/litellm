@@ -545,8 +545,51 @@ class LiteLLMCompletionResponsesConfig:
                     messages.extend(deduped_in_place)
                     continue
 
+                merged_assistant = LiteLLMCompletionResponsesConfig._merged_trailing_assistant_message(
+                    messages=messages,
+                    chat_completion_messages=chat_completion_messages,
+                )
+                if merged_assistant is not None:
+                    messages[-1] = merged_assistant
+                    continue
+
                 messages.extend(chat_completion_messages)
         return messages
+
+    @staticmethod
+    def _merged_trailing_assistant_message(
+        messages: Sequence[
+            AllMessageValues
+            | GenericChatCompletionMessage
+            | ChatCompletionMessageToolCall
+            | ChatCompletionResponseMessage
+        ],
+        chat_completion_messages: Sequence[
+            AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage
+        ],
+    ) -> ChatCompletionResponseMessage | None:
+        """Fold an assistant content message into a directly preceding assistant
+        tool_calls message. Providers like DeepSeek and Anthropic require tool
+        results immediately after the tool_calls message, so an assistant message
+        between them is rejected."""
+        if not messages or len(chat_completion_messages) != 1:
+            return None
+        last_message = messages[-1]
+        new_message = chat_completion_messages[0]
+        if not isinstance(last_message, dict):
+            return None
+        if last_message.get("role") != "assistant" or new_message.get("role") != "assistant":
+            return None
+        if not last_message.get("tool_calls") or last_message.get("content") or new_message.get("tool_calls"):
+            return None
+        new_content = new_message.get("content")
+        if new_content is None:
+            return None
+        merged: Final = {  # mutable-ok: json.dumps rejects MappingProxyType in outbound chat messages
+            **last_message,
+            "content": new_content,
+        }
+        return cast(ChatCompletionResponseMessage, merged)  # cast-ok: TypedDict spread widens to dict[str, object]
 
     @staticmethod
     def _deduplicate_tool_call_output_messages(
@@ -1373,7 +1416,9 @@ class LiteLLMCompletionResponsesConfig:
         function: Final = ChatCompletionToolParamFunctionChunk(
             name=chat_tool_name,
             description=description,
-            parameters=normalized_parameters,
+            parameters=dict(  # mutable-ok: json.dumps rejects MappingProxyType in the outbound payload
+                normalized_parameters
+            ),
             strict=bool(namespace_tool.get("strict", False)),
         )
         allowed_callers: Final = validated_allowed_callers(namespace_tool.get("allowed_callers"))

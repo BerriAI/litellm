@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 
@@ -1815,6 +1816,32 @@ class TestToolTransformation:
         assert result_tool["function"]["name"] == "collaboration__spawn_agent"
         assert result_tool["function"]["parameters"] == namespace_tool["tools"][0]["parameters"]
         assert result_tool["function"]["description"] == "Multi-agent tools\n\nSpawn an agent"
+
+    def test_transform_namespace_tools_are_json_serializable(self):
+        """Outbound chat payloads go through json.dumps, which rejects MappingProxyType."""
+        namespace_tool = {
+            "type": "namespace",
+            "name": "mcp__everything",
+            "description": "MCP tools",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "get_sum",
+                    "description": "Add two numbers",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"a": {"type": "number"}, "b": {"type": "number"}},
+                        "required": ["a", "b"],
+                    },
+                }
+            ],
+        }
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[namespace_tool]
+        )
+
+        assert "mcp__everything__get_sum" in json.dumps(result_tools)
 
     @pytest.mark.parametrize("nested", [True, False])
     def test_transform_namespace_tools_preserves_allowed_callers(self, nested):
