@@ -3,6 +3,9 @@ Shared utilities for the Soniox provider (https://soniox.com).
 """
 
 import unicodedata
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from functools import reduce
 from typing import Any, Final
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -120,9 +123,9 @@ _CUE_MAX_DURATION_MS: Final[int] = 7000
 
 _CUE_GAP_MS: Final[int] = 700
 
-_SENTENCE_END_CHARS = (".", "!", "?", "。", "！", "？", "؟", "۔", "।", "॥", "։", "።")
+_SENTENCE_END_CHARS: Final = (".", "!", "?", "。", "！", "？", "؟", "۔", "।", "॥", "։", "።")
 
-_CJK_RANGES = (
+_CJK_RANGES: Final = (
     (0x3400, 0x4DBF),
     (0x4E00, 0x9FFF),
     (0xF900, 0xFAFF),
@@ -131,13 +134,13 @@ _CJK_RANGES = (
     (0x31F0, 0x31FF),
 )
 
-_CJK_NO_BREAK_BEFORE = "、。，．！？：；・ー…」』）〉》】〕"
+_CJK_NO_BREAK_BEFORE: Final = "、。，．！？：；・ー…」』）〉》】〕"
 
-_CJK_NO_BREAK_AFTER = "「『（〈《【〔"
+_CJK_NO_BREAK_AFTER: Final = "「『（〈《【〔"
 
 
 def _is_cjk(ch: str) -> bool:
-    cp = ord(ch)
+    cp: Final = ord(ch)
     return any(lo <= cp <= hi for lo, hi in _CJK_RANGES)
 
 
@@ -175,7 +178,47 @@ def _format_timestamp_vtt(ms: int) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{millis:03d}"
 
 
-def _merge_tokens_into_words(tokens: list[dict[str, Any]]) -> list[dict[str, Any]]:
+@dataclass(frozen=True, slots=True)
+class _Word:
+    text: str
+    start_ms: int | None
+    end_ms: int | None
+    speaker: str | int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _Cue:
+    start_ms: int
+    end_ms: int
+    text: str
+
+
+def _keeps_token(token: Mapping[str, Any]) -> bool:
+    text: Final = token.get("text", "")
+    return isinstance(text, str) and text != "" and token.get("translation_status") != "translation"
+
+
+def _starts_new_word(prev: Mapping[str, Any], token: Mapping[str, Any]) -> bool:
+    prev_last: Final = prev["text"][-1:]
+    first: Final = token["text"][0]
+    return (
+        first.isspace()
+        or prev_last.isspace()
+        or token.get("speaker") != prev.get("speaker")
+        or _is_cjk_word_boundary(prev_last, first)
+    )
+
+
+def _build_word(group: Sequence[Mapping[str, Any]]) -> _Word:
+    return _Word(
+        text="".join(t["text"] for t in group),
+        start_ms=next((t.get("start_ms") for t in group if t.get("start_ms") is not None), None),
+        end_ms=next((t.get("end_ms") for t in reversed(group) if t.get("end_ms") is not None), None),
+        speaker=group[0].get("speaker"),
+    )
+
+
+def _merge_tokens_into_words(tokens: Sequence[Mapping[str, Any]]) -> tuple[_Word, ...]:
     """
     Merge Soniox subword tokens (e.g. ``"Hel"``, ``"lo"``) into whole words.
 
@@ -190,49 +233,61 @@ def _merge_tokens_into_words(tokens: list[dict[str, Any]]) -> list[dict[str, Any
     Soniox does not timestamp them, so they cannot be aligned to the audio and
     would otherwise mix translated text into original-language cues.
     """
-    words: list[dict[str, Any]] = []
-    for token in tokens:
-        text = token.get("text", "")
-        if not isinstance(text, str) or text == "":
-            continue
-        if token.get("translation_status") == "translation":
-            continue
-        is_continuation = (
-            bool(words)
-            and not text[0].isspace()
-            and not words[-1]["text"][-1:].isspace()
-            and token.get("speaker") == words[-1]["speaker"]
-            and not _is_cjk_word_boundary(words[-1]["text"][-1:], text[0])
-        )
-        if is_continuation:
-            last = words[-1]
-            last["text"] += text
-            if last["start_ms"] is None:
-                last["start_ms"] = token.get("start_ms")
-            if token.get("end_ms") is not None:
-                last["end_ms"] = token.get("end_ms")
-        else:
-            words.append(
-                {
-                    "text": text,
-                    "start_ms": token.get("start_ms"),
-                    "end_ms": token.get("end_ms"),
-                    "speaker": token.get("speaker"),
-                }
-            )
-    return words
+    kept: Final = tuple(t for t in tokens if _keeps_token(t))
+    starts: Final = tuple(i for i, t in enumerate(kept) if i == 0 or _starts_new_word(kept[i - 1], t))
+    return tuple(_build_word(kept[begin:end]) for begin, end in zip(starts, (*starts[1:], len(kept))))
 
 
-def _group_tokens_into_cues(
-    tokens: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+def _cue_start(ws: Sequence[_Word]) -> int | None:
+    return next((w.start_ms for w in ws if w.start_ms is not None), None)
+
+
+def _cue_end(ws: Sequence[_Word]) -> int | None:
+    return next((w.end_ms for w in reversed(ws) if w.end_ms is not None), _cue_start(ws))
+
+
+def _cue_text(ws: Sequence[_Word]) -> str:
+    return "".join(w.text for w in ws).strip()
+
+
+def _should_break(cue: Sequence[_Word], word: _Word) -> bool:
+    speaker_changed: Final = word.speaker is not None and any(
+        w.speaker is not None and w.speaker != word.speaker for w in cue
+    )
+    cue_start: Final = _cue_start(cue)
+    cue_end: Final = _cue_end(cue)
+    gap_exceeded: Final = word.start_ms is not None and cue_end is not None and (word.start_ms - cue_end) >= _CUE_GAP_MS
+    chars_exceeded: Final = _text_width(_cue_text(cue)) + _text_width(word.text) > _CUE_MAX_CHARS
+    word_end: Final = word.end_ms if word.end_ms is not None else word.start_ms
+    duration_exceeded: Final = (
+        word_end is not None and cue_start is not None and (word_end - cue_start) > _CUE_MAX_DURATION_MS
+    )
+    return speaker_changed or gap_exceeded or chars_exceeded or duration_exceeded
+
+
+def _cue_start_indices(words: Sequence[_Word]) -> tuple[int, ...]:
+    def step(starts: tuple[int, ...], index: int) -> tuple[int, ...]:
+        if words[index - 1].text.rstrip().endswith(_SENTENCE_END_CHARS):
+            return (*starts, index)
+        if _should_break(words[starts[-1] : index], words[index]):
+            return (*starts, index)
+        return starts
+
+    return reduce(step, range(1, len(words)), (0,)) if words else ()
+
+
+def _build_cue(ws: Sequence[_Word]) -> _Cue | None:
+    text: Final = _cue_text(ws)
+    start: Final = _cue_start(ws)
+    if not text or start is None:
+        return None
+    end: Final = _cue_end(ws)
+    return _Cue(start_ms=start, end_ms=end if end is not None else start, text=text)
+
+
+def _group_tokens_into_cues(tokens: Sequence[Mapping[str, Any]]) -> tuple[_Cue, ...]:
     """
     Group Soniox tokens into subtitle cues aligned to the actual speech.
-
-    Each cue has:
-      - start_ms: int
-      - end_ms: int
-      - text: str
 
     Cues only ever break at word boundaries (Soniox tokens are subwords, so
     tokens are first merged into words). A new cue starts when:
@@ -245,50 +300,16 @@ def _group_tokens_into_cues(
         _CUE_MAX_DURATION_MS.
     A cue also ends after sentence-final punctuation, which keeps cue breaks
     at natural seams. Cue timestamps come straight from token timestamps;
-    words without timestamps stay attached to the surrounding cue.
+    words without timestamps stay attached to the surrounding cue, and a cue
+    whose words carry no timestamps at all is dropped.
     """
-    words = _merge_tokens_into_words(tokens)
-    cues: list[dict[str, Any]] = []
-    current: list[dict[str, Any]] = []
-
-    def _cue_start(ws: list[dict[str, Any]]) -> int | None:
-        return next((w["start_ms"] for w in ws if w["start_ms"] is not None), None)
-
-    def _cue_end(ws: list[dict[str, Any]]) -> int | None:
-        return next((w["end_ms"] for w in reversed(ws) if w["end_ms"] is not None), _cue_start(ws))
-
-    def _cue_text(ws: list[dict[str, Any]]) -> str:
-        return "".join(w["text"] for w in ws).strip()
-
-    def _flush() -> None:
-        text = _cue_text(current)
-        start = _cue_start(current)
-        if text and start is not None:
-            cues.append({"start_ms": start, "end_ms": _cue_end(current), "text": text})
-        current.clear()
-
-    for word in words:
-        if current:
-            start_ms = word["start_ms"]
-            cue_start = _cue_start(current)
-            cue_end = _cue_end(current)
-            speaker_changed = word["speaker"] is not None and any(
-                w["speaker"] is not None and w["speaker"] != word["speaker"] for w in current
-            )
-            gap_exceeded = start_ms is not None and cue_end is not None and (start_ms - cue_end) >= _CUE_GAP_MS
-            chars_exceeded = _text_width(_cue_text(current)) + _text_width(word["text"]) > _CUE_MAX_CHARS
-            word_end = word["end_ms"] if word["end_ms"] is not None else start_ms
-            duration_exceeded = (
-                word_end is not None and cue_start is not None and (word_end - cue_start) > _CUE_MAX_DURATION_MS
-            )
-            if speaker_changed or gap_exceeded or chars_exceeded or duration_exceeded:
-                _flush()
-        current.append(word)
-        if word["text"].rstrip().endswith(_SENTENCE_END_CHARS):
-            _flush()
-
-    _flush()
-    return cues
+    words: Final = _merge_tokens_into_words(tokens)
+    starts: Final = _cue_start_indices(words)
+    return tuple(
+        cue
+        for begin, end in zip(starts, (*starts[1:], len(words)))
+        if (cue := _build_cue(words[begin:end])) is not None
+    )
 
 
 def render_soniox_tokens_as_srt(tokens: list[dict[str, Any]]) -> str:
@@ -301,16 +322,16 @@ def render_soniox_tokens_as_srt(tokens: list[dict[str, Any]]) -> str:
     if not cues:
         return ""
 
-    lines: Final[list[str]] = []
-    for idx, cue in enumerate(cues, start=1):
-        start = _format_timestamp_srt(cue["start_ms"])
-        end = _format_timestamp_srt(cue["end_ms"])
-        lines.append(str(idx))
-        lines.append(f"{start} --> {end}")
-        lines.append(cue["text"])
-        lines.append("")  # blank line between cues
-
-    return "\n".join(lines)
+    return "\n".join(
+        line
+        for idx, cue in enumerate(cues, start=1)
+        for line in (
+            str(idx),
+            f"{_format_timestamp_srt(cue.start_ms)} --> {_format_timestamp_srt(cue.end_ms)}",
+            cue.text,
+            "",
+        )
+    )
 
 
 def render_soniox_tokens_as_vtt(tokens: list[dict[str, Any]]) -> str:
@@ -321,12 +342,18 @@ def render_soniox_tokens_as_vtt(tokens: list[dict[str, Any]]) -> str:
     """
     cues: Final = _group_tokens_into_cues(tokens)
 
-    lines: Final[list[str]] = ["WEBVTT", ""]
-    for cue in cues:
-        start = _format_timestamp_vtt(cue["start_ms"])
-        end = _format_timestamp_vtt(cue["end_ms"])
-        lines.append(f"{start} --> {end}")
-        lines.append(cue["text"])
-        lines.append("")  # blank line between cues
+    lines: Final = (
+        "WEBVTT",
+        "",
+        *(
+            line
+            for cue in cues
+            for line in (
+                f"{_format_timestamp_vtt(cue.start_ms)} --> {_format_timestamp_vtt(cue.end_ms)}",
+                cue.text,
+                "",
+            )
+        ),
+    )
 
     return "\n".join(lines)

@@ -562,7 +562,7 @@ class TestMultilingualCueGrouping:
             {"text": "保存", "start_ms": 250, "end_ms": 400},
         ]
         words = _merge_tokens_into_words(tokens)
-        assert [w["text"] for w in words] == ["編", "集、", "保存"]
+        assert [w.text for w in words] == ["編", "集、", "保存"]
 
 
 class TestRenderSonioxTokensAsVtt:
