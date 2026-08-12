@@ -9,13 +9,20 @@ from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    DEFAULT_CRON_JOB_LOCK_TTL_SECONDS,
     EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME,
     LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE,
     LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
     UI_SESSION_TOKEN_TEAM_ID,
 )
 from litellm.proxy._types import KeyRequest, LiteLLM_VerificationToken, UserAPIKeyAuth
+from litellm.proxy.common_utils.single_owner_job import (
+    JobLease,
+    WhenLockUnavailable,
+    run_as_single_owner,
+)
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
@@ -35,7 +42,7 @@ class ExpiredUISessionKeyCleanupManager:
         self,
         prisma_client: PrismaClient,
         user_api_key_cache: UserApiKeyCache,
-        pod_lock_manager=None,
+        pod_lock_manager: PodLockManager | None = None,
     ):
         self.prisma_client = prisma_client
         self.user_api_key_cache = user_api_key_cache
@@ -44,25 +51,21 @@ class ExpiredUISessionKeyCleanupManager:
     async def cleanup_expired_keys(self) -> int:
         """
         Main entry point for deleting expired UI session keys.
-        Uses PodLockManager to ensure only one pod runs cleanup in multi-pod deployments.
+        Runs on one elected pod, holding a renewed lease for the whole cycle.
         """
-        lock_acquired = False
-        try:
-            if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
-                lock_acquired = (
-                    await self.pod_lock_manager.acquire_lock(
-                        cronjob_id=EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME,
-                    )
-                    or False
-                )
-                if not lock_acquired:
-                    verbose_proxy_logger.debug(
-                        "Expired UI session key cleanup: another pod is already "
-                        "running cleanup or Redis lock acquisition failed - "
-                        "skipping this cycle."
-                    )
-                    return 0
+        deleted: Final = await run_as_single_owner(
+            pod_lock_manager=self.pod_lock_manager,
+            job_name=EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME,
+            ttl_seconds=DEFAULT_CRON_JOB_LOCK_TTL_SECONDS,
+            # Two pods deleting the same batch make the loser's delete 404 and log
+            # an error for work that already succeeded
+            when_unavailable=WhenLockUnavailable.SKIP,
+            run=self._delete_expired_keys,
+        )
+        return deleted or 0
 
+    async def _delete_expired_keys(self, _lease: JobLease) -> int:
+        try:
             verbose_proxy_logger.info("Starting expired UI session key cleanup...")
 
             expired_keys: Final = await self._find_expired_ui_session_keys()
@@ -103,11 +106,6 @@ class ExpiredUISessionKeyCleanupManager:
                 return 0
             verbose_proxy_logger.error("Expired UI session key cleanup failed: %s", e)
             return 0
-        finally:
-            if lock_acquired and self.pod_lock_manager and self.pod_lock_manager.redis_cache:
-                await self.pod_lock_manager.release_lock(
-                    cronjob_id=EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME,
-                )
 
     @staticmethod
     def _get_deleted_token_count(

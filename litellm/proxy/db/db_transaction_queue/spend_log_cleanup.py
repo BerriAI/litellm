@@ -5,6 +5,7 @@ from typing import Final
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
 from litellm.constants import (
+    DEFAULT_CRON_JOB_LOCK_TTL_SECONDS,
     SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS,
     SPEND_LOG_CLEANUP_BATCH_SIZE,
     SPEND_LOG_CLEANUP_JOB_NAME,
@@ -12,6 +13,11 @@ from litellm.constants import (
     SPEND_LOG_RUN_LOOPS,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.proxy.common_utils.single_owner_job import (
+    JobLease,
+    WhenLockUnavailable,
+    run_as_single_owner,
+)
 from litellm.proxy.db.db_transaction_queue.spend_logs_partition_manager import (
     SpendLogsPartitionManager,
 )
@@ -203,10 +209,10 @@ class SpendLogCleanup:
     async def cleanup_old_spend_logs(self, prisma_client: PrismaClient) -> None:
         """
         Main cleanup function. Deletes old spend logs in batches.
-        If pod_lock_manager is available, ensures only one pod runs cleanup.
-        If no pod_lock_manager, runs cleanup without distributed locking.
+        Runs on one elected pod, holding a lease that is renewed for the whole
+        sweep so a cleanup slower than the lease TTL cannot be joined mid-run.
+        A deployment with no Redis-backed lock manager runs unguarded.
         """
-        lock_acquired = False
         try:
             verbose_proxy_logger.info("Cleanup job triggered at %s", datetime.now())
 
@@ -221,58 +227,22 @@ class SpendLogCleanup:
                 verbose_proxy_logger.error("Retention seconds is None, cannot proceed with cleanup")
                 return
 
-            # If we have a pod lock manager, try to acquire the lock
-            if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
-                lock_acquired = (
-                    await self.pod_lock_manager.acquire_lock(
-                        cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME,
-                    )
-                    or False
-                )
-                verbose_proxy_logger.info(
-                    "Lock acquisition attempt: %s  at %s", "successful" if lock_acquired else "failed", datetime.now()
+            async def _sweep(_lease: JobLease) -> None:
+                await self._cleanup_under_lease(
+                    prisma_client=prisma_client,
+                    delete_spend_logs=delete_spend_logs,
+                    autorouter_retention_seconds=autorouter_retention_seconds,
                 )
 
-                if not lock_acquired:
-                    verbose_proxy_logger.info("Another pod is already running cleanup")
-                    return
-
-            if delete_spend_logs and self.retention_seconds is not None:
-                cutoff_date: Final = datetime.now(timezone.utc) - timedelta(seconds=float(self.retention_seconds))
-                verbose_proxy_logger.info("Removing logs older than %s", cutoff_date.isoformat())
-
-                if self.general_settings.get(
-                    "use_spend_logs_partitioning", False
-                ) and await self.partition_manager.is_partitioned(prisma_client):
-                    await self.partition_manager.ensure_partitions(prisma_client)
-                    dropped: Final = await self.partition_manager.drop_partitions_older_than(prisma_client, cutoff_date)
-                    verbose_proxy_logger.info(
-                        "Dropped %d expired spend-log partitions: %s",
-                        len(dropped),
-                        dropped,
-                    )
-                    # DROP only reclaims whole expired partitions. Expired rows can
-                    # still sit in the DEFAULT partition (backfill, coverage gaps)
-                    # or in a partition that spans the cutoff, so retention must
-                    # also delete those stragglers row-wise.
-                    total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
-                    verbose_proxy_logger.info(
-                        "Deleted %s expired logs not covered by dropped partitions", total_deleted
-                    )
-                else:
-                    total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
-                    verbose_proxy_logger.info("Deleted %s logs", total_deleted)
-
-                index_deleted: Final = await self._delete_old_tool_index_rows(prisma_client, cutoff_date)
-                verbose_proxy_logger.info("Deleted %s expired tool index rows", index_deleted)
-
-            if autorouter_retention_seconds is not None:
-                session_cutoff: Final = datetime.now(timezone.utc) - timedelta(
-                    seconds=float(autorouter_retention_seconds)
-                )
-                sessions_deleted: Final = await self._delete_old_autorouter_session_rows(prisma_client, session_cutoff)
-                verbose_proxy_logger.info("Deleted %s expired auto-router session rollup rows", sessions_deleted)
-
+            await run_as_single_owner(
+                pod_lock_manager=self.pod_lock_manager,
+                job_name=SPEND_LOG_CLEANUP_JOB_NAME,
+                ttl_seconds=DEFAULT_CRON_JOB_LOCK_TTL_SECONDS,
+                # A second concurrent sweep deletes rows the first is already deleting,
+                # doubling the DB load the retention job exists to bound
+                when_unavailable=WhenLockUnavailable.SKIP,
+                run=_sweep,
+            )
         except Exception as e:
             # .exception() captures the traceback; str(e) alone on a Prisma/DB
             # timeout is often empty and gives operators no signal to diagnose.
@@ -281,9 +251,42 @@ class SpendLogCleanup:
                 type(e).__name__,
                 e,
             )
-            return  # Return after error handling
-        finally:
-            # Only release the lock if it was actually acquired
-            if lock_acquired and self.pod_lock_manager and self.pod_lock_manager.redis_cache:
-                await self.pod_lock_manager.release_lock(cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME)
-                verbose_proxy_logger.info("Released cleanup lock")
+
+    async def _cleanup_under_lease(
+        self,
+        *,
+        prisma_client: PrismaClient,
+        delete_spend_logs: bool,
+        autorouter_retention_seconds: int | None,
+    ) -> None:
+        if delete_spend_logs and self.retention_seconds is not None:
+            cutoff_date: Final = datetime.now(timezone.utc) - timedelta(seconds=float(self.retention_seconds))
+            verbose_proxy_logger.info("Removing logs older than %s", cutoff_date.isoformat())
+
+            if self.general_settings.get(
+                "use_spend_logs_partitioning", False
+            ) and await self.partition_manager.is_partitioned(prisma_client):
+                await self.partition_manager.ensure_partitions(prisma_client)
+                dropped: Final = await self.partition_manager.drop_partitions_older_than(prisma_client, cutoff_date)
+                verbose_proxy_logger.info(
+                    "Dropped %d expired spend-log partitions: %s",
+                    len(dropped),
+                    dropped,
+                )
+                # DROP only reclaims whole expired partitions. Expired rows can
+                # still sit in the DEFAULT partition (backfill, coverage gaps)
+                # or in a partition that spans the cutoff, so retention must
+                # also delete those stragglers row-wise.
+                total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
+                verbose_proxy_logger.info("Deleted %s expired logs not covered by dropped partitions", total_deleted)
+            else:
+                total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
+                verbose_proxy_logger.info("Deleted %s logs", total_deleted)
+
+            index_deleted: Final = await self._delete_old_tool_index_rows(prisma_client, cutoff_date)
+            verbose_proxy_logger.info("Deleted %s expired tool index rows", index_deleted)
+
+        if autorouter_retention_seconds is not None:
+            session_cutoff: Final = datetime.now(timezone.utc) - timedelta(seconds=float(autorouter_retention_seconds))
+            sessions_deleted: Final = await self._delete_old_autorouter_session_rows(prisma_client, session_cutoff)
+            verbose_proxy_logger.info("Deleted %s expired auto-router session rollup rows", sessions_deleted)

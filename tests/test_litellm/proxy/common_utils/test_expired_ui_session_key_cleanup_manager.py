@@ -13,6 +13,7 @@ from fastapi import HTTPException, status
 sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.constants import (
+    DEFAULT_CRON_JOB_LOCK_TTL_SECONDS,
     EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME,
     LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE,
     LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
@@ -305,6 +306,9 @@ class TestExpiredUISessionKeyCleanupManager:
         mock_cache = MagicMock()
         mock_pod_lock_manager = MagicMock()
         mock_pod_lock_manager.redis_cache = MagicMock()
+        # the lease is readable and another pod owns it, so this is contention
+        # rather than an outage
+        mock_pod_lock_manager.redis_cache.async_get_cache = AsyncMock(return_value="another-pod")
         mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=False)
         mock_pod_lock_manager.release_lock = AsyncMock()
 
@@ -320,6 +324,7 @@ class TestExpiredUISessionKeyCleanupManager:
         assert deleted_count == 0
         mock_pod_lock_manager.acquire_lock.assert_called_once_with(
             cronjob_id=EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME,
+            ttl=DEFAULT_CRON_JOB_LOCK_TTL_SECONDS,
         )
         manager._find_expired_ui_session_keys.assert_not_called()
         mock_pod_lock_manager.release_lock.assert_not_called()

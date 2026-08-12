@@ -60,6 +60,10 @@ spec:
             {{- if .Values.billingMetrics.enabled }}
             {{- include "litellm.billingMetricsEnv" . | nindent 12 }}
             {{- end }}
+            {{- if .Values.worker.enabled }}
+            - name: LITELLM_JOB_ROLE
+              value: "serving"
+            {{- end }}
           {{- include "litellm.envFrom" .Values.gateway | nindent 10 }}
           {{- if or .Values.gateway.config.create .Values.gateway.volumeMounts .Values.billingMetrics.enabled }}
           volumeMounts:
