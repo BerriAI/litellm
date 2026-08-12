@@ -66,6 +66,36 @@ def test_gemini_passthrough_nonstreaming_logs_cost(
     assert tag in (row.request_tags or []), f"tags not logged: {row.request_tags}"
 
 
+@pytest.mark.skip(reason="stage red: product gap, native passthrough returns no x-litellm-response-cost or x-ratelimit-* headers")
+def test_gemini_passthrough_returns_the_same_header_contract_as_the_managed_route(
+    client: PassthroughClient, scoped_key: str
+) -> None:
+    """Native /gemini/ passthrough must return the same operational headers as
+    /chat/completions: x-litellm-response-cost so the call reconciles against
+    spend, and x-ratelimit-* so a client can pace itself. It returns neither
+    today, which makes native traffic invisible to the same tooling.
+    """
+    result = client.gemini_generate(
+        scoped_key, "gemini-2.5-flash", f"Say hello in one word. {unique_marker()}"
+    )
+    require_successful_call(result)
+
+    assert result.call_id, "passthrough must stamp x-litellm-call-id"
+    assert result.response_cost is not None, (
+        "passthrough generateContent returned no x-litellm-response-cost header, so a "
+        "native call cannot be reconciled against spend the way /chat/completions can"
+    )
+    assert result.response_cost > 0, (
+        f"x-litellm-response-cost must be a real cost, got {result.response_cost}"
+    )
+
+    pacing = tuple(name for name in result.headers if name.startswith("x-ratelimit-"))
+    assert pacing, (
+        "passthrough generateContent returned no x-ratelimit-* headers, so a client "
+        f"cannot pace itself; headers present were {sorted(result.headers)}"
+    )
+
+
 def test_gemini_passthrough_streaming_logs_cost(
     client: PassthroughClient, scoped_key: str
 ) -> None:

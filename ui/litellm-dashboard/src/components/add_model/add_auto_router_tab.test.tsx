@@ -273,7 +273,7 @@ describe("AddAutoRouterTab", () => {
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
     expandDetailedConfiguration();
-    await user.click(screen.getByText("Advanced: Session Affinity"));
+    await user.click(screen.getByText("Advanced: Affinity"));
     expect(await screen.findByRole("switch", { name: "Pin a session to its first model" })).not.toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
@@ -292,7 +292,7 @@ describe("AddAutoRouterTab", () => {
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
     expandDetailedConfiguration();
-    await user.click(screen.getByText("Advanced: Session Affinity"));
+    await user.click(screen.getByText("Advanced: Affinity"));
     await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
 
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
@@ -300,6 +300,46 @@ describe("AddAutoRouterTab", () => {
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
       session_affinity: true,
+    });
+  });
+
+  it("defaults a new router to deployment affinity on, matching the backend field default", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Affinity"));
+    expect(
+      await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }),
+    ).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      deployment_affinity: true,
+    });
+  });
+
+  it("carries deployment affinity turned off through to the create payload", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Affinity"));
+    await user.click(await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }));
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      deployment_affinity: false,
     });
   });
 
@@ -636,8 +676,11 @@ describe("AddAutoRouterTab", () => {
       expect(labels).toEqual(["Anthropic Family", "OpenAI Family", "Custom Configuration"]);
     });
 
-    it("never lets a wildcard deployment satisfy a preset", async () => {
-      const wildcard = [{ model_name: "openai-wild", litellm_params: { model: "openai/*" } }];
+    it.each([
+      ["a wildcard group", "openai/*"],
+      ["a plain group over a wildcard underlying model", "openai-wild"],
+    ])("never lets %s satisfy a preset when the hub lists no expansions", async (_label, modelName) => {
+      const wildcard = [{ model_name: modelName, litellm_params: { model: "openai/*" } }];
       mockFetchAvailableModels.mockResolvedValue(groupsFor(wildcard));
       mockFetchAllModelDeployments.mockResolvedValue(wildcard);
 
@@ -648,6 +691,61 @@ describe("AddAutoRouterTab", () => {
         expect(optionByLabel("OpenAI Family")!.textContent).toContain("Missing:");
       });
       expect(isOptionDisabled(optionByLabel("OpenAI Family")!)).toBe(true);
+    });
+  });
+
+  describe("wildcard-matched presets", () => {
+    const WILDCARD_DEPLOYMENTS = [{ model_name: "someprovider/*", litellm_params: { model: "someprovider/*" } }];
+
+    const expandedGroupFor = (model: string): string => `someprovider/${model}`;
+
+    const EXPANDED_HUB_GROUPS: ModelGroup[] = [
+      { model_group: "someprovider/*", mode: "chat" },
+      ...[...new Set(getAllPresets().flatMap((preset) => [...getRequiredModelsInPreset(preset)]))].map((model) => ({
+        model_group: expandedGroupFor(model),
+        mode: "chat",
+      })),
+    ];
+
+    it("enables a preset whose models exist only as wildcard-expanded groups, labeling the match", async () => {
+      mockFetchAvailableModels.mockResolvedValue(EXPANDED_HUB_GROUPS);
+      mockFetchAllModelDeployments.mockResolvedValue(WILDCARD_DEPLOYMENTS);
+
+      renderWithProviders(<Harness />);
+      openTemplateDropdown();
+
+      await waitFor(() => {
+        expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
+      });
+      expect(optionByLabel("Anthropic Family")!.textContent).toContain("Matches your deployments");
+    });
+
+    it("prefills the expanded group names and submits them", async () => {
+      const user = userEvent.setup();
+      mockFetchAvailableModels.mockResolvedValue(EXPANDED_HUB_GROUPS);
+      mockFetchAllModelDeployments.mockResolvedValue(WILDCARD_DEPLOYMENTS);
+
+      renderWithProviders(<Harness />);
+      openTemplateDropdown();
+      await waitFor(() => {
+        expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
+      });
+      fireEvent.click(optionByLabel("Anthropic Family")!);
+
+      await user.type(screen.getByPlaceholderText(/smart_router/i), "wildcard-router");
+      await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+      expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({
+        complexity_router_config: {
+          tiers: {
+            SIMPLE: ANTHROPIC_TIERS.SIMPLE.map(expandedGroupFor),
+            MEDIUM: ANTHROPIC_TIERS.MEDIUM.map(expandedGroupFor),
+            COMPLEX: ANTHROPIC_TIERS.COMPLEX.map(expandedGroupFor),
+            REASONING: ANTHROPIC_TIERS.REASONING.map(expandedGroupFor),
+          },
+        },
+      });
     });
   });
 });

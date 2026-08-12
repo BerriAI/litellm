@@ -1,5 +1,6 @@
+from collections.abc import Coroutine
 from datetime import datetime
-from typing import Final
+from typing import Final, Protocol
 
 import httpx
 
@@ -24,6 +25,21 @@ from .llm_provider_handlers.vertex_passthrough_logging_handler import (
 from .success_handler import PassThroughEndpointLogging
 
 
+class RouteStreamingLogging(Protocol):
+    def __call__(
+        self,
+        *,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        passthrough_success_handler_obj: PassThroughEndpointLogging,
+        url_route: str,
+        request_body: dict,
+        endpoint_type: EndpointType,
+        start_time: datetime,
+        raw_bytes: list[bytes],
+        end_time: datetime,
+    ) -> Coroutine[None, None, None]: ...
+
+
 class PassThroughStreamingHandler:
     @staticmethod
     def _stamp_first_chunk_if_needed(litellm_logging_obj: LiteLLMLoggingObj) -> None:
@@ -39,7 +55,11 @@ class PassThroughStreamingHandler:
         start_time: datetime,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
+        route_streaming_logging: RouteStreamingLogging | None = None,
     ):
+        resolved_route_streaming_logging: Final[RouteStreamingLogging] = (
+            route_streaming_logging or PassThroughStreamingHandler._route_streaming_logging_to_handler
+        )
         raw_bytes: Final[list[bytes]] = []
         logging_scheduled = False
         model_name: Final = PassThroughStreamingHandler._extract_model_for_cost_injection(
@@ -56,7 +76,13 @@ class PassThroughStreamingHandler:
         cost_injection_active: Final = (
             bool(getattr(litellm, "include_cost_in_streaming_usage", False))
             and bool(model_name)
-            and endpoint_type in (EndpointType.VERTEX_AI, EndpointType.ANTHROPIC)
+            and (
+                endpoint_type in (EndpointType.ANTHROPIC, EndpointType.OPENAI)
+                or (
+                    endpoint_type == EndpointType.VERTEX_AI
+                    and ("streamRawPredict" in url_route or "rawPredict" in url_route)
+                )
+            )
         )
         try:
             if not cost_injection_active:
@@ -71,24 +97,19 @@ class PassThroughStreamingHandler:
                 # -> ``str`` for the per-chunk call site.
                 assert model_name is not None
                 resolved_model_name: Final[str] = model_name
+                pending = b""
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
                     PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
-                    if endpoint_type == EndpointType.VERTEX_AI:
-                        if "streamRawPredict" in url_route or "rawPredict" in url_route:
-                            modified_chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
-                                chunk, resolved_model_name
-                            )
-                            if modified_chunk is not None:
-                                chunk = modified_chunk
-                    else:  # EndpointType.ANTHROPIC
-                        modified_chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
-                            chunk, resolved_model_name
+                    complete_frames, pending = PassThroughStreamingHandler._split_complete_sse_frames(
+                        pending + chunk
+                    )  # rebind-ok: SSE frame reassembly buffer across transport chunks
+                    if complete_frames:
+                        yield ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+                            complete_frames, resolved_model_name
                         )
-                        if modified_chunk is not None:
-                            chunk = modified_chunk
-
-                    yield chunk
+                if pending:
+                    yield pending
         except Exception as e:
             verbose_proxy_logger.error("Error in chunk_processor: %s", e)
             raise
@@ -104,7 +125,7 @@ class PassThroughStreamingHandler:
                 logging_scheduled = True
                 try:
                     GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                        async_coroutine=PassThroughStreamingHandler._route_streaming_logging_to_handler(
+                        async_coroutine=resolved_route_streaming_logging(
                             litellm_logging_obj=litellm_logging_obj,
                             passthrough_success_handler_obj=passthrough_success_handler_obj,
                             url_route=url_route,
@@ -117,6 +138,17 @@ class PassThroughStreamingHandler:
                     )
                 except Exception as e:
                     verbose_proxy_logger.error("Error scheduling chunk_processor logging: %s", e)
+
+    @staticmethod
+    def _split_complete_sse_frames(pending: bytes) -> tuple[bytes, bytes]:
+        lf_boundary_end: Final = pending.rfind(b"\n\n") + 2
+        crlf_boundary_end: Final = pending.rfind(b"\r\n\r\n") + 4
+        boundary_end: Final = max(
+            lf_boundary_end if lf_boundary_end >= 2 else 0, crlf_boundary_end if crlf_boundary_end >= 4 else 0
+        )
+        if boundary_end == 0:
+            return b"", pending
+        return pending[:boundary_end], pending[boundary_end:]
 
     @staticmethod
     async def _route_streaming_logging_to_handler(
