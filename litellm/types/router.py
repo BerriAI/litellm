@@ -902,6 +902,14 @@ class TaggedPreRoutingStrategy(Generic[_PreRoutingStrategyT_co]):
     strategy: _PreRoutingStrategyT_co
 
 
+@dataclass(frozen=True, slots=True)
+class ConsumedRequestTagsStamp:
+    """The model group a tagged router rewrote to, plus the request tags spent selecting it."""
+
+    model_group: str
+    tags: tuple[str, ...]
+
+
 @runtime_checkable
 class PreRoutingStrategy(Protocol):
     """Structural interface shared by the auto / complexity / adaptive / quality routers."""
