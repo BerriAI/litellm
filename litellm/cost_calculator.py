@@ -334,6 +334,8 @@ def cost_per_token(
     response: Any | None = None,
     ### REQUEST MODEL ###
     request_model: str | None = None,  # original request model for router detection
+    ### DEPLOYMENT-SPECIFIC PRICING ###
+    custom_model_info: ModelInfo | None = None,  # deployment model_info, for non-token custom pricing
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -541,6 +543,7 @@ def cost_per_token(
             model=model,
             custom_llm_provider=custom_llm_provider,
             response=response,
+            model_info=custom_model_info,
         )
     elif (
         call_type == "aretrieve_batch"
@@ -1585,6 +1588,16 @@ def completion_cost(
                 if litellm_logging_obj is not None:
                     request_model_for_cost = litellm_logging_obj.model
 
+                # Deployment-specific model_info, for modalities whose pricing is
+                # not token-based and so cannot travel via custom_cost_per_token
+                # (e.g. OCR per-page pricing). Same extraction as the video path.
+                _custom_model_info: ModelInfo | None = None
+                if custom_pricing and litellm_logging_obj is not None:
+                    _cm_litellm_params = getattr(litellm_logging_obj, "litellm_params", None)
+                    if _cm_litellm_params is not None:
+                        _cm_metadata = _cm_litellm_params.get("metadata", {}) or {}
+                        _custom_model_info = _cm_metadata.get("model_info", None)
+
                 (
                     prompt_tokens_cost_usd_dollar,
                     completion_tokens_cost_usd_dollar,
@@ -1610,6 +1623,7 @@ def completion_cost(
                     vertex_location=vertex_location,
                     response=completion_response,
                     request_model=request_model_for_cost,
+                    custom_model_info=_custom_model_info,
                 )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
@@ -1843,12 +1857,16 @@ def ocr_cost(
     model: str,
     custom_llm_provider: str | None,
     response: object | None = None,
+    model_info: ModelInfo | None = None,
 ) -> tuple[float, float]:
     """
     Args:
         model: str - model name
         custom_llm_provider: Optional[str] - custom LLM provider
         response: Optional[Any] - response object
+        model_info: Optional[ModelInfo] - deployment-specific model info, used for
+            custom pricing. Takes precedence over the model cost map, mirroring
+            the video generation cost path.
 
     Returns:
         Tuple[float, float]: cost of OCR processing
@@ -1866,10 +1884,24 @@ def ocr_cost(
     if response.usage_info is None:
         raise ValueError("OCR response usage_info is None")
 
-    try:
-        model_info: ModelInfo | None = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-    except Exception:
-        model_info = None
+    #########################################################
+    # Deployment-specific pricing wins over the cost map.
+    #
+    # Custom pricing set on a deployment is registered under the router's
+    # deployment id, while the shared "{provider}/{model}" key has its pricing
+    # fields stripped (see _register_custom_pricing_for_request). A cost map
+    # lookup therefore cannot see it, so an OCR model that is not in the map
+    # bills $0 no matter how it is priced in config. Prefer the caller-supplied
+    # model_info when it carries OCR pricing.
+    #########################################################
+    has_custom_ocr_pricing: Final[bool] = model_info is not None and (
+        model_info.get("ocr_cost_per_page") is not None or model_info.get("ocr_cost_per_credit") is not None
+    )
+    if not has_custom_ocr_pricing:
+        try:
+            model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        except Exception:
+            model_info = None
 
     credits: Final = getattr(response.usage_info, "credits", None)
     cost_per_credit = None
