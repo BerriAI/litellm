@@ -19,7 +19,7 @@ export default function DurationSelect({ className, value, onChange }: DurationS
       onValueChange={(nextValue) => {
         const selectedOption = DURATION_OPTIONS.find((option) => option.value === nextValue);
         if (selectedOption) {
-          onChange?.(nextValue, selectedOption);
+          onChange?.(selectedOption.value, selectedOption);
         }
       }}
     >
