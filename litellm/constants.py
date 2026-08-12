@@ -1529,6 +1529,10 @@ APSCHEDULER_REPLACE_EXISTING: Final = os.getenv("APSCHEDULER_REPLACE_EXISTING", 
     "1",
 ]  # always replace existing jobs
 
+# Width of the window scheduled background jobs are spread across, so they do not all fire
+# on one instant on every replica. Tunable per deployment via general_settings.
+DEFAULT_STAGGER_WINDOW_SECONDS: Final = 300
+
 # The number of tag entries are higher than number of user, team entries. This leads to a higher QPS.
 # This will run tag spcific tasks at a later time to smooth QPS
 DAILY_TAG_SPEND_BATCH_MULTIPLIER: Final = 2.3
