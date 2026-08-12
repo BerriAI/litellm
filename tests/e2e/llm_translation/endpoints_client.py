@@ -12,16 +12,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel
-
-from proxy_client import ProxyClient
 from e2e_http import BinaryStream, Result, StreamingResponse
 from models import CacheControl, ChatMessage, LiteLLMParamsBody, RichMessage, TextBlock
+from proxy_client import ProxyClient
+from pydantic import BaseModel
 
 __all__ = [
     "CacheControl",
+    "ImageEditForm",
+    "ImagesResult",
     "RichMessage",
     "TextBlock",
+    "TranscriptionForm",
+    "TranscriptionResult",
 ]
 
 
@@ -70,6 +73,7 @@ class ResponsesRequest(BaseModel):
     instructions: str | None = None
     stream: bool = False
     tools: list[ResponsesFunctionTool] | None = None
+    guardrails: list[str] | None = None
 
 
 class MessagesRequest(BaseModel):
@@ -114,6 +118,12 @@ class ImageRequest(BaseModel):
     prompt: str
     n: int = 1
     size: str = "1024x1024"
+
+
+class ImageEditForm(BaseModel):
+    model: str
+    prompt: str
+    n: int = 1
 
 
 class TranscriptionForm(BaseModel):
@@ -237,12 +247,6 @@ class ImagesResult(BaseModel):
     data: list[ImageItem] = []
 
 
-class ImageEditForm(BaseModel):
-    model: str
-    prompt: str
-    n: int = 1
-
-
 class TranscriptionResult(BaseModel):
     text: str = ""
 
@@ -285,7 +289,13 @@ class EndpointsClient:
         )
 
     def responses(
-        self, key: str, model: str, text: str, *, stream: bool = False
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        stream: bool = False,
+        guardrails: list[str] | None = None,
     ) -> StreamingResponse:
         return self._send(
             "/v1/responses",
@@ -295,6 +305,7 @@ class EndpointsClient:
                 input=text,
                 instructions="You are a helpful assistant",
                 stream=stream,
+                guardrails=guardrails,
             ),
             stream=stream,
         )
