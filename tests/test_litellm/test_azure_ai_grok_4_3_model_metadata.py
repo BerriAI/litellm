@@ -7,7 +7,6 @@ import litellm
 from litellm import get_model_info
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
-
 AZURE_AI_GROK_4_3_MODEL = "azure_ai/grok-4.3"
 AZURE_AI_GROK_4_3_SOURCE = "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-grok-4-3-on-microsoft-foundry-latest-generation-agentic-capabilities/4517096"
 

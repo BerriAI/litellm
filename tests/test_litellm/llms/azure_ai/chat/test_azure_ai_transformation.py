@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -110,12 +110,12 @@ def test_azure_ai_grok_stop_parameter_handling():
     config = AzureAIStudioConfig()
 
     # Test Grok model detection
-    assert config._supports_stop_reason("grok-4-fast") == False
-    assert config._supports_stop_reason("grok-4.3") == False
-    assert config._supports_stop_reason("grok-4") == False
-    assert config._supports_stop_reason("grok-3-mini") == False
-    assert config._supports_stop_reason("grok-code-fast") == False
-    assert config._supports_stop_reason("gpt-4") == True
+    assert config._supports_stop_reason("grok-4-fast") is False
+    assert config._supports_stop_reason("grok-4.3") is False
+    assert config._supports_stop_reason("grok-4") is False
+    assert config._supports_stop_reason("grok-3-mini") is False
+    assert config._supports_stop_reason("grok-code-fast") is False
+    assert config._supports_stop_reason("gpt-4") is True
 
     # Test supported parameters for Grok models
     for model in ("grok-4-fast", "grok-4.3"):
