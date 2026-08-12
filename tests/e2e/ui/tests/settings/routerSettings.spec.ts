@@ -201,13 +201,8 @@ test.describe("Router Settings - Loadbalancing", () => {
 });
 
 /**
- * The fallback test above proves the UI can *record* a fallback. This one
- * proves the recorded fallback is actually honoured: a model whose upstream is
- * unreachable still answers, and the answer is the fallback model's.
- *
- * The primary is created here rather than taken from fixtures/config.yml
- * because every configured model is backed by the mock server and therefore
- * healthy — there is nothing in the fixture set that can fail on demand.
+ * The test above proves the UI can record a fallback; this proves the fallback is honoured. The
+ * primary is created here because every fixture model is mock-backed and cannot fail on demand.
  */
 test.describe("Router Settings - Fallbacks serve the request", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
@@ -270,9 +265,7 @@ test.describe("Router Settings - Fallbacks serve the request", () => {
         },
       });
 
-    // Without a fallback the primary's failure is the client's failure. This is
-    // the control: it proves the mock reply asserted below could only have come
-    // from the fallback, not from the primary quietly working.
+    // The control: it proves the reply below could only have come from the fallback.
     expect((await chat()).status(), "broken primary unexpectedly succeeded on its own").toBeGreaterThanOrEqual(400);
 
     await patchRouterSettings(request, {
@@ -287,8 +280,7 @@ test.describe("Router Settings - Fallbacks serve the request", () => {
       })
       .toBe(200);
 
-    // And the UI shows it: the playground renders a reply for a model whose own
-    // upstream is down.
+    // And the playground renders a reply for a model whose own upstream is down.
     await openPlayground(page);
     await selectModel(page, BROKEN_PRIMARY);
     await sendMessage(page, "fallback probe from the playground");

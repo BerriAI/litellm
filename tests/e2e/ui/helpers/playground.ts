@@ -2,19 +2,11 @@ import { expect, type Locator, type Page as PlaywrightPage } from "@playwright/t
 import { navigateToPage, dismissFeedbackPopup } from "./navigation";
 import { Page } from "../fixtures/pages";
 
-/**
- * Controls for the Test Key / Playground page.
- *
- * Shared because more than one manual-QA flow ends in "send a message from the
- * UI and check what comes back" — the playground itself, and router fallbacks,
- * which are only really verified by seeing the fallback's reply render.
- */
+/** Controls for the Test Key / Playground page, shared with the router-fallback specs. */
 
 /**
- * The playground renders its configuration panel twice — once for the docked
- * sidebar and once for the collapsed/overlay layout — and only one copy is on
- * screen at a time. Every control here is narrowed to the visible copy; an
- * unscoped locator hits a strict-mode violation against its hidden twin.
+ * The configuration panel is rendered twice, docked and overlay, with one visible at a time.
+ * Every control is narrowed to the visible copy or it trips strict mode against its hidden twin.
  */
 export const onlyVisible = (locator: Locator): Locator => locator.filter({ visible: true }).first();
 
@@ -40,10 +32,7 @@ export async function openPlayground(page: PlaywrightPage): Promise<void> {
 export async function selectModel(page: PlaywrightPage, model: string): Promise<void> {
   const select = modelSelect(page);
   await select.click();
-  // The dropdown is virtualized: only the options in the rendered window exist
-  // in the DOM, so once other specs have added models to the proxy the one we
-  // want is not merely off-screen, it is absent. The Select takes showSearch,
-  // so type to narrow the list before clicking.
+  // Virtualized: options outside the rendered window are absent from the DOM, so search first.
   await select.locator("input.ant-select-selection-search-input").fill(model);
   // antd portals its dropdown to the body; options carry the value as `title`.
   await onlyVisible(page.locator(`.ant-select-item-option[title="${model}"]`)).click({ timeout: 15_000 });

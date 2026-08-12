@@ -10,21 +10,9 @@ import {
   waitForSpendLog,
 } from "../../helpers/traffic";
 
-/**
- * Usage page manual-QA coverage: traffic billed to a virtual key shows up in
- * Top Virtual Keys, the card switches between its table and chart renderings,
- * and clicking the key opens its key-info panel.
- *
- * Targets the current Usage page (/ui/usage). The legacy /ui/old-usage view
- * carries its own deprecation banner and is deliberately not covered here.
- */
+/** Covers /ui/usage. The legacy /ui/old-usage view is deprecated and deliberately not covered. */
 
-/**
- * The Top Virtual Keys card. Its <Title> is a direct child of the card element,
- * so stepping up one level from the title is an exact handle — needed because
- * the page renders several other tables (Spend by Provider, Top Models) that an
- * unscoped table locator would pick up.
- */
+/** Stepping up from the title is exact; the page renders several other tables. */
 const topKeysCard = (page: PlaywrightPage): Locator =>
   page.getByText("Top Virtual Keys", { exact: true }).locator("xpath=..");
 
@@ -33,9 +21,7 @@ async function openUsage(page: PlaywrightPage): Promise<Locator> {
   await dismissFeedbackPopup(page);
   const card = topKeysCard(page);
   await expect(card).toBeVisible({ timeout: 30_000 });
-  // Widen the leaderboard so the key under test is not cut off by the default
-  // top-5 limit when the database already holds other keys. (antd Segmented
-  // renders label-wrapped radios, not options.)
+  // Widen past the default top-5 so other keys in the database cannot crowd this one out.
   await card.locator(".ant-segmented-item").filter({ hasText: /^50$/ }).click();
   return card;
 }
@@ -76,9 +62,7 @@ test.describe("Usage page", () => {
     await expect(row).toHaveCount(1, { timeout: 10_000 });
 
     // Clicking the Key ID cell fetches key info and opens the detail panel.
-    // Assert on the panel's own controls, not on the alias: the alias is
-    // already in the row behind the modal, so a text match on it would pass
-    // even if the panel never opened.
+    // The alias is already in the row behind the modal, so match the panel's own controls.
     await row.locator("td").first().click();
     const keyInfo = page.getByRole("tab", { name: "Overview", exact: true });
     await expect(keyInfo, "key info panel did not open").toBeVisible({

@@ -4,13 +4,8 @@ import { CHAT_MODEL_A, CHAT_MODEL_B, MOCK_RESPONSE_TEXT, createVirtualKey } from
 import { keySourceSelect, onlyVisible, openPlayground, selectModel, sendMessage } from "../../helpers/playground";
 
 /**
- * Test Key / Playground manual-QA coverage: a chat sent from the UI reaches the
- * proxy and renders the model's reply, for both configured models and for both
- * virtual-key sources (the logged-in UI session, and a virtual key pasted in).
- *
- * This is the one flow that exercises the dashboard's own LLM call path rather
- * than an admin CRUD endpoint, so it is the check that the UI's request
- * plumbing (auth header, endpoint selection, streaming render) still works.
+ * The one flow that exercises the dashboard's own LLM call path rather than an admin CRUD endpoint,
+ * so it covers the UI's auth header, endpoint selection and streaming render.
  */
 test.describe("Playground", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
@@ -19,8 +14,7 @@ test.describe("Playground", () => {
     test(`chats with ${model} using the current UI session`, async ({ page }) => {
       await openPlayground(page);
 
-      // "Current UI Session" is the default source — the logged-in admin's key
-      // is used, with no key pasted anywhere.
+      // "Current UI Session" is the default: the logged-in admin's key, nothing pasted.
       await expect(onlyVisible(page.getByTitle("Current UI Session"))).toBeVisible();
 
       await selectModel(page, model);

@@ -2,37 +2,20 @@ import { test, expect, Locator } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { createMcpServer, deleteMcpServerByName, openMcpToolsTab } from "../../helpers/mcp";
 
-// Covers the two MCP manual-QA items that mcpServers.spec.ts cannot: listing a
-// server's tools, and actually calling one. Both need an MCP server that really
-// answers, which the create-only spec deliberately avoids (it points at an
-// unreachable .test.local URL).
+// Listing and calling MCP tools, which needs a server that really answers; the create-only spec
+// points at an unreachable URL on purpose.
 //
-// THIS SPEC MAKES A NETWORK CALL TO A THIRD PARTY, and that is a real cost, so
-// it is stated plainly rather than buried:
+// This spec makes a read-only network call to DeepWiki's public MCP server, from the proxy rather
+// than the browser. It needs no credentials, so there is no secret to leak from a public repo.
 //
-//   - The upstream is DeepWiki's public MCP server. It needs no credentials
-//     (Streamable HTTP, auth None), which is what makes it usable from a public
-//     repo -- there is no secret to leak.
-//   - The call is made by the PROXY, not the browser, so the proxy pod is what
-//     needs egress. Nothing in the e2e chart restricts that: the only
-//     NetworkPolicies the stack renders belong to the bundled postgresql and
-//     redis subcharts.
-//   - It is read-only (read_wiki_structure returns a repo's doc outline) and
-//     answered in well under a second when measured directly.
-//
-// If DeepWiki has an outage this spec goes red for a reason that is not a
-// litellm regression. That failure is left VISIBLE by default rather than
-// auto-skipped, because a spec that silently skips on connection trouble also
-// silently skips when the proxy's MCP client breaks -- which is the exact
-// regression it exists to catch. Set E2E_SKIP_EXTERNAL_MCP=1 to opt out
-// explicitly when the upstream is known-bad.
+// A DeepWiki outage turns this red for something that is not a litellm regression. That is left
+// visible rather than auto-skipped: skipping on connection trouble also skips when the proxy's own
+// MCP client breaks, which is the regression this exists to catch. E2E_SKIP_EXTERNAL_MCP=1 opts out.
 const MCP_SERVER_URL = "https://mcp.deepwiki.com/mcp";
 const TOOL_NAME = "read_wiki_structure";
 const TOOL_ARG_REPO = "BerriAI/litellm";
 
-// Each tool card renders its name in an `h4.font-mono` and its description in a
-// sibling <p>. Matching the heading rather than page text keeps a tool whose
-// DESCRIPTION mentions another tool's name from tripping strict mode.
+// Match the h4 heading, not page text: a tool whose description names another tool trips strict mode.
 const toolCard = (list: Locator, name: string): Locator =>
   list.locator("h4.font-mono").filter({ hasText: new RegExp(`^${name}$`) });
 
@@ -47,27 +30,22 @@ test.describe("MCP Tools", () => {
     await openMcpToolsTab(page, serverName);
   });
 
-  // Servers outlive the test that made them, and the MCP page contacts every
-  // one it lists, so leaked servers make later MCP tests slower run by run.
+  // The MCP page contacts every server it lists, so leaks slow later tests run by run.
   test.afterEach(async ({ page }) => {
     await deleteMcpServerByName(page, serverName);
   });
 
   test("MCP Tools tab lists the tools the upstream server advertises", async ({ page }) => {
-    // The list is fetched through the proxy on tab mount, so allow for a cold
-    // upstream connection rather than the ~250ms a warm direct call takes.
+    // Fetched through the proxy on mount, so allow for a cold upstream connection.
     const toolList = page.locator(".mcp-tools-scrollable");
     await expect(toolList).toBeVisible({ timeout: 30_000 });
 
-    // Assert on tool names DeepWiki actually advertises. Asserting merely that
-    // the list is non-empty would still pass if the proxy returned some other
-    // server's tools.
+    // Non-empty would still pass if the proxy returned some other server's tools.
     await expect(toolCard(toolList, TOOL_NAME)).toBeVisible();
     await expect(toolCard(toolList, "ask_question")).toBeVisible();
     await expect(toolCard(toolList, "read_wiki_contents")).toBeVisible();
 
-    // Search narrows the list. No other tool's name or description contains
-    // this string, so exactly one card must survive.
+    // No other tool's name or description contains this string, so exactly one card survives.
     await page.getByPlaceholder("Search tools...").fill(TOOL_NAME);
     await expect(toolList.locator("h4.font-mono")).toHaveCount(1);
     await expect(toolCard(toolList, TOOL_NAME)).toBeVisible();
@@ -83,10 +61,8 @@ test.describe("MCP Tools", () => {
     await expect(page.getByText("Test Tool:", { exact: true })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("Ready to Call Tool")).toBeVisible();
 
-    // The arguments form is generated from the tool's own inputSchema --
-    // MCPToolArgumentsForm renders one antd Form.Item per property, named after
-    // the property, so `repoName` is proof the schema round-tripped through the
-    // proxy rather than the panel falling back to its generic "input" field.
+    // The form is generated from the tool's inputSchema, so `repoName` proves the schema
+    // round-tripped through the proxy instead of the panel falling back to a generic field.
     const repoInput = page.locator('input[id="repoName"]');
     await expect(repoInput).toBeVisible();
     await repoInput.fill(TOOL_ARG_REPO);
@@ -94,9 +70,7 @@ test.describe("MCP Tools", () => {
     await page.getByRole("button", { name: "Call Tool", exact: true }).click();
 
     await expect(page.getByText("Tool executed successfully")).toBeVisible({ timeout: 60_000 });
-    // Content assertion, not just the success chrome: read_wiki_structure
-    // answers with the repo's page outline, so the result pane must contain
-    // the repo it was asked about.
+    // read_wiki_structure answers with the repo's outline, so the pane must name the repo.
     await expect(page.getByText(TOOL_ARG_REPO).first()).toBeVisible();
 
     // A second call is offered rather than the button resetting to its

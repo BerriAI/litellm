@@ -59,9 +59,7 @@ test.describe("Proxy Admin - Teams", () => {
     // Verify success notification
     await expect(page.getByText("Team created").first()).toBeVisible({ timeout: 10_000 });
 
-    // "Team created" is the UI reporting on its own request. Confirm the team
-    // is really there, and that the models picked in the modal came with it --
-    // a create that drops its model selection still toasts success.
+    // A create that drops its model selection still toasts success.
     const created = await findTeamByAlias(page, uniqueAlias);
     expect(created, `team ${uniqueAlias} readable from /team/list`).toBeTruthy();
     expect(created?.models, "created team kept its model selection").toBeTruthy();
@@ -95,9 +93,7 @@ test.describe("Proxy Admin - Teams", () => {
 
     await expect(page.getByText(/member.*added|success/i).first()).toBeVisible({ timeout: 10_000 });
 
-    // Membership is the point of the flow, and the toast is matched loosely
-    // enough (/success/i) that almost any notification satisfies it. Confirm
-    // the user is actually on the team.
+    // The toast is matched loosely enough (/success/i) that almost any notification satisfies it.
     await expect
       .poll(async () => await teamMemberEmails(page, E2E_TEAM_CRUD_ID), {
         message: "invited user never appeared in the team's members",
@@ -140,8 +136,7 @@ test.describe("Proxy Admin - Teams", () => {
 
     await expect(teamRow).not.toBeVisible({ timeout: 10_000 });
 
-    // A row vanishing from the table is the client dropping it from local
-    // state; it happens whether or not the delete reached the database.
+    // A row vanishing is local state, which happens whether or not the delete landed.
     await expect
       .poll(async () => await findTeamByAlias(page, E2E_TEAM_DELETE_ALIAS), {
         message: `team ${E2E_TEAM_DELETE_ALIAS} still readable from /team/list after delete`,

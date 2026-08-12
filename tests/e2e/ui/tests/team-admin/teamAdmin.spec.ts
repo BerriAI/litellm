@@ -10,14 +10,8 @@ import { navigateToPage, dismissFeedbackPopup, clickTeamId } from "../../helpers
 import { captureRequestBody, readBack } from "../../helpers/roundTrip";
 
 /**
- * Every identifier a team's roster is addressable by.
- *
- * members_with_roles carries both `user_id` and `user_email`, and which one is
- * populated depends on how the member got there: users seeded into the team
- * have a user_id and a null email, users added through the UI's email search
- * carry both. Flattening the two means the membership assertions can name
- * whichever identifier the test actually typed, instead of guessing which
- * column the write happened to fill in.
+ * Every identifier a roster is addressable by. Which of user_id / user_email is populated depends on
+ * how the member got there, so flatten both and let assertions name whichever the test typed.
  */
 async function teamMemberIdentities(page: PlaywrightPage, teamId: string): Promise<string[]> {
   const info = await readBack<{ team_info: { members_with_roles?: { user_id?: string; user_email?: string }[] } }>(
@@ -82,16 +76,13 @@ test.describe("Team Admin", () => {
     const add = await captureRequestBody(page, { method: "POST", urlIncludes: "/team/member_add" }, async () => {
       await modal.getByRole("button", { name: /Add Member/i }).click();
     });
-    // teamMemberAddCall posts {team_id, member}. A team admin's add must land
-    // on their own team -- an add that reaches the API with the wrong team_id
-    // still toasts success, and the member turns up somewhere else.
+    // An add carrying the wrong team_id still toasts success, and the member lands elsewhere.
     expect(add.team_id, "add targets the team being viewed").toBe(E2E_TEAM_CRUD_ID);
     expect(add.member?.user_email, "the typed email is what goes on the wire").toBe("invitable-team@test.local");
 
     await expect(page.getByText("Team member added successfully").first()).toBeVisible({ timeout: 10_000 });
 
-    // The toast is the UI reporting on its own request. Membership is the point
-    // of the flow, so read the roster back.
+    // Membership is the point of the flow, so read the roster back.
     await expect
       .poll(async () => await teamMemberIdentities(page, E2E_TEAM_CRUD_ID), {
         message: "added member never appeared in the team's roster",
@@ -120,9 +111,7 @@ test.describe("Team Admin", () => {
     const remove = await captureRequestBody(page, { method: "POST", urlIncludes: "/team/member_delete" }, async () => {
       await modal.getByRole("button", { name: /^Delete$/ }).click();
     });
-    // teamMemberDeleteCall posts {team_id, user_id?, user_email?}. Removing the
-    // wrong member is the failure that a success toast hides completely, so
-    // pin both halves of the target.
+    // Removing the wrong member is exactly what a success toast hides, so pin both halves.
     expect(remove.team_id, "delete targets the team being viewed").toBe(E2E_TEAM_CRUD_ID);
     expect([remove.user_id, remove.user_email], "delete identifies the member whose row was clicked").toContain(
       "e2e-removable-member",
@@ -130,8 +119,7 @@ test.describe("Team Admin", () => {
 
     await expect(page.getByText("Team member removed successfully").first()).toBeVisible({ timeout: 10_000 });
 
-    // The row disappearing is the client dropping it from local state; that
-    // happens whether or not the removal reached the database.
+    // The row disappearing is local state, which happens whether or not the write landed.
     await expect
       .poll(async () => await teamMemberIdentities(page, E2E_TEAM_CRUD_ID), {
         message: "removed member is still on the team",
@@ -171,10 +159,8 @@ test.describe("Team Admin", () => {
 
     await expect(page.getByText(keyName)).toBeVisible({ timeout: 10_000 });
 
-    // The table row is rendered from the create response the UI already holds,
-    // so it shows the key as the UI *asked* for it. A key that a team admin
-    // creates and that comes back unscoped -- or scoped to another team -- is
-    // both a privilege and a billing problem, and only a read-back sees it.
+    // A team-admin key that comes back unscoped, or scoped elsewhere, is a privilege and
+    // billing problem that only a read-back sees.
     const persisted = await findKeyByAlias(page, keyName);
     expect(persisted, `key ${keyName} readable from /key/list`).toBeTruthy();
     expect(persisted?.team_id, "the key is owned by the team admin's own team").toBe(E2E_TEAM_CRUD_ID);

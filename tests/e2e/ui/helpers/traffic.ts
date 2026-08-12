@@ -1,16 +1,5 @@
 import { APIRequestContext, expect } from "@playwright/test";
 
-/**
- * Helpers for driving real traffic through the proxy from a test.
- *
- * Several manual-QA flows (Logs, Usage) can only be checked once the proxy has
- * actually served a request: the spend log a Logs row renders, and the
- * per-key spend the Usage page aggregates, are both written by the completion
- * path. Seeding those tables directly would test the UI against rows no code
- * produced, so these helpers make the proxy generate them the same way a user
- * would.
- */
-
 /** Model names served by fixtures/config.yml, both backed by the mock LLM server. */
 export const CHAT_MODEL_A = "fake-openai-gpt-4";
 export const CHAT_MODEL_B = "fake-anthropic-claude";
@@ -20,13 +9,11 @@ export const MOCK_RESPONSE_TEXT = "This is a mock response.";
 
 export const masterKey = (): string => process.env.LITELLM_MASTER_KEY || "sk-1234";
 
-/** Root path the proxy is mounted under, "" for the default mount. */
 const rootPath = (): string => process.env.SERVER_ROOT_PATH ?? "";
 
 interface ChatOptions {
   model: string;
   prompt: string;
-  /** Virtual key to bill the call to. Defaults to the master key. */
   apiKey?: string;
   /** Sent as `user`, which lands in the spend log's end_user column. */
   endUser?: string;
@@ -51,13 +38,7 @@ export async function sendChatCompletion(request: APIRequestContext, opts: ChatO
   return body.id as string;
 }
 
-/**
- * Create a virtual key via /key/generate.
- *
- * `key` is the sk- value callers authenticate with; `token` is its hash, which
- * is what usage/spend aggregates are keyed by (the plaintext key is never
- * stored, so it never appears in those responses).
- */
+/** `key` is the sk- value to authenticate with; `token` is its hash, which spend aggregates are keyed by. */
 export async function createVirtualKey(
   request: APIRequestContext,
   data: Record<string, unknown> = {},
@@ -78,11 +59,7 @@ export async function createVirtualKey(
   };
 }
 
-/**
- * Spend logs are flushed on a timer, not synchronously with the response, so a
- * Logs/Usage assertion made straight after a completion races the writer. Poll
- * /spend/logs until the request id shows up rather than sleeping a fixed amount.
- */
+/** Spend logs are flushed on a timer, so an assertion straight after a completion races the writer. */
 export async function waitForSpendLog(
   request: APIRequestContext,
   requestId: string,
@@ -97,7 +74,7 @@ export async function waitForSpendLog(
     lastStatus = res.status();
     if (res.ok()) {
       const body = await res.json();
-      const rows = Array.isArray(body) ? body : body?.data ?? [];
+      const rows = Array.isArray(body) ? body : (body?.data ?? []);
       if (rows.length > 0) {
         return;
       }
@@ -110,13 +87,8 @@ export async function waitForSpendLog(
 const isoDay = (d: Date): string => d.toISOString().slice(0, 10);
 
 /**
- * Wait until a key's traffic has been rolled up into the daily-spend aggregate.
- *
- * The Usage page is built from /user/daily/activity, which reads the aggregate
- * table a background job writes — not the spend log itself. It also fetches
- * once on mount and never refetches, so a test that navigates before the
- * rollup lands will keep re-reading a stale render until it times out. Waiting
- * on the API first is the only way to make that deterministic.
+ * The Usage page reads /user/daily/activity, a rollup written by a background job, and fetches it once
+ * on mount. Navigating before the rollup lands leaves a stale render that never refreshes.
  */
 export async function waitForKeyInDailyActivity(
   request: APIRequestContext,

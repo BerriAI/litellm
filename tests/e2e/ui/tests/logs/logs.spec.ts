@@ -5,33 +5,20 @@ import { Page } from "../../fixtures/pages";
 import { CHAT_MODEL_A, MOCK_RESPONSE_TEXT, sendChatCompletion, waitForSpendLog } from "../../helpers/traffic";
 
 /**
- * Logs page manual-QA coverage: a request the proxy actually served shows up in
- * the table, its detail drawer expands to the real request and response bodies,
- * both can be copied, and the End User filter narrows the table to it.
- *
- * Every assertion is anchored to traffic this spec generates itself (unique
- * prompt + unique end user per run), so it neither depends on seeded spend rows
- * nor collides with the other specs' traffic when the suite runs in parallel.
+ * Anchored to traffic this spec generates itself, with a unique prompt and end user per run, so it
+ * neither depends on seeded spend rows nor collides with other specs under parallelism.
  */
 
 const uniqueSuffix = (): string => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 /**
- * The Input/Output cards in the drawer are built from SectionHeader, whose
- * label is an antd Text span nested icon-div > flex-row > header-root. Walking
- * up from the label is the only stable handle: the header has no role, test id
- * or class of its own, and its copy button is icon-only (its "Copy" tooltip
- * only exists while hovered, so it has no accessible name to query by).
+ * Walking up from the label is the only stable handle: the header carries no role, test id or class,
+ * and its copy button is icon-only with a hover-only tooltip.
  */
 const sectionHeader = (drawer: Locator, label: "Input" | "Output"): Locator =>
   drawer.getByText(label, { exact: true }).locator("xpath=../../..");
 
-/**
- * The Logs page mounts every tab (Request Logs, Audit Logs, Deleted Keys,
- * Deleted Teams), so the DOM holds four tables and four data-table toolbars at
- * once and only the active tab's are visible. Unscoped `table tbody tr` counts
- * rows from all four; every locator here goes through the visible one.
- */
+/** Every tab stays mounted, so the DOM holds four tables at once; scope to the visible one. */
 const requestLogsRows = (page: PlaywrightPage): Locator =>
   page.locator("table").filter({ visible: true }).first().locator("tbody tr");
 
@@ -56,8 +43,7 @@ async function openLogsForRequest(page: PlaywrightPage, requestId: string): Prom
 test.describe("Logs page", () => {
   test.use({
     storageState: ADMIN_STORAGE_PATH,
-    // The drawer's copy buttons go through navigator.clipboard; without these
-    // the writes reject and the success toast never fires.
+    // The copy buttons go through navigator.clipboard, which rejects without these.
     permissions: ["clipboard-read", "clipboard-write"],
   });
 
@@ -86,23 +72,12 @@ test.describe("Logs page", () => {
     await expect(drawer.getByText(MOCK_RESPONSE_TEXT, { exact: false }).first()).toBeVisible({ timeout: 20_000 });
   });
 
-  // Split from the expand test above rather than folded into it: the copy path
-  // is the only part that needs a secure context, and skipping the whole test
-  // would take the drawer-rendering coverage with it.
+  // Split out because only the copy path needs a secure context; folding it in would
+  // take the drawer-rendering coverage down with it.
   test("the drawer copies the request and the response to the clipboard", async ({ page, request }) => {
-    // `navigator.clipboard` exists only in a secure context. Locally the suite
-    // runs against http://127.0.0.1, and localhost is trustworthy, so it is
-    // there; in CI the run pod is pointed at a plain-HTTP cluster DNS name,
-    // where it is `undefined`. InputCard.handleCopy calls writeText unguarded,
-    // so on such an origin the click throws and no toast ever renders --
-    // measured, not assumed: isSecureContext/typeof navigator.clipboard come
-    // back true/"object" on 127.0.0.1 and false/"undefined" on a DNS name that
-    // resolves to the very same address.
-    //
-    // So this is a real product limitation, not a test defect, and it is worth
-    // knowing that it is skipped rather than silently passing: any deployment
-    // served over plain HTTP on a hostname has a copy button that throws and
-    // gives the user no feedback at all.
+    // `navigator.clipboard` is undefined outside a secure context, and handleCopy calls
+    // writeText unguarded, so on plain HTTP served from a hostname the click throws and no
+    // toast renders. Skipped rather than weakened so the product gap stays visible.
     await page.goto("/ui");
     const isSecure = await page.evaluate(() => window.isSecureContext);
     test.skip(!isSecure, "origin is not a secure context, so navigator.clipboard is unavailable");
@@ -150,11 +125,8 @@ test.describe("Logs page", () => {
       timeout: 20_000,
     });
 
-    // SectionHeader renders an up-arrow while expanded and a down-arrow while
-    // collapsed. The body is the header's next sibling and collapses via
-    // `max-height: 0; overflow: hidden`, which zeroes its own bounding box —
-    // so the wrapper reads as hidden even though the prompt text node inside
-    // it does not (its box keeps its size, it is merely clipped by the parent).
+    // The body collapses via `max-height: 0; overflow: hidden`, which zeroes its own bounding
+    // box, so the wrapper reads as hidden while the clipped text node inside it does not.
     const header = sectionHeader(drawer, "Input");
     const body = header.locator("xpath=following-sibling::div[1]");
     await expect(header.locator(".anticon-up")).toBeVisible();

@@ -12,20 +12,8 @@ import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
 import { captureRequestBody, readBack } from "../../helpers/roundTrip";
 
 /**
- * Looks a key up through the management API by alias.
- *
- * `return_full_object=true` is what makes the row carry the fields these tests
- * assert on (token, models, tpm_limit); without it the response is aliases
- * only. `/key/list` matches exactly unless `substring_matching` is set, which
- * is what we want here -- the dashboard opts into substring matching for its
- * search box, we do not.
- *
- * Returns undefined when no key carries the alias, which is how the delete
- * test proves the row is actually gone.
- *
- * Response shape is KeyListResponseObject (litellm/proxy/_types.py): `keys` is
- * a list of UserAPIKeyAuth once return_full_object is set, so token / models /
- * team_id sit at the top level of each row.
+ * Looks a key up by alias, undefined when none carries it. `return_full_object=true` is what makes
+ * the row carry token / models / tpm_limit; without it the response is aliases only.
  */
 async function findKeyByAlias(page: PlaywrightPage, alias: string): Promise<Record<string, any> | undefined> {
   const body = await readBack<{ keys: Record<string, any>[] }>(
@@ -73,9 +61,7 @@ test.describe("Proxy Admin - Keys", () => {
     // Verify the new key appears in the table
     await expect(page.getByText(keyName)).toBeVisible({ timeout: 10_000 });
 
-    // ...and that it was really created against the team. The row rendering
-    // above comes from the create response the UI already holds, so it would
-    // still show a key whose team assignment the backend dropped.
+    // The row above renders from the create response the UI already holds, so it proves nothing.
     const persisted = await findKeyByAlias(page, keyName);
     expect(persisted, `key ${keyName} readable from /key/list`).toBeTruthy();
     expect(typeof persisted?.team_id, "created key is owned by a team, not orphaned").toBe("string");
@@ -85,9 +71,7 @@ test.describe("Proxy Admin - Keys", () => {
     await navigateToPage(page, Page.ApiKeys);
     await dismissFeedbackPopup(page);
 
-    // The point of regeneration is that the stored token changes. Capture the
-    // old one first -- a modal offering a Copy button proves only that the UI
-    // rendered a success view.
+    // Capture the old token first: a modal with a Copy button only proves the UI rendered.
     const before = await findKeyByAlias(page, E2E_REGENERATE_KEY_ALIAS);
     expect(before?.token, `seeded key ${E2E_REGENERATE_KEY_ALIAS} has a token`).toBeTruthy();
 
@@ -109,9 +93,7 @@ test.describe("Proxy Admin - Keys", () => {
     // Success view shows a Copy button in the footer (text varies between modal versions)
     await expect(modal.getByRole("button", { name: /Copy.*Key/ })).toBeVisible({ timeout: 20_000 });
 
-    // The stored token must actually have been replaced, and the key must keep
-    // its identity while doing so -- a regenerate that silently orphans the
-    // alias looks identical from the modal.
+    // The token must be replaced and the alias kept; orphaning it looks identical from the modal.
     await expect
       .poll(async () => (await findKeyByAlias(page, E2E_REGENERATE_KEY_ALIAS))?.token, {
         message: `token for ${E2E_REGENERATE_KEY_ALIAS} did not change after regenerate`,
@@ -124,9 +106,7 @@ test.describe("Proxy Admin - Keys", () => {
     await navigateToPage(page, Page.ApiKeys);
     await dismissFeedbackPopup(page);
 
-    // Snapshot the key before touching it, so the assertions at the end can
-    // tell "the limits changed" apart from "the limits changed and something
-    // else changed with them".
+    // Snapshot first, so the end assertions can tell an isolated edit from a collateral one.
     const before = await findKeyByAlias(page, E2E_UPDATE_LIMITS_KEY_ALIAS);
     expect(before, `seeded key ${E2E_UPDATE_LIMITS_KEY_ALIAS} exists`).toBeTruthy();
 
@@ -146,26 +126,20 @@ test.describe("Proxy Admin - Keys", () => {
       await page.getByRole("button", { name: "Save Changes" }).click();
     });
 
-    // The form posts limits at the top level (key_info_view.tsx sets
-    // formValues.key from the token and hands the whole object to
-    // keyUpdateCall). Compare numerically -- the field arrives as a string or a
-    // number depending on how the spinbutton was last touched.
+    // The form posts limits at the top level. Compare numerically: the spinbutton yields either type.
     expect(Number(update.tpm_limit), "TPM limit on the wire").toBe(123);
     expect(Number(update.rpm_limit), "RPM limit on the wire").toBe(456);
 
     await expect(page.getByRole("paragraph").filter({ hasText: "TPM: 123" })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByRole("paragraph").filter({ hasText: "RPM: 456" })).toBeVisible({ timeout: 10_000 });
 
-    // The rendering above is driven by the response the UI already holds, so it
-    // proves nothing about what is stored. Read the key back.
+    // Read the key back; the rendering above comes from a response the UI already holds.
     const after = await findKeyByAlias(page, E2E_UPDATE_LIMITS_KEY_ALIAS);
     expect(after, "key still readable after update").toBeTruthy();
     expect(Number(after?.tpm_limit), "TPM limit persisted").toBe(123);
     expect(Number(after?.rpm_limit), "RPM limit persisted").toBe(456);
 
-    // And that editing the limits did not take anything else with it. This is
-    // the reported failure mode, not a hypothetical: bumping a key's budget
-    // wiped its MCP toolset (PR #34452), and the toast said success both times.
+    // Not hypothetical: bumping a key's budget wiped its MCP toolset (PR #34452), toast said success.
     expect(after?.models, "editing limits left the key's models untouched").toEqual(before?.models);
     expect(after?.team_id, "editing limits left the key's team untouched").toEqual(before?.team_id);
   });
@@ -193,8 +167,7 @@ test.describe("Proxy Admin - Keys", () => {
 
     await expect(page.getByText(/Key deleted/i).first()).toBeVisible({ timeout: 10_000 });
 
-    // "Key deleted" is a claim, not evidence. The key is gone when the
-    // management API stops returning it.
+    // The key is gone when the management API stops returning it, not when the toast says so.
     await expect
       .poll(async () => await findKeyByAlias(page, E2E_DELETE_KEY_ALIAS), {
         message: `key ${E2E_DELETE_KEY_ALIAS} still readable from /key/list after delete`,

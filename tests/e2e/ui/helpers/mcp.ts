@@ -3,18 +3,7 @@ import { navigateToPage } from "./navigation";
 import { Page } from "../fixtures/pages";
 import { masterKey } from "./traffic";
 
-/**
- * Creates an MCP server through the UI's discovery -> custom form flow and
- * returns the name it was given.
- *
- * Transport is always Streamable HTTP and auth is always None: those are the
- * only combination the rest of this file's callers exercise, and "http" is the
- * only transport value the proxy actually accepts.
- *
- * mcpServers.spec.ts still carries its own inline copy of this flow. It
- * predates this helper and is green, so it was left alone rather than
- * refactored blind; fold it in the next time that spec is touched.
- */
+/** Creates an MCP server through the UI's discovery to custom-form flow and returns its name. */
 export async function createMcpServer(page: PwPage, url: string): Promise<string> {
   await navigateToPage(page, Page.McpServers);
 
@@ -26,10 +15,7 @@ export async function createMcpServer(page: PwPage, url: string): Promise<string
   const formModal = page.locator(".ant-modal:visible").filter({ hasText: "MCP Server Name" });
   await expect(formModal).toBeVisible({ timeout: 5_000 });
 
-  // validateMCPServerName rejects spaces and hyphens. The worker index is in
-  // the name because at workers>1 two workers can reach Date.now() in the same
-  // millisecond, and a duplicate name makes the create fail rather than the
-  // assertion.
+  // validateMCPServerName rejects spaces and hyphens; the worker index avoids a same-millisecond collision.
   const name = `e2e_mcp_${process.env.TEST_WORKER_INDEX ?? "0"}_${Date.now()}`;
   await formModal.locator('input[id="server_name"]').fill(name);
 
@@ -39,8 +25,7 @@ export async function createMcpServer(page: PwPage, url: string): Promise<string
 
   await formModal.locator('input[id="url"]').fill(url);
 
-  // The auth_type Form.Item has no label prop (CreateMCPServer.tsx), so anchor
-  // on the enclosing Collapse panel instead of label text.
+  // The auth_type Form.Item has no label prop, so anchor on the enclosing Collapse panel.
   const authSection = formModal.locator(".ant-collapse-item", { hasText: /^Authentication/ });
   await authSection.locator(".ant-form-item").first().locator(".ant-select").click();
   await page.locator(".ant-select-dropdown:visible").getByText("None", { exact: true }).click();
@@ -54,19 +39,9 @@ export async function createMcpServer(page: PwPage, url: string): Promise<string
 }
 
 /**
- * Deletes every server carrying `serverName`, through the API.
- *
- * Cleaning up is not housekeeping here, it is what keeps the MCP specs
- * runnable. Servers persist for the life of the database, the MCP page reaches
- * out to each one it lists, and a server whose URL does not answer holds that
- * up. Measured on a local stack: with eleven leaked servers, eight of them
- * pointing at an unreachable host, navigateToPage's networkidle wait stopped
- * settling inside 30s and every MCP spec failed -- including the ones that
- * leaked nothing. Deleting the leftovers made all five pass again.
- *
- * Failures here are swallowed on purpose: this runs from afterEach, and a
- * cleanup error reported as a test failure hides whatever the test itself
- * found.
+ * Deletes every server carrying `serverName`. Leaked servers break unrelated MCP specs: the page
+ * reaches out to each one it lists, so unreachable leftovers stall networkidle until it times out.
+ * Errors are swallowed because this runs from afterEach.
  */
 export async function deleteMcpServerByName(page: PwPage, serverName: string): Promise<void> {
   const headers = { Authorization: `Bearer ${masterKey()}` };
@@ -78,7 +53,7 @@ export async function deleteMcpServerByName(page: PwPage, serverName: string): P
       await page.request.delete(`/v1/mcp/server/${server.server_id}`, { headers });
     }
   } catch {
-    // best effort -- see above
+    // best effort, see above
   }
 }
 
