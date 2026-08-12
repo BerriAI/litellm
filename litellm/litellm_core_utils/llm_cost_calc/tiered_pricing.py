@@ -25,6 +25,17 @@ def _coerce_cost_per_token(value: float | str | None) -> float:
     return float(value)
 
 
+def _resolve_tier_cost_per_token(
+    tier: dict,
+    cost_key: str,
+    fallback_cost_key: str | None,
+) -> float:
+    primary: Final = tier.get(cost_key)
+    if primary is not None:
+        return _coerce_cost_per_token(primary)
+    return _coerce_cost_per_token(tier.get(fallback_cost_key, 0))
+
+
 def calculate_tiered_cost(
     tokens: int,
     tiered_pricing: list[dict],
@@ -84,8 +95,7 @@ def calculate_tiered_cost(
 
         if tier_end > tier_start:
             tokens_in_tier = tier_end - tier_start
-            cost_per_token = tier.get(cost_key) or tier.get(fallback_cost_key, 0)
-            total_cost += tokens_in_tier * _coerce_cost_per_token(cost_per_token)
+            total_cost += tokens_in_tier * _resolve_tier_cost_per_token(tier, cost_key, fallback_cost_key)
             tokens_processed = tier_end
 
     # After loop, check if any tokens remain (i.e., tokens > highest tier's end range)
@@ -93,8 +103,7 @@ def calculate_tiered_cost(
     if tokens_processed < tokens and sorted_tiers:
         last_tier: Final = sorted_tiers[-1]
         remaining_tokens: Final = tokens - tokens_processed
-        cost_per_token = last_tier.get(cost_key) or last_tier.get(fallback_cost_key, 0)
-        total_cost += remaining_tokens * _coerce_cost_per_token(cost_per_token)
+        total_cost += remaining_tokens * _resolve_tier_cost_per_token(last_tier, cost_key, fallback_cost_key)
 
     return total_cost
 
@@ -135,5 +144,4 @@ def tier_rate(
     fallback_cost_key: str | None = None,
 ) -> float:
     """Read a per-token rate from a tier, coercing YAML string costs to float."""
-    raw: Final = tier.get(cost_key) or tier.get(fallback_cost_key, 0)
-    return _coerce_cost_per_token(raw)
+    return _resolve_tier_cost_per_token(tier, cost_key, fallback_cost_key)
