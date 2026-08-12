@@ -675,26 +675,38 @@ def anthropic_messages_handler(
         or kwargs.get("drop_params") is True
     )
 
-    if should_drop_params:
-        anthropic_messages_optional_request_params = _drop_unsupported_anthropic_messages_params(
+    filtered_anthropic_messages_params: Final = (
+        _drop_unsupported_anthropic_messages_params(
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
             model=model,
             custom_llm_provider=custom_llm_provider,
             additional_drop_params=kwargs.get("additional_drop_params"),
         )
-    if is_reasoning_auto_summary_enabled():
-        thinking_param: Final = anthropic_messages_optional_request_params.get("thinking")
-        if isinstance(thinking_param, dict) and thinking_param.get("type") != "disabled":
-            anthropic_messages_optional_request_params["thinking"] = {
-                **thinking_param,
-                "display": "summarized",
+        if should_drop_params
+        else anthropic_messages_optional_request_params
+    )
+    thinking_param: Final = filtered_anthropic_messages_params.get("thinking")
+    final_anthropic_messages_params: Final = (
+        MappingProxyType(
+            {
+                **filtered_anthropic_messages_params,
+                "thinking": {
+                    **thinking_param,
+                    "display": "summarized",
+                },
             }
+        )
+        if is_reasoning_auto_summary_enabled()
+        and isinstance(thinking_param, dict)
+        and thinking_param.get("type") != "disabled"
+        else filtered_anthropic_messages_params
+    )
 
     return base_llm_http_handler.anthropic_messages_handler(
         model=model,
         messages=messages,
         anthropic_messages_provider_config=anthropic_messages_provider_config,
-        anthropic_messages_optional_request_params=dict(anthropic_messages_optional_request_params),
+        anthropic_messages_optional_request_params=dict(final_anthropic_messages_params),
         _is_async=is_async,
         client=client,
         custom_llm_provider=custom_llm_provider,
