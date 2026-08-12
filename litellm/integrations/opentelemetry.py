@@ -2,6 +2,7 @@ import os
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
@@ -26,7 +27,6 @@ from litellm.litellm_core_utils.service_tier_utils import (
     get_requested_service_tier,
     get_served_service_tier,
 )
-from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
@@ -88,6 +88,11 @@ class _ResponseWithUsageView(TypedDict, total=False):
 
 # Cap on credential-scoped providers held at once; each one owns an exporter thread.
 _MAX_DYNAMIC_TRACER_PROVIDERS: Final = 256
+
+# Dedicated so a dropped provider whose endpoint is unreachable, whose shutdown blocks for
+# the OTLP retry budget, cannot starve the shared executor that serves unrelated logging.
+# Threads spawn lazily, so a proxy that never evicts a provider never pays for this.
+_PROVIDER_SHUTDOWN_EXECUTOR: Final = ThreadPoolExecutor(max_workers=4, thread_name_prefix="OtelProviderShutdown")
 
 LITELLM_TRACER_NAME: Final = os.getenv("OTEL_TRACER_NAME", "litellm")
 LITELLM_METER_NAME: Final = os.getenv("LITELLM_METER_NAME", "litellm")
@@ -1103,7 +1108,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         if dropped is not None and shutdown_dropped:
             # Off the caller's thread: shutdown joins the exporter worker, which flushes
             # with the OTLP retry budget and would otherwise stall the event loop.
-            executor.submit(_shutdown_tracer_provider, dropped)
+            _PROVIDER_SHUTDOWN_EXECUTOR.submit(_shutdown_tracer_provider, dropped)
         return winner.get_tracer(LITELLM_TRACER_NAME)
 
     def _get_tracer_with_dynamic_config(self, dynamic_config: OpenTelemetryConfig) -> "_Tracer":
