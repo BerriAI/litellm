@@ -432,7 +432,7 @@ def _drop_unsupported_anthropic_messages_params(
     supports_reasoning: Final = AnthropicConfig._supports_model_capability(
         model, "supports_reasoning", custom_llm_provider or "anthropic"
     )
-    drop_context_management: Final = custom_llm_provider in ["vertex_ai", "bedrock"] and "haiku" in model.lower()
+    drop_context_management: Final = custom_llm_provider in ("vertex_ai", "bedrock") and "haiku" in model.lower()
     return MappingProxyType(
         {
             k: v
@@ -690,7 +690,7 @@ def anthropic_messages_handler(
         MappingProxyType(
             {
                 **filtered_anthropic_messages_params,
-                "thinking": {
+                "thinking": {  # mutable-ok: construct the summarized payload before freezing
                     **thinking_param,
                     "display": "summarized",
                 },
@@ -706,7 +706,9 @@ def anthropic_messages_handler(
         model=model,
         messages=messages,
         anthropic_messages_provider_config=anthropic_messages_provider_config,
-        anthropic_messages_optional_request_params=dict(final_anthropic_messages_params),
+        anthropic_messages_optional_request_params=dict(  # mutable-ok: downstream handler requires a dict
+            final_anthropic_messages_params
+        ),
         _is_async=is_async,
         client=client,
         custom_llm_provider=custom_llm_provider,
