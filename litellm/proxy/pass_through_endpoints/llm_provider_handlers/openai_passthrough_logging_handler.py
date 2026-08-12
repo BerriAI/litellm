@@ -583,6 +583,8 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 "response_cost": response_cost,
                 "model": model,
                 "custom_llm_provider": custom_llm_provider,
+                "call_type": litellm_logging_obj.call_type,
+                "messages": litellm_logging_obj.model_call_details.get("messages"),
                 "litellm_params": existing_litellm_params.copy(),
             }
 
@@ -599,8 +601,11 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                         user
                     )
 
-            # Create standard logging object
-            get_standard_logging_object_payload(
+            # Attach the payload to kwargs so the success handler adopts it;
+            # its later rebuild runs on a copy whose Responses usage was
+            # coerced to chat shape and serializes as total_tokens only,
+            # zeroing the prompt/completion split in spend logs.
+            standard_logging_object: Final = get_standard_logging_object_payload(
                 kwargs=kwargs,
                 init_response_obj=complete_response,
                 start_time=start_time,
@@ -608,6 +613,8 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 logging_obj=litellm_logging_obj,
                 status="success",
             )
+            if standard_logging_object is not None:
+                kwargs["standard_logging_object"] = standard_logging_object
 
             # Update logging object with cost information
             litellm_logging_obj.model_call_details["model"] = model
