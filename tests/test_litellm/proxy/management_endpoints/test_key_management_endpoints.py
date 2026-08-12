@@ -15663,8 +15663,9 @@ async def test_key_generate_omitted_budget_duration_still_takes_default_key_gene
 
 
 @pytest.mark.asyncio
-async def test_key_generate_explicit_null_budget_duration_beats_upperbound_fill(monkeypatch):
-    """upperbound_key_generate_params is a ceiling, so it must not resurrect a duration the caller nulled out."""
+async def test_key_generate_explicit_null_budget_duration_cannot_bypass_upperbound(monkeypatch):
+    """upperbound_key_generate_params is an admin ceiling: an explicit null must not mint an uncapped key,
+    otherwise any key creator could bypass configured limits (duration, budgets, rate limits)."""
     from litellm.types.proxy.management_endpoints.ui_sso import (
         LiteLLM_UpperboundKeyGenerateParams,
     )
@@ -15679,8 +15680,8 @@ async def test_key_generate_explicit_null_budget_duration_beats_upperbound_fill(
 
     key_row = await _generate_key_and_get_persisted_row(GenerateKeyRequest(budget_duration=None), mock_insert_data)
 
-    assert key_row["budget_duration"] is None
-    assert key_row["budget_reset_at"] is None
+    assert key_row["budget_duration"] == "30d"
+    assert key_row["budget_reset_at"] is not None
 
 
 @pytest.mark.asyncio

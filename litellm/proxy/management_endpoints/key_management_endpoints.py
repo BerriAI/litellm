@@ -805,7 +805,7 @@ def _enforce_upperbound_key_params(
         upperbound_value = getattr(litellm.upperbound_key_generate_params, key, None)
         if upperbound_value is not None:
             if value is None:
-                if fill_defaults and key not in data.model_fields_set:
+                if fill_defaults:
                     setattr(data, key, upperbound_value)
             else:
                 if key in [
