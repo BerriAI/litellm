@@ -4,8 +4,9 @@ Tests for Vertex AI (Veo) video generation transformation.
 
 import base64
 import json
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping, cast
+from typing import cast
 from unittest.mock import Mock, patch
 
 import httpx
