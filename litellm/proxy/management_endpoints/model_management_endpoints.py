@@ -2248,10 +2248,22 @@ async def clear_cache() -> ReconcileOutcome:
             config_models: Final = []
             db_model_ids: Final = []
 
+            db_router_names: Final = set()
+
             for model in current_models:
                 model_info = model.get("model_info", {})
                 if model_info.get("db_model", False):
                     db_model_ids.append(model_info.get("id"))
+                    # Auto-router deployments (and only those) are wiped here, in the
+                    # same pass, so the reload rebuilds them -- see the comment below.
+                    model_name = model.get("model_name")
+                    if model_name is not None and str(model.get("litellm_params", {}).get("model", "")).startswith(
+                        "auto_router/"
+                    ):
+                        db_router_names.add(model_name)
+                        router_model_id = model_info.get("id")
+                        if router_model_id is not None:
+                            llm_router.delete_deployment(id=router_model_id)
                 else:
                     # This is a config model, preserved by the reconcile below
                     config_models.append(model)
@@ -2267,8 +2279,9 @@ async def clear_cache() -> ReconcileOutcome:
             # visible to that comparison -- `blocked` and (for premium) `updated_at`
             # are written into model_info.
             #
-            # AUTO-ROUTER db deployments are the exception and ARE wiped, below,
-            # together with their strategy entries. Their strategy registries are keyed
+            # AUTO-ROUTER db deployments are the exception and ARE wiped -- in the
+            # classification pass above, together with the strategy entries popped
+            # just below. Their strategy registries are keyed
             # by model_name, which no deployment-id reconcile touches, so they have to
             # be popped and rebuilt here. But the rebuild only happens on the ADD path:
             # Router.upsert_deployment returns early when a deployment is unchanged and
@@ -2280,26 +2293,14 @@ async def clear_cache() -> ReconcileOutcome:
             # Deleting the deployment forces upsert down the add path, which rebuilds
             # both the deployment and its strategy entry.
             #
-            # Restrict to deployments whose model is actually an auto_router/* so a
-            # config router that merely shares a model_name with a regular db model
-            # isn't evicted -- config routers are never re-added by the reload (it only
-            # reloads db models) and would be permanently unroutable for every tenant.
+            # That pass restricts the wipe to deployments whose model is actually an
+            # auto_router/* so a config router that merely shares a model_name with a
+            # regular db model isn't evicted -- config routers are never re-added by the
+            # reload (it only reloads db models) and would be permanently unroutable.
             # The auto_router/ prefix also covers quality_router/ and adaptive_router/,
             # so pop the name from every registry (no-op where absent); a missing
             # quality/adaptive entry would otherwise make init raise "already exists"
             # on reload and abort it.
-            db_router_deployments: Final = [
-                model
-                for model in current_models
-                if model.get("model_name") is not None
-                and model.get("model_info", {}).get("db_model", False)
-                and str(model.get("litellm_params", {}).get("model", "")).startswith("auto_router/")
-            ]
-            db_router_names: Final = {model["model_name"] for model in db_router_deployments}
-            for model in db_router_deployments:
-                router_model_id = model.get("model_info", {}).get("id")
-                if router_model_id is not None:
-                    llm_router.delete_deployment(id=router_model_id)
             for model_name in db_router_names:
                 llm_router.auto_routers.pop(model_name, None)
                 llm_router.complexity_routers.pop(model_name, None)
