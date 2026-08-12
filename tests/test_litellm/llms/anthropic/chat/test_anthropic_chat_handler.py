@@ -1091,6 +1091,60 @@ def test_accumulated_json_concatenated_envelopes_do_not_wedge():
     assert iterator.accumulated_json == ""
 
 
+def test_accumulated_json_heuristic_passes_but_value_still_incomplete():
+    """
+    A buffer whose newest fragment ends in '}' can still be genuinely
+    incomplete (an inner object closed, the outer one didn't). The
+    heuristic must let the parse attempt through, and pop_next_value
+    finding nothing must propagate as None rather than raising.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+    iterator.chunk_type = "accumulated_json"
+
+    result = iterator._handle_accumulated_json_chunk('{"type": {"nested": 1}')
+    assert result is None
+
+
+def test_accumulated_json_setter_and_sync_end_of_stream_drain():
+    """
+    The accumulated_json setter and __next__'s StopIteration drain branch:
+    a buffered partial JSON must still parse and return when the
+    underlying stream ends, instead of being silently dropped.
+    """
+    obj = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}'
+    iterator = ModelResponseIterator(
+        streaming_response=iter([]), sync_stream=True, json_mode=False
+    )
+    iterator.chunk_type = "accumulated_json"
+    iterator.accumulated_json = obj  # exercises the setter
+
+    result = iterator.__next__()
+    assert result is not None
+    assert result.choices[0].delta.content == "a"
+
+
+def test_accumulated_json_async_end_of_stream_drain():
+    """Async twin of the sync end-of-stream drain test: __anext__'s
+    StopAsyncIteration branch must also parse a buffered value."""
+    import asyncio
+
+    obj = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}'
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=False, json_mode=False
+    )
+    iterator.chunk_type = "accumulated_json"
+    iterator.accumulated_json = obj
+    mock_async_iterator = MagicMock()
+    mock_async_iterator.__anext__ = AsyncMock(side_effect=StopAsyncIteration)
+    iterator.async_response_iterator = mock_async_iterator
+
+    result = asyncio.run(iterator.__anext__())
+    assert result is not None
+    assert result.choices[0].delta.content == "a"
+
+
 def test_web_search_tool_result_no_extra_tool_calls():
     """
     Test that web_search_tool_result blocks don't emit tool call chunks.

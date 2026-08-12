@@ -5552,3 +5552,21 @@ def test_accumulated_json_skips_non_dict_leading_value():
 
     assert len(out) == 1
     assert out[0].choices[0].delta.content == "a"
+
+
+def test_accumulated_json_async_end_of_stream_drains_buffered_value():
+    """Async twin of test_accumulated_json_end_of_stream_drains_all_buffered_values:
+    __anext__'s StopAsyncIteration branch must also parse a buffered value."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    obj = '{"candidates":[{"content":{"parts":[{"text":"a"}]}}],"usageMetadata":{}}'
+    iterator = _accumulating_gemini_iterator()
+    iterator.accumulated_json = obj
+    mock_async_iterator = MagicMock()
+    mock_async_iterator.__anext__ = AsyncMock(side_effect=StopAsyncIteration)
+    iterator.async_response_iterator = mock_async_iterator
+
+    result = asyncio.run(iterator.__anext__())
+    assert result is not None
+    assert result.choices[0].delta.content == "a"
