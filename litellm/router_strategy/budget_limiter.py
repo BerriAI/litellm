@@ -532,7 +532,7 @@ class RouterBudgetLimiting(CustomLogger):
 
         Only runs if Redis is initialized
         """
-        increment_operations_to_flush: list[
+        increment_operations_to_flush: list[  # mutable-ok: Redis pipeline contract requires a concrete mutable batch
             RedisPipelineIncrementOperation
         ] = (  # mutable-ok: Redis pipeline contract requires a list batch
             []  # mutable-ok: Redis pipeline batches are lists
