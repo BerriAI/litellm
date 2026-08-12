@@ -4,6 +4,8 @@ stay truthful to who failed."""
 
 import httpx
 import pytest
+from mcp import McpError
+from mcp.types import ErrorData
 
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
@@ -31,6 +33,16 @@ def test_upstream_auth_error_maps_to_auth_required_and_forbidden():
 def test_timeout_and_connection_errors_classify_without_status():
     assert classify_list_exception(TimeoutError()).tag == "timeout"
     assert classify_list_exception(ConnectionError()).tag == "unreachable"
+
+
+def test_upstream_json_rpc_error_code_is_never_read_as_an_http_status():
+    """JSON-RPC error codes and HTTP status codes are different namespaces, so an upstream is free
+    to answer with application code 408. Classifying that number as a gateway timeout would report
+    a 504 the gateway never caused. A client timeout reaches here already expressed as a
+    ``TimeoutError``, so this taxonomy never has to read the code to tell them apart."""
+    upstream_error = McpError(ErrorData(code=int(httpx.codes.REQUEST_TIMEOUT), message="re-authenticate and retry"))
+    assert classify_list_exception(upstream_error).tag != "timeout"
+    assert list_fault_http_status(classify_list_exception(upstream_error)) != 504
 
 
 def test_embedded_upstream_response_status_wins():
