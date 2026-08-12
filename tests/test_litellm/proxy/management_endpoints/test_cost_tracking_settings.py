@@ -600,3 +600,86 @@ class TestEstimateCostOnPremProvider:
         assert response.daily_cost == pytest.approx(0.2)
         assert response.input_cost_per_token == pytest.approx(0.000001)
         assert response.output_cost_per_token == pytest.approx(0.000002)
+
+    @pytest.mark.asyncio
+    async def test_estimate_cost_onprem_model_with_model_info_pricing(self):
+        """
+        Custom pricing configured under model_info (how DB / Admin UI added
+        deployments store it) must be honored, not just litellm_params pricing.
+
+        completion_cost is intentionally NOT mocked.
+        """
+        from litellm.proxy._types import CostEstimateRequest
+        from litellm.proxy.management_endpoints.cost_tracking_settings import (
+            estimate_cost,
+        )
+
+        request = CostEstimateRequest(
+            model="nvidia/zai-org/glm-5.2",
+            input_tokens=1000,
+            output_tokens=500,
+        )
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "nvidia/zai-org/glm-5.2",
+                "litellm_params": {
+                    "model": "zai-org/GLM-5.2",
+                    "custom_llm_provider": "openai",
+                },
+                "model_info": {
+                    "input_cost_per_token": 0.000003,
+                    "output_cost_per_token": 0.000004,
+                },
+            }
+        ]
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+            response = await estimate_cost(request=request, user_api_key_dict=MagicMock())
+
+        assert response.provider == "openai"
+        assert response.cost_per_request == pytest.approx(0.005)
+        assert response.input_cost_per_token == pytest.approx(0.000003)
+        assert response.output_cost_per_token == pytest.approx(0.000004)
+
+    @pytest.mark.asyncio
+    async def test_estimate_cost_litellm_params_pricing_overrides_model_info(self):
+        """
+        When pricing is set in both places, litellm_params wins, matching the
+        router's cost-map registration precedence.
+        """
+        from litellm.proxy._types import CostEstimateRequest
+        from litellm.proxy.management_endpoints.cost_tracking_settings import (
+            estimate_cost,
+        )
+
+        request = CostEstimateRequest(
+            model="nvidia/zai-org/glm-5.2",
+            input_tokens=1000,
+            output_tokens=500,
+        )
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "nvidia/zai-org/glm-5.2",
+                "litellm_params": {
+                    "model": "zai-org/GLM-5.2",
+                    "custom_llm_provider": "openai",
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                },
+                "model_info": {
+                    "input_cost_per_token": 0.000003,
+                    "output_cost_per_token": 0.000004,
+                },
+            }
+        ]
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+            response = await estimate_cost(request=request, user_api_key_dict=MagicMock())
+
+        assert response.cost_per_request == pytest.approx(0.002)
+        assert response.input_cost_per_token == pytest.approx(0.000001)
+        assert response.output_cost_per_token == pytest.approx(0.000002)

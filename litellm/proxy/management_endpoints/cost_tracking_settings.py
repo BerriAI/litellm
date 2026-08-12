@@ -38,16 +38,24 @@ class ResolvedCostModel:
     custom_cost_per_token: CostPerToken | None
 
 
-def _extract_custom_pricing(litellm_params: Mapping[str, object]) -> CostPerToken | None:
+def _configured_price(key: str, sources: tuple[Mapping[str, object], ...]) -> float | None:
+    values: Final = (source.get(key) for source in sources)
+    numeric: Final = (float(value) for value in values if isinstance(value, (int, float)))
+    return next(numeric, None)
+
+
+def _extract_custom_pricing(
+    litellm_params: Mapping[str, object], model_info: Mapping[str, object]
+) -> CostPerToken | None:
     """
     Pull per-token pricing configured on a deployment so on-prem / self-hosted
     models (absent from the public cost map) still estimate a real cost.
+    Pricing may live on ``litellm_params`` or ``model_info``; ``litellm_params``
+    wins, matching the router's cost-map registration precedence.
     """
-    input_cost: Final = litellm_params.get("input_cost_per_token")
-    output_cost: Final = litellm_params.get("output_cost_per_token")
-
-    input_price: Final = float(input_cost) if isinstance(input_cost, (int, float)) else None
-    output_price: Final = float(output_cost) if isinstance(output_cost, (int, float)) else None
+    sources: Final = (litellm_params, model_info)
+    input_price: Final = _configured_price("input_cost_per_token", sources)
+    output_price: Final = _configured_price("output_cost_per_token", sources)
 
     if input_price is None and output_price is None:
         return None
@@ -89,7 +97,7 @@ def _resolve_model_for_cost_lookup(model: str) -> ResolvedCostModel:
                 model_info: Final = first_deployment.get("model_info", {})
                 custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
                 provider: Final = str(custom_llm_provider) if custom_llm_provider is not None else None
-                custom_cost_per_token: Final = _extract_custom_pricing(litellm_params)
+                custom_cost_per_token: Final = _extract_custom_pricing(litellm_params, model_info)
 
                 # Check base_model first (needed for Azure custom deployment names)
                 base_model: Final = model_info.get("base_model") or litellm_params.get("base_model")
