@@ -2595,6 +2595,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
         if isinstance(assembled_model_response, ModelResponse):
             pre_guardrail_text: Final = model_response_text(assembled_model_response)
+            _pre_block_response: Final = assembled_model_response
             ####################################################################
             ########## 1. Make Bedrock Apply Guardrail API request ##########
             #
@@ -2637,6 +2638,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 )
                 if _original_usage is not None:
                     assembled_model_response.usage = _original_usage
+                if raw_sse:
+                    assembled_model_response.id = _pre_block_response.id
+                    assembled_model_response.model = _pre_block_response.model
                 output_guardrail_response = None
 
             #########################################################################
@@ -2652,8 +2656,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             ########## 3. Return the (potentially masked) chunks ##########
             #########################################################################
             if raw_sse:
-                # Re-encoding cannot reproduce every upstream frame, so the originals are forwarded
-                # whenever the guardrail left the response alone.
                 for sse_chunk in (
                     anthropic_sse_chunks_from_response(assembled_model_response)
                     if model_response_text(assembled_model_response) != pre_guardrail_text

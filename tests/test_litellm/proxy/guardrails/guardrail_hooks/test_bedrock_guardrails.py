@@ -2866,7 +2866,9 @@ async def _anthropic_sse_stream():
         yield chunk
 
 
-async def _drain_streaming_hook(guardrail, request_data=None):
+async def _drain_streaming_hook(
+    guardrail: BedrockGuardrail, request_data: dict[str, object] | None = None
+) -> list[object]:
     return [
         chunk
         async for chunk in guardrail.async_post_call_streaming_iterator_hook(
@@ -2879,7 +2881,7 @@ async def _drain_streaming_hook(guardrail, request_data=None):
     ]
 
 
-def _sse_guardrail(**kwargs):
+def _sse_guardrail(**kwargs: object) -> BedrockGuardrail:
     return BedrockGuardrail(
         guardrail_name="bedrock-sse",
         guardrailIdentifier="test-guardrail",
@@ -2930,6 +2932,25 @@ async def test_streaming_hook_emits_masked_text_for_raw_anthropic_sse():
     body = b"".join(delivered)
     assert b"{SSN}" in body
     assert b"123-45-6789" not in body
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_block_stream_keeps_upstream_identity():
+    """A blocked stream must carry the same id and model as the mask path, not the proxy alias."""
+    guardrail = _sse_guardrail(disable_exception_on_block=True)
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.side_effect = ModifyResponseException(
+            message="Sorry, the model cannot answer this question.",
+            model="my-proxy-alias",
+            request_data={},
+        )
+        delivered = await _drain_streaming_hook(guardrail)
+
+    body = b"".join(delivered)
+    assert b'"id": "msg_1"' in body
+    assert b'"model": "claude"' in body
+    assert b"my-proxy-alias" not in body
 
 
 @pytest.mark.asyncio

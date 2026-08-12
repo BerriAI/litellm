@@ -47,6 +47,11 @@ def _anthropic_message_start(sse_stream: str) -> Mapping[str, object] | None:
 
 
 def assemble_anthropic_sse_stream(all_chunks: Sequence[object]) -> ModelResponse | None:
+    """Assemble raw Anthropic SSE frames into a ModelResponse, restoring the upstream id and model.
+
+    The assembler does not carry either through, and they are written onto the freshly built object
+    rather than copied into a new one because it is unreachable from caller state until returned.
+    """
     from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
         AnthropicPassthroughLoggingHandler,
     )
@@ -59,8 +64,6 @@ def assemble_anthropic_sse_stream(all_chunks: Sequence[object]) -> ModelResponse
         return None
     model: Final = message_start.get("model")
     try:
-        # stream_chunk_builder re-raises every assembly failure as litellm.APIError, which the
-        # passthrough caller of this same assembler also catches broadly
         assembled: Final = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(  # pyright: ignore[reportPrivateUsage]  # the only SSE-to-ModelResponse assembler; reimplementing it here would fork the parser
             all_chunks=(sse_stream,),
             litellm_logging_obj=None,  # pyright: ignore[reportArgumentType]  # only forwarded to stream_chunk_builder, which accepts None
