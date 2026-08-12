@@ -2401,6 +2401,23 @@ def test_ConfigGeneralSettings_rejects_invalid_config_source_of_truth():
         ConfigGeneralSettings.model_validate({"config_source_of_truth": "invalid"})
 
 
+def test_ProxyConfig__record_deployed_config_accepts_enum_source():
+    pc = ProxyConfig()
+
+    pc._record_deployed_config(
+        {"general_settings": {"config_source_of_truth": ConfigSourceOfTruth.CONFIG_FILE}}
+    )
+
+    assert pc._config_source_of_truth is ConfigSourceOfTruth.CONFIG_FILE
+
+
+def test_ProxyConfig__record_deployed_config_rejects_non_string_source():
+    pc = ProxyConfig()
+
+    with pytest.raises(ValueError, match="config_source_of_truth"):
+        pc._record_deployed_config({"general_settings": {"config_source_of_truth": 1}})
+
+
 def test_ProxyConfig__update_config_fields_config_file_wins_conflicts():
     pc = ProxyConfig()
     pc._record_deployed_config({"general_settings": {"config_source_of_truth": "config_file"}})
@@ -2447,6 +2464,33 @@ def test_ProxyConfig__update_config_fields_config_file_env_wins_case_insensitive
     assert out["environment_variables"]["DB_ONLY"] == "database-only"
     assert "API_KEY" not in os.environ
     assert os.environ["DB_ONLY"] == "database-only"
+
+
+def test_ProxyConfig__update_config_fields_config_file_applies_safe_litellm_settings(monkeypatch):
+    pc = ProxyConfig()
+    pc._record_deployed_config({"general_settings": {"config_source_of_truth": "config_file"}})
+    monkeypatch.setattr(litellm, "max_ui_session_budget", 0.0)
+
+    out = pc._update_config_fields(
+        current_config={"litellm_settings": {"max_ui_session_budget": 10.0}},
+        param_name="litellm_settings",
+        db_param_value={"max_ui_session_budget": 20.0, "db_only": True},
+    )
+
+    assert out["litellm_settings"] == {"max_ui_session_budget": 10.0, "db_only": True}
+    assert litellm.max_ui_session_budget == 10.0
+
+
+def test_ProxyConfig__update_config_fields_database_replaces_mismatched_value_types():
+    pc = ProxyConfig()
+
+    out = pc._update_config_fields(
+        current_config={"router_settings": {"timeout": 10}},
+        param_name="router_settings",
+        db_param_value=["database-value"],
+    )
+
+    assert out["router_settings"] == ["database-value"]
 
 
 @pytest.mark.asyncio
