@@ -1562,9 +1562,6 @@
     }
   },
   "src/app/(dashboard)/prompts/_components/prompt_editor_view/VersionHistorySidePanel.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 1
-    },
     "no-nested-ternary": {
       "count": 1
     },

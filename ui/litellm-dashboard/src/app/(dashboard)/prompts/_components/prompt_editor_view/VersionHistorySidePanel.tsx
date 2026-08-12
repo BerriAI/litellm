@@ -98,7 +98,7 @@ const VersionHistorySidePanel: React.FC<VersionHistorySidePanelProps> = ({
       </header>
       <div className="overflow-y-auto px-4 pb-4">
         {loading ? (
-          <div className="space-y-3" aria-label="Loading version history">
+          <div className="space-y-3" role="status" aria-label="Loading version history">
             <Skeleton className="h-24 w-full" />
             <Skeleton className="h-24 w-full" />
             <Skeleton className="h-24 w-full" />
