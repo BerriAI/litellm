@@ -171,6 +171,7 @@ try:
     import orjson
     import yaml
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.interval import IntervalTrigger
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
 
@@ -344,6 +345,12 @@ from litellm.proxy.common_utils.periodic_reload_schedule import (
 )
 from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
+from litellm.proxy.common_utils.scheduled_job_stagger import (
+    apply_scheduled_job_stagger,
+    attach_job_timing_logger,
+    parse_stagger_settings,
+    stagger_trigger,
+)
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_settings,
@@ -6142,10 +6149,17 @@ class ProxyConfig:
                 retention_interval: Final = general_settings.get("maximum_spend_logs_retention_interval", "1d")
                 try:
                     interval_seconds: Final = duration_in_seconds(retention_interval)
+                    # this runs against a started scheduler, which the startup stagger sweep
+                    # cannot reach, so the offset is applied here or the job reconverges across
+                    # replicas the first time an admin edits the retention settings
                     scheduler.add_job(
                         spend_log_cleanup.cleanup_old_spend_logs,
-                        "interval",
-                        seconds=interval_seconds + random.randint(0, 60),
+                        stagger_trigger(
+                            job_id="spend_log_cleanup_job",
+                            trigger=IntervalTrigger(seconds=interval_seconds),
+                            period_seconds=interval_seconds,
+                            settings=parse_stagger_settings(general_settings),
+                        ),
                         args=[prisma_client],
                         id="spend_log_cleanup_job",
                         replace_existing=True,
@@ -8930,6 +8944,14 @@ class ProxyStartupEvent:
         # MEMORY LEAK FIX: Start scheduler with paused=False to avoid backlog processing
         # Do NOT reset job times to "now" as this can trigger the memory leak
         # The misfire_grace_time and coalesce settings will handle any missed runs properly
+
+        # Every job above anchors on this process's start instant, so without a phase offset
+        # they all fire together, on every replica the rollout brought up at the same time
+        attach_job_timing_logger(scheduler)
+        apply_scheduled_job_stagger(
+            scheduler=scheduler,
+            settings=parse_stagger_settings(general_settings),
+        )
 
         # Start the scheduler immediately without processing backlogs
         scheduler.start(paused=False)

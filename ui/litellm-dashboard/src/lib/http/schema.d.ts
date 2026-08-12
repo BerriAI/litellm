@@ -23640,6 +23640,8 @@ export interface components {
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
             reject_clientside_metadata_tags?: boolean | null;
+            /** @description Spreads the proxy's scheduled background jobs (spend flushes, budget resets, config reloads, exports) across a window instead of firing them together on every replica. On by default; set to tune the window, pin a job, or turn it off. */
+            scheduled_job_stagger?: components["schemas"]["ScheduledJobStaggerSettings"] | null;
             /**
              * Store Model In Db
              * @description If True, models and config are stored in and loaded from the database. Default is False.
@@ -32443,6 +32445,37 @@ export interface components {
             values: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * ScheduledJobStaggerSettings
+         * @description Spreads the proxy's scheduled background jobs across a window instead of firing them
+         *     all on one instant, on every replica, forever.
+         */
+        ScheduledJobStaggerSettings: {
+            /**
+             * Enabled
+             * @description apply deterministic phase offsets to scheduled background jobs
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Identity
+             * @description replaces the POD_NAME/HOSTNAME-derived component of the offset hash. Set this when replicas share a hostname and would otherwise land on the same offset
+             */
+            identity?: string | null;
+            /**
+             * Offsets
+             * @description explicit offset in seconds per scheduler job id, overriding the derived value. 0 pins a job to its unshifted schedule
+             */
+            offsets?: {
+                [key: string]: number;
+            };
+            /**
+             * Window Seconds
+             * @description width of the window jobs are spread over. An interval job is never offset by more than one of its own periods, so it is not delayed past the wait it already has
+             * @default 300
+             */
+            window_seconds: number;
         };
         /**
          * SearchTool
