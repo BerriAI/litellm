@@ -646,6 +646,24 @@ def _validate_anthropic_content(content: Mapping[str, Any]) -> type:
     return expected_cls
 
 
+def _anthropic_image_source_data(source: Mapping[str, str]) -> str:
+    """
+    Resolve an Anthropic image `source` to the data string `calculate_img_tokens` prices.
+
+    Returns "" for a `file` source, whose bytes the proxy cannot resolve locally.
+    """
+    source_type: Final = source.get("type")
+    if source_type == "base64":
+        data: Final = source.get("data")
+        if not data:
+            return ""
+        media_type: Final = source.get("media_type") or "image/png"
+        return f"data:{media_type};base64,{data}"
+    if source_type == "url":
+        return source.get("url") or ""
+    return ""
+
+
 def _count_anthropic_content(
     content: Mapping[str, Any],
     count_function: TokenCounterFunction,
@@ -714,6 +732,13 @@ def _count_content_list(
             elif c["type"] == "image_url":
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(image_url, use_default_image_token_count)
+            elif c["type"] == "image":
+                source = c.get("source")
+                num_tokens += calculate_img_tokens(
+                    data=_anthropic_image_source_data(source) if isinstance(source, dict) else "",
+                    mode="auto",
+                    use_default_image_token_count=use_default_image_token_count,
+                )
             elif c["type"] in ("tool_use", "tool_result"):
                 num_tokens += _count_anthropic_content(
                     c,
@@ -742,7 +767,8 @@ def _count_content_list(
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
-                    f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking, tool_reference)."
+                    f"Expected str or dict with 'type' field "
+                    f"(text, image_url, image, tool_use, tool_result, thinking, tool_reference)."
                 )
         return num_tokens
     except Exception as e:
