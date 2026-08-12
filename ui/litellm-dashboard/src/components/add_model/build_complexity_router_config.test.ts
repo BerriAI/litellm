@@ -472,7 +472,7 @@ describe("classifier prompt and fallback", () => {
       classifierLlmConfig: {
         model: "haiku-classifier",
         timeout_ms: 400,
-        classification_classification_rubric: "chat",
+        classification_rubric: "chat",
         system_prompt: "Grade the data sensitivity of the request.",
       },
     });
