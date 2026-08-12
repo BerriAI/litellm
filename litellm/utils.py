@@ -3764,13 +3764,12 @@ def get_optional_params_embeddings(
     if "extra_body" in final_params and len(final_params["extra_body"]) == 0:
         final_params.pop("extra_body", None)
 
-    # High-performance check optimized to avoid allocations in hot paths
     if (
         (litellm.drop_params is True or drop_params is True)
         and (custom_llm_provider == "azure" or custom_llm_provider in litellm.openai_compatible_providers)
         and model is not None
         and "text-embedding-3" not in model
-        and "dimensions" not in (allowed_openai_params or [])
+        and "dimensions" not in (allowed_openai_params or ())
     ):
         final_params.pop("dimensions", None)
 
