@@ -3430,8 +3430,7 @@ def get_optional_params_embeddings(
     special_params: Final = passed_params.pop("kwargs")
 
     drop_params = passed_params.pop("drop_params", None)
-    if drop_params is None:
-        drop_params = litellm.drop_params or False
+    drop_params = litellm.drop_params or False if drop_params is None else drop_params
 
     additional_drop_params = passed_params.pop("additional_drop_params", None)
 
@@ -3766,11 +3765,14 @@ def get_optional_params_embeddings(
         final_params.pop("extra_body", None)
 
     # High-performance check optimized to avoid allocations in hot paths
-    if litellm.drop_params is True or drop_params is True:
-        if custom_llm_provider == "azure" or custom_llm_provider in litellm.openai_compatible_providers:
-            is_legacy_model = model is not None and "text-embedding-3" not in model
-            if is_legacy_model and "dimensions" not in (allowed_openai_params or []):
-                final_params.pop("dimensions", None)
+    if (
+        (litellm.drop_params is True or drop_params is True)
+        and (custom_llm_provider == "azure" or custom_llm_provider in litellm.openai_compatible_providers)
+        and model is not None
+        and "text-embedding-3" not in model
+        and "dimensions" not in (allowed_openai_params or [])
+    ):
+        final_params.pop("dimensions", None)
 
     return final_params
 
