@@ -298,6 +298,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         request_data: Mapping[str, Any],
         exception: Exception,
         call_type: CallTypes | None,
+        fallback_depth: int | None = None,
     ) -> None:
         """
         Called once per failed deployment attempt - attempt 1, every retry, and
@@ -314,6 +315,15 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         Pairs with ``async_pre_call_deployment_hook`` and
         ``async_post_call_success_deployment_hook`` to complete the
         pre-call/success/failure lifecycle for a single deployment attempt.
+
+        ``fallback_depth`` is best-effort: ``None`` on the first attempt and on
+        any call made without a ``Router`` (a bare SDK call has no fallback
+        chain to be at a depth in), ``1`` on the first fallback hop, ``2`` on
+        the second, and so on. It reflects ``Router``'s own internal fallback
+        bookkeeping (``kwargs["fallback_depth"]``), not a value this hook
+        computes or guarantees the shape of across versions. It tracks
+        fallback hops only, not retries within the same model group - a
+        retry-only failure (no fallback yet) also reports ``None``.
 
         Default: no-op. Opt in by overriding. Keep overrides fast - this
         runs on the request's exception path, so a slow implementation

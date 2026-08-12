@@ -4985,10 +4985,10 @@ def test_completion_does_not_leak_rust_flag_into_provider_request_body():
 class _RecordingDeploymentFailureLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.calls: list[tuple[dict, Exception, CallTypes | None]] = []
+        self.calls: list[tuple[dict, Exception, CallTypes | None, int | None]] = []
 
-    async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type):
-        self.calls.append((request_data, exception, call_type))
+    async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type, fallback_depth=None):
+        self.calls.append((request_data, exception, call_type, fallback_depth))
 
 
 @pytest.mark.asyncio
@@ -5006,10 +5006,11 @@ async def test_async_post_call_failure_deployment_hook_calls_custom_logger_callb
     )
 
     assert len(recorder.calls) == 1
-    request_data, received_exc, call_type = recorder.calls[0]
+    request_data, received_exc, call_type, fallback_depth = recorder.calls[0]
     assert request_data == {"model": "gpt-4o-mini"}
     assert received_exc is exc
     assert call_type == CallTypes.acompletion
+    assert fallback_depth is None
 
 
 @pytest.mark.asyncio
@@ -5028,13 +5029,48 @@ async def test_async_post_call_failure_deployment_hook_falls_back_to_none_call_t
 
 
 @pytest.mark.asyncio
+async def test_async_post_call_failure_deployment_hook_passes_through_fallback_depth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """fallback_depth on request_data (set by Router on each fallback hop) must reach the
+    callback unchanged, so a subscriber can tell which fallback hop this failure is from."""
+    recorder = _RecordingDeploymentFailureLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    await async_post_call_failure_deployment_hook(
+        request_data={"fallback_depth": 2}, exception=ValueError("x"), call_type="acompletion"
+    )
+
+    assert recorder.calls[0][3] == 2
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_deployment_hook_fallback_depth_defaults_to_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """fallback_depth must be None, not raise or pass through garbage, when request_data has
+    no fallback_depth at all (first attempt, or a bare SDK call with no Router) or a
+    non-int value there."""
+    recorder = _RecordingDeploymentFailureLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    await async_post_call_failure_deployment_hook(request_data={}, exception=ValueError("x"), call_type="acompletion")
+    await async_post_call_failure_deployment_hook(
+        request_data={"fallback_depth": "not-an-int"}, exception=ValueError("y"), call_type="acompletion"
+    )
+
+    assert recorder.calls[0][3] is None
+    assert recorder.calls[1][3] is None
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_deployment_hook_swallows_callback_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A callback that raises inside the hook must not propagate out of the dispatcher."""
 
     class ExplodingLogger(CustomLogger):
-        async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type):
+        async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type, fallback_depth=None):
             raise RuntimeError("hook exploded")
 
     monkeypatch.setattr(litellm, "callbacks", [ExplodingLogger()])
@@ -5077,9 +5113,10 @@ async def test_wrapper_async_fires_post_call_failure_deployment_hook_once_per_fa
         )
 
     assert len(recorder.calls) == 1
-    _, received_exc, call_type = recorder.calls[0]
+    _, received_exc, call_type, fallback_depth = recorder.calls[0]
     assert isinstance(received_exc, litellm.AuthenticationError)
     assert call_type == CallTypes.acompletion
+    assert fallback_depth is None
 
 
 @pytest.mark.asyncio
@@ -5090,7 +5127,7 @@ async def test_wrapper_async_raises_original_exception_even_if_hook_callback_err
     exception the caller is waiting on."""
 
     class ExplodingLogger(CustomLogger):
-        async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type):
+        async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type, fallback_depth=None):
             raise RuntimeError("hook exploded")
 
     monkeypatch.setattr(litellm, "callbacks", [ExplodingLogger()])
@@ -5101,3 +5138,61 @@ async def test_wrapper_async_raises_original_exception_even_if_hook_callback_err
             messages=[{"role": "user", "content": "hi"}],
             mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
         )
+
+
+@pytest.mark.asyncio
+async def test_router_fallback_chain_reports_increasing_fallback_depth(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: a real Router fallback chain must report fallback_depth=None on the
+    first, pre-fallback attempt and fallback_depth=1 on the first fallback hop - the
+    concrete scenario async_post_call_failure_deployment_hook exists to make visible."""
+    recorder = _RecordingDeploymentFailureLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "bad-group", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "bad-a"}},
+            {"model_name": "good-group", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "bad-b"}},
+        ],
+        num_retries=0,
+        fallbacks=[{"bad-group": ["good-group"]}],
+    )
+
+    with pytest.raises(litellm.AuthenticationError):
+        await router.acompletion(
+            model="bad-group",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
+        )
+
+    assert len(recorder.calls) == 2
+    assert recorder.calls[0][3] is None
+    assert recorder.calls[1][3] == 1
+
+
+@pytest.mark.asyncio
+async def test_router_multi_hop_fallback_chain_reports_depth_per_hop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: fallback_depth must keep incrementing across more than one fallback
+    hop (group-a -> group-b -> group-c, all failing), not just report 1 for every
+    fallback attempt regardless of how deep the chain has gone."""
+    recorder = _RecordingDeploymentFailureLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "group-a", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "bad-a"}},
+            {"model_name": "group-b", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "bad-b"}},
+            {"model_name": "group-c", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "bad-c"}},
+        ],
+        num_retries=0,
+        fallbacks=[{"group-a": ["group-b", "group-c"]}],
+    )
+
+    with pytest.raises(litellm.AuthenticationError):
+        await router.acompletion(
+            model="group-a",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
+        )
+
+    assert len(recorder.calls) == 3
+    assert [call[3] for call in recorder.calls] == [None, 1, 2]

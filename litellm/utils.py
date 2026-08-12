@@ -1263,17 +1263,26 @@ async def async_post_call_failure_deployment_hook(
     in its own try/except: it runs on the wrapper's exception path, so a
     broken callback must never replace the real exception that's about to be
     re-raised to the caller.
+
+    Reads ``fallback_depth`` off ``request_data`` (set by ``Router`` on each
+    fallback hop) and passes it through to the callback; ``None`` when
+    missing or not an int, since a bare SDK call has no fallback chain.
     """
     try:
         typed_call_type = CallTypes(call_type)
     except ValueError:
         typed_call_type = None  # unknown call type
 
+    _raw_fallback_depth: Final = request_data.get("fallback_depth")
+    fallback_depth: Final = _raw_fallback_depth if isinstance(_raw_fallback_depth, int) else None
+
     CustomLogger: Final = _get_cached_custom_logger()
     for callback in litellm.callbacks:
         if isinstance(callback, CustomLogger):
             try:
-                await callback.async_post_call_failure_deployment_hook(request_data, exception, typed_call_type)
+                await callback.async_post_call_failure_deployment_hook(
+                    request_data, exception, typed_call_type, fallback_depth=fallback_depth
+                )
             except Exception as callback_error:  # noqa: BLE001  # a broken callback must not mask the real failure
                 verbose_logger.debug(
                     "async_post_call_failure_deployment_hook error in %s: %s",
