@@ -805,7 +805,7 @@ def _enforce_upperbound_key_params(
         upperbound_value = getattr(litellm.upperbound_key_generate_params, key, None)
         if upperbound_value is not None:
             if value is None:
-                if fill_defaults:
+                if fill_defaults and key not in data.model_fields_set:
                     setattr(data, key, upperbound_value)
             else:
                 if key in [
@@ -888,7 +888,7 @@ async def _common_key_generation_helper(
     if litellm.default_key_generate_params is not None:
         for elem in data:
             key, value = elem
-            if value is None and key in [
+            if key not in data.model_fields_set and key in [
                 "max_budget",
                 "user_id",
                 "team_id",
@@ -898,7 +898,9 @@ async def _common_key_generation_helper(
                 "budget_duration",
                 "duration",
             ]:
-                setattr(data, key, litellm.default_key_generate_params.get(key, None))
+                default_value = litellm.default_key_generate_params.get(key)
+                if default_value is not None:
+                    setattr(data, key, default_value)
             elif key == "models" and value == []:
                 setattr(data, key, litellm.default_key_generate_params.get(key, []))
             elif key == "metadata" and value == {}:
