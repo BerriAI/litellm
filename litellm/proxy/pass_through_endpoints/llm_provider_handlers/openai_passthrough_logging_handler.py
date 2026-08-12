@@ -542,7 +542,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             handler: Final = OpenAIPassthroughLoggingHandler()
             handler_instance: Final = handler
             complete_response: Final = (
-                OpenAIResponsesAPIConfig.parse_completed_response_from_stream_chunks(all_chunks=all_chunks)
+                OpenAIResponsesAPIConfig.parse_terminal_response_from_stream_chunks(all_chunks=all_chunks)
                 if is_responses
                 else handler._build_complete_streaming_response(
                     all_chunks=all_chunks,
