@@ -1,7 +1,15 @@
-import type { FormInstance, UploadProps } from "antd";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import type { ComponentProps } from "react";
 
-export function vertexCredentialsUploadProps(form: FormInstance): UploadProps {
+import NotificationsManager from "@/components/molecules/notifications_manager";
+import type CredentialsPanel from "@/components/model_add/CredentialsPanel";
+
+interface VertexCredentialsForm {
+  setFieldsValue: (values: { vertex_credentials: string }) => void;
+}
+
+type UploadProps = ComponentProps<typeof CredentialsPanel>["uploadProps"];
+
+export function vertexCredentialsUploadProps(form: VertexCredentialsForm): UploadProps {
   return {
     name: "file",
     accept: ".json",

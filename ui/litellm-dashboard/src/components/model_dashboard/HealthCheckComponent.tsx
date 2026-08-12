@@ -1,13 +1,19 @@
 import { OnChangeFn, PaginationState, RowSelectionState } from "@tanstack/react-table";
-import { Modal } from "antd";
-import { Button as AntdButton } from "antd";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { errorPatterns } from "@/utils/errorPatterns";
 
 import { Team } from "../key_team_helpers/key_list";
 import { individualModelHealthCheckCall, latestHealthChecksCall } from "../networking";
-import { Button } from "@/components/ui/button";
 import { HealthChecksTable } from "./HealthChecksTable";
 import type { HealthCheckData, HealthStatus } from "./HealthChecksTableColumns";
 
@@ -541,71 +547,85 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
         teams={teams}
       />
 
-      {/* Error Modal */}
-      <Modal
-        title={selectedErrorDetails ? `Health Check Error - ${selectedErrorDetails.modelName}` : "Error Details"}
+      <Dialog
         open={errorModalVisible}
-        onCancel={closeErrorModal}
-        footer={[
-          <AntdButton key="close" onClick={closeErrorModal}>
-            Close
-          </AntdButton>,
-        ]}
-        width={800}
+        onOpenChange={(open) => {
+          if (!open) closeErrorModal();
+        }}
       >
-        {selectedErrorDetails && (
-          <div className="space-y-4">
-            <div>
-              <span className="font-medium">Error:</span>
-              <div className="mt-2 rounded-md border border-red-200 bg-red-50 p-3">
-                <span className="text-red-800">{selectedErrorDetails.cleanedError}</span>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>
+              {selectedErrorDetails ? `Health Check Error - ${selectedErrorDetails.modelName}` : "Error Details"}
+            </DialogTitle>
+            <DialogDescription>Details returned by the model health check.</DialogDescription>
+          </DialogHeader>
+          {selectedErrorDetails && (
+            <div className="space-y-4">
+              <div>
+                <span className="font-medium">Error:</span>
+                <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 p-3">
+                  <span className="text-destructive">{selectedErrorDetails.cleanedError}</span>
+                </div>
+              </div>
+
+              <div>
+                <span className="font-medium">Full Error Details:</span>
+                <div className="mt-2 max-h-96 overflow-y-auto rounded-md border bg-muted/50 p-3">
+                  <pre className="whitespace-pre-wrap text-sm text-foreground">{selectedErrorDetails.fullError}</pre>
+                </div>
               </div>
             </div>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={closeErrorModal}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-            <div>
-              <span className="font-medium">Full Error Details:</span>
-              <div className="mt-2 max-h-96 overflow-y-auto rounded-md border border-gray-200 bg-gray-50 p-3">
-                <pre className="text-sm whitespace-pre-wrap text-gray-800">{selectedErrorDetails.fullError}</pre>
-              </div>
-            </div>
-          </div>
-        )}
-      </Modal>
-
-      {/* Success Modal */}
-      <Modal
-        title={
-          selectedSuccessDetails ? `Health Check Response - ${selectedSuccessDetails.modelName}` : "Response Details"
-        }
+      <Dialog
         open={successModalVisible}
-        onCancel={closeSuccessModal}
-        footer={[
-          <AntdButton key="close" onClick={closeSuccessModal}>
-            Close
-          </AntdButton>,
-        ]}
-        width={800}
+        onOpenChange={(open) => {
+          if (!open) closeSuccessModal();
+        }}
       >
-        {selectedSuccessDetails && (
-          <div className="space-y-4">
-            <div>
-              <span className="font-medium">Status:</span>
-              <div className="mt-2 rounded-md border border-green-200 bg-green-50 p-3">
-                <span className="text-green-800">Health check passed successfully</span>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>
+              {selectedSuccessDetails
+                ? `Health Check Response - ${selectedSuccessDetails.modelName}`
+                : "Response Details"}
+            </DialogTitle>
+            <DialogDescription>Response returned by the successful model health check.</DialogDescription>
+          </DialogHeader>
+          {selectedSuccessDetails && (
+            <div className="space-y-4">
+              <div>
+                <span className="font-medium">Status:</span>
+                <div className="mt-2 rounded-md border border-primary/30 bg-primary/5 p-3">
+                  <span className="text-foreground">Health check passed successfully</span>
+                </div>
               </div>
-            </div>
 
-            <div>
-              <span className="font-medium">Response Details:</span>
-              <div className="mt-2 max-h-96 overflow-y-auto rounded-md border border-gray-200 bg-gray-50 p-3">
-                <pre className="text-sm whitespace-pre-wrap text-gray-800">
-                  {JSON.stringify(selectedSuccessDetails.response, null, 2)}
-                </pre>
+              <div>
+                <span className="font-medium">Response Details:</span>
+                <div className="mt-2 max-h-96 overflow-y-auto rounded-md border bg-muted/50 p-3">
+                  <pre className="whitespace-pre-wrap text-sm text-foreground">
+                    {JSON.stringify(selectedSuccessDetails.response, null, 2)}
+                  </pre>
+                </div>
               </div>
             </div>
-          </div>
-        )}
-      </Modal>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={closeSuccessModal}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

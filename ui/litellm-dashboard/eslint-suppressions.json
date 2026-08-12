@@ -1031,26 +1031,8 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab.test.tsx": {
-    "react/display-name": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab.tsx": {
     "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
-  "src/app/(dashboard)/models-and-endpoints/components/PriceDataManagementTab.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/models-and-endpoints/page.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -2526,12 +2508,6 @@
     }
   },
   "src/components/add_model/RouterConfigBuilder.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/purity": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -2567,9 +2543,6 @@
   },
   "src/components/add_model/auto_router_connection_test.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -2635,9 +2608,6 @@
     },
     "no-nested-ternary": {
       "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/add_model/provider_specific_fields.test.tsx": {
@@ -3098,9 +3068,6 @@
   "src/components/key_value_input.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/components/leftnav.tsx": {
@@ -3190,35 +3157,10 @@
       "count": 3
     }
   },
-  "src/components/model_add/CredentialsPanel.test.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/model_add/CredentialsPanel.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/model_add/credential_form_helpers.test.ts": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/model_add/credential_form_helpers.ts": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/model_add/reuse_credentials.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
-  "src/components/model_dashboard/HealthCheckComponent.tsx": {
     "no-restricted-imports": {
       "count": 2
     }
@@ -3442,12 +3384,6 @@
   "src/components/price_data_reload.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/immutability": {
-      "count": 2
     }
   },
   "src/components/provider_info_helpers.tsx": {
@@ -3472,16 +3408,10 @@
   "src/components/query_param_input.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/components/route_preview.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
