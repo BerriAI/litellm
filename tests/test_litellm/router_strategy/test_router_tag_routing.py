@@ -2875,6 +2875,22 @@ async def test_router_selecting_tag_is_not_reapplied_to_the_routed_tier():
 
 
 @pytest.mark.asyncio()
+async def test_router_selecting_tag_is_consumed_on_litellm_metadata_shaped_requests():
+    # /v1/messages (and other litellm_metadata endpoints) store proxy metadata,
+    # including x-litellm-tags header tags, under "litellm_metadata"; consumption
+    # must read and stamp that same bucket instead of only "metadata".
+    router = _tagged_marker_router()
+
+    deployment = await router.async_get_available_deployment(
+        model="gpt4o",
+        request_kwargs={"litellm_metadata": {"tags": ["route"], "inherited_tags": []}},
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+    )
+
+    assert deployment["model_info"]["id"] == "tier-gemini-flash"
+
+
+@pytest.mark.asyncio()
 async def test_tagged_request_direct_to_plain_group_still_rejected():
     # Sent straight to the tier, no router selection consumed the tag, so strict
     # tag filtering must reject exactly as before.
