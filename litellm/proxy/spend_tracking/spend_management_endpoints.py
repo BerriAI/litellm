@@ -2250,9 +2250,8 @@ async def ui_view_spend_logs(
         description="Sort order: asc or desc",
     ),
     filter_time_by: str | None = fastapi.Query(
-        default="startTime",
-        description="Filter field for date range: 'startTime' (default) or 'endTime'"
-    )
+        default="startTime", description="Filter field for date range: 'startTime' (default) or 'endTime'"
+    ),
 ):
     """
     View spend logs with pagination support.
@@ -2307,7 +2306,7 @@ async def ui_view_spend_logs(
         )
 
     # Validate filter_time_by
-    valid_filter_fields = {"startTime", "endTime"}
+    valid_filter_fields: Final = ("startTime", "endTime")
     if filter_time_by not in valid_filter_fields:
         raise ProxyException(
             message=f"Invalid filter_time_by: {filter_time_by}. Must be one of: {', '.join(sorted(valid_filter_fields))}",
@@ -2315,7 +2314,7 @@ async def ui_view_spend_logs(
             param="filter_time_by",
             code=status.HTTP_400_BAD_REQUEST,
         )
-    filter_time_field = "startTime" if filter_time_by == "startTime" else "endTime"
+    filter_time_field: Final = "startTime" if filter_time_by == "startTime" else "endTime"
 
     try:
         is_admin_view: Final = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
