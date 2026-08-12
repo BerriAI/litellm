@@ -344,6 +344,18 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     quality_router_config: dict | None = None
     quality_router_default_model: str | None = None
 
+    # adept-router params
+    adept_router_default_model: str | None = None
+    adept_router_tag_prefix: str | None = None
+    adept_router_seed_config: list[dict] | None = None  # mutable-ok: pydantic config field
+    adept_router_conversations_threshold: int | None = None
+    adept_router_trainer_url: str | None = None
+    adept_router_pg_host: str | None = None
+    adept_router_pg_port: int | None = None
+    adept_router_pg_database: str | None = None
+    adept_router_pg_user: str | None = None
+    adept_router_pg_password: str | None = None
+
     # Vector Store Params
     vector_store_id: str | None = None
     milvus_text_field: str | None = None

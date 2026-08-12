@@ -51,6 +51,7 @@ import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import CacheControlSettings from "./add_model/cache_control_settings";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
+import EditAdeptRouterModal from "./edit_adept_router/EditAdeptRouterModal";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
 import NotificationsManager from "./molecules/notifications_manager";
 import {
@@ -214,6 +215,7 @@ export default function ModelInfoView({
   const [showCacheControl, setShowCacheControl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [isAutoRouterModalOpen, setIsAutoRouterModalOpen] = useState(false);
+  const [isAdeptRouterModalOpen, setIsAdeptRouterModalOpen] = useState(false);
   const [isAutoRouterTestModalOpen, setIsAutoRouterTestModalOpen] = useState(false);
   const [autoRouterTestId, setAutoRouterTestId] = useState(0);
   const [autoRouterTestTargets, setAutoRouterTestTargets] = useState<AutoRouterTestTarget[]>([]);
@@ -261,6 +263,7 @@ export default function ModelInfoView({
   const isAnyAutoRouter = isAutoRouterDeployment(modelData?.litellm_params);
   const deleteLabel = isAnyAutoRouter ? "Delete Auto-Router" : "Delete Model";
   const isComplexityRouterModel = isComplexityRouterParams(modelData?.litellm_params);
+  const isAdeptRouter = modelData?.litellm_params?.model?.startsWith("adept/") ?? false;
 
   const usingExistingCredential =
     modelData?.litellm_params?.litellm_credential_name != null &&
@@ -655,6 +658,7 @@ export default function ModelInfoView({
       onModelUpdate(updatedModel);
     }
   };
+
   const isWildcardModel = modelData.litellm_model_name.includes("*");
 
   return (
@@ -805,6 +809,11 @@ export default function ModelInfoView({
                   {isAutoRouterModel && canEditModel && !isEditing && (
                     <TremorButton onClick={() => setIsAutoRouterModalOpen(true)} className="flex items-center">
                       Edit Auto Router
+                    </TremorButton>
+                  )}
+                  {isAdeptRouter && canEditModel && !isEditing && (
+                    <TremorButton onClick={() => setIsAdeptRouterModalOpen(true)} className="flex items-center">
+                      Edit ADEPT Router
                     </TremorButton>
                   )}
                   {canEditModel ? (
@@ -1601,6 +1610,16 @@ export default function ModelInfoView({
       <EditAutoRouterModal
         isVisible={isAutoRouterModalOpen}
         onCancel={() => setIsAutoRouterModalOpen(false)}
+        onSuccess={handleAutoRouterUpdate}
+        modelData={localModelData || modelData}
+        accessToken={accessToken || ""}
+        userRole={userRole || ""}
+      />
+
+      {/* Edit ADEPT Router Modal */}
+      <EditAdeptRouterModal
+        isVisible={isAdeptRouterModalOpen}
+        onCancel={() => setIsAdeptRouterModalOpen(false)}
         onSuccess={handleAutoRouterUpdate}
         modelData={localModelData || modelData}
         accessToken={accessToken || ""}
