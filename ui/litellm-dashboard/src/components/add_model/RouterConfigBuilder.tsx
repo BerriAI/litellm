@@ -49,18 +49,14 @@ const UtteranceInput = ({ value, onChange }: UtteranceInputProps) => {
   const [draft, setDraft] = useState("");
 
   const addUtterances = (input: string) => {
-    const existingUtterances = new Set(value);
-    const additions = input.split("\n").reduce<string[]>((uniqueAdditions, utterance) => {
-      const trimmedUtterance = utterance.trim();
-      if (trimmedUtterance !== "" && !existingUtterances.has(trimmedUtterance)) {
-        existingUtterances.add(trimmedUtterance);
-        uniqueAdditions.push(trimmedUtterance);
-      }
-      return uniqueAdditions;
-    }, []);
+    const normalizedUtterances = input
+      .split("\n")
+      .map((utterance) => utterance.trim())
+      .filter((utterance) => utterance !== "");
+    const updatedUtterances = Array.from(new Set([...value, ...normalizedUtterances]));
 
-    if (additions.length > 0) {
-      onChange([...value, ...additions]);
+    if (updatedUtterances.length > value.length) {
+      onChange(updatedUtterances);
     }
     setDraft("");
   };
