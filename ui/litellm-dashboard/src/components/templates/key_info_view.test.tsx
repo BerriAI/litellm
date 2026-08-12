@@ -1,11 +1,9 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { keyDeleteCall, keyUpdateCall } from "../networking";
 import { QueryClient } from "@tanstack/react-query";
@@ -151,6 +149,46 @@ describe("KeyInfoView", () => {
     await userEvent.click(await screen.findByRole("button", { name: /more key actions/i }));
   };
 
+  describe("last updated", () => {
+    const renderWithTimestamps = (overrides: Partial<KeyResponse>) => {
+      vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+      return renderWithProviders(
+        <KeyInfoView
+          keyData={{
+            ...MOCK_KEY_DATA,
+            created_at: "2021-06-15T12:00:00Z",
+            updated_at: "2023-06-15T12:00:00Z",
+            ...overrides,
+          }}
+          onClose={() => {}}
+          keyId={"test-key-id"}
+          onKeyDataUpdate={() => {}}
+          teams={[]}
+        />,
+      );
+    };
+
+    const findLastUpdatedText = async () => {
+      const label = await screen.findByText("Last Updated");
+      return label.closest("div")?.parentElement?.parentElement?.textContent ?? "";
+    };
+
+    it("should show when the key was last configured, not when it last recorded spend", async () => {
+      renderWithTimestamps({ settings_updated_at: "2022-06-15T12:00:00Z" });
+
+      expect(await findLastUpdatedText()).toMatch(/Jun \d+, 2022/);
+      expect(screen.queryByText(/Jun \d+, 2023/)).not.toBeInTheDocument();
+    });
+
+    it("should fall back to creation time for a key that was never reconfigured", async () => {
+      renderWithTimestamps({ settings_updated_at: null });
+
+      expect(await findLastUpdatedText()).toMatch(/Jun \d+, 2021/);
+      expect(screen.queryByText(/Jun \d+, 2023/)).not.toBeInTheDocument();
+    });
+  });
+
   it("should render tags", async () => {
     vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
 
@@ -186,6 +224,42 @@ describe("KeyInfoView", () => {
       expect(metadataBlock).toBeInTheDocument();
       expect(metadataBlock?.textContent?.trim()).toBe("{}");
     });
+  });
+
+  it("should render the estimated output token settings from key metadata", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+    const keyData = {
+      ...MOCK_KEY_DATA,
+      metadata: {
+        ...MOCK_KEY_DATA.metadata,
+        default_estimated_output_tokens: 512,
+        default_estimated_output_tokens_per_model: { "gpt-4": 4096 },
+      },
+    };
+    renderWithProviders(
+      <KeyInfoView keyData={keyData} onClose={() => {}} keyId={"test-key-id"} onKeyDataUpdate={() => {}} teams={[]} />,
+    );
+
+    expect(await screen.findByText("Estimated Output Tokens: 512")).toBeInTheDocument();
+    expect(await screen.findByText('Estimated Output Tokens Per Model: {"gpt-4":4096}')).toBeInTheDocument();
+  });
+
+  it("should fall back to Default when no estimated output tokens are configured", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={MOCK_KEY_DATA}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    expect(await screen.findByText("Estimated Output Tokens: Default")).toBeInTheDocument();
+    expect(await screen.findByText("Estimated Output Tokens Per Model: Default")).toBeInTheDocument();
   });
 
   it("should allow proxy admin to modify key", async () => {

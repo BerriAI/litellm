@@ -1,8 +1,8 @@
 import React from "react";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders } from "../../tests/test-utils";
+import { renderWithProviders, testQueryClient } from "../../tests/test-utils";
 import TeamSSOSettings from "./TeamSSOSettings";
 import * as networking from "./networking";
 import NotificationsManager from "./molecules/notifications_manager";
@@ -35,6 +35,46 @@ vi.mock("./common_components/budget_duration_dropdown", () => {
 
 vi.mock("./key_team_helpers/fetch_available_models_team_key", () => ({
   getModelDisplayName: vi.fn((model: string) => model),
+}));
+
+vi.mock("./common_components/OrganizationDropdown", () => ({
+  default: ({
+    organizations,
+    value,
+    onChange,
+    placeholder,
+    loading,
+  }: {
+    organizations?: { organization_id: string; organization_alias: string }[] | null;
+    value?: string;
+    onChange?: (value: string) => void;
+    placeholder?: string;
+    loading?: boolean;
+  }) => (
+    <div>
+      <select
+        data-testid="organization-dropdown"
+        data-loading={String(Boolean(loading))}
+        aria-label="Default organization"
+        value={value ?? ""}
+        onChange={(e) => onChange?.(e.target.value)}
+      >
+        <option value="">{placeholder}</option>
+        {organizations?.map((org) => (
+          <option key={org.organization_id} value={org.organization_id}>
+            {org.organization_alias} ({org.organization_id})
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        data-testid="organization-dropdown-clear"
+        onClick={() => onChange?.(undefined as unknown as string)}
+      >
+        Clear organization
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("./ModelSelect/ModelSelect", () => {
@@ -145,7 +185,13 @@ vi.mock("antd", async (importOriginal) => {
 
 const mockGetDefaultTeamSettings = vi.mocked(networking.getDefaultTeamSettings);
 const mockUpdateDefaultTeamSettings = vi.mocked(networking.updateDefaultTeamSettings);
+const mockOrganizationListCall = vi.mocked(networking.organizationListCall);
 const mockNotificationsManager = vi.mocked(NotificationsManager);
+
+const MOCK_ORGANIZATIONS = [
+  { organization_id: "org-1", organization_alias: "Engineering" },
+  { organization_id: "org-2", organization_alias: "Sales" },
+];
 
 describe("TeamSSOSettings", () => {
   const defaultProps = {
@@ -165,8 +211,12 @@ describe("TeamSSOSettings", () => {
     },
   };
 
+  const getOrganizationRow = () => screen.getByText("Default Organization").closest(".ant-row") as HTMLElement;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    testQueryClient.clear();
+    mockOrganizationListCall.mockResolvedValue(MOCK_ORGANIZATIONS);
   });
 
   // --- Loading & Error States ---
@@ -433,6 +483,124 @@ describe("TeamSSOSettings", () => {
     // Should exit edit mode after save
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /Edit Settings/i })).toBeInTheDocument();
+    });
+  });
+
+  // --- Default Organization ---
+
+  it("should display the default organization alias and id in view mode", async () => {
+    mockGetDefaultTeamSettings.mockResolvedValue({
+      values: { ...mockSettingsResponse.values, organization_id: "org-2" },
+    });
+
+    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(within(getOrganizationRow()).getByText("Sales (org-2)")).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText("Teams created without an explicit organization are assigned to this organization."),
+    ).toBeInTheDocument();
+  });
+
+  it("should fall back to the raw organization id when it is not in the organization list", async () => {
+    mockGetDefaultTeamSettings.mockResolvedValue({
+      values: { ...mockSettingsResponse.values, organization_id: "org-deleted" },
+    });
+
+    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(within(getOrganizationRow()).getByText("org-deleted")).toBeInTheDocument();
+    });
+  });
+
+  it("should display 'Not set' when the settings payload has no organization_id", async () => {
+    mockGetDefaultTeamSettings.mockResolvedValue(mockSettingsResponse);
+
+    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(within(getOrganizationRow()).getByText("Not set")).toBeInTheDocument();
+    });
+  });
+
+  it("should populate the organization dropdown with the fetched organizations in edit mode", async () => {
+    mockGetDefaultTeamSettings.mockResolvedValue(mockSettingsResponse);
+
+    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Edit Settings/i })).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /Edit Settings/i }));
+
+    await waitFor(() => {
+      const dropdown = screen.getByTestId("organization-dropdown");
+      expect(within(dropdown).getByRole("option", { name: "Engineering (org-1)" })).toBeInTheDocument();
+      expect(within(dropdown).getByRole("option", { name: "Sales (org-2)" })).toBeInTheDocument();
+    });
+  });
+
+  it("should send the selected organization_id when saving", async () => {
+    mockGetDefaultTeamSettings.mockResolvedValue(mockSettingsResponse);
+    mockUpdateDefaultTeamSettings.mockResolvedValue({
+      settings: { ...mockSettingsResponse.values, organization_id: "org-2" },
+    });
+
+    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Edit Settings/i })).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /Edit Settings/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: "Sales (org-2)" })).toBeInTheDocument();
+    });
+    await userEvent.selectOptions(screen.getByTestId("organization-dropdown"), "org-2");
+    await userEvent.click(screen.getByRole("button", { name: /Save Changes/i }));
+
+    await waitFor(() => {
+      expect(mockUpdateDefaultTeamSettings).toHaveBeenCalledWith("test-token", {
+        ...mockSettingsResponse.values,
+        organization_id: "org-2",
+      });
+    });
+
+    await waitFor(() => {
+      expect(within(getOrganizationRow()).getByText("Sales (org-2)")).toBeInTheDocument();
+    });
+  });
+
+  it("should send a null organization_id when the selection is cleared", async () => {
+    mockGetDefaultTeamSettings.mockResolvedValue({
+      values: { ...mockSettingsResponse.values, organization_id: "org-2" },
+    });
+    mockUpdateDefaultTeamSettings.mockResolvedValue({
+      settings: { ...mockSettingsResponse.values, organization_id: null },
+    });
+
+    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Edit Settings/i })).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /Edit Settings/i }));
+    await userEvent.click(screen.getByTestId("organization-dropdown-clear"));
+    await userEvent.click(screen.getByRole("button", { name: /Save Changes/i }));
+
+    await waitFor(() => {
+      expect(mockUpdateDefaultTeamSettings).toHaveBeenCalledWith("test-token", {
+        ...mockSettingsResponse.values,
+        organization_id: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(within(getOrganizationRow()).getByText("Not set")).toBeInTheDocument();
     });
   });
 

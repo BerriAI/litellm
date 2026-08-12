@@ -110,6 +110,28 @@ describe("MCPDiscovery", () => {
     expect(await screen.findByText(/No servers found/)).toBeInTheDocument();
   });
 
+  it("keeps the wide dialog width the antd modal had", async () => {
+    render(<MCPDiscovery {...defaultProps} />);
+    await screen.findByText("GitHub");
+
+    const dialog = document.querySelector("[data-slot='dialog-content']");
+    const width = Array.from(dialog?.classList ?? []).filter((c) => c.includes("max-w-"));
+
+    expect(width).toContain("sm:max-w-[1000px]");
+    expect(width).not.toContain("sm:max-w-md");
+  });
+
+  // The close button is absolutely positioned, so it is out of flow and the header
+  // row lays out as if it were not there. Without a reserved margin the custom-server
+  // action sits underneath it. jsdom has no layout engine, so this pins the class.
+  it("keeps the custom-server action clear of the close button", async () => {
+    render(<MCPDiscovery {...defaultProps} />);
+    await screen.findByText("GitHub");
+
+    expect(document.querySelector("[data-slot='dialog-close']")).toHaveClass("absolute");
+    expect(screen.getByRole("button", { name: "+ Custom Server" })).toHaveClass("mr-8");
+  });
+
   it("does not fetch while hidden", () => {
     render(<MCPDiscovery {...defaultProps} isVisible={false} />);
 

@@ -126,13 +126,6 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({ modelInfo, va
   };
 
   // Handle utterances change (convert textarea string to array)
-  const handleUtterancesChange = (routeId: string, utterancesText: string) => {
-    const utterancesArray = utterancesText
-      .split("\n")
-      .map((line) => line.trim()) // Only trims leading/trailing whitespace, preserves internal spaces
-      .filter((line) => line.length > 0);
-    updateRoute(routeId, "utterances", utterancesArray);
-  };
 
   // Prepare model options for dropdowns
   const modelOptions = modelInfo.map((model) => ({

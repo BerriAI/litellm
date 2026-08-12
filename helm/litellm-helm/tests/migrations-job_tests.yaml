@@ -254,3 +254,39 @@ tests:
           content:
             name: sidecar-tpl
             image: "ghcr.io/berriai/litellm-database:test"
+  - it: should render the pod-level securityContext from podSecurityContext
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+      podSecurityContext:
+        fsGroup: 10000
+        runAsUser: 10000
+        runAsNonRoot: true
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext
+          value:
+            fsGroup: 10000
+            runAsUser: 10000
+            runAsNonRoot: true
+  - it: should keep the pod-level and container-level securityContext separate
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+      podSecurityContext:
+        fsGroup: 10000
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext
+          value:
+            fsGroup: 10000
+      - equal:
+          path: spec.template.spec.containers[0].securityContext
+          value:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true

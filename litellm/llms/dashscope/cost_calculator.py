@@ -5,7 +5,7 @@ Handles tiered pricing and prompt caching scenarios.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Final
 
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import calculate_tiered_cost
 from litellm.types.utils import ModelInfo, Usage
@@ -28,7 +28,7 @@ def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
     if usage.prompt_tokens_details and hasattr(usage.prompt_tokens_details, "cached_tokens"):
         cached_tokens = usage.prompt_tokens_details.cached_tokens or 0
 
-    text_tokens = usage.prompt_tokens - cached_tokens
+    text_tokens: Final = usage.prompt_tokens - cached_tokens
 
     reasoning_tokens = 0
     if (
@@ -38,7 +38,7 @@ def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
     ):
         reasoning_tokens = usage.completion_tokens_details.reasoning_tokens or 0
 
-    completion_tokens = (usage.completion_tokens or 0) - reasoning_tokens
+    completion_tokens: Final = (usage.completion_tokens or 0) - reasoning_tokens
 
     return TokenBreakdown(text_tokens, cached_tokens, completion_tokens, reasoning_tokens)
 
@@ -46,11 +46,11 @@ def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
 def _calculate_prompt_cost(
     breakdown: TokenBreakdown,
     model_info: ModelInfo,
-    tiered_pricing: Optional[List[dict]],
+    tiered_pricing: list[dict] | None,
 ) -> float:
     """Calculate total prompt cost including cached tokens."""
     if tiered_pricing:
-        text_cost = calculate_tiered_cost(
+        text_cost: Final = calculate_tiered_cost(
             tokens=breakdown.text_tokens,
             tiered_pricing=tiered_pricing,
             cost_key="input_cost_per_token",
@@ -63,10 +63,10 @@ def _calculate_prompt_cost(
         )
         return text_cost + cache_cost
 
-    input_cost = float(model_info.get("input_cost_per_token") or 0.0)
+    input_cost: Final = float(model_info.get("input_cost_per_token") or 0.0)
 
     # For cache_cost, first try the specific key, then fall back to input_cost.
-    cache_cost_val = model_info.get("cache_read_input_token_cost")
+    cache_cost_val: Final = model_info.get("cache_read_input_token_cost")
     if cache_cost_val is None:
         cache_cost = input_cost
     else:
@@ -78,11 +78,11 @@ def _calculate_prompt_cost(
 def _calculate_completion_cost(
     breakdown: TokenBreakdown,
     model_info: ModelInfo,
-    tiered_pricing: Optional[List[dict]],
+    tiered_pricing: list[dict] | None,
 ) -> float:
     """Calculate total completion cost including reasoning tokens."""
     if tiered_pricing:
-        completion_cost = calculate_tiered_cost(
+        completion_cost: Final = calculate_tiered_cost(
             tokens=breakdown.completion_tokens,
             tiered_pricing=tiered_pricing,
             cost_key="output_cost_per_token",
@@ -95,10 +95,10 @@ def _calculate_completion_cost(
         )
         return completion_cost + reasoning_cost
 
-    output_cost = float(model_info.get("output_cost_per_token") or 0.0)
+    output_cost: Final = float(model_info.get("output_cost_per_token") or 0.0)
 
     # For reasoning_cost, first try the specific key, then fall back to output_cost.
-    reasoning_cost_val = model_info.get("output_cost_per_reasoning_token")
+    reasoning_cost_val: Final = model_info.get("output_cost_per_reasoning_token")
     if reasoning_cost_val is None:
         reasoning_cost = output_cost
     else:
@@ -107,7 +107,7 @@ def _calculate_completion_cost(
     return (breakdown.completion_tokens * output_cost) + (breakdown.reasoning_tokens * reasoning_cost)
 
 
-def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
+def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     """
     Calculate cost per token for Dashscope models.
 
@@ -120,12 +120,12 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     Returns:
         Tuple[float, float] - (prompt_cost_in_usd, completion_cost_in_usd)
     """
-    model_info = get_model_info(model=model, custom_llm_provider="dashscope")
-    breakdown = _extract_token_breakdown(usage)
+    model_info: Final = get_model_info(model=model, custom_llm_provider="dashscope")
+    breakdown: Final = _extract_token_breakdown(usage)
     tiered_pricing = model_info.get("tiered_pricing") if isinstance(model_info.get("tiered_pricing"), list) else None
 
     prompt_cost = _calculate_prompt_cost(breakdown=breakdown, model_info=model_info, tiered_pricing=tiered_pricing)
-    completion_cost = _calculate_completion_cost(
+    completion_cost: Final = _calculate_completion_cost(
         breakdown=breakdown, model_info=model_info, tiered_pricing=tiered_pricing
     )
 

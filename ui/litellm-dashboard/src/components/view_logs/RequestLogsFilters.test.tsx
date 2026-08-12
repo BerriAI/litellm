@@ -14,11 +14,11 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useInfiniteModelInfo: vi.fn(),
 }));
 
-vi.mock("@/app/(dashboard)/hooks/customers/useEndUserAliases", () => ({
-  useInfiniteEndUserAliases: vi.fn(),
+vi.mock("@/app/(dashboard)/hooks/spendLogs/useSpendLogEndUsers", () => ({
+  useInfiniteSpendLogEndUsers: vi.fn(),
 }));
 
-import { useInfiniteEndUserAliases } from "@/app/(dashboard)/hooks/customers/useEndUserAliases";
+import { useInfiniteSpendLogEndUsers } from "@/app/(dashboard)/hooks/spendLogs/useSpendLogEndUsers";
 import { useInfiniteKeyAliases } from "@/app/(dashboard)/hooks/keys/useKeyAliases";
 import { useInfiniteModelInfo } from "@/app/(dashboard)/hooks/models/useModels";
 
@@ -50,8 +50,8 @@ describe("RequestLogsFilters", () => {
     vi.mocked(useInfiniteModelInfo).mockReturnValue(
       emptyInfiniteQuery as unknown as ReturnType<typeof useInfiniteModelInfo>,
     );
-    vi.mocked(useInfiniteEndUserAliases).mockReturnValue(
-      emptyInfiniteQuery as unknown as ReturnType<typeof useInfiniteEndUserAliases>,
+    vi.mocked(useInfiniteSpendLogEndUsers).mockReturnValue(
+      emptyInfiniteQuery as unknown as ReturnType<typeof useInfiniteSpendLogEndUsers>,
     );
   });
 
@@ -98,8 +98,8 @@ describe("RequestLogsFilters", () => {
   it("asks the server for a bounded page of end users scoped to the visible time window", async () => {
     renderFilters();
 
-    await waitFor(() => expect(useInfiniteEndUserAliases).toHaveBeenCalled());
-    expect(useInfiniteEndUserAliases).toHaveBeenCalledWith(LOGS_WINDOW, 50, undefined);
+    await waitFor(() => expect(useInfiniteSpendLogEndUsers).toHaveBeenCalled());
+    expect(useInfiniteSpendLogEndUsers).toHaveBeenCalledWith(LOGS_WINDOW, 50, undefined);
   });
 
   it("pushes the End User query to the server rather than filtering a preloaded list", async () => {
@@ -110,14 +110,23 @@ describe("RequestLogsFilters", () => {
     await user.click(input);
     await user.type(input, "acme");
 
-    await waitFor(() => expect(useInfiniteEndUserAliases).toHaveBeenCalledWith(LOGS_WINDOW, 50, "acme"));
+    await waitFor(() => expect(useInfiniteSpendLogEndUsers).toHaveBeenCalledWith(LOGS_WINDOW, 50, "acme"));
   });
 
   it("renders only the end users the current page returned", async () => {
-    vi.mocked(useInfiniteEndUserAliases).mockReturnValue({
+    vi.mocked(useInfiniteSpendLogEndUsers).mockReturnValue({
       ...emptyInfiniteQuery,
-      data: { pages: [{ aliases: ["cust-a", "cust-b"], current_page: 1, size: 50, has_more: true }], pageParams: [1] },
-    } as unknown as ReturnType<typeof useInfiniteEndUserAliases>);
+      data: {
+        pages: [
+          {
+            data: ["cust-a", "cust-b"],
+            meta: { page: 1, page_size: 50, has_more: true },
+            links: { self: "", next: "?page=2" },
+          },
+        ],
+        pageParams: [1],
+      },
+    } as unknown as ReturnType<typeof useInfiniteSpendLogEndUsers>);
     const user = userEvent.setup();
     renderFilters();
 
@@ -129,12 +138,17 @@ describe("RequestLogsFilters", () => {
 
   it("loads the next page when the End User list is scrolled near the end", async () => {
     const fetchNextPage = vi.fn();
-    vi.mocked(useInfiniteEndUserAliases).mockReturnValue({
+    vi.mocked(useInfiniteSpendLogEndUsers).mockReturnValue({
       ...emptyInfiniteQuery,
       fetchNextPage,
       hasNextPage: true,
-      data: { pages: [{ aliases: ["cust-a"], current_page: 1, size: 50, has_more: true }], pageParams: [1] },
-    } as unknown as ReturnType<typeof useInfiniteEndUserAliases>);
+      data: {
+        pages: [
+          { data: ["cust-a"], meta: { page: 1, page_size: 50, has_more: true }, links: { self: "", next: "?page=2" } },
+        ],
+        pageParams: [1],
+      },
+    } as unknown as ReturnType<typeof useInfiniteSpendLogEndUsers>);
     const user = userEvent.setup();
     renderFilters();
 
@@ -152,6 +166,6 @@ describe("RequestLogsFilters", () => {
     const otherWindow = { start_date: "2026-01-01 00:00:00", end_date: "2026-01-02 00:00:00" };
     renderWithProviders(<RequestLogsFilters get={() => undefined} set={vi.fn()} teams={[]} logsWindow={otherWindow} />);
 
-    await waitFor(() => expect(useInfiniteEndUserAliases).toHaveBeenCalledWith(otherWindow, 50, undefined));
+    await waitFor(() => expect(useInfiniteSpendLogEndUsers).toHaveBeenCalledWith(otherWindow, 50, undefined));
   });
 });

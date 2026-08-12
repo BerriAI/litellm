@@ -32,44 +32,44 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime, timedelta
-from typing import Literal, TypeAlias
+from typing import Final, Literal, TypeAlias
 
 import jwt
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
-SESSION_TOKEN_PREFIX = "llm_session_"
+SESSION_TOKEN_PREFIX: Final = "llm_session_"
 """Marker prefix on every serialized session ACCESS token so the admission edge can cheaply
 tell a gateway session from a litellm key, JWT, or bridge envelope before doing any
 cryptography. Distinct from the ``llm_env_``/``llm_refresh_`` envelope prefixes."""
 
-SESSION_REFRESH_PREFIX = "llm_srefresh_"
+SESSION_REFRESH_PREFIX: Final = "llm_srefresh_"
 """Marker prefix on every serialized session REFRESH token. A distinct prefix keeps the two
 credentials routable without crypto and, together with the signed ``kind`` claim, stops one
 from being presented where the other is expected: the refresh token is only ever presented
 back to the token endpoint, never at the MCP edge."""
 
-SESSION_ISSUER = "litellm-mcp-gateway"
+SESSION_ISSUER: Final = "litellm-mcp-gateway"
 """``iss`` claim stamped into every session token and required back on open. Distinct from
 the envelope issuer so a token of one family can never validate in the other even under a
 hypothetical shared signing key."""
 
-SESSION_TTL_SECONDS = 3600
+SESSION_TTL_SECONDS: Final = 3600
 """Session ACCESS token lifetime (1h), matching the access-envelope and BYOK session bearer
 windows: a client-held credential never outlives a bounded window, and each refresh
 re-validates the live user before re-minting."""
 
-SESSION_REFRESH_TTL_SECONDS = 1209600
+SESSION_REFRESH_TTL_SECONDS: Final = 1209600
 """Session REFRESH token lifetime (14 days), matching the refresh-envelope bound. Each
 renewal re-validates the sealed user against the live record (deactivation gates it) and
 rotates the refresh token, so the practical bound is idle time, not a fixed session."""
 
-MAX_SESSION_TOKEN_BYTES = 4096
+MAX_SESSION_TOKEN_BYTES: Final = 4096
 """Size cap on the serialized token (prefix + JWT, in bytes) and on any candidate accepted
 by the openers. Session claims are small; the only variable-length field is ``client_id``
 (a sealed DCR client record), and 4096 leaves ample headroom under common 8-16KB header
 limits while bounding hostile input before JWT parsing."""
 
-_SESSION_JWT_ALGORITHM = "HS256"
+_SESSION_JWT_ALGORITHM: Final = "HS256"
 
 SessionTokenKind = Literal["session", "session_refresh"]
 """Which credential a session token is. Stamped into the signed claims and required to match
@@ -278,7 +278,7 @@ def _mint(
 ) -> MintedSessionToken | SessionTokenTooLarge:
     """Sign the claims for either token kind and enforce the size cap. Shared by both mints
     so the JWT shape, issuer, and size guard cannot drift between access and refresh."""
-    claims = _SessionClaims(
+    claims: Final = _SessionClaims(
         iss=SESSION_ISSUER,
         iat=int(now.timestamp()),
         exp=int(expires_at.timestamp()),
@@ -287,10 +287,10 @@ def _mint(
         user_id=principal.user_id,
         client_id=principal.client_id,
     )
-    token = prefix + jwt.encode(
+    token: Final = prefix + jwt.encode(
         claims.model_dump(), keys.signing_key.get_secret_value(), algorithm=_SESSION_JWT_ALGORITHM
     )
-    size_bytes = len(token.encode("utf-8"))
+    size_bytes: Final = len(token.encode("utf-8"))
     if size_bytes > MAX_SESSION_TOKEN_BYTES:
         return SessionTokenTooLarge(size_bytes=size_bytes, max_bytes=MAX_SESSION_TOKEN_BYTES)
     return MintedSessionToken(token=SecretStr(token), expires_at=expires_at)
@@ -315,7 +315,7 @@ def _open(
         return SessionMalformed()
     if len(candidate.encode("utf-8", "surrogatepass")) > MAX_SESSION_TOKEN_BYTES:
         return SessionMalformed()
-    claims = _decode_claims(candidate.removeprefix(prefix), keys.signing_key)
+    claims: Final = _decode_claims(candidate.removeprefix(prefix), keys.signing_key)
     if not isinstance(claims, _SessionClaims):
         return claims
     if claims.kind != expected_kind:
@@ -343,7 +343,7 @@ def _decode_claims(
     token as an ``InvalidTokenError``. ``_SessionClaims`` is the total type gate.
     """
     try:
-        payload = jwt.decode(
+        payload: Final = jwt.decode(
             compact,
             signing_key.get_secret_value(),
             algorithms=[_SESSION_JWT_ALGORITHM],

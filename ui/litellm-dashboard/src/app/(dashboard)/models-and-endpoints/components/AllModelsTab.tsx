@@ -104,6 +104,9 @@ const AllModelsTab = ({
     teamIdForQuery,
     sortBy,
     sortOrder,
+    // Auto-routers are routing constructs, not deployments; the sibling Auto-Routers tab
+    // lists and manages them. Excluded server-side so total_count stays honest.
+    true,
   );
   const isLoading = isLoadingModelsInfo || isLoadingModelCostMap;
 

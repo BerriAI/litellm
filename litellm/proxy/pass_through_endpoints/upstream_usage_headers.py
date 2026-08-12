@@ -8,6 +8,7 @@ records the reported values without recomputing them.
 
 import math
 from dataclasses import dataclass
+from typing import Final
 
 import httpx
 
@@ -15,13 +16,13 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.utils import Usage
 
-UPSTREAM_RESPONSE_COST_HEADER = "x-litellm-response-cost"
-UPSTREAM_TOTAL_TOKENS_HEADER = "x-litellm-total-tokens"
+UPSTREAM_RESPONSE_COST_HEADER: Final = "x-litellm-response-cost"
+UPSTREAM_TOTAL_TOKENS_HEADER: Final = "x-litellm-total-tokens"
 
 # model_call_details key holding what the upstream reported, so later stages of
 # the success path can tell an upstream-reported cost apart from one LiteLLM
 # derived itself.
-UPSTREAM_REPORTED_USAGE_KEY = "_litellm_upstream_reported_usage"
+UPSTREAM_REPORTED_USAGE_KEY: Final = "_litellm_upstream_reported_usage"
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +45,7 @@ def _parse_response_cost(raw_value: str | None) -> float | None:
         )
         return None
     try:
-        response_cost = float(raw_value)
+        response_cost: Final = float(raw_value)
     except ValueError:
         verbose_proxy_logger.warning(
             "pass_through_endpoint: upstream sent unparseable %s=%r; recording 0 cost for this request",
@@ -70,7 +71,7 @@ def _parse_total_tokens(raw_value: str | None) -> int | None:
         )
         return None
     try:
-        total_tokens = int(raw_value)
+        total_tokens: Final = int(raw_value)
     except ValueError:
         verbose_proxy_logger.warning(
             "pass_through_endpoint: upstream sent unparseable %s=%r; recording 0 tokens for this request",
@@ -95,8 +96,8 @@ def parse_upstream_reported_usage(headers: httpx.Headers) -> UpstreamReportedUsa
     for a target that does not speak this contract (e.g. Anthropic or Vertex,
     whose cost LiteLLM derives from the response body instead).
     """
-    raw_response_cost = headers.get(UPSTREAM_RESPONSE_COST_HEADER)
-    raw_total_tokens = headers.get(UPSTREAM_TOTAL_TOKENS_HEADER)
+    raw_response_cost: Final = headers.get(UPSTREAM_RESPONSE_COST_HEADER)
+    raw_total_tokens: Final = headers.get(UPSTREAM_TOTAL_TOKENS_HEADER)
     if raw_response_cost is None and raw_total_tokens is None:
         return None
     return UpstreamReportedUsage(
@@ -115,7 +116,7 @@ def apply_upstream_reported_usage(
     that reports cost but not tokens keeps the token count LiteLLM derived on
     its own rather than having it zeroed.
     """
-    reported = parse_upstream_reported_usage(headers)
+    reported: Final = parse_upstream_reported_usage(headers)
     if reported is None:
         return None
     logging_obj.model_call_details[UPSTREAM_REPORTED_USAGE_KEY] = reported

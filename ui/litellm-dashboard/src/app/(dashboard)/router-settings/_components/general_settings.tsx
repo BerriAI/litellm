@@ -13,7 +13,7 @@ import {
   Icon,
   Switch,
 } from "@tremor/react";
-import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getGeneralSettingsCall, updateConfigFieldSetting, deleteConfigFieldSetting } from "@/components/networking";
 import { InputNumber, Select as AntdSelect } from "antd";
 import { TrashIcon } from "@heroicons/react/outline";
@@ -232,82 +232,80 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
 
   return (
     <div className="w-full">
-      <TabGroup className="h-[75vh] w-full">
-        <TabList variant="line" defaultValue="1" className="px-8 pt-4">
-          <Tab value="1">Loadbalancing</Tab>
-          <Tab value="2">Routing Groups</Tab>
-          <Tab value="3">Fallbacks</Tab>
-          <Tab value="5">Prompt Caching</Tab>
-          <Tab value="4">General</Tab>
-        </TabList>
-        <TabPanels className="px-8 py-6">
-          <TabPanel>
-            <RouterSettings accessToken={accessToken} userRole={userRole} userID={userID} />
-          </TabPanel>
-          <TabPanel>
-            <RoutingGroups />
-          </TabPanel>
-          <TabPanel>
-            <Fallbacks accessToken={accessToken} userRole={userRole} userID={userID} />
-          </TabPanel>
-          <TabPanel>
-            <PromptCachingPanel accessToken={accessToken} settings={generalSettings} onChange={handleInputChange} />
-          </TabPanel>
-          <TabPanel>
-            <Card>
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableHeaderCell>Setting</TableHeaderCell>
-                    <TableHeaderCell>Value</TableHeaderCell>
-                    <TableHeaderCell>Status</TableHeaderCell>
-                    <TableHeaderCell>Action</TableHeaderCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {generalSettings
-                    .filter((value) => value.field_type !== "TypedDictionary" && value.field_tab !== PROMPT_CACHING_TAB)
-                    .map((value, index) => (
-                      <TableRow key={index}>
-                        <TableCell>
-                          <Text>{value.field_name}</Text>
-                          <p
-                            style={{
-                              fontSize: "0.65rem",
-                              color: "#808080",
-                              fontStyle: "italic",
-                            }}
-                            className="mt-1"
-                          >
-                            {value.field_description}
-                          </p>
-                        </TableCell>
-                        <TableCell>
-                          <SettingValueEditor setting={value} onChange={handleInputChange} />
-                        </TableCell>
-                        <TableCell>
-                          {value.stored_in_db == true ? (
-                            <StatusBadge tone="success" label="In DB" />
-                          ) : value.stored_in_db == false ? (
-                            <StatusBadge tone="neutral" label="In Config" />
-                          ) : (
-                            <StatusBadge tone="neutral" label="Not Set" />
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Button onClick={() => handleUpdateField(value.field_name)}>Update</Button>
-                          <Icon icon={TrashIcon} color="red" onClick={() => handleResetField(value.field_name)}>
-                            Reset
-                          </Icon>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                </TableBody>
-              </Table>
-            </Card>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+      <Tabs defaultValue="loadbalancing" className="h-[75vh] w-full">
+        <TabsList variant="line" className="mx-8 mt-4">
+          <TabsTrigger value="loadbalancing">Loadbalancing</TabsTrigger>
+          <TabsTrigger value="routing-groups">Routing Groups</TabsTrigger>
+          <TabsTrigger value="fallbacks">Fallbacks</TabsTrigger>
+          <TabsTrigger value="prompt-caching">Prompt Caching</TabsTrigger>
+          <TabsTrigger value="general">General</TabsTrigger>
+        </TabsList>
+        <TabsContent value="loadbalancing" className="px-8 py-6">
+          <RouterSettings accessToken={accessToken} userRole={userRole} userID={userID} />
+        </TabsContent>
+        <TabsContent value="routing-groups" className="px-8 py-6">
+          <RoutingGroups />
+        </TabsContent>
+        <TabsContent value="fallbacks" className="px-8 py-6">
+          <Fallbacks accessToken={accessToken} userRole={userRole} userID={userID} />
+        </TabsContent>
+        <TabsContent value="prompt-caching" className="px-8 py-6">
+          <PromptCachingPanel accessToken={accessToken} settings={generalSettings} onChange={handleInputChange} />
+        </TabsContent>
+        <TabsContent value="general" className="px-8 py-6">
+          <Card>
+            <Table>
+              <TableHead>
+                <TableRow>
+                  <TableHeaderCell>Setting</TableHeaderCell>
+                  <TableHeaderCell>Value</TableHeaderCell>
+                  <TableHeaderCell>Status</TableHeaderCell>
+                  <TableHeaderCell>Action</TableHeaderCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {generalSettings
+                  .filter((value) => value.field_type !== "TypedDictionary" && value.field_tab !== PROMPT_CACHING_TAB)
+                  .map((value, index) => (
+                    <TableRow key={index}>
+                      <TableCell>
+                        <Text>{value.field_name}</Text>
+                        <p
+                          style={{
+                            fontSize: "0.65rem",
+                            color: "#808080",
+                            fontStyle: "italic",
+                          }}
+                          className="mt-1"
+                        >
+                          {value.field_description}
+                        </p>
+                      </TableCell>
+                      <TableCell>
+                        <SettingValueEditor setting={value} onChange={handleInputChange} />
+                      </TableCell>
+                      <TableCell>
+                        {value.stored_in_db == true ? (
+                          <StatusBadge tone="success" label="In DB" />
+                        ) : value.stored_in_db == false ? (
+                          <StatusBadge tone="neutral" label="In Config" />
+                        ) : (
+                          <StatusBadge tone="neutral" label="Not Set" />
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Button onClick={() => handleUpdateField(value.field_name)}>Update</Button>
+                        <Icon icon={TrashIcon} color="red" onClick={() => handleResetField(value.field_name)}>
+                          Reset
+                        </Icon>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+              </TableBody>
+            </Table>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };

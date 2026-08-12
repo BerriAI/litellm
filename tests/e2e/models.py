@@ -10,14 +10,16 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, RootModel, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, RootModel, model_validator
 
 # ---------- keys ----------
 
 
 class ModelBudgetEntry(BaseModel):
-    budget_limit: float
-    time_period: str
+    budget_limit: float = Field(validation_alias=AliasChoices("budget_limit", "max_budget"))
+    time_period: str = Field(validation_alias=AliasChoices("time_period", "budget_duration"))
+    rpm_limit: int | None = None
+    tpm_limit: int | None = None
 
 
 class BudgetWindow(BaseModel):
@@ -43,6 +45,7 @@ class KeyLoggingCallback(BaseModel):
 
 class KeyMetadata(BaseModel):
     logging: list[KeyLoggingCallback] | None = None
+    priority: str | None = None
 
 
 class ObjectPermission(BaseModel):
@@ -97,6 +100,7 @@ class LiteLLMBudgetTable(BaseModel):
 
 class KeyInfo(BaseModel):
     key_alias: str | None = None
+    metadata: KeyMetadata | None = None
     models: list[str] = []
     tpm_limit: int | None = None
     rpm_limit: int | None = None
@@ -216,6 +220,8 @@ class ChatBody(BaseModel):
     messages: list[ChatMessage]
     stream: bool = False
     max_tokens: int | None = None
+    max_completion_tokens: int | None = None
+    temperature: float | None = None
     user: str | None = None
     metadata: ChatMetadata | None = None
     reasoning_effort: str | None = None
@@ -293,6 +299,7 @@ class McpResponseMetadata(BaseModel):
 
 
 class OutMessage(BaseModel):
+    role: str | None = None
     content: str | None = None
     reasoning_content: str | None = None
     tool_calls: list[ToolCall] | None = None
@@ -323,6 +330,7 @@ class Usage(BaseModel):
 
 class ChatResponse(BaseModel):
     id: str | None = None
+    object: str | None = None
     model: str | None = None
     choices: list[ChatChoice] = []
     usage: Usage | None = None
@@ -345,14 +353,26 @@ class ToolInputSchema(BaseModel):
     required: list[str] = []
 
 
-class AnthropicToolSearchTool(BaseModel):
-    """The tool_search discovery tool. `type` carries the SDK-version-pinned
-    suffix (e.g. ``tool_search_tool_regex_20251119``) that LiteLLM keys its
-    per-provider beta-header translation on; `name` is the unsuffixed
-    canonical name the upstream accepts."""
+class AnthropicServerTool(BaseModel):
+    """An Anthropic-managed tool the upstream executes itself. It carries no
+    `input_schema`; `type` is the SDK-version-pinned identifier LiteLLM keys its
+    per-provider translation on, and `name` is the unsuffixed canonical name the
+    upstream accepts."""
 
     type: str
     name: str
+
+
+class AnthropicToolSearchTool(AnthropicServerTool):
+    """The tool_search discovery tool, e.g. ``tool_search_tool_regex_20251119``."""
+
+
+class AnthropicWebSearchTool(AnthropicServerTool):
+    """The web_search server tool, e.g. ``web_search_20250305``. Distinct from
+    Claude Code's client-side ``WebSearch`` tool, which is an ordinary custom
+    tool the CLI executes and feeds back as a tool_result."""
+
+    max_uses: int | None = None
 
 
 class AnthropicCustomTool(BaseModel):
@@ -361,7 +381,7 @@ class AnthropicCustomTool(BaseModel):
     input_schema: ToolInputSchema
 
 
-type AnthropicTool = AnthropicToolSearchTool | AnthropicCustomTool
+type AnthropicTool = AnthropicToolSearchTool | AnthropicWebSearchTool | AnthropicCustomTool
 
 
 class AnthropicMessagesBody(BaseModel):
@@ -370,6 +390,7 @@ class AnthropicMessagesBody(BaseModel):
     max_tokens: int
     stream: bool | None = None
     tools: list[AnthropicTool] | None = None
+    guardrails: list[str] | None = None
 
 
 class CountTokensBody(BaseModel):
@@ -694,6 +715,7 @@ class LiteLLMParamsBody(BaseModel):
     complexity_router_config: dict[str, object] | None = None
     mock_response: str | None = None
     timeout: float | None = None
+    tpm: int | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]

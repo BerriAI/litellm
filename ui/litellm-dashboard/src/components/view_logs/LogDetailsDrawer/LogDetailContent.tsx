@@ -12,6 +12,7 @@ import { VectorStoreViewer } from "../VectorStoreViewer";
 import { TruncatedValue } from "./TruncatedValue";
 import { TokenFlow } from "./TokenFlow";
 import { JsonViewer } from "./JsonViewer";
+import { RoutingDecisionCard, type RoutingDecision } from "./RoutingDecisionCard";
 import {
   formatData,
   checkHasMessages,
@@ -136,6 +137,9 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
           </Descriptions>
         </Card>
       </div>
+
+      {/* Routing */}
+      <RoutingDecisionCard decision={metadata?.routing_decision as RoutingDecision | undefined} />
 
       {/* Metrics */}
       <MetricsSection logEntry={logEntry} metadata={metadata} />

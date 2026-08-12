@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import traceback
+from typing import Final
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -2814,6 +2815,63 @@ class TestOpenAIPassthroughRoute:
             assert result == {"id": "asst_123", "object": "assistant"}
 
 
+def _resolve_route_name(method: str, path: str) -> str | None:
+    from starlette.routing import Match
+
+    from litellm.proxy.proxy_server import app
+
+    scope: Final = {
+        "type": "http",
+        "method": method,
+        "path": path,
+        "headers": [],
+        "query_string": b"",
+        "root_path": "",
+    }
+    for route in app.router.routes:
+        if route.matches(scope)[0] == Match.FULL:
+            return getattr(route, "name", None)
+    return None
+
+
+@pytest.mark.parametrize(
+    "method, path",
+    [
+        ("POST", "/openai_passthrough/v1/files"),
+        ("GET", "/openai_passthrough/v1/files"),
+        ("GET", "/openai_passthrough/v1/files/file-abc123"),
+        ("DELETE", "/openai_passthrough/v1/files/file-abc123"),
+        ("GET", "/openai_passthrough/v1/files/file-abc123/content"),
+        ("POST", "/openai_passthrough/v1/batches"),
+        ("GET", "/openai_passthrough/v1/batches"),
+        ("GET", "/openai_passthrough/v1/batches/batch_abc123"),
+        ("POST", "/openai_passthrough/v1/batches/batch_abc123/cancel"),
+        ("POST", "/openai_passthrough/v1/responses"),
+    ],
+)
+def test_openai_passthrough_prefix_wins_over_native_provider_routes(method, path):
+    """
+    /openai_passthrough exists to guarantee passthrough, so the native
+    /{provider}/v1/files and /{provider}/v1/batches routes must never capture it
+    with provider="openai_passthrough" (which 500s on the LlmProviders lookup).
+    """
+    assert _resolve_route_name(method, path) == "openai_proxy_route"
+
+
+@pytest.mark.parametrize(
+    "method, path, expected_name",
+    [
+        ("POST", "/openai/v1/files", "create_file"),
+        ("GET", "/azure/v1/files", "list_files"),
+        ("POST", "/v1/files", "create_file"),
+        ("POST", "/v1/batches", "create_batch"),
+        ("POST", "/openai/v1/chat/completions", "openai_proxy_route"),
+    ],
+)
+def test_native_provider_routes_are_unchanged(method, path, expected_name):
+    assert _resolve_route_name(method, path) == expected_name
+
+
 class TestCursorProxyRoute:
     """Tests for the Cursor Cloud Agents pass-through route."""
 
@@ -3022,3 +3080,172 @@ class TestCursorProxyRoute:
             assert call_args["target"] == "https://api.cursor.com/v0/agents"
             assert result["id"] == "bc_abc123"
             assert result["status"] == "CREATING"
+
+
+class TestVertexRawPredictStreamingClassification:
+    """
+    Regression coverage for LIT-4761.
+
+    `_base_vertex_proxy_route` classified any target URL containing "stream" as a
+    streaming request. `:streamRawPredict` carries that substring, so a unary
+    Anthropic-on-Vertex call (no `stream` field in the body) was sent with
+    `?alt=sse` and logged through the streaming chunk collector, which parses
+    Anthropic SSE deltas and finds no usage in a complete `"type": "message"`
+    body; the spend log recorded 0 tokens and $0 cost.
+
+    Streaming for the rawPredict family is decided by the request body, per the
+    Anthropic Messages contract. The Gemini generateContent family stays
+    URL-signalled because the Gemini REST body has no `stream` field.
+    """
+
+    RAW_PREDICT_ENDPOINT = (
+        "v1/projects/test-project/locations/us-east5/publishers/anthropic/models/"
+        "claude-sonnet-4-6:streamRawPredict"
+    )
+    GENERATE_CONTENT_ENDPOINT = (
+        "v1/projects/test-project/locations/us-east5/publishers/google/models/"
+        "gemini-2.5-flash:streamGenerateContent"
+    )
+
+    async def _capture_passthrough_kwargs(self, endpoint: str, body: object) -> dict:
+        raw_body = json.dumps(body).encode("utf-8")
+
+        async def receive():
+            return {"type": "http.request", "body": raw_body, "more_body": False}
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": f"/vertex_ai/{endpoint}",
+                "headers": [(b"content-type", b"application/json")],
+                "query_string": b"",
+            },
+            receive=receive,
+        )
+
+        captured: dict = {}
+
+        def fake_create_pass_through_route(**kwargs):
+            captured.update(kwargs)
+            return AsyncMock(return_value={"status": "success"})
+
+        mock_credentials = Mock()
+        mock_credentials.token = "test-token"
+
+        base_url = "https://us-east5-aiplatform.googleapis.com/"
+        mock_handler = Mock()
+        mock_handler.get_default_base_target_url.return_value = base_url
+        mock_handler.update_base_target_url_with_credential_location = Mock(return_value=base_url)
+
+        module = "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints"
+        with (
+            mock.patch(
+                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth",
+                return_value=(mock_credentials, "test-project"),
+            ),
+            mock.patch(f"{module}.create_pass_through_route", side_effect=fake_create_pass_through_route),
+            mock.patch(f"{module}.get_litellm_virtual_key", return_value="Bearer test-key"),
+            mock.patch(f"{module}.user_api_key_auth", new=AsyncMock(return_value={"api_key": "test-key"})),
+            mock.patch(f"{module}.get_vertex_pass_through_handler", return_value=mock_handler),
+        ):
+            await vertex_proxy_route(
+                endpoint=endpoint,
+                request=request,
+                fastapi_response=Response(),
+                user_api_key_dict=UserAPIKeyAuth(token="test-key"),
+            )
+
+        assert captured, "create_pass_through_route was never called"
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_raw_predict_without_stream_field_is_not_streaming(self):
+        captured = await self._capture_passthrough_kwargs(
+            endpoint=self.RAW_PREDICT_ENDPOINT,
+            body={
+                "anthropic_version": "vertex-2023-10-16",
+                "messages": [{"role": "user", "content": "Explain MLOps"}],
+                "max_tokens": 5000,
+            },
+        )
+
+        assert captured["is_streaming_request"] is False
+        assert "alt=sse" not in captured["target"]
+
+    @pytest.mark.asyncio
+    async def test_raw_predict_with_stream_false_is_not_streaming(self):
+        captured = await self._capture_passthrough_kwargs(
+            endpoint=self.RAW_PREDICT_ENDPOINT,
+            body={
+                "anthropic_version": "vertex-2023-10-16",
+                "stream": False,
+                "messages": [{"role": "user", "content": "Explain MLOps"}],
+                "max_tokens": 5000,
+            },
+        )
+
+        assert captured["is_streaming_request"] is False
+        assert "alt=sse" not in captured["target"]
+
+    @pytest.mark.asyncio
+    async def test_raw_predict_with_stream_true_still_streams(self):
+        captured = await self._capture_passthrough_kwargs(
+            endpoint=self.RAW_PREDICT_ENDPOINT,
+            body={
+                "anthropic_version": "vertex-2023-10-16",
+                "stream": True,
+                "messages": [{"role": "user", "content": "Explain MLOps"}],
+                "max_tokens": 5000,
+            },
+        )
+
+        assert captured["is_streaming_request"] is True
+        assert captured["target"].endswith("?alt=sse")
+
+    @pytest.mark.asyncio
+    async def test_gemini_stream_generate_content_stays_url_signalled(self):
+        captured = await self._capture_passthrough_kwargs(
+            endpoint=self.GENERATE_CONTENT_ENDPOINT,
+            body={"contents": [{"role": "user", "parts": [{"text": "Explain MLOps"}]}]},
+        )
+
+        assert captured["is_streaming_request"] is True
+        assert captured["target"].endswith("?alt=sse")
+
+    @pytest.mark.asyncio
+    async def test_raw_predict_with_non_object_body_is_not_streaming(self):
+        captured = await self._capture_passthrough_kwargs(
+            endpoint=self.RAW_PREDICT_ENDPOINT,
+            body=[{"role": "user", "content": "Explain MLOps"}],
+        )
+
+        assert captured["is_streaming_request"] is False
+        assert "alt=sse" not in captured["target"]
+
+
+@pytest.mark.parametrize(
+    "request_body, expected",
+    [
+        ({"stream": True}, True),
+        ({"stream": "true"}, True),
+        ({"stream": False}, False),
+        ({}, False),
+        ([{"role": "user"}], False),
+        ([], False),
+        ("stream", False),
+        (7, False),
+        (None, False),
+    ],
+)
+def test_is_passthrough_request_streaming_tolerates_non_object_bodies(request_body, expected):
+    """
+    A JSON request body is not required to be an object. Every passthrough
+    streaming decision funnels through this predicate, so a list or scalar body
+    must answer False instead of raising AttributeError.
+    """
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        is_passthrough_request_streaming,
+    )
+
+    assert is_passthrough_request_streaming(request_body) is expected

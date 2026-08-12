@@ -1,7 +1,5 @@
-import { useSearchParams } from "next/navigation";
+import { parseAsString, useQueryStates } from "nuqs";
 import { useCallback } from "react";
-
-import { navigateWithParams } from "../navigateWithParams";
 
 export interface ModelDetailRouting {
   modelId: string | null;
@@ -12,32 +10,32 @@ export interface ModelDetailRouting {
 }
 
 export function useModelDetailRouting(): ModelDetailRouting {
-  const searchParams = useSearchParams();
+  const [{ model, team }, setParams] = useQueryStates(
+    { model: parseAsString, team: parseAsString },
+    { history: "push" },
+  );
 
-  const openModel = useCallback((id: string) => {
-    navigateWithParams((params) => {
-      params.delete("team");
-      params.set("model", id);
-    });
-  }, []);
+  const openModel = useCallback(
+    (id: string) => {
+      void setParams({ model: id, team: null });
+    },
+    [setParams],
+  );
 
-  const openTeam = useCallback((id: string) => {
-    navigateWithParams((params) => {
-      params.delete("model");
-      params.set("team", id);
-    });
-  }, []);
+  const openTeam = useCallback(
+    (id: string) => {
+      void setParams({ model: null, team: id });
+    },
+    [setParams],
+  );
 
   const close = useCallback(() => {
-    navigateWithParams((params) => {
-      params.delete("model");
-      params.delete("team");
-    });
-  }, []);
+    void setParams({ model: null, team: null });
+  }, [setParams]);
 
   return {
-    modelId: searchParams?.get("model") ?? null,
-    teamId: searchParams?.get("team") ?? null,
+    modelId: model,
+    teamId: team,
     openModel,
     openTeam,
     close,

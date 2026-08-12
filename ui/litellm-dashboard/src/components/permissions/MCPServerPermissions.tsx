@@ -90,7 +90,7 @@ export function MCPServerPermissions({
     const serverDetail = mcpServerDetails.find((server) => server.server_id === serverId);
     if (serverDetail) {
       const truncatedId = serverId.length > 7 ? `${serverId.slice(0, 3)}...${serverId.slice(-4)}` : serverId;
-      return `${serverDetail.alias} (${truncatedId})`;
+      return `${serverDetail.alias || serverDetail.server_name || serverId} (${truncatedId})`;
     }
     return serverId;
   };
