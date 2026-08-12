@@ -111,6 +111,7 @@ describe("autorouter_presets", () => {
         tiers: { SIMPLE: [presetModel], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
         session_affinity: false,
+        deployment_affinity: true,
       };
       expect(getMissingModels(config, availability)).toEqual([]);
       expect(buildPresetPrefill(config, availability).complexityRouterConfig.tiers.SIMPLE).toEqual([group]);
@@ -153,6 +154,7 @@ describe("autorouter_presets", () => {
         tiers: { SIMPLE: ["claude-opus-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
         session_affinity: false,
+        deployment_affinity: true,
       };
       expect(buildPresetPrefill(config, availability).complexityRouterConfig.tiers.SIMPLE).toEqual(["a-group"]);
     });
@@ -166,6 +168,7 @@ describe("autorouter_presets", () => {
         tiers: { SIMPLE: ["claude-opus-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
         session_affinity: false,
+        deployment_affinity: true,
       };
       expect(buildPresetPrefill(config, availability).complexityRouterConfig.tiers.SIMPLE).toEqual(["claude-opus-5"]);
     });
@@ -187,6 +190,149 @@ describe("autorouter_presets", () => {
         const prefilledModels = Object.values(prefilled.complexityRouterConfig.tiers).flat();
         expect(prefilledModels.length).toBeGreaterThan(0);
         for (const model of prefilledModels) expect(groups).toContain(model);
+      },
+    );
+  });
+
+  describe("wildcard deployment matching (expanded model groups)", () => {
+    const wildcardDeployment = (pattern: string) => ({ modelGroup: pattern, underlyingModels: [pattern] });
+
+    const simpleTierConfig = (presetModel: string) => ({
+      tiers: { SIMPLE: [presetModel], MEDIUM: [], COMPLEX: [], REASONING: [] },
+      classifier_type: "heuristic" as const,
+      session_affinity: false,
+      deployment_affinity: true,
+    });
+
+    it("resolves a preset model to a group expanded from a wildcard deployment", () => {
+      const availability = buildModelAvailability(
+        ["anthropic/*", "anthropic/claude-opus-5", "bedrock/anthropic.claude-opus-5"],
+        [wildcardDeployment("anthropic/*")],
+      );
+      const config = simpleTierConfig("claude-opus-5");
+      expect(getMissingModels(config, availability)).toEqual([]);
+      expect(buildPresetPrefill(config, availability).complexityRouterConfig.tiers.SIMPLE).toEqual([
+        "anthropic/claude-opus-5",
+      ]);
+    });
+
+    it("normalizes an expanded group's namespaced own name the same way as a deployment's", () => {
+      const availability = buildModelAvailability(
+        ["bedrock/*", "bedrock/us.anthropic.claude-sonnet-5"],
+        [wildcardDeployment("bedrock/*")],
+      );
+      expect(getMissingModels(simpleTierConfig("claude-sonnet-5"), availability)).toEqual([]);
+    });
+
+    it("anchors a partial wildcard pattern and treats its dots literally", () => {
+      const availability = buildModelAvailability(
+        ["bedrock/us.anthropic.claude-opus-5", "bedrock/usXanthropic.claude-fable-5"],
+        [wildcardDeployment("bedrock/us.*")],
+      );
+      expect(getMissingModels(simpleTierConfig("claude-opus-5"), availability)).toEqual([]);
+      expect(getMissingModels(simpleTierConfig("claude-fable-5"), availability)).toEqual(["claude-fable-5"]);
+    });
+
+    it.each([
+      ["gpt-5.4", "openai/gpt-5.4-mini"],
+      ["gpt-5.4-mini", "openai/gpt-5.4"],
+      ["o3", "openai/o3-mini"],
+    ])("never lets %s be satisfied by the expanded group %s", (presetModel, expandedGroup) => {
+      const availability = buildModelAvailability(["openai/*", expandedGroup], [wildcardDeployment("openai/*")]);
+      expect(getMissingModels(simpleTierConfig(presetModel), availability)).toEqual([presetModel]);
+    });
+
+    it("anchors the pattern's suffix and keeps middle segments in order", () => {
+      const availability = buildModelAvailability(
+        ["bedrock/us.anthropic.claude-opus-5", "bedrock/anthropic.us.claude-sonnet-5"],
+        [wildcardDeployment("bedrock/*.anthropic.*")],
+      );
+      expect(getMissingModels(simpleTierConfig("claude-opus-5"), availability)).toEqual([]);
+      expect(getMissingModels(simpleTierConfig("claude-sonnet-5"), availability)).toEqual(["claude-sonnet-5"]);
+    });
+
+    it("matches a pathological many-star pattern in linear time instead of backtracking", () => {
+      const hostile = `prov/a*${"a*".repeat(30)}b`;
+      const nonMatching = `prov/${"a".repeat(120)}`;
+      const availability = buildModelAvailability([nonMatching], [wildcardDeployment(hostile)]);
+      expect(availability.underlyingIndex.size).toBe(0);
+    });
+
+    it("expands a bare-star model_name through its underlying wildcard, not as match-all", () => {
+      const availability = buildModelAvailability(
+        ["openai/gpt-5.4", "team-a/claude-opus-5"],
+        [{ modelGroup: "*", underlyingModels: ["openai/*"] }],
+      );
+      expect(getMissingModels(simpleTierConfig("gpt-5.4"), availability)).toEqual([]);
+      expect(getMissingModels(simpleTierConfig("claude-opus-5"), availability)).toEqual(["claude-opus-5"]);
+    });
+
+    it.each([
+      ["a bare-star underlying", "*"],
+      ["a non-wildcard underlying", "openai/gpt-4o"],
+      ["a slashless wildcard underlying", "gpt*"],
+    ])("derives no pattern from a bare-star model_name with %s", (_label, underlying) => {
+      const availability = buildModelAvailability(
+        ["openai/gpt-5.4"],
+        [{ modelGroup: "*", underlyingModels: [underlying] }],
+      );
+      expect(availability.underlyingIndex.size).toBe(0);
+    });
+
+    it("derives no pattern from a slashless wildcard model_name", () => {
+      const availability = buildModelAvailability(["gpt-5.4"], [wildcardDeployment("gpt*")]);
+      expect(availability.underlyingIndex.size).toBe(0);
+    });
+
+    it("does not trust a group's name when no wildcard deployment covers it", () => {
+      const availability = buildModelAvailability(
+        ["team-a/claude-opus-5", "openai/*"],
+        [wildcardDeployment("openai/*")],
+      );
+      expect(getMissingModels(simpleTierConfig("claude-opus-5"), availability)).toEqual(["claude-opus-5"]);
+    });
+
+    it("never resolves to the wildcard group itself when the hub lists no expansions", () => {
+      const availability = buildModelAvailability(["openai/*"], [wildcardDeployment("openai/*")]);
+      expect(getMissingModels(simpleTierConfig("gpt-5.4"), availability)).toEqual(["gpt-5.4"]);
+      expect(availability.underlyingIndex.size).toBe(0);
+    });
+
+    it("applies a wildcard deployment's pattern even when the wildcard group is not itself listed", () => {
+      const availability = buildModelAvailability(["anthropic/claude-opus-5"], [wildcardDeployment("anthropic/*")]);
+      expect(getMissingModels(simpleTierConfig("claude-opus-5"), availability)).toEqual([]);
+    });
+
+    it("keeps the groups-only availability strict even when expanded groups are listed", () => {
+      const availability = groupsOnly(["anthropic/*", "anthropic/claude-opus-5"]);
+      expect(getMissingModels(simpleTierConfig("claude-opus-5"), availability)).toEqual(["claude-opus-5"]);
+    });
+
+    it("prefers the alphabetically first covered group when several expansions serve the model", () => {
+      const availability = buildModelAvailability(
+        ["bedrock/us.anthropic.claude-opus-5", "anthropic/claude-opus-5", "bedrock/anthropic.claude-opus-5"],
+        [wildcardDeployment("anthropic/*"), wildcardDeployment("bedrock/*")],
+      );
+      const config = simpleTierConfig("claude-opus-5");
+      expect(buildPresetPrefill(config, availability).complexityRouterConfig.tiers.SIMPLE).toEqual([
+        "anthropic/claude-opus-5",
+      ]);
+    });
+
+    it.each(getAllPresets().map((preset) => [preset.key, preset] as const))(
+      "fully resolves the %s preset through wildcard-expanded groups only",
+      (_key, preset) => {
+        const required = [...getRequiredModelsInPreset(preset)];
+        const expandedGroups = required.map((model) => `someprovider/${model}`);
+        const availability = buildModelAvailability(
+          ["someprovider/*", ...expandedGroups],
+          [wildcardDeployment("someprovider/*")],
+        );
+        expect(getMissingModelsInPreset(preset, availability)).toEqual([]);
+        const prefilled = buildPresetPrefill(preset.complexity_router_config, availability);
+        const prefilledModels = Object.values(prefilled.complexityRouterConfig.tiers).flat();
+        expect(prefilledModels.length).toBeGreaterThan(0);
+        for (const model of prefilledModels) expect(expandedGroups).toContain(model);
       },
     );
   });
@@ -298,6 +444,7 @@ describe("autorouter_presets", () => {
         tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
         session_affinity: false,
+        deployment_affinity: true,
         match_threshold: 0,
         escalation_keywords: [],
       };
@@ -312,6 +459,7 @@ describe("autorouter_presets", () => {
           tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
           classifier_type: "heuristic",
           session_affinity: false,
+          deployment_affinity: true,
         },
         groupsOnly(["gpt-5-nano"]),
       );
@@ -327,6 +475,7 @@ describe("autorouter_presets", () => {
         tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
         session_affinity: false,
+        deployment_affinity: true,
       };
       const labeled = buildPresetPrefill(
         { ...base, tier_labels: { SIMPLE: "Cheap", REASONING: "Deep" } },
@@ -341,6 +490,7 @@ describe("autorouter_presets", () => {
         tiers: { SIMPLE: ["claude-sonnet-4-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
         session_affinity: false,
+        deployment_affinity: true,
       };
       const prefill = buildPresetPrefill(config, groupsOnly(["claude-sonnet-4.5"]));
       expect(prefill.complexityRouterConfig.tiers.SIMPLE).toEqual(["claude-sonnet-4.5"]);

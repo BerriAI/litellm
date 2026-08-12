@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import Sequence
 from datetime import datetime
@@ -7,6 +8,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import ANTHROPIC_BATCHES_ROUTE
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
@@ -20,6 +22,12 @@ from litellm.llms.anthropic.chat.handler import (
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
+    is_collection_route,
+    log_batch_registration_result,
+    optional_str,
+    request_tags_from_metadata,
+)
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
@@ -833,13 +841,14 @@ class AnthropicPassthroughLoggingHandler:
 
                 # Store the managed object for cost tracking
                 # This will be picked up by check_batch_cost polling mechanism
-                AnthropicPassthroughLoggingHandler._store_batch_managed_object(
-                    unified_object_id=unified_object_id,
-                    batch_object=litellm_batch_response,
-                    model_object_id=batch_id,
-                    logging_obj=logging_obj,
-                    **kwargs,
-                )
+                if is_collection_route(url_route, ANTHROPIC_BATCHES_ROUTE):
+                    AnthropicPassthroughLoggingHandler._store_batch_managed_object(
+                        unified_object_id=unified_object_id,
+                        batch_object=litellm_batch_response,
+                        model_object_id=batch_id,
+                        logging_obj=logging_obj,
+                        **kwargs,
+                    )
 
                 # Create a batch job response for logging
                 litellm_model_response = ModelResponse()
@@ -964,8 +973,12 @@ class AnthropicPassthroughLoggingHandler:
         **kwargs,
     ) -> None:
         """
-        Store batch managed object for cost tracking.
+        Register a newly created batch for cost tracking.
         This will be picked up by the check_batch_cost polling mechanism.
+
+        Only the create reaches here, so the row records the creating key and its tags.
+        An id-scoped route cannot rebuild the unified object id anyway: the model comes
+        from the create's request body, which a retrieve does not have.
         """
         try:
             # Get the managed files hook from the logging object
@@ -981,7 +994,7 @@ class AnthropicPassthroughLoggingHandler:
 
                 user_api_key_dict: Final = UserAPIKeyAuth(
                     user_id=_request_metadata.get("user_api_key_user_id", "default-user"),
-                    api_key="",
+                    api_key=optional_str(_request_metadata.get("user_api_key")),
                     team_id=_request_metadata.get("user_api_key_team_id"),
                     team_alias=None,
                     user_role=LitellmUserRoles.CUSTOMER,  # Use proper enum value
@@ -1003,9 +1016,7 @@ class AnthropicPassthroughLoggingHandler:
                 )
 
                 # Store the unified object for batch cost tracking
-                import asyncio
-
-                asyncio.create_task(
+                task: Final = asyncio.create_task(
                     managed_files_hook.store_unified_object_id(
                         unified_object_id=unified_object_id,
                         file_object=batch_object,
@@ -1013,13 +1024,14 @@ class AnthropicPassthroughLoggingHandler:
                         model_object_id=model_object_id,
                         file_purpose="batch",
                         user_api_key_dict=user_api_key_dict,
+                        request_tags=request_tags_from_metadata(_request_metadata),
+                        persist_attribution=True,
                     )
                 )
-
-                verbose_proxy_logger.info(
-                    "Stored Anthropic batch managed object with unified_object_id=%s, batch_id=%s",
-                    unified_object_id,
-                    model_object_id,
+                task.add_done_callback(
+                    lambda finished: log_batch_registration_result(
+                        finished, "Anthropic", unified_object_id, model_object_id, is_batch_create=True
+                    )
                 )
             else:
                 verbose_proxy_logger.warning(

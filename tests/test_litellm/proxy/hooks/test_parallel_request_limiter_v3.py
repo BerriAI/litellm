@@ -3,6 +3,7 @@ Unit Tests for the max parallel request limiter v3 for the proxy
 """
 
 import asyncio
+import logging
 import os
 import sys
 import time
@@ -5100,3 +5101,456 @@ async def test_reserve_tpm_tokens_never_evaluates_the_requests_dimension():
         f"reservation pass, got: {response}"
     )
     assert [s["rate_limit_type"] for s in response["statuses"]] == ["tokens"]
+
+
+STATIC_OUTPUT_FLOOR = 1024
+ONE_TOKEN_PROMPT = [{"role": "user", "content": "hello"}]
+ONE_TOKEN_PROMPT_INPUT_ESTIMATE = 1
+
+
+async def _reserved_tokens_for(
+    handler,
+    local_cache,
+    user_api_key_dict,
+    data,
+    call_type="completion",
+):
+    """Drive the pre-call hook and read back what landed on the :tokens counter."""
+    tokens_key = handler.create_rate_limit_keys(
+        key="api_key", value=user_api_key_dict.api_key, rate_limit_type="tokens"
+    )
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=data,
+        call_type=call_type,
+    )
+    return int(await local_cache.async_get_cache(key=tokens_key) or 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_metadata, team_metadata, expected_output_estimate, tier",
+    [
+        (
+            {
+                "default_estimated_output_tokens_per_model": {"gpt-4o-mini": 3001},
+                "default_estimated_output_tokens": 2002,
+            },
+            {
+                "default_estimated_output_tokens_per_model": {"gpt-4o-mini": 1503},
+                "default_estimated_output_tokens": 777,
+            },
+            3001,
+            "key per-model wins over every other tier",
+        ),
+        (
+            {"default_estimated_output_tokens": 2002},
+            {
+                "default_estimated_output_tokens_per_model": {"gpt-4o-mini": 1503},
+                "default_estimated_output_tokens": 777,
+            },
+            2002,
+            "key global wins over team config",
+        ),
+        (
+            {"default_estimated_output_tokens_per_model": {"some-other-model": 9999}},
+            {
+                "default_estimated_output_tokens_per_model": {"gpt-4o-mini": 1503},
+                "default_estimated_output_tokens": 777,
+            },
+            1503,
+            "team per-model wins when the key has no applicable entry",
+        ),
+        (
+            {},
+            {"default_estimated_output_tokens": 777},
+            777,
+            "team global is the last configured tier",
+        ),
+        ({}, {}, STATIC_OUTPUT_FLOOR, "unconfigured falls back to the static floor"),
+        (
+            {"unrelated": "value"},
+            {"unrelated": "value"},
+            STATIC_OUTPUT_FLOOR,
+            "unrelated metadata changes nothing",
+        ),
+        (
+            {"default_estimated_output_tokens": "not-a-number"},
+            {},
+            STATIC_OUTPUT_FLOOR,
+            "malformed config falls back to the static floor instead of erroring",
+        ),
+        (
+            {"default_estimated_output_tokens": 0},
+            {},
+            STATIC_OUTPUT_FLOOR,
+            "a non-positive estimate is rejected, not reserved",
+        ),
+    ],
+)
+async def test_estimated_output_tokens_resolution_precedence(
+    monkeypatch, key_metadata, team_metadata, expected_output_estimate, tier
+):
+    """The no-max_tokens output reservation resolves per key / team / model.
+
+    Every configured value here is distinct from the static 1024 floor and
+    from the input estimate, so the reserved amount identifies which tier the
+    resolver picked.
+    """
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token(f"sk-estimate-{expected_output_estimate}-{tier}"),
+        tpm_limit=1_000_000,
+        metadata=key_metadata,
+        team_metadata=team_metadata,
+    )
+
+    reserved = await _reserved_tokens_for(
+        handler,
+        local_cache,
+        user_api_key_dict,
+        {"model": "gpt-4o-mini", "messages": ONE_TOKEN_PROMPT},
+    )
+
+    assert reserved == ONE_TOKEN_PROMPT_INPUT_ESTIMATE + expected_output_estimate, tier
+
+
+@pytest.mark.asyncio
+async def test_request_max_tokens_outranks_configured_estimate(monkeypatch):
+    """An explicit request-level max_tokens stays the top of the precedence order."""
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-estimate-explicit-max-tokens"),
+        tpm_limit=1_000_000,
+        metadata={"default_estimated_output_tokens": 2002},
+    )
+
+    reserved = await _reserved_tokens_for(
+        handler,
+        local_cache,
+        user_api_key_dict,
+        {"model": "gpt-4o-mini", "messages": ONE_TOKEN_PROMPT, "max_tokens": 42},
+    )
+
+    assert reserved == ONE_TOKEN_PROMPT_INPUT_ESTIMATE + 42
+
+
+@pytest.mark.asyncio
+async def test_configured_estimate_does_not_apply_to_embeddings(monkeypatch):
+    """Embeddings generate no output, so a declared output estimate must not be reserved."""
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-estimate-embeddings"),
+        tpm_limit=1_000_000,
+        metadata={"default_estimated_output_tokens": 2002},
+    )
+
+    reserved = await _reserved_tokens_for(
+        handler,
+        local_cache,
+        user_api_key_dict,
+        {"model": "text-embedding-3-small", "input": "hello"},
+        call_type="embeddings",
+    )
+
+    assert reserved == ONE_TOKEN_PROMPT_INPUT_ESTIMATE
+
+
+@pytest.mark.asyncio
+async def test_configured_estimate_applies_to_contentless_requests(monkeypatch):
+    """A declared estimate describes generation, so it holds even with no prompt body.
+
+    Without config such a request reserves the 1-token floor only; the
+    declaration is what makes concurrent tool-call continuations countable.
+    """
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    configured = UserAPIKeyAuth(
+        api_key=hash_token("sk-estimate-contentless-configured"),
+        tpm_limit=1_000_000,
+        metadata={"default_estimated_output_tokens": 2002},
+    )
+    unconfigured = UserAPIKeyAuth(
+        api_key=hash_token("sk-estimate-contentless-plain"),
+        tpm_limit=1_000_000,
+    )
+
+    assert (
+        await _reserved_tokens_for(
+            handler, local_cache, configured, {"model": "gpt-4o-mini", "messages": []}
+        )
+        == 2002
+    )
+    assert (
+        await _reserved_tokens_for(
+            handler, local_cache, unconfigured, {"model": "gpt-4o-mini", "messages": []}
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_declared_estimate_never_tightens_the_small_tpm_clamp(monkeypatch):
+    """The small-TPM clamp can only be loosened by a declaration, never tightened.
+
+    That clamp is the one place the proxy rewrites the caller's generation
+    budget, and it only fires below a 4096 TPM limit. A declaration above it
+    raises it, so the tenant is not truncated below what they said their
+    model emits; a declaration below it changes nothing, because an estimate
+    describes the typical response and must not become a hard cap that
+    truncates the tail. The reservation tracks whatever the clamp settles on,
+    so a small tenant can never generate more than was reserved.
+    """
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    raised_data: Dict[str, Any] = {"model": "gpt-4o-mini", "messages": ONE_TOKEN_PROMPT}
+    raised_reserved = await _reserved_tokens_for(
+        handler,
+        local_cache,
+        UserAPIKeyAuth(
+            api_key=hash_token("sk-estimate-hard-cap-raised"),
+            tpm_limit=2000,
+            metadata={"default_estimated_output_tokens": 900},
+        ),
+        raised_data,
+    )
+    assert raised_data["max_tokens"] == 900
+    assert raised_reserved == ONE_TOKEN_PROMPT_INPUT_ESTIMATE + 900
+
+    lowered_data: Dict[str, Any] = {"model": "gpt-4o-mini", "messages": ONE_TOKEN_PROMPT}
+    lowered_reserved = await _reserved_tokens_for(
+        handler,
+        local_cache,
+        UserAPIKeyAuth(
+            api_key=hash_token("sk-estimate-hard-cap-lowered"),
+            tpm_limit=2000,
+            metadata={"default_estimated_output_tokens": 120},
+        ),
+        lowered_data,
+    )
+    assert lowered_data["max_tokens"] == 500
+    assert lowered_reserved == ONE_TOKEN_PROMPT_INPUT_ESTIMATE + 500
+
+    unconfigured_data: Dict[str, Any] = {"model": "gpt-4o-mini", "messages": ONE_TOKEN_PROMPT}
+    unconfigured_reserved = await _reserved_tokens_for(
+        handler,
+        local_cache,
+        UserAPIKeyAuth(
+            api_key=hash_token("sk-estimate-hard-cap-plain"),
+            tpm_limit=2000,
+        ),
+        unconfigured_data,
+    )
+    assert unconfigured_data["max_tokens"] == 500
+    assert unconfigured_reserved == ONE_TOKEN_PROMPT_INPUT_ESTIMATE + 500
+
+
+@pytest.mark.asyncio
+async def test_one_malformed_estimate_field_does_not_discard_the_other(monkeypatch):
+    """Each declared field is validated on its own.
+
+    A per-model map with a bad entry must not take a valid global estimate
+    down with it, and a bad global must not hide a valid per-model entry.
+    """
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    broken_map = await _reserved_tokens_for(
+        handler,
+        local_cache,
+        UserAPIKeyAuth(
+            api_key=hash_token("sk-estimate-broken-map"),
+            tpm_limit=1_000_000,
+            metadata={
+                "default_estimated_output_tokens_per_model": {"gpt-4o-mini": "huge"},
+                "default_estimated_output_tokens": 2002,
+            },
+        ),
+        {"model": "gpt-4o-mini", "messages": ONE_TOKEN_PROMPT},
+    )
+    assert broken_map == ONE_TOKEN_PROMPT_INPUT_ESTIMATE + 2002
+
+    broken_global = await _reserved_tokens_for(
+        handler,
+        local_cache,
+        UserAPIKeyAuth(
+            api_key=hash_token("sk-estimate-broken-global"),
+            tpm_limit=1_000_000,
+            metadata={
+                "default_estimated_output_tokens_per_model": {"gpt-4o-mini": 3001},
+                "default_estimated_output_tokens": -5,
+            },
+        ),
+        {"model": "gpt-4o-mini", "messages": ONE_TOKEN_PROMPT},
+    )
+    assert broken_global == ONE_TOKEN_PROMPT_INPUT_ESTIMATE + 3001
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("declared", [100_000, 5000])
+async def test_declared_estimate_over_the_tpm_budget_is_honored_and_explained(monkeypatch, caplog, declared):
+    """A declaration bigger than the budget must not be silently shrunk.
+
+    Capping it against the TPM limit would re-admit exactly the traffic this
+    feature exists to hold back, so the request is refused instead and the
+    reservation is explained rather than leaving an unexplained 429 loop.
+
+    ``declared == tpm_limit`` is the boundary case: the declaration alone
+    equals the limit, so only adding the input estimate tips the reservation
+    over. Comparing the declaration against the limit rather than the
+    reservation would refuse this request while saying nothing.
+    """
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token(f"sk-estimate-over-budget-{declared}"),
+        tpm_limit=5000,
+        metadata={"default_estimated_output_tokens": declared},
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=local_cache,
+                data={"model": "gpt-4o-mini", "messages": ONE_TOKEN_PROMPT},
+                call_type="completion",
+            )
+
+    assert exc_info.value.status_code == 429
+    explained = [
+        record.getMessage()
+        for record in caplog.records
+        if "cannot be admitted even against an empty window" in record.getMessage()
+    ]
+    assert len(explained) == 1, f"expected exactly one explanation, got {explained}"
+    assert str(declared) in explained[0]
+    assert str(ONE_TOKEN_PROMPT_INPUT_ESTIMATE + declared) in explained[0]
+    assert "5000" in explained[0]
+
+
+@pytest.mark.asyncio
+async def test_a_key_that_declared_nothing_is_never_blamed_for_a_declaration(monkeypatch, caplog):
+    """A request can outgrow its budget on prompt size alone, with no declaration.
+
+    The heuristic path reserves input plus the injected clamp, so a long
+    prompt against a small limit is refused without anyone having declared
+    anything. Blaming the declared field there would point an operator at a
+    setting they never set, to fix a 429 whose real cause is prompt size.
+    """
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key=hash_token("sk-undeclared-long-prompt"),
+                    tpm_limit=1000,
+                ),
+                cache=local_cache,
+                data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "x" * 3600}]},
+                call_type="completion",
+            )
+
+    assert exc_info.value.status_code == 429
+    assert not [
+        record for record in caplog.records if "cannot be admitted even against an empty window" in record.getMessage()
+    ]
+
+
+@pytest.mark.asyncio
+async def test_declared_estimate_inside_the_tpm_budget_is_not_explained(monkeypatch, caplog):
+    """The explanation is for requests that cannot fit, not for every request.
+
+    Without this, a correctly configured key would emit one line per call.
+    """
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key=hash_token("sk-estimate-within-budget"),
+                tpm_limit=5000,
+                metadata={"default_estimated_output_tokens": 1000},
+            ),
+            cache=local_cache,
+            data={"model": "gpt-4o-mini", "messages": ONE_TOKEN_PROMPT},
+            call_type="completion",
+        )
+
+    assert not [
+        record for record in caplog.records if "cannot be admitted even against an empty window" in record.getMessage()
+    ]
+
+
+@pytest.mark.asyncio
+async def test_configured_estimate_blocks_the_overrun_the_static_floor_admits(monkeypatch):
+    """Concurrent unbounded requests must stop at the declared budget.
+
+    A key with tpm_limit=8000 whose model really emits ~3000 output tokens
+    admits 7 concurrent requests under the 1024 floor (7 * 1025 <= 8000), so
+    once they all report actual usage the window carries ~21000 tokens
+    against an 8000 limit. Declaring the real output size admits only the two
+    requests the budget actually covers.
+    """
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+
+    async def admitted(metadata):
+        local_cache = DualCache()
+        handler = _PROXY_MaxParallelRequestsHandler(
+            internal_usage_cache=InternalUsageCache(local_cache)
+        )
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key=hash_token(f"sk-overrun-{metadata}"),
+            tpm_limit=8000,
+            metadata=metadata,
+        )
+        accepted = 0
+        for _ in range(10):
+            try:
+                await handler.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    cache=local_cache,
+                    data={"model": "gpt-4o-mini", "messages": ONE_TOKEN_PROMPT},
+                    call_type="completion",
+                )
+            except HTTPException:
+                break
+            accepted += 1
+        return accepted
+
+    assert await admitted({}) == 7
+    assert await admitted({"default_estimated_output_tokens": 3000}) == 2
