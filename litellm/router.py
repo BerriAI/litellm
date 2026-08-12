@@ -8620,7 +8620,9 @@ class Router:
         requests that route to (and bill as) a real deployment.
         """
         if classify_strategy_router_model(model) is not None:
-            model_info = {k: v for k, v in model_info.items() if k not in CustomPricingLiteLLMParams.model_fields}
+            model_info = {  # mutable-ok: filtered copy of the caller's entry, handed straight to register_model
+                k: v for k, v in model_info.items() if k not in CustomPricingLiteLLMParams.model_fields
+            }
 
         if model_id is not None:
             litellm.register_model(model_cost={model_id: model_info}, persist_across_reloads=False)
