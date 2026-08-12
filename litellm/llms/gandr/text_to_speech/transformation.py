@@ -146,8 +146,27 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
     ) -> dict:
         """
         Validate the Gandr environment and set up authentication headers.
+
+        A caller-supplied api_base is honored when constructing the request
+        URL, so falling back to a server-managed key while the caller controls
+        the host would leak that key. The provider default and the operator's
+        own GANDR_API_BASE override are the only trusted destinations for a
+        server-managed key; anything else requires an explicit api_key.
         """
-        api_key = api_key or litellm.api_key or get_secret_str("GANDR_API_KEY")
+        server_api_key: Final = litellm.api_key or get_secret_str("GANDR_API_KEY")
+
+        if api_key is None and api_base is not None and server_api_key is not None:
+            trusted_base: Final = (
+                get_secret_str("GANDR_API_BASE") or self.TTS_BASE_URL
+            ).rstrip("/")
+            if api_base.rstrip("/") != trusted_base:
+                raise ValueError(
+                    "Refusing to send the server-configured GANDR_API_KEY to the "
+                    f"caller-supplied api_base '{api_base}'. Pass an explicit "
+                    "api_key when overriding api_base."
+                )
+
+        api_key = api_key or server_api_key
 
         if api_key is None:
             raise ValueError(
