@@ -6,6 +6,15 @@ export type ExtendedDailyData = DailyData & {
 
 export type ModelBreakdownKey = "models" | "model_groups";
 
+export interface ProviderSpendRow extends Record<string, unknown> {
+  provider: string;
+  spend: number;
+  requests: number;
+  successful_requests: number;
+  failed_requests: number;
+  tokens: number;
+}
+
 export const getTopModels = (
   results: ExtendedDailyData[],
   modelBreakdownKey: ModelBreakdownKey,
@@ -136,8 +145,8 @@ export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number
     .slice(0, topKeysLimit);
 };
 
-export const getProviderSpend = (results: ExtendedDailyData[]) => {
-  const providerSpend: { [key: string]: any } = {};
+export const getProviderSpend = (results: ExtendedDailyData[]): ProviderSpendRow[] => {
+  const providerSpend: Record<string, ProviderSpendRow> = {};
   results.forEach((day) => {
     Object.entries(day.breakdown.providers || {}).forEach(([provider, metrics]) => {
       if (!providerSpend[provider]) {
