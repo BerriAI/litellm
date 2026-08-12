@@ -8612,7 +8612,16 @@ class Router:
         Nothing is recorded for replay: a refresh walks the live routers instead,
         so a deleted, repointed or never-added deployment, and a discarded router,
         drop out of the rebuild on their own.
+
+        A strategy-router alias is never the deployment actually called or
+        billed, so custom pricing configured on it must not become a cost-map
+        price: an explicit zero would let ``_is_cost_explicitly_configured``
+        treat the alias as a genuinely free model and waive budget checks for
+        requests that route to (and bill as) a real deployment.
         """
+        if classify_strategy_router_model(model) is not None:
+            model_info = {k: v for k, v in model_info.items() if k not in CustomPricingLiteLLMParams.model_fields}
+
         if model_id is not None:
             litellm.register_model(model_cost={model_id: model_info}, persist_across_reloads=False)
 
@@ -11439,13 +11448,16 @@ class Router:
         # deployment the hook selected won't have them. Router-only fields
         # (tpm, rpm, weight, complexity_router_config, ...) are excluded from the
         # actual outbound LLM call downstream by litellm.types.utils.all_litellm_params,
-        # not here.
+        # not here. Custom pricing fields ARE call params, so they must be
+        # excluded here: they price the alias, not the deployment the hook
+        # selected, and forwarding them re-registers the routed deployment at
+        # the alias's price (an explicit 0 makes every alias request bill $0).
         if pre_routing_hook_response is not None:
             alias_index: Final = self.model_name_to_deployment_indices.get(model, [])
             if alias_index:
                 alias_litellm_params: Final = self.model_list[alias_index[0]].get("litellm_params", {})
                 for key, value in alias_litellm_params.items():
-                    if key != "model" and value is not None:
+                    if key != "model" and key not in CustomPricingLiteLLMParams.model_fields and value is not None:
                         request_kwargs.setdefault(key, value)
 
         return pre_routing_hook_response
