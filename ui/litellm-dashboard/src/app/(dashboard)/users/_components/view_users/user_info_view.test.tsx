@@ -122,6 +122,19 @@ describe("UserInfoView", () => {
     expect(aliases.length).toBeGreaterThan(0);
   });
 
+  it("should render overview spend and budget with two decimal places", async () => {
+    mockUserGetInfoV2.mockResolvedValue({
+      ...MOCK_USER_DATA,
+      spend: 98.854,
+      max_budget: 3_000_000,
+    });
+
+    render(<UserInfoView {...defaultProps} />);
+
+    expect(await screen.findByText("$98.85")).toBeInTheDocument();
+    expect(screen.getByText(/of \$3,000,000\.00/)).toBeInTheDocument();
+  });
+
   it("should render teams in a table with team names", async () => {
     render(<UserInfoView {...defaultProps} />);
 
