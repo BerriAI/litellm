@@ -35,3 +35,5 @@ class TestMasterKeyAuth:
         assert isinstance(result, UnauthorizedError), (
             f"a token that is not the master key must be rejected with 401, got {result}"
         )
+
+# e2e gate proof 1: tier-1 single test file selection (throwaway)
