@@ -2,6 +2,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "@/../tests/test-utils";
 import { getPromptVersions, PromptSpec } from "@/components/networking";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import VersionHistorySidePanel from "./VersionHistorySidePanel";
 
 vi.mock("@/components/networking", () => ({ getPromptVersions: vi.fn() }));
@@ -214,5 +215,24 @@ describe("VersionHistorySidePanel", () => {
     await user.keyboard("{Escape}");
 
     expect(props.onClose).toHaveBeenCalledOnce();
+  });
+
+  it("should keep history open when Escape dismisses a modal above it", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <>
+        <VersionHistorySidePanel {...props} />
+        <Dialog defaultOpen>
+          <DialogContent>
+            <DialogTitle>Prompt modal</DialogTitle>
+          </DialogContent>
+        </Dialog>
+      </>,
+    );
+    await screen.findByRole("dialog", { name: "Prompt modal" });
+
+    await user.keyboard("{Escape}");
+
+    expect(props.onClose).not.toHaveBeenCalled();
   });
 });

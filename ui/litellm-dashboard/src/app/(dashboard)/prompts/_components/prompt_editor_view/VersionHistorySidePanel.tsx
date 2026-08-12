@@ -35,7 +35,8 @@ const VersionHistorySidePanel: React.FC<VersionHistorySidePanelProps> = ({
     if (!isOpen) return;
 
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      const openModal = document.querySelector('[data-slot="dialog-content"][data-open]');
+      if (event.key === "Escape" && !openModal) onClose();
     };
 
     document.addEventListener("keydown", handleEscape);
