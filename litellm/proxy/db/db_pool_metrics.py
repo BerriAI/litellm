@@ -162,12 +162,17 @@ class DBPoolMetricsSampler:
         return max(0.0, sample.pending_acquirers - self._pending_baseline)
 
     def _to_update(self, sample: DBPoolSample) -> DBPoolMetricsUpdate:
-        pending: Final = self._corrected_pending_acquirers(sample)
         previous: Final = self._previous
         engine_restarted: Final = previous is not None and (
             sample.acquire_count_total < previous.acquire_count_total
             or sample.query_count_total < previous.query_count_total
         )
+        if engine_restarted:
+            # A fresh engine has an unlatched waiter gauge, so carrying the old
+            # baseline would subtract a latch that no longer exists and hide
+            # real waiters.
+            self._pending_baseline = 0.0
+        pending: Final = self._corrected_pending_acquirers(sample)
         if previous is None or engine_restarted:
             return DBPoolMetricsUpdate(
                 sample=sample,

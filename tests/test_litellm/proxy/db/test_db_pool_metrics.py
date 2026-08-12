@@ -263,3 +263,33 @@ async def test_the_raw_engine_reading_is_still_carried_on_the_sample():
     assert update is not None
     assert update.pending_acquirers == 0.0
     assert update.sample.pending_acquirers == 4.0
+
+
+@pytest.mark.asyncio
+async def test_an_engine_restart_clears_the_pending_latch():
+    """The restart guard zeroes the counter deltas; the waiter baseline has to go
+    with them. A fresh engine's gauge carries no latch, so keeping the old
+    baseline would subtract waiters that are really queued and can report zero
+    during the saturation that caused the restart."""
+    clock = _Clock()
+    client = _Client(
+        # saturated, 6 waiters of which 4 are latched timeouts
+        _Metrics(busy=2.0, idle=0.0, wait=6.0, waits=40, queries=40),
+        # drained: baseline arms at 4
+        _Metrics(busy=0.0, idle=2.0, wait=4.0, waits=40, queries=40),
+        # engine restarted (totals reset) and is saturated again with 3 real waiters
+        _Metrics(busy=2.0, idle=0.0, wait=3.0, waits=1, queries=1),
+    )
+    sampler = DBPoolMetricsSampler(min_interval_seconds=1.0, monotonic=clock)
+
+    observed = []
+    for tick in range(3):
+        clock.now = tick * 2.0
+        update = await sampler.maybe_sample(lambda: client)
+        assert update is not None
+        observed.append(update.pending_acquirers)
+
+    assert observed[1] == 0.0, "an idle pool reports no waiters and arms the baseline"
+    assert observed[2] == 3.0, (
+        f"after a restart the fresh gauge must be reported in full, got {observed[2]}"
+    )
