@@ -8,6 +8,7 @@ hooks, proxy SERVER span lifecycle (start + setters), parent-context resolution
 
 import asyncio
 import contextlib
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -34,6 +35,7 @@ from litellm.integrations.otel.plumbing.context import (  # noqa: E402
     set_mcp_message_transport_span,
     set_request_root_span,
 )
+from litellm.integrations.otel.model.db_endpoint import postgres_endpoint  # noqa: E402
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.model.spans import (  # noqa: E402
     LITELLM_PROXY_REQUEST_SPAN_NAME,
@@ -1519,6 +1521,40 @@ def test_async_service_success_hook_emits_service_span():
     assert span.attributes["call_type"] == "set"  # V1 bare key
     # Success leaves status UNSET (semconv default), not forced OK.
     assert span.status.status_code is StatusCode.UNSET
+
+
+def test_postgres_db_span_names_the_database_server_not_the_prisma_engine():
+    """Prisma reaches Postgres over loopback, so without server.address the
+    backend attributes the wait to localhost."""
+    dsn = "postgresql://llmproxy:dbpassword9090@litellm-prod.abc123.us-east-1.rds.amazonaws.com:6432/litellm?schema=reporting"
+    logger, exporter = _logger()
+    parent = _service_parent(logger)
+    postgres_endpoint.cache_clear()
+    try:
+        with patch(
+            "litellm.integrations.otel.model.db_endpoint.get_secret_str",
+            side_effect=lambda name, default_value=None: dsn if name == "DATABASE_URL" else None,
+        ):
+            asyncio.run(
+                logger.async_service_success_hook(
+                    payload=_ServicePayload("postgres", "get_data"),
+                    parent_otel_span=parent,
+                )
+            )
+    finally:
+        parent.end()
+        postgres_endpoint.cache_clear()
+    span = {s.name: s for s in exporter.get_finished_spans()}["postgres get_data"]
+    assert span.kind is SpanKind.CLIENT
+    assert span.attributes["db.system.name"] == "postgresql"
+    assert span.attributes["db.operation.name"] == "get_data"
+    assert span.attributes["server.address"] == "litellm-prod.abc123.us-east-1.rds.amazonaws.com"
+    assert span.attributes["server.port"] == 6432
+    assert span.attributes["db.namespace"] == "litellm|reporting"
+    assert span.attributes["db.system"] == "postgresql"
+    exported = " ".join(str(value) for value in span.attributes.values())
+    assert "dbpassword9090" not in exported
+    assert "llmproxy" not in exported
 
 
 def test_async_service_failure_hook_marks_error_status():
