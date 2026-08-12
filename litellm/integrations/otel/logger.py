@@ -21,6 +21,7 @@ from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.model.metadata import (
     LLMCallEvent,
     RequestIdentity,
+    auth_metadata,
     model_from_request_data,
 )
 from litellm.integrations.otel.model.payloads import (
@@ -265,7 +266,7 @@ class OpenTelemetryV2(CustomLogger):
                 call.provisional_span_name,
                 parent_context=parent_context,
                 start_time_ns=start_time_ns,
-                tracer=self._tenant_tracers.tracer_for(self.tracer, call.dynamic_params),
+                tracer=self._tenant_tracers.tracer_for(self.tracer, call.dynamic_params, call.auth_metadata),
             )
         self._open_llm_calls[call_id] = _LLMCallSpan(span=span, start_time_ns=start_time_ns)
         # Evict the oldest open call if the map is over budget. A call that opens
@@ -376,6 +377,7 @@ class OpenTelemetryV2(CustomLogger):
             start_time_ns=to_ns(start_time),
             end_time_ns=to_ns(end_time),
             links=links,
+            tracer=self._tenant_tracers.tracer_for(self.tracer, None, auth_metadata(payload, kwargs)),
         )
         return True
 
@@ -412,6 +414,7 @@ class OpenTelemetryV2(CustomLogger):
             start_time_ns=to_ns(start_time),
             end_time_ns=to_ns(end_time),
             links=links,
+            tracer=self._tenant_tracers.tracer_for(self.tracer, None, auth_metadata(payload, kwargs)),
         )
         return True
 
@@ -465,7 +468,7 @@ class OpenTelemetryV2(CustomLogger):
             parent_context=parent_ctx,
             start_time_ns=carrier.start_time_ns,
             end_time_ns=end_time_ns,
-            tracer=self._tenant_tracers.tracer_for(self.tracer, call.dynamic_params),
+            tracer=self._tenant_tracers.tracer_for(self.tracer, call.dynamic_params, call.auth_metadata),
         )
 
     # ====================================================================== #

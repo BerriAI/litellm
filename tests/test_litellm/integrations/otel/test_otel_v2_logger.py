@@ -35,6 +35,7 @@ from litellm.integrations.otel.plumbing.context import (  # noqa: E402
     set_request_root_span,
 )
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
+from litellm.integrations.otel.model.config import ExporterSpec  # noqa: E402
 from litellm.integrations.otel.model.spans import (  # noqa: E402
     LITELLM_PROXY_REQUEST_SPAN_NAME,
     SpanRole,
@@ -2277,3 +2278,110 @@ def test_metrics_disabled_by_default_records_nothing(monkeypatch):
         )
     )
     assert _emitted_metric_names(reader) == set()
+
+
+# --------------------------------------------------------------------------- #
+#  Per-request Phoenix project routing (key/team auth metadata)
+# --------------------------------------------------------------------------- #
+
+
+def _phoenix_routing_logger(capture_kind):
+    """A Phoenix-shaped logger whose owned exporter is a registered factory kind
+    that captures the exporter built per routed header set, so the test can
+    assert which destination each span actually exported through."""
+    captured = {}
+
+    def factory(spec):
+        exporter = InMemorySpanExporter()
+        captured[spec.headers] = exporter
+        return exporter
+
+    providers.register_exporter_factory(capture_kind, factory)
+    cfg = OpenTelemetryV2Config(
+        exporters=[
+            ExporterSpec(
+                kind=capture_kind,
+                endpoint="http://phoenix:6006",
+                headers="Authorization=Bearer phoenix-key",
+                owner="arize_phoenix",
+            )
+        ]
+    )
+    default_exporter = InMemorySpanExporter()
+    tracer_provider = providers.build_tracer_provider(cfg, exporter=default_exporter)
+    logger = OpenTelemetryV2(
+        config=cfg, callback_name="arize_phoenix", tracer_provider=tracer_provider
+    )
+    return logger, default_exporter, captured
+
+
+def test_key_team_auth_metadata_routes_llm_span_to_phoenix_project():
+    """The proxy stamps the key/team config into ``user_api_key_auth_metadata``;
+    a ``phoenix_project_name`` there must route the LLM span through an exporter
+    carrying the ``x-project-name`` header while keeping the preset's auth."""
+    logger, default_exporter, captured = _phoenix_routing_logger("capture_route_a")
+    auth_md = {"phoenix_project_name": "team-proj"}
+    payload = _payload(metadata={"user_api_key_auth_metadata": auth_md})
+    kwargs = {
+        "standard_logging_object": payload,
+        "litellm_params": {"metadata": {"user_api_key_auth_metadata": auth_md}},
+    }
+    _emit_llm(logger, kwargs)
+
+    assert [s.name for s in default_exporter.get_finished_spans()] == []
+    (headers,) = captured
+    parsed = providers.parse_headers(headers)
+    assert parsed["x-project-name"] == "team-proj"
+    assert parsed["authorization"] == "Bearer phoenix-key"
+    routed_spans = captured[headers].get_finished_spans()
+    assert len(routed_spans) == 1
+
+
+def test_client_request_metadata_cannot_route_phoenix_project():
+    """A bare ``phoenix_project_name`` in client request metadata (not the
+    server-set ``user_api_key_auth_metadata``) must be ignored: the span stays
+    on the default tracer and no routed exporter is ever built."""
+    logger, default_exporter, captured = _phoenix_routing_logger("capture_route_b")
+    payload = _payload(metadata={"phoenix_project_name": "attacker-project"})
+    kwargs = {
+        "standard_logging_object": payload,
+        "litellm_params": {"metadata": {"phoenix_project_name": "attacker-project"}},
+    }
+    _emit_llm(logger, kwargs)
+
+    assert captured == {}
+    assert len(default_exporter.get_finished_spans()) == 1
+
+
+def test_project_routing_resolves_at_pre_call_before_payload_exists():
+    """Production ``pre_call`` runs before the standard logging payload exists,
+    so the destination project must resolve from ``litellm_params`` alone — the
+    span is created (and its exporter chosen) right there."""
+    logger, default_exporter, captured = _phoenix_routing_logger("capture_route_c")
+    auth_md = {"phoenix_project_name": "team-proj"}
+    litellm_params = {"metadata": {"user_api_key_auth_metadata": auth_md}}
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    with trace.use_span(server, end_on_exit=False):
+        logger.log_pre_api_call(
+            model="gpt-4o",
+            messages=[],
+            kwargs={"litellm_call_id": "call_1", "litellm_params": litellm_params},
+        )
+    server.end()
+    assert len(captured) == 1  # routed exporter already built at pre_call
+
+    close_kwargs = {
+        "standard_logging_object": _payload(
+            metadata={"user_api_key_auth_metadata": auth_md}
+        ),
+        "litellm_params": litellm_params,
+    }
+    asyncio.run(logger.async_log_success_event(close_kwargs, None, None, None))
+
+    (headers,) = captured
+    assert [s.name for s in captured[headers].get_finished_spans()] == ["chat gpt-4o"]
+    assert all(
+        s.name != "chat gpt-4o" for s in default_exporter.get_finished_spans()
+    )
