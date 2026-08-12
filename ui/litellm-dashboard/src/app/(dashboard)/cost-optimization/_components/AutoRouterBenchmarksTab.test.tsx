@@ -1,10 +1,15 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import { ApiError } from "@/lib/http/client";
 
 vi.mock("./useAutoRouterBenchmarks", () => ({ useAutoRouterBenchmarks: vi.fn() }));
+vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({ useAutoRouters: vi.fn() }));
+
+import { useAutoRouters } from "@/app/(dashboard)/hooks/models/useModels";
 
 import AutoRouterBenchmarksTab from "./AutoRouterBenchmarksTab";
 import type {
@@ -15,6 +20,10 @@ import type {
 import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
 
 type HookResult = ReturnType<typeof useAutoRouterBenchmarks>;
+
+const mockAutoRouters = (deployments: AutoRouterDeployment[] = []) => {
+  vi.mocked(useAutoRouters).mockReturnValue({ data: deployments } as unknown as ReturnType<typeof useAutoRouters>);
+};
 
 const mockHook = (result: { data?: AutoRouterBenchmarksResponse; isPending?: boolean; error?: Error }) => {
   vi.mocked(useAutoRouterBenchmarks).mockReturnValue({
@@ -71,9 +80,20 @@ const response = (groups: AutoRouterBenchmarkGroup[], shared: Totals = totals())
   groups,
 });
 
-const renderTab = () => render(<AutoRouterBenchmarksTab accessToken="sk-test" />);
+const renderTab = () => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <AutoRouterBenchmarksTab accessToken="sk-test" />
+    </QueryClientProvider>,
+  );
+};
 
 describe("AutoRouterBenchmarksTab", () => {
+  beforeEach(() => {
+    mockAutoRouters();
+  });
+
   it("leads with total estimated savings, before the three session-shape metrics", () => {
     mockHook({ data: response([group(), group({ router_name: "gpt-auto" })]) });
     renderTab();
@@ -97,7 +117,7 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("-86%")).toBeInTheDocument();
     expect(screen.getByText("Actual auto-router spend")).toBeInTheDocument();
     expect(screen.getByText("$359.86")).toBeInTheDocument();
-    expect(screen.getByText("Estimated spend at highest-cost model")).toBeInTheDocument();
+    expect(screen.getByText("Estimated spend at highest-tier model")).toBeInTheDocument();
     expect(screen.getByText("$2,534.45")).toBeInTheDocument();
     expect(screen.getByText("32.7")).toBeInTheDocument();
     expect(screen.getByText("2.1h")).toBeInTheDocument();
@@ -108,12 +128,9 @@ describe("AutoRouterBenchmarksTab", () => {
     mockHook({ data: response([group(), group({ router_name: "gpt-auto" })]) });
     renderTab();
 
-    expect(screen.getByText("Total sessions")).toBeInTheDocument();
-    expect(screen.getByText("94")).toBeInTheDocument();
-    expect(screen.getByText("Total turns")).toBeInTheDocument();
-    expect(screen.getByText("3,073")).toBeInTheDocument();
     expect(screen.getByText("Avg saved per session")).toBeInTheDocument();
     expect(screen.getByText("$23.13")).toBeInTheDocument();
+    expect(screen.getByText("across 94 sessions")).toBeInTheDocument();
   });
 
   it("shows a cost increase as a positive delta rather than a saving", () => {

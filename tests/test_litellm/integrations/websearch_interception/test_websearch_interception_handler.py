@@ -221,14 +221,97 @@ async def test_execute_search_passes_selected_search_tool_litellm_params(monkeyp
         kwargs={"litellm_params": {"metadata": {"user_api_key_auth": user_api_key_auth}}},
     )
 
-    mock_asearch.assert_awaited_once_with(
-        query="what is litellm",
-        search_provider="tavily",
-        api_key="fake-ui-key",
-        api_base="https://api.tavily.com",
-        timeout=10.0,
-        max_retries=2,
+    forwarded_kwargs = mock_asearch.await_args.kwargs
+    assert forwarded_kwargs["query"] == "what is litellm"
+    assert forwarded_kwargs["search_provider"] == "tavily"
+    assert forwarded_kwargs["api_key"] == "fake-ui-key"
+    assert forwarded_kwargs["api_base"] == "https://api.tavily.com"
+    assert forwarded_kwargs["timeout"] == 10.0
+    assert forwarded_kwargs["max_retries"] == 2
+
+
+@pytest.mark.asyncio
+async def test_execute_search_attributes_spend_to_the_calling_key(monkeypatch):
+    """An intercepted search is billed and logged against the key that made the LLM request.
+
+    Without the forwarded attribution metadata the proxy's spend hook skips the search
+    entirely, so its provider cost never reaches SpendLogs or any budget.
+    """
+    import litellm
+    from litellm.proxy import proxy_server
+    from litellm.proxy.hooks.proxy_track_cost_callback import _should_track_cost_callback
+
+    logger = WebSearchInterceptionLogger(
+        enabled_providers=["bedrock"],
+        search_tool_name="perplexity-sonar-pro",
     )
+    router = MagicMock()
+    router.search_tools = [
+        {
+            "search_tool_name": "perplexity-sonar-pro",
+            "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
+        }
+    ]
+    mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="hashed-sk-1234",
+        key_alias="alice-key",
+        user_id="user-alice",
+        org_id="org-1",
+    )
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+
+    await logger._execute_search(
+        "what is litellm",
+        kwargs={"litellm_params": {"metadata": {"user_api_key_auth": user_api_key_auth}}},
+    )
+
+    forwarded_metadata = mock_asearch.await_args.kwargs["litellm_metadata"]
+    assert forwarded_metadata["user_api_key"] == "hashed-sk-1234"
+    assert forwarded_metadata["user_api_key_hash"] == "hashed-sk-1234"
+    assert forwarded_metadata["user_api_key_alias"] == "alice-key"
+    assert forwarded_metadata["user_api_key_user_id"] == "user-alice"
+    assert forwarded_metadata["user_api_key_org_id"] == "org-1"
+    assert forwarded_metadata["model_group"] == "perplexity-sonar-pro"
+    assert (
+        _should_track_cost_callback(
+            user_api_key=forwarded_metadata["user_api_key"],
+            user_id=forwarded_metadata["user_api_key_user_id"],
+            team_id=forwarded_metadata["user_api_key_team_id"],
+            end_user_id=None,
+            call_type="asearch",
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_search_without_proxy_auth_context_stays_sdk_only(monkeypatch):
+    """SDK callers have no key to attribute the search to, so no proxy metadata is invented."""
+    import litellm
+    from litellm.proxy import proxy_server
+
+    logger = WebSearchInterceptionLogger(
+        enabled_providers=["bedrock"],
+        search_tool_name="perplexity-sonar-pro",
+    )
+    router = MagicMock()
+    router.search_tools = [
+        {
+            "search_tool_name": "perplexity-sonar-pro",
+            "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
+        }
+    ]
+    mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+
+    await logger._execute_search("what is litellm", kwargs={"litellm_params": {}})
+
+    assert "litellm_metadata" not in mock_asearch.await_args.kwargs
 
 
 @pytest.mark.asyncio

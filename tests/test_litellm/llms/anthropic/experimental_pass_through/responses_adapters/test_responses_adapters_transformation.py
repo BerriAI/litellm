@@ -9,6 +9,8 @@ import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock
 
+import pytest
+
 sys.path.insert(0, os.path.abspath("../../../../../../.."))
 
 from litellm.constants import (
@@ -221,6 +223,106 @@ class TestTranslateMessagesToResponsesInput:
             {"type": "input_text", "text": "First part."},
             {"type": "input_text", "text": "Second part."},
         ]
+
+    @pytest.mark.parametrize(
+        "system_content",
+        [
+            "Use the corrected result.",
+            [{"type": "text", "text": "Use the corrected result."}],
+            [
+                {"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}},
+                {"type": "text", "text": "Use the corrected result."},
+            ],
+        ],
+    )
+    def test_midturn_system_correction_stays_system_in_sequence(self, system_content: object):
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01234",
+                        "name": "get_weather",
+                        "input": {"location": "Boston"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01234",
+                        "content": "Rainy, 55°F",
+                    }
+                ],
+            },
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": "Continue."},
+        ]
+
+        result = _translate_messages(messages)
+
+        assert result == [
+            {
+                "type": "function_call",
+                "call_id": "toolu_01234",
+                "name": "get_weather",
+                "arguments": '{"location": "Boston"}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "toolu_01234",
+                "output": "Rainy, 55°F",
+            },
+            {
+                "type": "message",
+                "role": "system",
+                "content": [{"type": "input_text", "text": "Use the corrected result."}],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Continue."}],
+            },
+        ]
+
+    def test_midturn_system_correction_keeps_multiple_text_blocks(self):
+        messages = [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "First correction."},
+                    {"type": "text", "text": "Second correction."},
+                ],
+            }
+        ]
+
+        assert _translate_messages(messages) == [
+            {
+                "type": "message",
+                "role": "system",
+                "content": [
+                    {"type": "input_text", "text": "First correction."},
+                    {"type": "input_text", "text": "Second correction."},
+                ],
+            }
+        ]
+
+    @pytest.mark.parametrize(
+        "system_content",
+        [
+            "",
+            [{"type": "text", "text": ""}],
+            [{"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}}],
+            None,
+        ],
+    )
+    def test_empty_or_unsupported_midturn_system_correction_is_dropped(self, system_content: object):
+        messages = [{"role": "system", "content": system_content}]
+
+        assert _translate_messages(messages) == []
 
     def test_user_base64_image(self):
         """User message with base64 image source becomes input_image with data URL."""
@@ -722,6 +824,42 @@ class TestTranslateRequestBroaderCoverage:
         req = _make_request(system="You are a helpful assistant.")
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs["instructions"] == "You are a helpful assistant."
+
+    def test_top_level_system_and_midturn_correction_are_not_duplicated(self):
+        """
+        Request level: the trusted top-level prompt goes to `instructions` only, and the
+        in-sequence correction stays a `role: "system"` input item in its original position.
+        Neither appears twice, and the surrounding turns keep their order.
+        """
+        req = _make_request(
+            system="Trusted top-level prompt.",
+            messages=[
+                {"role": "user", "content": "First question."},
+                {"role": "system", "content": "Use the corrected result."},
+                {"role": "user", "content": "Continue."},
+            ],
+        )
+
+        kwargs = _ADAPTER.translate_request(req)
+
+        assert kwargs["instructions"] == "Trusted top-level prompt."
+        assert kwargs["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "First question."}],
+            },
+            {
+                "type": "message",
+                "role": "system",
+                "content": [{"type": "input_text", "text": "Use the corrected result."}],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Continue."}],
+            },
+        ]
 
     def test_system_list_of_text_blocks_joined(self):
         req = _make_request(

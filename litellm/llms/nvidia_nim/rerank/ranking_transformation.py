@@ -6,7 +6,7 @@ Use this by passing "nvidia_nim/ranking/<model>" to force the /v1/ranking endpoi
 Reference: https://build.nvidia.com/nvidia/llama-3_2-nv-rerankqa-1b-v2/deploy
 """
 
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -84,7 +84,7 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],  # mutable-ok: matches BaseRerankConfig's document contract
+        documents: list[str | dict[str, object]],  # mutable-ok: matches BaseRerankConfig's document contract
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,  # mutable-ok: matches BaseRerankConfig's field contract
