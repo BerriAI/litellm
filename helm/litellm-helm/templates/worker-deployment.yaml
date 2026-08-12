@@ -1,28 +1,24 @@
+{{- if .Values.worker.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   annotations:
   {{- toYaml .Values.deploymentAnnotations | nindent 4 }}
-  name: {{ include "litellm.fullname" . }}
+  name: {{ include "litellm.worker.fullname" . }}
   labels:
-    {{- include "litellm.labels" . | nindent 4 }}
+    {{- include "litellm.worker.labels" . | nindent 4 }}
     {{- if .Values.deploymentLabels }}
     {{- toYaml .Values.deploymentLabels | nindent 4 }}
     {{- end }}
 spec:
-  {{- if and (not .Values.keda.enabled) (not .Values.autoscaling.enabled) }}
-  replicas: {{ .Values.replicaCount }}
-  {{- end }}
+  replicas: {{ .Values.worker.replicaCount }}
   {{- with .Values.strategy }}
   strategy:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   selector:
     matchLabels:
-      {{- include "litellm.selectorLabels" . | nindent 6 }}
-  {{- if .Values.deploymentMinReadySeconds }}
-  minReadySeconds: {{ .Values.deploymentMinReadySeconds }}
-  {{- end }}
+      {{- include "litellm.worker.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       annotations:
@@ -33,9 +29,10 @@ spec:
         {{- tpl (toYaml .) $ | nindent 8 }}
         {{- end }}
       labels:
-        {{- include "litellm.labels" . | nindent 8 }}
+        {{- include "litellm.worker.labels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      {{- include "litellm.podSpec" (dict "root" $ "worker" false) }}
+      {{- include "litellm.podSpec" (dict "root" $ "worker" true) }}
+{{- end }}

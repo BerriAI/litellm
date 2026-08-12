@@ -257,6 +257,38 @@ tolerations: []
 
 affinity: {}
 
+# Optional dedicated worker Deployment for the proxy's single-owner auxiliary
+# jobs (budget resets, cost polls, cleanups). Off by default, which leaves
+# LITELLM_JOB_ROLE unset everywhere and every proxy pod eligible to own them,
+# exactly as before.
+#
+# Enabling this sets LITELLM_JOB_ROLE=worker here and LITELLM_JOB_ROLE=serving on
+# the proxy Deployment, so the jobs stop competing with inference traffic for the
+# event loop and the database pool. The worker gets no Service, HPA, or KEDA
+# scaler; nothing routes to it. Its pods also take their own
+# `app.kubernetes.io/name`, so they stay out of the proxy Service, PDB, and
+# ServiceMonitor selectors.
+#
+# Only the cluster-wide scheduled jobs move. A serving pod keeps flushing its own
+# in-memory spend and request queues and keeps refreshing its own model registry
+# and credentials, so it still writes spend exactly as it does today.
+#
+# The jobs are single-owner, so raising replicaCount buys availability across a
+# rollout, not throughput. The worker also pins `--num_workers 1` rather than
+# inheriting `numWorkers`: the scheduler is registered once per uvicorn worker
+# process, so N processes would run N copies of every job in one pod.
+# Everything else (image, config, probes, env,
+# securityContext, topologySpreadConstraints) is inherited from the proxy; the
+# keys below override sizing and scheduling only, and fall back to the top-level
+# values when left empty.
+worker:
+  enabled: false
+  replicaCount: 1
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 db:
   # Use an existing postgres server/cluster
   useExisting: false

@@ -1,0 +1,104 @@
+{{- if .Values.worker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "litellm.worker.fullname" . }}
+  labels:
+    {{- include "litellm.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "litellm.worker.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- if or .Values.gateway.config.create .Values.worker.podAnnotations }}
+      annotations:
+        {{- if .Values.gateway.config.create }}
+        checksum/config: {{ include (print $.Template.BasePath "/gateway/configmap.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.worker.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      labels:
+        {{- include "litellm.worker.selectorLabels" . | nindent 8 }}
+        {{- with .Values.worker.podLabels }}
+        {{- include "litellm.podLabels" (dict "podLabels" . "componentName" "worker") | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "litellm.backend.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccounts.backend.automount }}
+      {{- with .Values.worker.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          {{- with .Values.worker.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 4001
+              protocol: TCP
+          env:
+            {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.worker) | nindent 12 }}
+            {{- if .Values.gateway.config.create }}
+            - name: CONFIG_FILE_PATH
+              value: /app/config/config.yaml
+            {{- end }}
+            # The scheduler is registered once per uvicorn worker process, not
+            # once per pod, so anything above 1 runs that many copies of every job.
+            - name: NUM_WORKERS
+              value: "1"
+            - name: LITELLM_JOB_ROLE
+              value: "worker"
+          {{- include "litellm.envFrom" .Values.worker | nindent 10 }}
+          {{- if .Values.gateway.config.create }}
+          volumeMounts:
+            - name: gateway-config
+              mountPath: /app/config/config.yaml
+              subPath: config.yaml
+          {{- end }}
+          {{- with .Values.worker.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.worker.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+      {{- if .Values.gateway.config.create }}
+      volumes:
+        - name: gateway-config
+          configMap:
+            name: {{ include "litellm.gateway.fullname" . }}-config
+      {{- end }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- $gracePeriod := .Values.worker.terminationGracePeriodSeconds }}
+      {{- if not (or (kindIs "invalid" $gracePeriod) (eq (printf "%v" $gracePeriod) "")) }}
+      terminationGracePeriodSeconds: {{ $gracePeriod }}
+      {{- end }}
+{{- end }}

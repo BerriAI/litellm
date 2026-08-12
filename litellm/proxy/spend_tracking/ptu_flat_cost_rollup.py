@@ -31,6 +31,11 @@ from litellm.constants import (
     PTU_SENTINEL_API_KEY,
 )
 from litellm.litellm_core_utils.ptu_pricing import ptu_terms
+from litellm.proxy.common_utils.single_owner_job import (
+    JobLease,
+    WhenLockUnavailable,
+    run_as_single_owner,
+)
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 
 if TYPE_CHECKING:
@@ -601,10 +606,8 @@ async def run_scheduled_ptu_rollup(
     unguarded, as ``SpendLogCleanup`` does, and so does a run that cannot reach Redis at
     all: the lock exists to avoid duplicate work, so no lock problem may cost a day.
 
-    The lease is a fixed TTL with no renewal, so a long scan can outlive it. That costs
-    duplicate work rather than correctness: the upserts are idempotent on the sentinel
-    key and the prune reads only the row's own timestamp, so a second pod arriving
-    mid-run cannot corrupt the day.
+    Only the elected owner may prune. An unguarded run reconciles without pruning, since
+    a pod that cannot prove it is alone could delete a row another pod just wrote.
 
     Returns None without touching the database when PTU cost attribution is off. Proxy
     startup already skips scheduling the cron, so this guards the function itself rather
@@ -614,41 +617,23 @@ async def run_scheduled_ptu_rollup(
     if not is_ptu_cost_attribution_enabled():
         return None
 
-    if pod_lock_manager is None or pod_lock_manager.redis_cache is None:
-        return await _run_and_alert(prisma_client, target_date=target_date, alert=alert, may_prune=False)
-
-    if not await pod_lock_manager.acquire_lock(cronjob_id=PTU_ROLLUP_JOB_ID, ttl=PTU_ROLLUP_LOCK_TTL_SECONDS):
-        if await _lock_is_held(pod_lock_manager):
-            verbose_proxy_logger.info("PTU rollup: another pod holds the rollup lock, skipping this run")
-            return None
-        # acquire_lock reports contention and a Redis outage the same way, so an
-        # unreachable Redis would otherwise skip the day on every pod at once. The
-        # reconcile is safe to run concurrently, so losing the lock costs duplicate
-        # work; losing the day costs a team's charges
-        verbose_proxy_logger.warning(
-            "PTU rollup: could not take the rollup lock and no other pod holds it, "
-            "running unguarded rather than skipping the day"
+    async def _reconcile(lease: JobLease) -> RollupResult | None:
+        return await _run_and_alert(
+            prisma_client,
+            target_date=target_date,
+            alert=alert,
+            may_prune=lease is JobLease.LEADER,
         )
-        return await _run_and_alert(prisma_client, target_date=target_date, alert=alert, may_prune=False)
 
-    try:
-        return await _run_and_alert(prisma_client, target_date=target_date, alert=alert, may_prune=True)
-    finally:
-        await pod_lock_manager.release_lock(cronjob_id=PTU_ROLLUP_JOB_ID)
-
-
-async def _lock_is_held(pod_lock_manager: "PodLockManager") -> bool:
-    """True only when the rollup lock is readable and someone is holding it.
-
-    A Redis that cannot be read is reported as "not held" so the caller runs the day
-    rather than skipping it; the cost of being wrong here is a duplicate reconcile.
-    """
-    try:
-        lock_key: Final = pod_lock_manager.get_redis_lock_key(PTU_ROLLUP_JOB_ID)
-        return bool(await pod_lock_manager.redis_cache.async_get_cache(lock_key))
-    except Exception as exc:  # noqa: BLE001  # an unreadable lock must not skip the day
-        verbose_proxy_logger.warning("PTU rollup: could not read the rollup lock: %s", exc)
-        return False
+    return await run_as_single_owner(
+        pod_lock_manager=pod_lock_manager,
+        job_name=PTU_ROLLUP_JOB_ID,
+        ttl_seconds=PTU_ROLLUP_LOCK_TTL_SECONDS,
+        # The reconcile is safe to repeat, so losing the lock costs duplicate work
+        # while losing the day costs a team's charges
+        when_unavailable=WhenLockUnavailable.RUN,
+        run=_reconcile,
+    )
 
 
 async def _run_and_alert(

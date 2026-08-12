@@ -9,6 +9,7 @@ from pydantic import BaseModel, TypeAdapter
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
 from litellm.constants import (
+    DEFAULT_CRON_JOB_LOCK_TTL_SECONDS,
     SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS,
     SPEND_LOG_CLEANUP_BATCH_SIZE,
     SPEND_LOG_CLEANUP_BATCH_TIMEOUT_SECONDS,
@@ -19,6 +20,11 @@ from litellm.constants import (
     SPEND_LOG_RUN_LOOPS,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.proxy.common_utils.single_owner_job import (
+    JobLease,
+    WhenLockUnavailable,
+    run_as_single_owner,
+)
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import (
     RunOutcome,
     SpendLogCleanupMetrics,
@@ -586,10 +592,10 @@ class SpendLogCleanup:
     async def cleanup_old_spend_logs(self, prisma_client: PrismaClient) -> None:
         """
         Main cleanup function. Deletes old spend logs in batches.
-        If pod_lock_manager is available, ensures only one pod runs cleanup.
-        If no pod_lock_manager, runs cleanup without distributed locking.
+        Runs on one elected pod, holding a lease that is renewed for the whole
+        sweep so a cleanup slower than the lease TTL cannot be joined mid-run.
+        A deployment with no Redis-backed lock manager runs unguarded.
         """
-        lock_acquired = False
         try:
             verbose_proxy_logger.info("Cleanup job triggered at %s", datetime.now())
             self._refresh_bounds()
@@ -612,63 +618,55 @@ class SpendLogCleanup:
                 SpendLogCleanupMetrics.record_run("skipped_disabled")
                 return
 
-            # If we have a pod lock manager, try to acquire the lock
-            if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
-                lock_acquired = (
-                    await self.pod_lock_manager.acquire_lock(
-                        cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME,
+            async def _sweep(_lease: JobLease) -> RunOutcome:
+                deadline: Final = time.monotonic() + self.run_budget_seconds
+                configured_group_count: Final = (
+                    int(delete_spend_logs and self.retention_seconds is not None)
+                    + int(autorouter_retention_seconds is not None)
+                    + int(health_check_retention_seconds is not None)
+                )
+
+                spend_log_results: Final = (
+                    await self._clean_spend_log_tables(
+                        prisma_client,
+                        self._group_deadline(deadline, configured_group_count),
                     )
-                    or False
+                    if delete_spend_logs and self.retention_seconds is not None
+                    else ()
                 )
-                verbose_proxy_logger.info(
-                    "Lock acquisition attempt: %s  at %s", "successful" if lock_acquired else "failed", datetime.now()
+                remaining_groups_after_spend_logs: Final = int(autorouter_retention_seconds is not None) + int(
+                    health_check_retention_seconds is not None
                 )
+                session_results: Final = (
+                    await self._clean_session_rollup(
+                        prisma_client,
+                        autorouter_retention_seconds,
+                        self._group_deadline(deadline, remaining_groups_after_spend_logs),
+                    )
+                    if autorouter_retention_seconds is not None
+                    else ()
+                )
+                health_check_results: Final = (
+                    await self._clean_health_checks(
+                        prisma_client,
+                        health_check_retention_seconds,
+                        deadline,
+                    )
+                    if health_check_retention_seconds is not None
+                    else ()
+                )
+                return self._run_outcome(spend_log_results + session_results + health_check_results)
 
-                if not lock_acquired:
-                    verbose_proxy_logger.info("Another pod is already running cleanup")
-                    SpendLogCleanupMetrics.record_run("skipped_locked")
-                    return
-
-            deadline: Final = time.monotonic() + self.run_budget_seconds
-            configured_group_count: Final = (
-                int(delete_spend_logs and self.retention_seconds is not None)
-                + int(autorouter_retention_seconds is not None)
-                + int(health_check_retention_seconds is not None)
+            outcome: Final = await run_as_single_owner(
+                pod_lock_manager=self.pod_lock_manager,
+                job_name=SPEND_LOG_CLEANUP_JOB_NAME,
+                ttl_seconds=DEFAULT_CRON_JOB_LOCK_TTL_SECONDS,
+                # A second concurrent sweep deletes rows the first is already deleting,
+                # doubling the DB load the retention job exists to bound
+                when_unavailable=WhenLockUnavailable.SKIP,
+                run=_sweep,
             )
-
-            spend_log_results: Final = (
-                await self._clean_spend_log_tables(
-                    prisma_client,
-                    self._group_deadline(deadline, configured_group_count),
-                )
-                if delete_spend_logs and self.retention_seconds is not None
-                else ()
-            )
-            remaining_groups_after_spend_logs: Final = int(autorouter_retention_seconds is not None) + int(
-                health_check_retention_seconds is not None
-            )
-            session_results: Final = (
-                await self._clean_session_rollup(
-                    prisma_client,
-                    autorouter_retention_seconds,
-                    self._group_deadline(deadline, remaining_groups_after_spend_logs),
-                )
-                if autorouter_retention_seconds is not None
-                else ()
-            )
-            health_check_results: Final = (
-                await self._clean_health_checks(
-                    prisma_client,
-                    health_check_retention_seconds,
-                    deadline,
-                )
-                if health_check_retention_seconds is not None
-                else ()
-            )
-
-            SpendLogCleanupMetrics.record_run(
-                self._run_outcome(spend_log_results + session_results + health_check_results)
-            )
+            SpendLogCleanupMetrics.record_run("skipped_locked" if outcome is None else outcome)
 
         except Exception as e:
             # .exception() captures the traceback; str(e) alone on a Prisma/DB
@@ -679,9 +677,3 @@ class SpendLogCleanup:
                 e,
             )
             SpendLogCleanupMetrics.record_run("aborted")
-            return  # Return after error handling
-        finally:
-            # Only release the lock if it was actually acquired
-            if lock_acquired and self.pod_lock_manager and self.pod_lock_manager.redis_cache:
-                await self.pod_lock_manager.release_lock(cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME)
-                verbose_proxy_logger.info("Released cleanup lock")

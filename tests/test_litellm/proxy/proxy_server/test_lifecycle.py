@@ -32,6 +32,7 @@ from pydantic import BaseModel
 from typing_extensions import TypedDict
 
 import litellm.proxy.proxy_server as ps
+from litellm.proxy.common_utils.single_owner_job import JobRole
 from litellm.proxy.proxy_server import (
     ProxyStartupEvent,
     _initialize_shared_aiohttp_session,
@@ -840,6 +841,7 @@ def _make_slack_alerting_proxy_logging(acquire_lock_result: bool | None) -> Magi
 async def _init_slack_alerting_jobs(
     acquire_lock_result: bool | None,
     spend_report_frequency: str = "7d",
+    job_role: JobRole = JobRole.ALL,
 ) -> tuple[SlackAlertingJobs, MagicMock]:
     scheduler = MagicMock()
     proxy_logging_obj = _make_slack_alerting_proxy_logging(acquire_lock_result)
@@ -849,10 +851,20 @@ async def _init_slack_alerting_jobs(
         general_settings={"spend_report_frequency": spend_report_frequency},
         proxy_logging_obj=proxy_logging_obj,
         prisma_client=MagicMock(),
+        job_role=job_role,
     )
 
     jobs = {call.kwargs["id"]: call.args[0] for call in scheduler.add_job.call_args_list}
     return jobs, proxy_logging_obj
+
+
+@pytest.mark.asyncio
+async def test_serving_role_registers_no_spend_report_jobs():
+    """LIT-5434: each report reaches a channel once per window, so a pod dedicated to
+    serving traffic must not schedule them at all."""
+    jobs, _ = await _init_slack_alerting_jobs(acquire_lock_result=True, job_role=JobRole.SERVING)
+
+    assert jobs == {}
 
 
 @pytest.mark.parametrize("spend_report_frequency", ["0d", "-1d", "7h"])

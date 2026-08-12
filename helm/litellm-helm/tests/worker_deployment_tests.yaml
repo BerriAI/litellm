@@ -1,0 +1,316 @@
+suite: test worker deployment disabled
+templates:
+  - deployment.yaml
+  - worker-deployment.yaml
+  - configmap-litellm.yaml
+tests:
+  - it: renders no worker Deployment by default
+    template: worker-deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: adds nothing to the proxy Deployment env by default
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_JOB_ROLE
+            value: "serving"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_JOB_ROLE
+            value: "worker"
+      - lengthEqual:
+          path: spec.template.spec.containers[0].env
+          count: 9
+
+---
+suite: test worker deployment enabled
+templates:
+  - deployment.yaml
+  - worker-deployment.yaml
+  - configmap-litellm.yaml
+set:
+  worker.enabled: true
+tests:
+  - it: renders exactly one worker Deployment with one replica
+    template: worker-deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm-worker
+      - equal:
+          path: spec.replicas
+          value: 1
+
+  - it: runs the worker job role
+    template: worker-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_JOB_ROLE
+            value: "worker"
+
+  - it: flips the proxy Deployment to the serving job role
+    template: deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_JOB_ROLE
+            value: "serving"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_JOB_ROLE
+            value: "worker"
+
+  - it: keeps the worker out of the proxy selector labels
+    template: worker-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: litellm-worker
+            app.kubernetes.io/instance: RELEASE-NAME
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/name"]
+          value: litellm-worker
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: worker
+
+  - it: reaches the same database, master key, and config as the proxy
+    template: worker-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PROXY_MASTER_KEY
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-litellm-masterkey
+                key: masterkey
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_HOST
+            value: RELEASE-NAME-postgresql
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: litellm-config
+            configMap:
+              name: RELEASE-NAME-litellm-config
+              items:
+                - key: config.yaml
+                  path: "config.yaml"
+
+  - it: shares the proxy image
+    template: worker-deployment.yaml
+    set:
+      image.tag: test
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm:test
+
+  - it: runs one uvicorn worker process whatever the proxy runs
+    set:
+      numWorkers: 4
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - --config
+            - /etc/litellm/config.yaml
+            - --num_workers
+            - "1"
+        template: worker-deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - --config
+            - /etc/litellm/config.yaml
+            - --num_workers
+            - "4"
+        template: deployment.yaml
+
+  - it: runs one uvicorn worker process when the proxy sets none
+    template: worker-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - --config
+            - /etc/litellm/config.yaml
+            - --num_workers
+            - "1"
+
+---
+suite: test worker deployment is not a serving target
+templates:
+  - service.yaml
+  - hpa.yaml
+  - keda.yaml
+  - poddisruptionbudget.yaml
+  - worker-deployment.yaml
+  - configmap-litellm.yaml
+set:
+  worker.enabled: true
+tests:
+  - it: does not route Service traffic to worker pods
+    template: service.yaml
+    asserts:
+      - equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/name: litellm
+            app.kubernetes.io/instance: RELEASE-NAME
+
+  - it: scales only the proxy Deployment with the HPA
+    template: hpa.yaml
+    set:
+      autoscaling.enabled: true
+    asserts:
+      - equal:
+          path: spec.scaleTargetRef.name
+          value: RELEASE-NAME-litellm
+
+  - it: scales only the proxy Deployment with KEDA
+    template: keda.yaml
+    set:
+      keda.enabled: true
+    asserts:
+      - equal:
+          path: spec.scaleTargetRef.name
+          value: RELEASE-NAME-litellm
+
+  - it: does not budget worker pod disruptions
+    template: poddisruptionbudget.yaml
+    set:
+      pdb.enabled: true
+      pdb.minAvailable: 1
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: litellm
+            app.kubernetes.io/instance: RELEASE-NAME
+
+---
+suite: test worker deployment sizing and scheduling overrides
+templates:
+  - deployment.yaml
+  - worker-deployment.yaml
+  - configmap-litellm.yaml
+set:
+  worker.enabled: true
+tests:
+  - it: inherits the proxy sizing and scheduling when unset
+    set:
+      resources:
+        requests:
+          cpu: "2"
+      nodeSelector:
+        pool: serving
+      tolerations:
+        - key: serving
+          operator: Exists
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: "2"
+        template: worker-deployment.yaml
+      - equal:
+          path: spec.template.spec.nodeSelector.pool
+          value: serving
+        template: worker-deployment.yaml
+      - equal:
+          path: spec.template.spec.tolerations[0].key
+          value: serving
+        template: worker-deployment.yaml
+
+  - it: overrides sizing and scheduling without touching the proxy
+    set:
+      resources:
+        requests:
+          cpu: "2"
+      nodeSelector:
+        pool: serving
+      tolerations:
+        - key: serving
+          operator: Exists
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: serving
+                    operator: Exists
+      worker:
+        resources:
+          requests:
+            cpu: 100m
+        nodeSelector:
+          pool: jobs
+        tolerations:
+          - key: jobs
+            operator: Exists
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: jobs
+                      operator: Exists
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 100m
+        template: worker-deployment.yaml
+      - equal:
+          path: spec.template.spec.nodeSelector.pool
+          value: jobs
+        template: worker-deployment.yaml
+      - equal:
+          path: spec.template.spec.tolerations[0].key
+          value: jobs
+        template: worker-deployment.yaml
+      - equal:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key
+          value: jobs
+        template: worker-deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: "2"
+        template: deployment.yaml
+      - equal:
+          path: spec.template.spec.nodeSelector.pool
+          value: serving
+        template: deployment.yaml
+      - equal:
+          path: spec.template.spec.tolerations[0].key
+          value: serving
+        template: deployment.yaml
+      - equal:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key
+          value: serving
+        template: deployment.yaml
+
+  - it: replicas follow worker.replicaCount
+    template: worker-deployment.yaml
+    set:
+      worker.replicaCount: 2
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2

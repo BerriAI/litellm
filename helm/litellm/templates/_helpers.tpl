@@ -27,6 +27,10 @@ Common naming + label helpers shared by gateway, backend, and ui templates.
 {{- printf "%s-ui" (include "litellm.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- define "litellm.worker.fullname" -}}
+{{- printf "%s-worker" (include "litellm.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
 {{- define "litellm.commonLabels" -}}
 app.kubernetes.io/name: {{ include "litellm.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
@@ -104,6 +108,12 @@ app.kubernetes.io/component: backend
 app.kubernetes.io/name: {{ include "litellm.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: ui
+{{- end -}}
+
+{{- define "litellm.worker.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "litellm.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: worker
 {{- end -}}
 
 {{/*
