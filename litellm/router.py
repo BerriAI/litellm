@@ -9068,10 +9068,7 @@ class Router:
         ## CHECK USER SET MODEL INFO
         user_model_info: Final = deployment.get("model_info") or {}
 
-        if model_info is not None:
-            model_info.update(cast(ModelInfo, user_model_info))
-
-        return model_info
+        return cast(ModelMapInfo, {**model_info, **dict(user_model_info)})  # mutable-ok: fresh map, cache stays clean
 
     def get_model_info(self, id: str) -> dict | None:
         """
@@ -9136,7 +9133,7 @@ class Router:
                         custom_model_info = custom_model_info or {}
                         # Base model provides defaults, custom model info overrides
                         custom_model_info = _update_dictionary(
-                            cast(dict, base_model_info),
+                            copy.deepcopy(cast(dict, base_model_info)),
                             custom_model_info,
                         )
         except Exception:
@@ -9149,7 +9146,7 @@ class Router:
             model_info = cast(
                 ModelInfo,
                 _update_dictionary(
-                    cast(dict, litellm_model_name_model_info).copy(),
+                    copy.deepcopy(cast(dict, litellm_model_name_model_info)),
                     custom_model_info,
                 ),
             )

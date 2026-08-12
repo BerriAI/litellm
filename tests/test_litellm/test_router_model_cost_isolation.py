@@ -809,6 +809,136 @@ def test_add_deployment_does_not_leak_custom_metadata_to_shared_backend_key():
         _restore_model_cost_entries(model_keys)
 
 
+def test_get_router_model_info_isolates_sibling_deployment_metadata():
+    """Registration-time isolation is not enough: get_router_model_info used to
+    update() the cached backend model info in place, so the mapping returned for
+    one deployment was the same object every caller got. Looking up a sibling
+    deployment on the same backend model rewrote the first deployment's view and
+    left the deployment's metadata on the cached backend info.
+    """
+    backend_model = "vertex_ai/claude-sonnet-4-5@20250929"
+    restricted_id = "read-path-restricted"
+    unrestricted_id = "read-path-unrestricted"
+
+    model_keys = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (backend_model, restricted_id, unrestricted_id)
+    }
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "claude-sonnet",
+                    "litellm_params": {
+                        "model": backend_model,
+                        "vertex_project": "fake-project",
+                        "vertex_location": "us-east5",
+                    },
+                    "model_info": {
+                        "id": restricted_id,
+                        "additionalProp1": {"restricted": True},
+                    },
+                },
+                {
+                    "model_name": "claude-sonnet",
+                    "litellm_params": {
+                        "model": backend_model,
+                        "vertex_project": "fake-project",
+                        "vertex_location": "us-east5",
+                    },
+                    "model_info": {
+                        "id": unrestricted_id,
+                        "additionalProp1": {"restricted": False},
+                    },
+                },
+            ],
+        )
+
+        restricted_info = router.get_router_model_info(
+            deployment=None, received_model_name="claude-sonnet", id=restricted_id
+        )
+        assert restricted_info["additionalProp1"] == {"restricted": True}
+
+        unrestricted_info = router.get_router_model_info(
+            deployment=None, received_model_name="claude-sonnet", id=unrestricted_id
+        )
+        assert unrestricted_info["additionalProp1"] == {"restricted": False}
+
+        assert restricted_info["additionalProp1"] == {"restricted": True}
+        assert restricted_info["id"] == restricted_id
+        assert restricted_info is not unrestricted_info
+
+        backend_info = litellm.get_model_info(model=backend_model)
+        assert "additionalProp1" not in backend_info
+        assert "id" not in backend_info
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def test_get_deployment_model_info_does_not_mutate_cached_nested_metadata():
+    """A deployment that overrides part of a nested metadata mapping (here
+    search context pricing) must not rewrite the built-in entry: the merge
+    shallow-copied the cached backend info, so the nested mapping was shared
+    and _update_dictionary mutated it in place.
+    """
+    backend_model = "openai/gpt-4o-search-preview"
+    deploy_id = "search-context-partial-override"
+
+    builtin_search_costs = copy.deepcopy(
+        litellm.get_model_info(model=backend_model)["search_context_cost_per_query"]
+    )
+    assert builtin_search_costs is not None
+    assert builtin_search_costs["search_context_size_low"] != 0.999
+
+    model_keys = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (backend_model, "gpt-4o-search-preview", deploy_id)
+    }
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "search-model",
+                    "litellm_params": {
+                        "model": backend_model,
+                        "api_key": "fake-key-search",
+                    },
+                    "model_info": {
+                        "id": deploy_id,
+                        "search_context_cost_per_query": {
+                            "search_context_size_low": 0.999
+                        },
+                    },
+                }
+            ],
+        )
+
+        deployment_info = router.get_deployment_model_info(
+            model_id=deploy_id, model_name=backend_model
+        )
+        assert deployment_info is not None
+        assert (
+            deployment_info["search_context_cost_per_query"][
+                "search_context_size_low"
+            ]
+            == 0.999
+        )
+
+        assert (
+            litellm.get_model_info(model=backend_model)[
+                "search_context_cost_per_query"
+            ]
+            == builtin_search_costs
+        )
+        cost_map_key = litellm.get_model_info(model=backend_model)["key"]
+        assert (
+            litellm.model_cost[cost_map_key]["search_context_cost_per_query"]
+            == builtin_search_costs
+        )
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
 def test_shared_backend_model_info_keeps_schema_fields_and_drops_the_rest():
     """Unit test of the whitelist helper: cost-map schema fields survive,
     custom pricing overrides and per-deployment metadata do not.
