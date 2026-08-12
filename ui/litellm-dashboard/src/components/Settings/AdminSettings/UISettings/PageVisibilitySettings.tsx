@@ -24,10 +24,16 @@ export default function PageVisibilitySettings({
 }: PageVisibilitySettingsProps) {
   const isPageVisibilitySet = enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined;
   const availablePages = useMemo(() => getAvailablePages(), []);
-  const pagesByGroup = useMemo(
-    () => Object.groupBy(availablePages, (page) => page.group) as Record<string, typeof availablePages | undefined>,
-    [availablePages],
-  );
+  const pagesByGroup = useMemo(() => {
+    const grouped: Record<string, typeof availablePages> = {};
+    availablePages.forEach((page) => {
+      if (!grouped[page.group]) {
+        grouped[page.group] = [];
+      }
+      grouped[page.group].push(page);
+    });
+    return grouped;
+  }, [availablePages]);
   const [selectedPages, setSelectedPages] = useState<string[]>(enabledPagesInternalUsers || []);
 
   useMemo(() => {
@@ -83,7 +89,7 @@ export default function PageVisibilitySettings({
                   {groupName}
                 </legend>
                 <div className="ml-4 space-y-2">
-                  {pages?.map((page) => {
+                  {pages.map((page) => {
                     const checkboxId = `page-visibility-${page.page}`;
                     return (
                       <label key={page.page} htmlFor={checkboxId} className="flex cursor-pointer items-start gap-2">

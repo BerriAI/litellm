@@ -41,6 +41,19 @@ describe("PageVisibilitySettings", () => {
     expect(onUpdate).toHaveBeenCalledWith({ enabled_ui_pages_internal_users: null });
   });
 
+  it("groups every available page under its original group without requiring modern grouping APIs", async () => {
+    const user = userEvent.setup();
+    render(<PageVisibilitySettings enabledPagesInternalUsers={null} isUpdating={false} onUpdate={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: /configure page visibility/i }));
+
+    expect(screen.getByRole("group", { name: "Analytics" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Access" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /usage/i })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /models/i })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /api keys/i })).toBeInTheDocument();
+  });
+
   it("should display the property description when provided", () => {
     render(
       <PageVisibilitySettings
