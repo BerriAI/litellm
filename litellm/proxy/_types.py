@@ -3,7 +3,7 @@ import json
 import os
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple
 
 import httpx
 from pydantic import (
@@ -71,6 +71,27 @@ if TYPE_CHECKING:
     Span = _Span | Any
 else:
     Span = Any
+
+
+class ReconcileOutcome(NamedTuple):
+    """What a model reconcile observed, captured while it still held the reconcile
+    lock.
+
+    Both fields have to be read under that lock to be worth anything. ``live_after``
+    in particular is the router's serving state the instant this reconcile finished,
+    which is NOT the same as what a later snapshot would see: any other model write
+    admitted in between briefly un-serves every db model (see ``clear_cache``), so a
+    caller that re-snapshots at verdict time can observe that hole and blame its own
+    reload for it.
+
+    - ``still_desired``: the db + config ids the reconcile reconciled against, or None
+      when no reconcile ran and the desired set is therefore unknown.
+    - ``live_after``: the ids the router served immediately after the reconcile, or
+      None when no reconcile ran.
+    """
+
+    still_desired: frozenset[str] | None
+    live_after: frozenset[str] | None
 
 
 class SupportedDBObjectType(str, enum.Enum):
