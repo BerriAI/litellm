@@ -117,7 +117,7 @@
     "limit": 118
   },
   "reportUnnecessaryComparison": {
-    "limit": 699
+    "limit": 698
   },
   "reportUnnecessaryContains": {
     "limit": 5

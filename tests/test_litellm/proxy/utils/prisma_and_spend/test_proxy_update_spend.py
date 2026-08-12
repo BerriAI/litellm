@@ -290,6 +290,90 @@ async def test_update_spend_logs_failure_raises_after_retries(
         )
 
 
+@pytest.mark.asyncio
+async def test_update_spend_logs_retries_a_postgres_level_error_and_persists_the_batch(
+    mock_prisma_client: Any,
+    make_spend_log_row: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deadlock / serialization failure must not cost the batch.
+
+    The batch is popped off ``spend_log_transactions`` before the write and the
+    failure handler deliberately does not put it back, so an attempt not made
+    here is billing data lost for good. Only transport errors
+    (``DB_CONNECTION_ERROR_TYPES``) used to be retried, while the errors
+    concurrency actually produces - deadlock detected, serialization failure,
+    lock timeout, pool exhaustion - arrive as prisma errors and got zero
+    attempts. Retrying is safe because the write is idempotent.
+    """
+    from prisma.errors import TransactionError
+
+    async def _fake_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr(utils_mod.asyncio, "sleep", _fake_sleep)
+
+    attempts: List[List[str]] = []
+    written: List[str] = []
+
+    async def _create_many(*, data: Any, skip_duplicates: bool) -> None:
+        ids = [row["request_id"] for row in data]
+        attempts.append(ids)
+        if len(attempts) == 1:
+            raise TransactionError("deadlock detected")
+        written.extend(ids)
+
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_create_many)
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    await ProxyUpdateSpend.update_spend_logs(
+        n_retry_times=3,
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=proxy_logging,
+        logs_to_process=[make_spend_log_row(request_id="r1"), make_spend_log_row(request_id="r2")],
+    )
+
+    assert written == ["r1", "r2"], f"the batch was dropped instead of retried; attempts={attempts}"
+    assert len(attempts) == 2
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_stops_retrying_a_postgres_level_error_at_the_limit(
+    mock_prisma_client: Any,
+    make_spend_log_row: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retries stay bounded by ``n_retry_times``: a persistently failing write must
+    still surface rather than spin the flush job forever."""
+    from prisma.errors import TransactionError
+
+    async def _fake_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr(utils_mod.asyncio, "sleep", _fake_sleep)
+
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(
+        side_effect=TransactionError("deadlock detected")
+    )
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    with pytest.raises(TransactionError):
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=2,
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging,
+            logs_to_process=[make_spend_log_row(request_id="r1")],
+        )
+
+    assert mock_prisma_client.db.litellm_spendlogs.create_many.await_count == 3, (
+        "expected the initial write plus n_retry_times retries"
+    )
+
+
 def _data_error(message: str) -> Any:
     from prisma.errors import DataError
 

@@ -25,7 +25,6 @@ from litellm.constants import (
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
 )
 from litellm.proxy._types import (
-    DB_CONNECTION_ERROR_TYPES,
     DB_RETRY_SAFE_ERROR_TYPES,
     CommonProxyErrors,
     ProxyErrorTypes,
@@ -5561,18 +5560,27 @@ class ProxyUpdateSpend:
                             "%s logs processed. Remaining in queue: %s", len(logs_to_process), remaining_count
                         )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
-                    if i is None:
-                        i = 0
+                except Exception as e:
+                    # The batch was popped off the queue before this write, and the
+                    # handler below deliberately does not put it back, so whatever is
+                    # not retried here is billing data lost for good. Retry on any
+                    # error rather than only DB_CONNECTION_ERROR_TYPES (transport):
+                    # the errors concurrency actually produces - deadlock detected,
+                    # serialization failure, statement/lock timeout, pool exhaustion -
+                    # reach us as prisma errors, and got zero attempts. Retrying them
+                    # is safe because the write is idempotent (create_many with
+                    # skip_duplicates), and a row Postgres rejects on its data never
+                    # gets here: _create_spend_logs_with_poison_isolation drops it and
+                    # returns, so a poisoned batch cannot spin.
+                    if i >= n_retry_times:
+                        raise
                     verbose_proxy_logger.warning(
-                        "Spend tracking - DB connection error writing spend logs, retry %d/%d. logs_count=%d, error=%s",
+                        "Spend tracking - error writing spend logs, retry %d/%d. logs_count=%d, error=%s",
                         i + 1,
                         n_retry_times,
                         len(logs_to_process),
                         str(e),
                     )
-                    if i >= n_retry_times:
-                        raise
                     await asyncio.sleep(2**i)
         except Exception as e:
             # Logs already removed from queue at start - don't put them back
