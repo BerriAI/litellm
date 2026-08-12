@@ -384,16 +384,19 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
     # passes through (which today re-sends the OLD pricing on every save) cannot
     # silently undo a litellm_params clear via .update().
     #
-    # Restricted to SPECIAL_MODEL_INFO_PARAMS (input/output cost per token/character
-    # and cache read/write costs) so this path cannot be used to null out privileged
-    # model_info fields like team_id or access groups. SPECIAL_MODEL_INFO_PARAMS are
-    # mirrored between litellm_params and model_info by Deployment.__init__, so the
-    # clear propagates to both blobs.
+    # A litellm_params field the caller explicitly sets to null is removed from the
+    # stored params, so the UI can drop a param (e.g. reasoning_effort) instead of
+    # only overwriting it. The cross-blob mirror stays scoped to SPECIAL_MODEL_INFO_PARAMS
+    # (input/output cost per token/character and cache read/write costs), which
+    # Deployment.__init__ mirrors between litellm_params and model_info. The model_info
+    # loop below stays restricted to SPECIAL params so this path cannot null out
+    # privileged model_info fields like team_id or access groups.
     if updated_patch.litellm_params:
         for field in updated_patch.litellm_params.model_fields_set:
-            if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.litellm_params, field) is None:
+            if getattr(updated_patch.litellm_params, field) is None:
                 merged_litellm_params.pop(field, None)
-                merged_model_info.pop(field, None)
+                if field in SPECIAL_MODEL_INFO_PARAMS:
+                    merged_model_info.pop(field, None)
     if updated_patch.model_info:
         for field in updated_patch.model_info.model_fields_set:
             if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.model_info, field) is None:

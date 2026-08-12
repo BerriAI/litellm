@@ -36,7 +36,7 @@ import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
-import { isMaskedSecret, stripMaskedSecrets } from "../utils/maskedSecretUtils";
+import { computeRemovedLitellmParamKeys, isMaskedSecret, stripMaskedSecrets } from "../utils/maskedSecretUtils";
 import { formItemValidateJSON, truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
 import { AutoRouterTestTarget, buildAutoRouterTestTargets } from "./add_model/build_auto_router_test_targets";
@@ -502,6 +502,16 @@ export default function ModelInfoView({
       } catch (e) {
         NotificationsManager.fromBackend("Invalid JSON in Model Info");
         return;
+      }
+
+      // A param the user deleted from the editor is absent from updatedLitellmParams;
+      // send it as an explicit null so the backend clears it, since the PATCH merge is
+      // additive and would otherwise keep the stored value.
+      for (const removedKey of computeRemovedLitellmParamKeys(
+        localModelData.litellm_params ?? {},
+        updatedLitellmParams,
+      )) {
+        updatedLitellmParams[removedKey] = null;
       }
 
       // Final guard: never PATCH a redacted secret. The /model/info snapshot that
