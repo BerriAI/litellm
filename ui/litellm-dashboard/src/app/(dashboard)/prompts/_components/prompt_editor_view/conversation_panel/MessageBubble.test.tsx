@@ -10,4 +10,9 @@ describe("MessageBubble", () => {
     expect(screen.getByText("Hello")).toBeInTheDocument();
     expect(screen.getByText("gpt-4o")).toBeInTheDocument();
   });
+
+  it("uses theme tokens for user messages", () => {
+    render(<MessageBubble message={{ role: "user", content: "Hello" }} />);
+    expect(screen.getByText("Hello").closest(".bg-accent")).toHaveClass("border-border");
+  });
 });

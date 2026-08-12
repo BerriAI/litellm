@@ -52,7 +52,7 @@ const ToolModal: React.FC<ToolModalProps> = ({ visible, initialJson, onSave, onC
 
   return (
     <Dialog open={visible} onOpenChange={(open) => !open && handleClose()}>
-      <DialogContent className="sm:max-w-3xl">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>Add Tool</DialogTitle>
         </DialogHeader>

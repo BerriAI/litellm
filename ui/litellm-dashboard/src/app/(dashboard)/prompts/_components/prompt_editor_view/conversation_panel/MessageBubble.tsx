@@ -14,18 +14,15 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
   return (
     <div className={`mb-4 flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
       <div
-        className="max-w-[85%] rounded-lg shadow-xs p-3.5 px-4"
-        style={{
-          backgroundColor: message.role === "user" ? "#f0f8ff" : "#ffffff",
-          border: message.role === "user" ? "1px solid #e6f0fa" : "1px solid #f0f0f0",
-        }}
+        className={`max-w-[85%] rounded-lg border border-border p-3.5 px-4 shadow-xs ${
+          message.role === "user" ? "bg-accent" : "bg-card"
+        }`}
       >
         <div className="flex items-center gap-2 mb-1.5">
           <div
-            className="flex items-center justify-center w-6 h-6 rounded-full mr-1"
-            style={{
-              backgroundColor: message.role === "user" ? "#e6f0fa" : "#f5f5f5",
-            }}
+            className={`flex h-6 w-6 items-center justify-center rounded-full mr-1 ${
+              message.role === "user" ? "bg-primary/10" : "bg-muted"
+            }`}
           >
             {message.role === "user" ? (
               <User className="size-3 text-primary" aria-hidden="true" />

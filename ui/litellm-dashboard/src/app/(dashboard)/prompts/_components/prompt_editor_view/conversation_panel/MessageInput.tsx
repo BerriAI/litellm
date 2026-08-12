@@ -32,7 +32,7 @@ const MessageInput: React.FC<MessageInputProps> = ({
           placeholder="Type your message... (Shift+Enter for new line)"
           disabled={isLoading}
           rows={1}
-          className="field-sizing-fixed max-h-24 min-h-8 flex-1 resize-none border-0 bg-transparent px-0 py-1 text-sm shadow-none focus-visible:ring-0"
+          className="field-sizing-content max-h-24 min-h-8 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-0 py-1 text-sm shadow-none focus-visible:ring-0"
         />
 
         <Button

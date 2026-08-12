@@ -16,5 +16,8 @@ describe("PromptCodeSnippets", () => {
     fireEvent.click(screen.getByRole("button", { name: /get code/i }));
     expect(await screen.findByText("Generated Code")).toBeInTheDocument();
     expect(screen.getByText(/welcome/)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Language" })).toBeInTheDocument();
+    expect(screen.getByRole("tablist", { name: "Generated code type" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toHaveClass("max-h-[calc(100dvh-2rem)]", "overflow-y-auto");
   });
 });

@@ -17,8 +17,10 @@ describe("MessageInput", () => {
         onCancel={vi.fn()}
       />,
     );
-    fireEvent.change(screen.getByPlaceholderText(/type your message/i), { target: { value: "Hi" } });
-    fireEvent.click(screen.getByRole("button"));
+    const textarea = screen.getByPlaceholderText(/type your message/i);
+    expect(textarea).toHaveClass("field-sizing-content", "max-h-24", "overflow-y-auto");
+    fireEvent.change(textarea, { target: { value: "Hi" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     expect(onInputChange).toHaveBeenCalledWith("Hi");
     expect(onSend).toHaveBeenCalledOnce();
   });

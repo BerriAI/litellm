@@ -242,18 +242,20 @@ main();`;
       </Button>
 
       <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleCancel()}>
-        <DialogContent className="sm:max-w-3xl">
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>Generated Code</DialogTitle>
           </DialogHeader>
           <div className="flex justify-between items-center mb-4">
             <div>
-              <label className="font-medium block mb-1 text-foreground">Language</label>
+              <label htmlFor="prompt-code-language" className="font-medium block mb-1 text-foreground">
+                Language
+              </label>
               <Select
                 value={selectedLanguage}
                 onValueChange={(value) => setSelectedLanguage(value as "curl" | "python" | "javascript")}
               >
-                <SelectTrigger className="w-[180px]">
+                <SelectTrigger id="prompt-code-language" className="w-[180px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -276,7 +278,7 @@ main();`;
           </div>
 
           <Tabs value={selectedTab} onValueChange={(value) => setSelectedTab(String(value))}>
-            <TabsList>
+            <TabsList aria-label="Generated code type">
               <TabsTrigger value="basic">Basic</TabsTrigger>
               <TabsTrigger value="messages">With Messages</TabsTrigger>
               <TabsTrigger value="version">With Version</TabsTrigger>

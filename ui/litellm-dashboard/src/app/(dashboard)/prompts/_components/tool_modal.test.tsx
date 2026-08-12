@@ -6,6 +6,7 @@ describe("ToolModal", () => {
   it("rejects invalid JSON and saves valid JSON", async () => {
     const onSave = vi.fn();
     render(<ToolModal visible initialJson="{}" onSave={onSave} onClose={vi.fn()} />);
+    expect(await screen.findByRole("dialog")).toHaveClass("max-h-[calc(100dvh-2rem)]", "overflow-y-auto");
     const editor = await screen.findByPlaceholderText("Paste your tool JSON here...");
     fireEvent.change(editor, { target: { value: "invalid" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));

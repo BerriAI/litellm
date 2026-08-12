@@ -35,8 +35,13 @@ const ToolsCard: React.FC<ToolsCardProps> = ({ tools, onAddTool, onEditTool, onR
                 <Button variant="ghost" size="sm" onClick={() => onEditTool(index)}>
                   Edit
                 </Button>
-                <Button variant="ghost" size="icon-sm" onClick={() => onRemoveTool(index)}>
-                  <TrashIcon size={14} />
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={`Remove ${tool.name}`}
+                  onClick={() => onRemoveTool(index)}
+                >
+                  <TrashIcon size={14} aria-hidden="true" />
                 </Button>
               </div>
             </div>

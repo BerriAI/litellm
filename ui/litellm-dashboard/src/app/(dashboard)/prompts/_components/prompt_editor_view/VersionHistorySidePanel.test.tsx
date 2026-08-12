@@ -65,6 +65,29 @@ describe("VersionHistorySidePanel", () => {
     expect(props.onClose).toHaveBeenCalled();
   });
 
+  it("keeps the surrounding editor interactive while history is open", async () => {
+    const onEditorAction = vi.fn();
+    render(
+      <>
+        <button type="button" onClick={onEditorAction}>
+          Editor action
+        </button>
+        <VersionHistorySidePanel {...props} />
+      </>,
+    );
+    await screen.findByText("v2");
+    expect(screen.getByRole("dialog", { name: "Version History" })).toHaveAttribute("aria-modal", "false");
+    fireEvent.click(screen.getByRole("button", { name: "Editor action" }));
+    expect(onEditorAction).toHaveBeenCalledOnce();
+  });
+
+  it("closes on Escape", async () => {
+    render(<VersionHistorySidePanel {...props} />);
+    await screen.findByText("v2");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(props.onClose).toHaveBeenCalledOnce();
+  });
+
   it("does not load while closed", async () => {
     await act(async () => render(<VersionHistorySidePanel {...props} isOpen={false} />));
     await waitFor(() => expect(getPromptVersions).not.toHaveBeenCalled());
