@@ -174,8 +174,8 @@ export default function ModelsAndEndpointsPage() {
           />
         ) : (
           <Tabs value={activeKey} onValueChange={setActiveKey}>
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b">
-              <TabsList variant="line" className="max-w-full flex-none justify-start overflow-x-auto">
+            <div className="flex min-w-0 flex-nowrap items-center gap-3 border-b">
+              <TabsList variant="line" className="min-w-0 flex-1 justify-start overflow-x-auto">
                 {visibleSlugs.map((slug) => {
                   const key = slug || BASE_TAB_KEY;
                   return (
@@ -185,7 +185,7 @@ export default function ModelsAndEndpointsPage() {
                   );
                 })}
               </TabsList>
-              <div className="flex items-center gap-2 pb-1">
+              <div className="flex shrink-0 items-center gap-2 pb-1">
                 {lastRefreshed && (
                   <span className="text-xs text-muted-foreground">Last Refreshed: {lastRefreshed}</span>
                 )}
