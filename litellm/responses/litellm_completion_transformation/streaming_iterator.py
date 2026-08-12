@@ -82,6 +82,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.sent_output_item_done_event: bool = False
         self.sent_annotation_events: bool = False
         self.litellm_model_response: ModelResponse | TextCompletionResponse | None = None
+        self.completed_response: Any = None
         self.final_text: str = ""
         self._cached_item_id: str | None = None
         self._cached_response_id: str | None = None
