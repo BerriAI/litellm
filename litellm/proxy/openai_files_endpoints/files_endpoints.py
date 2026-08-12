@@ -7,6 +7,7 @@
 
 import asyncio
 import traceback
+from types import MappingProxyType
 from typing import Any, BinaryIO, Final, cast, get_args
 
 import httpx
@@ -706,11 +707,18 @@ async def get_file_content(
 
             model: Final = cast(str | None, data.get("model"))
             if model:
+                deployment_credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model)
+                trusted_model_credentials: Final = (
+                    {"_litellm_internal_model_credentials": MappingProxyType(dict(deployment_credentials))}
+                    if deployment_credentials is not None
+                    else {}
+                )
                 response = await llm_router.afile_content(
                     **{
                         "model": model,
                         "file_id": file_id,
                         **data,
+                        **trusted_model_credentials,
                     }
                 )
 
