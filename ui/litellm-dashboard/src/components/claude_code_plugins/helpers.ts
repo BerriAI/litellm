@@ -2,7 +2,7 @@
  * Helper utilities for Claude Code Marketplace
  */
 
-import { PluginSource, MarketplacePluginEntry } from "./types";
+import { PluginSource, MarketplacePluginEntry, Plugin, SkillApprovalStatus } from "./types";
 
 export interface SkillSourcePreview {
   parsed: PluginSource;
@@ -438,3 +438,43 @@ export const formatKeywords = (keywords?: string[]): string => {
 
   return keywords.join(", ");
 };
+
+export interface SkillApprovalDisplay {
+  label: string;
+  tone: "success" | "warning" | "error";
+}
+
+export const getApprovalStatusDisplay = (status?: SkillApprovalStatus): SkillApprovalDisplay => {
+  switch (status) {
+    case "pending_review":
+      return { label: "Pending Review", tone: "warning" };
+    case "rejected":
+      return { label: "Rejected", tone: "error" };
+    default:
+      return { label: "Active", tone: "success" };
+  }
+};
+
+export const isAwaitingReview = (plugin: Pick<Plugin, "approval_status">): boolean =>
+  plugin.approval_status === "pending_review";
+
+export const countAwaitingReview = (plugins: Pick<Plugin, "approval_status">[]): number =>
+  plugins.filter(isAwaitingReview).length;
+
+export const isApprovedSkill = (plugin: Pick<Plugin, "approval_status">): boolean =>
+  plugin.approval_status === undefined || plugin.approval_status === "active";
+
+const CONFLICT_STATUS = 409;
+
+const isStaleReviewConflict = (error: unknown): boolean =>
+  typeof error === "object" && error !== null && "status" in error && error.status === CONFLICT_STATUS;
+
+/**
+ * The proxy answers 409 when the submitter edited the skill after it was listed, so the
+ * approval no longer refers to the content on screen. Say that rather than "failed", since
+ * the reviewer has to look at the refreshed row and decide again.
+ */
+export const reviewFailureMessage = (error: unknown): string =>
+  isStaleReviewConflict(error)
+    ? "This submission changed since the list was loaded. Review the refreshed content before approving it"
+    : "Failed to review skill";

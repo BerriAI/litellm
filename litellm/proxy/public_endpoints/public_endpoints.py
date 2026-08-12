@@ -82,7 +82,7 @@ class _PluginRow(Protocol):
 
 
 class _PluginTableActions(Protocol):
-    def find_many(self, *, where: Mapping[str, bool]) -> Awaitable[Sequence[_PluginRow]]: ...
+    def find_many(self, *, where: Mapping[str, object]) -> Awaitable[Sequence[_PluginRow]]: ...
 
 
 def _plugin_table(prisma_client: object) -> _PluginTableActions:
@@ -299,9 +299,10 @@ async def get_mcp_servers():
     tags=["public", "Claude Code Marketplace"],
 )
 async def public_skill_hub():
-    """Return enabled (public) Claude Code skills — no auth required."""
+    """Return approved, enabled (public) Claude Code skills. No auth required."""
     from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
         _get_prisma_client,
+        published_skill_filter,
     )
     from litellm.types.proxy.claude_code_endpoints import (
         ListPluginsResponse,
@@ -310,7 +311,7 @@ async def public_skill_hub():
 
     try:
         prisma_client: Final = await _get_prisma_client()
-        plugins: Final = await _plugin_table(prisma_client).find_many(where={"enabled": True})
+        plugins: Final = await _plugin_table(prisma_client).find_many(where=published_skill_filter())
         items: Final = []
         for plugin in plugins:
             raw = plugin.manifest_json or {}

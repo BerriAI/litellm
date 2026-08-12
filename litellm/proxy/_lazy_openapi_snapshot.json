@@ -4315,6 +4315,33 @@
   "claude_code_marketplace": {
     "components": {
       "schemas": {
+        "ApprovePluginRequest": {
+          "description": "Administrator approval of a submitted skill.\n\nThe fingerprint binds the approval to the content the administrator read.\nA submitter who edits their submission after it was read, but before it is\napproved, changes the fingerprint, so the approval is refused rather than\npublishing a manifest nobody reviewed.",
+          "properties": {
+            "review_notes": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reviewer feedback shown to the submitter",
+              "title": "Review Notes"
+            },
+            "reviewed_fingerprint": {
+              "description": "manifest_fingerprint of the submission that was reviewed, from GET /claude-code/plugins",
+              "title": "Reviewed Fingerprint",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reviewed_fingerprint"
+          ],
+          "title": "ApprovePluginRequest",
+          "type": "object"
+        },
         "HTTPValidationError": {
           "properties": {
             "detail": {
@@ -4380,6 +4407,16 @@
         "PluginListItem": {
           "description": "Plugin item in list responses.",
           "properties": {
+            "approval_status": {
+              "default": "active",
+              "enum": [
+                "pending_review",
+                "active",
+                "rejected"
+              ],
+              "title": "Approval Status",
+              "type": "string"
+            },
             "author": {
               "anyOf": [
                 {
@@ -4411,6 +4448,17 @@
                 }
               ],
               "title": "Created At"
+            },
+            "created_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created By"
             },
             "description": {
               "anyOf": [
@@ -4467,6 +4515,11 @@
               ],
               "title": "Keywords"
             },
+            "manifest_fingerprint": {
+              "default": "",
+              "title": "Manifest Fingerprint",
+              "type": "string"
+            },
             "name": {
               "title": "Name",
               "type": "string"
@@ -4481,6 +4534,39 @@
                 }
               ],
               "title": "Namespace"
+            },
+            "review_notes": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Review Notes"
+            },
+            "reviewed_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Reviewed At"
+            },
+            "reviewed_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Reviewed By"
             },
             "source": {
               "additionalProperties": {
@@ -4528,6 +4614,17 @@
         "PluginResponse": {
           "description": "Plugin information in API responses.",
           "properties": {
+            "approval_status": {
+              "default": "active",
+              "description": "Administrator approval state",
+              "enum": [
+                "pending_review",
+                "active",
+                "rejected"
+              ],
+              "title": "Approval Status",
+              "type": "string"
+            },
             "description": {
               "anyOf": [
                 {
@@ -4713,7 +4810,7 @@
           "description": "Response from plugin registration.",
           "properties": {
             "action": {
-              "description": "Action taken (created/updated)",
+              "description": "Action taken (created/submitted_for_review/updated)",
               "title": "Action",
               "type": "string"
             },
@@ -4733,6 +4830,99 @@
             "plugin"
           ],
           "title": "RegisterPluginResponse",
+          "type": "object"
+        },
+        "RejectPluginRequest": {
+          "description": "Administrator rejection of a submitted skill.",
+          "properties": {
+            "review_notes": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reviewer feedback shown to the submitter",
+              "title": "Review Notes"
+            }
+          },
+          "title": "RejectPluginRequest",
+          "type": "object"
+        },
+        "ReviewPluginResponse": {
+          "description": "Response from approving or rejecting a submitted skill.",
+          "properties": {
+            "approval_status": {
+              "description": "Resulting approval state",
+              "enum": [
+                "pending_review",
+                "active",
+                "rejected"
+              ],
+              "title": "Approval Status",
+              "type": "string"
+            },
+            "enabled": {
+              "description": "Whether the skill is now served to users",
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "name": {
+              "description": "Skill name",
+              "title": "Name",
+              "type": "string"
+            },
+            "review_notes": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reviewer feedback",
+              "title": "Review Notes"
+            },
+            "reviewed_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ISO timestamp of the review",
+              "title": "Reviewed At"
+            },
+            "reviewed_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "User id of the reviewing administrator",
+              "title": "Reviewed By"
+            },
+            "status": {
+              "description": "Operation status",
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "name",
+            "approval_status",
+            "enabled"
+          ],
+          "title": "ReviewPluginResponse",
           "type": "object"
         },
         "UpdatePluginRequest": {
@@ -4916,7 +5106,7 @@
       },
       "/claude-code/plugins": {
         "get": {
-          "description": "List all plugins in the marketplace.\n\nParameters:\n    - enabled_only: If true, only return enabled plugins\n\nReturns:\n    List of plugins with their metadata.",
+          "description": "List plugins in the marketplace.\n\nAdmins see every skill, including submissions awaiting review. Everyone\nelse sees approved skills plus their own submissions, so a submitter can\ntrack the status of what they sent in.\n\nParameters:\n    - enabled_only: If true, only return enabled plugins\n    - approval_status: Filter to one approval state, e.g. `pending_review` for the admin review queue\n\nReturns:\n    List of plugins with their metadata and review state.",
           "operationId": "list_plugins_claude_code_plugins_get",
           "parameters": [
             {
@@ -4927,6 +5117,27 @@
                 "default": false,
                 "title": "Enabled Only",
                 "type": "boolean"
+              }
+            },
+            {
+              "in": "query",
+              "name": "approval_status",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "pending_review",
+                      "active",
+                      "rejected"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Approval Status"
               }
             }
           ],
@@ -4963,7 +5174,7 @@
           ]
         },
         "post": {
-          "description": "Register a new plugin in the LiteLLM marketplace.\n\nLiteLLM acts as a registry/discovery layer. Plugins are hosted on\nGitHub/GitLab/Bitbucket. Claude Code will clone from the git source\nwhen users install.\n\nThis endpoint is create-only and never overwrites. If a plugin with\nthe same name already exists it returns 409 Conflict; use\nPUT /claude-code/plugins/{plugin_name} to update an existing plugin.\n\nParameters:\n    - name: Plugin name (kebab-case)\n    - source: Git source reference (github, url, or git-subdir format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Registration status (action is always \"created\") and plugin information.\n\nExample:\n    ```bash\n    curl -X POST http://localhost:4000/claude-code/plugins \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"name\": \"my-plugin\",\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"1.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
+          "description": "Register a new plugin in the LiteLLM marketplace.\n\nLiteLLM acts as a registry/discovery layer. Plugins are hosted on\nGitHub/GitLab/Bitbucket. Claude Code will clone from the git source\nwhen users install.\n\nThis endpoint is create-only and never overwrites. If a plugin with\nthe same name already exists it returns 409 Conflict; use\nPUT /claude-code/plugins/{plugin_name} to update an existing plugin.\n\nCallers that are not proxy admins are self-service submitters: the skill\nis stored with approval_status=pending_review and stays disabled until an\nadmin approves it via POST /claude-code/plugins/{plugin_name}/approve.\n\nParameters:\n    - name: Plugin name (kebab-case)\n    - source: Git source reference (github, url, or git-subdir format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Registration status (\"created\" for admins, \"submitted_for_review\" otherwise)\n    and plugin information.\n\nExample:\n    ```bash\n    curl -X POST http://localhost:4000/claude-code/plugins \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"name\": \"my-plugin\",\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"1.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
           "operationId": "register_plugin_claude_code_plugins_post",
           "requestBody": {
             "content": {
@@ -5010,7 +5221,7 @@
       },
       "/claude-code/plugins/{plugin_name}": {
         "delete": {
-          "description": "Delete a plugin from the marketplace.\n\nParameters:\n    - plugin_name: The name of the plugin to delete",
+          "description": "Delete a plugin from the marketplace. Admins can delete any skill; a\nsubmitter can withdraw one they submitted.\n\nParameters:\n    - plugin_name: The name of the plugin to delete",
           "operationId": "delete_plugin_claude_code_plugins__plugin_name__delete",
           "parameters": [
             {
@@ -5098,7 +5309,7 @@
           ]
         },
         "put": {
-          "description": "Update an existing plugin in the LiteLLM marketplace.\n\nThe plugin is identified by its name in the path, which is the resource\nidentity and cannot be changed here. This is a full replace, not a merge:\nthe manifest is rebuilt from the request body, so any optional field left\nout is reset to its default (e.g. an omitted version is cleared, not kept).\nSend the full desired state.\n\nReturns 404 if no plugin with the given name exists; use\nPOST /claude-code/plugins to create a new plugin.\n\nParameters:\n    - plugin_name: Name of the plugin to update (path parameter)\n    - source: Git source reference (github, url, or git-subdir format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Update status (action is always \"updated\") and plugin information.\n\nExample:\n    ```bash\n    curl -X PUT http://localhost:4000/claude-code/plugins/my-plugin \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"2.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
+          "description": "Update an existing plugin in the LiteLLM marketplace.\n\nThe plugin is identified by its name in the path, which is the resource\nidentity and cannot be changed here. This is a full replace, not a merge:\nthe manifest is rebuilt from the request body, so any optional field left\nout is reset to its default (e.g. an omitted version is cleared, not kept).\nSend the full desired state.\n\nReturns 404 if no plugin with the given name exists; use\nPOST /claude-code/plugins to create a new plugin.\n\nAdmins can update any skill and the review state is left untouched. A\nsubmitter can only update their own skill, and doing so sends it back to\npending review, since the content an admin approved has changed.\n\nParameters:\n    - plugin_name: Name of the plugin to update (path parameter)\n    - source: Git source reference (github, url, or git-subdir format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Update status (action is always \"updated\") and plugin information.\n\nExample:\n    ```bash\n    curl -X PUT http://localhost:4000/claude-code/plugins/my-plugin \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"2.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
           "operationId": "update_plugin_claude_code_plugins__plugin_name__put",
           "parameters": [
             {
@@ -5154,9 +5365,67 @@
           ]
         }
       },
+      "/claude-code/plugins/{plugin_name}/approve": {
+        "post": {
+          "description": "Approve a submitted skill (admin only).\n\nApproving sets approval_status=active and publishes the skill to\nmarketplace.json and the public Skill Hub.\n\nreviewed_fingerprint is the manifest_fingerprint returned by\nGET /claude-code/plugins and GET /claude-code/plugins/{plugin_name}. It\nties the approval to the content that was read, so a submitter cannot get\nan edit published by landing it between the read and the approval.\n\nExample:\n    ```bash\n    FP=$(curl -s http://localhost:4000/claude-code/plugins/my-skill \\\n      -H \"Authorization: Bearer sk-admin-...\" | jq -r .manifest_fingerprint)\n    curl -X POST http://localhost:4000/claude-code/plugins/my-skill/approve \\\n      -H \"Authorization: Bearer sk-admin-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d \"{\\\"reviewed_fingerprint\\\": \\\"$FP\\\"}\"\n    ```",
+          "operationId": "approve_plugin_claude_code_plugins__plugin_name__approve_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "plugin_name",
+              "required": true,
+              "schema": {
+                "title": "Plugin Name",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovePluginRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ReviewPluginResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Approve Plugin",
+          "tags": [
+            "claude_code_marketplace"
+          ]
+        }
+      },
       "/claude-code/plugins/{plugin_name}/disable": {
         "post": {
-          "description": "Disable a plugin without deleting it.\n\nParameters:\n    - plugin_name: The name of the plugin to disable",
+          "description": "Disable a plugin without deleting it. Proxy admins only.\n\nParameters:\n    - plugin_name: The name of the plugin to disable",
           "operationId": "disable_plugin_claude_code_plugins__plugin_name__disable_post",
           "parameters": [
             {
@@ -5202,7 +5471,7 @@
       },
       "/claude-code/plugins/{plugin_name}/enable": {
         "post": {
-          "description": "Enable a disabled plugin.\n\nParameters:\n    - plugin_name: The name of the plugin to enable",
+          "description": "Enable a disabled plugin. Proxy admins only.\n\nA skill that has not been approved cannot be enabled here: approve it\nthrough POST /claude-code/plugins/{plugin_name}/approve instead, so the\nreviewer is recorded on the row.\n\nParameters:\n    - plugin_name: The name of the plugin to enable",
           "operationId": "enable_plugin_claude_code_plugins__plugin_name__enable_post",
           "parameters": [
             {
@@ -5241,6 +5510,64 @@
             }
           ],
           "summary": "Enable Plugin",
+          "tags": [
+            "claude_code_marketplace"
+          ]
+        }
+      },
+      "/claude-code/plugins/{plugin_name}/reject": {
+        "post": {
+          "description": "Reject a submitted skill (admin only).\n\nThe row is kept unpublished so the submitter can read review_notes and fix the submission.\n\nExample:\n    ```bash\n    curl -X POST http://localhost:4000/claude-code/plugins/my-skill/reject \\\n      -H \"Authorization: Bearer sk-admin-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\"review_notes\": \"point the source at the skill folder\"}'\n    ```",
+          "operationId": "reject_plugin_claude_code_plugins__plugin_name__reject_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "plugin_name",
+              "required": true,
+              "schema": {
+                "title": "Plugin Name",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RejectPluginRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ReviewPluginResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Reject Plugin",
           "tags": [
             "claude_code_marketplace"
           ]

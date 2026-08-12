@@ -13,6 +13,7 @@ interface PluginTableProps {
   pluginsList: Plugin[];
   isLoading: boolean;
   onDeleteClick: (pluginName: string, displayName: string) => void;
+  onReviewClick: (plugin: Plugin, decision: "approve" | "reject") => void;
   isAdmin: boolean;
   onPluginClick: (pluginId: string) => void;
 }
@@ -31,12 +32,19 @@ function EmptyState() {
   );
 }
 
-const PluginTable: React.FC<PluginTableProps> = ({ pluginsList, isLoading, onDeleteClick, isAdmin, onPluginClick }) => {
+const PluginTable: React.FC<PluginTableProps> = ({
+  pluginsList,
+  isLoading,
+  onDeleteClick,
+  onReviewClick,
+  isAdmin,
+  onPluginClick,
+}) => {
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
 
   const columns = useMemo(
-    () => getPluginTableColumns({ isAdmin, onPluginClick, onDeleteClick }),
-    [isAdmin, onPluginClick, onDeleteClick],
+    () => getPluginTableColumns({ isAdmin, onPluginClick, onDeleteClick, onReviewClick }),
+    [isAdmin, onPluginClick, onDeleteClick, onReviewClick],
   );
 
   return (

@@ -16,6 +16,8 @@ export interface PluginSource {
 
 export type PluginAuthor = components["schemas"]["PluginAuthor"];
 
+export type SkillApprovalStatus = components["schemas"]["PluginListItem"]["approval_status"];
+
 export interface Plugin {
   id: string;
   name: string; // kebab-case
@@ -29,6 +31,11 @@ export interface Plugin {
   domain?: string;
   namespace?: string;
   enabled: boolean;
+  approval_status?: SkillApprovalStatus;
+  manifest_fingerprint?: string;
+  review_notes?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
   created_at?: string;
   updated_at?: string;
   created_by?: string;
@@ -47,6 +54,11 @@ export interface PluginListItem {
   domain?: string;
   namespace?: string;
   enabled: boolean;
+  approval_status?: SkillApprovalStatus;
+  manifest_fingerprint?: string;
+  review_notes?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
   created_at?: string;
   updated_at?: string;
   created_by?: string;

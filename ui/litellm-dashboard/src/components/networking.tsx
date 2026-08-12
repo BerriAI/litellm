@@ -7489,6 +7489,32 @@ export const deleteClaudeCodePlugin = async (accessToken: string, pluginName: st
   }
 };
 
+/**
+ * Approve or reject a submitted skill (admin only)
+ */
+export interface SkillReview {
+  decision: "approve" | "reject";
+  reviewNotes?: string;
+  /** Fingerprint of the manifest the reviewer read; the proxy 409s if it has changed since. */
+  reviewedFingerprint?: string;
+}
+
+export const reviewClaudeCodePlugin = async (accessToken: string, pluginName: string, review: SkillReview) => {
+  const { decision, reviewNotes, reviewedFingerprint } = review;
+  try {
+    return await apiClient.post(`/claude-code/plugins/${pluginName}/${decision}`, {
+      accessToken,
+      body: {
+        review_notes: reviewNotes || null,
+        ...(decision === "approve" ? { reviewed_fingerprint: reviewedFingerprint ?? "" } : {}),
+      },
+    });
+  } catch (error) {
+    console.error(`Failed to ${decision} skill "${pluginName}":`, error);
+    throw error;
+  }
+};
+
 // Compliance check types and functions
 
 export interface ComplianceCheckResult {

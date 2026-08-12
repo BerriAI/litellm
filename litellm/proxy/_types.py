@@ -774,6 +774,10 @@ class LiteLLMRoutes(enum.Enum):
             # Create/update/delete and test_connection stay admin-only.
             "/search_tools/list",
             "/search_tools/ui/available_providers",
+            # Self-service skill submission. Approve/reject stay admin-only.
+            "/claude-code/marketplace.json",
+            "/claude-code/plugins",
+            "/claude-code/plugins/{plugin_name}",
         ]
         + spend_tracking_routes
         + key_management_routes
