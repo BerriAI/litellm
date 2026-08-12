@@ -43,6 +43,8 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.types.integrations.slack_alerting import *
 from litellm.types.proxy.model_deprecation import (
     DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
+    DEPRECATION_ROUTER_WAIT_ATTEMPTS,
+    DEPRECATION_ROUTER_WAIT_SECONDS,
 )
 
 from ..email_templates.templates import *
@@ -1080,7 +1082,12 @@ Model Info:
     async def _run_scheduled_deprecation_check(
         self, get_llm_router: Callable[[], Router | None] = _proxy_llm_router
     ) -> None:
-        """Alert once on startup, then daily, re-reading the router and alert types each pass"""
+        """Alert once the router is loaded, then daily, re-reading the router and alert types each pass"""
+        for _ in range(DEPRECATION_ROUTER_WAIT_ATTEMPTS):
+            if get_llm_router() is not None:
+                break
+            await asyncio.sleep(DEPRECATION_ROUTER_WAIT_SECONDS)
+
         while True:
             try:
                 await self.send_model_deprecation_alert(llm_router=get_llm_router())

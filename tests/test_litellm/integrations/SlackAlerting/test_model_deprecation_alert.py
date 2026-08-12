@@ -3,6 +3,7 @@
 import asyncio
 import os
 import sys
+from itertools import chain, repeat
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,6 +13,7 @@ sys.path.insert(0, os.path.abspath("../../../.."))
 import litellm
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.proxy._types import AlertType
+from litellm.types.proxy.model_deprecation import DEPRECATION_ROUTER_WAIT_SECONDS
 
 
 def _make_router(deployments):
@@ -121,7 +123,6 @@ async def test_should_alert_once_the_alert_type_and_router_arrive_after_startup(
             }
         ]
     )
-    routers = [None, router]
 
     async def stop_after_second_pass(_seconds):
         if alerting.alert_types == [AlertType.llm_exceptions]:
@@ -139,9 +140,52 @@ async def test_should_alert_once_the_alert_type_and_router_arrive_after_startup(
         ),
         pytest.raises(asyncio.CancelledError),
     ):
+        await alerting._run_scheduled_deprecation_check(get_llm_router=lambda: router)
+
+    mock_send_alert.assert_awaited_once()
+    assert "dead-alias" in mock_send_alert.await_args.kwargs["message"]
+
+
+@pytest.mark.asyncio
+async def test_should_wait_for_the_router_instead_of_sleeping_a_full_day(monkeypatch):
+    """Config load can start the loop before the router exists, which must not cost a day of alerts"""
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {"dead-model": {"deprecation_date": "2020-01-01", "litellm_provider": "openai"}},
+    )
+    alerting = SlackAlerting(
+        alerting=["slack"], alert_types=[AlertType.model_deprecation_warnings]
+    )
+    router = _make_router(
+        [
+            {
+                "model_name": "dead-alias",
+                "litellm_params": {"model": "dead-model"},
+                "model_info": {"id": "1"},
+            }
+        ]
+    )
+    routers = chain((None, None), repeat(router))
+    slept: list[float] = []
+
+    async def record_sleep(seconds):
+        slept.append(seconds)
+        if len(slept) > 2:
+            raise asyncio.CancelledError
+
+    with (
+        patch.object(alerting, "send_alert", new_callable=AsyncMock) as mock_send_alert,
+        patch(
+            "litellm.integrations.SlackAlerting.slack_alerting.asyncio.sleep",
+            side_effect=record_sleep,
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
         await alerting._run_scheduled_deprecation_check(
-            get_llm_router=lambda: routers.pop(0)
+            get_llm_router=lambda: next(routers)
         )
 
+    assert slept[:2] == [DEPRECATION_ROUTER_WAIT_SECONDS] * 2
     mock_send_alert.assert_awaited_once()
     assert "dead-alias" in mock_send_alert.await_args.kwargs["message"]
