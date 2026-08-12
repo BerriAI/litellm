@@ -17,7 +17,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           label: potential-duplicate
           threshold: 0.6
-          reaction: eyes
+          reactions: eyes
           comment: |
             **⚠️ Potential duplicate detected**
 
