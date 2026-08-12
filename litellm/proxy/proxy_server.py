@@ -467,6 +467,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
     _add_team_model_to_db,
     _deduplicate_litellm_router_models,
+    live_model_ids_snapshot,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     router as model_management_router,
@@ -2166,6 +2167,15 @@ experimental = False
 #### GLOBAL VARIABLES ####
 llm_router: Router | None = None
 llm_model_list: list | None = None
+# Serializes every model reconcile (ProxyConfig.add_deployment and clear_cache) so the
+# read-modify-write of llm_router above is atomic. Without it, two concurrent model
+# writes each reconcile the router against their OWN db snapshot, and the one holding
+# the older snapshot evicts the deployment the newer one just added -- the db keeps the
+# row, this pod stops serving it. Control-plane only (model create/update/delete and
+# the config-sync tick), never on a completion path, so the serialization is free.
+# Module-level rather than per-ProxyConfig because llm_router is a module global and a
+# second ProxyConfig instance must not get its own independent lock over it.
+MODEL_RECONCILE_LOCK: Final = asyncio.Lock()
 general_settings: dict = {}
 config_passthrough_endpoints: list[dict[str, Any]] | None = None
 log_file: Final = "api_log.json"
@@ -6456,16 +6466,37 @@ class ProxyConfig:
         self,
         prisma_client: PrismaClient,
         proxy_logging_obj: ProxyLogging,
-    ) -> frozenset[str] | None:
+    ) -> ReconcileOutcome:
         """
         - Check db for new models
         - Check if model id's in router already
         - If not, add to router
 
-        Returns the ids the db + config say should be served after the reconcile, or
-        None when no reconcile ran. Callers that judge their own reload need it to tell
-        a deliberate eviction from a deployment that went missing.
+        Serialized against every other model reconcile by MODEL_RECONCILE_LOCK, because
+        the work below is a read-modify-write of the shared ``llm_router`` global: it
+        reads the db into a snapshot and then makes the router match that snapshot. Two
+        of those interleaving is not a lost update but an eviction -- the request whose
+        snapshot predates the other's commit reconciles the newer model *out* of the
+        router, since _delete_deployment removes every live deployment absent from the
+        snapshot it was handed. The model stays in the db and this pod stops serving it
+        until some later reload puts it back.
+
+        Returns what the reconcile saw, captured before the lock is released so a
+        caller's verdict cannot be corrupted by the next reconcile's own in-flight
+        window. See ReconcileOutcome.
         """
+        async with MODEL_RECONCILE_LOCK:
+            return await self._add_deployment_locked(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
+
+    async def _add_deployment_locked(
+        self,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+    ) -> ReconcileOutcome:
+        """add_deployment's body, minus the locking. MODEL_RECONCILE_LOCK MUST already
+        be held. Split out for the one caller that has to hold the lock across more than
+        this reconcile -- clear_cache, which un-serves every db model before calling it
+        and would deadlock on a re-acquire."""
         global llm_router, llm_model_list, master_key, general_settings
 
         still_desired_ids: frozenset[str] | None = None
@@ -6508,7 +6539,12 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.exception("litellm.proxy.proxy_server.py::ProxyConfig:add_deployment - %s", e)
 
-        return still_desired_ids
+        # Read while the lock is still held: once it is released the next reconcile can
+        # begin, and clear_cache's leading wipe would make this look like a mass drop.
+        return ReconcileOutcome(
+            still_desired=still_desired_ids,
+            live_after=None if still_desired_ids is None else live_model_ids_snapshot(),
+        )
 
     def start_config_sync_subscriber(
         self,
