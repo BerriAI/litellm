@@ -695,14 +695,24 @@ def _is_gemini_model(model: str | None, custom_llm_provider: str | None) -> bool
 
 def is_gemini_tts_model(model: str, custom_llm_provider: str | None = None) -> bool:
     try:
-        model_info: Final = get_model_info(
+        runtime_model_info: Final = get_model_info(
             model=model,
             custom_llm_provider=custom_llm_provider,
         )
     except Exception:
-        return False
+        provider_model: Final = (
+            f"{custom_llm_provider}/{model}"
+            if custom_llm_provider is not None and not model.startswith(f"{custom_llm_provider}/")
+            else model
+        )
+        bundled_model_cost: Final = _get_bundled_model_cost_map()
+        bundled_model_info: Final = bundled_model_cost.get(provider_model) or bundled_model_cost.get(model) or {}
+        return bundled_model_info.get("mode") == "audio_speech" and bundled_model_info.get("litellm_provider") in {
+            "gemini",
+            "vertex_ai-language-models",
+        }
 
-    return model_info.get("mode") == "audio_speech" and model_info.get("litellm_provider") in {
+    return runtime_model_info.get("mode") == "audio_speech" and runtime_model_info.get("litellm_provider") in {
         "gemini",
         "vertex_ai-language-models",
     }

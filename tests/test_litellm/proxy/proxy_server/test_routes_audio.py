@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 from litellm.proxy import proxy_server
 from litellm.types.llms.openai import HttpxBinaryResponseContent
@@ -132,6 +133,15 @@ def patched_speech_provider_error(monkeypatch):
 
 
 @pytest.fixture
+def patched_speech_http_error(monkeypatch, patched_speech):
+    async def _raise(*args, **kwargs):
+        raise HTTPException(status_code=422, detail="Provider rejected the speech request.")
+
+    monkeypatch.setattr(proxy_server, "route_request", _raise)
+    yield
+
+
+@pytest.fixture
 def patched_transcription(monkeypatch):
     router = MagicMock()
     router.model_names = ["whisper-1"]
@@ -232,17 +242,32 @@ def test_audio_speech_content_type_matches_audio_format(
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])
-def test_audio_speech_pcm16_uses_wav_media_type(client, auth_as, patched_speech, path):
+@pytest.mark.parametrize(
+    "response_format,expected_media_type",
+    [
+        ("pcm16", "audio/wav"),
+        ("alaw", "audio/x-alaw-basic"),
+        ("mulaw", "audio/basic"),
+    ],
+)
+def test_audio_speech_uses_requested_media_type(
+    client,
+    auth_as,
+    patched_speech,
+    path,
+    response_format,
+    expected_media_type,
+):
     payload = {
         "model": "gemini-3.1-flash-tts-preview",
         "input": "Hi",
         "voice": "Umbriel",
-        "response_format": "pcm16",
+        "response_format": response_format,
     }
     with auth_as():
         response = client.post(path, json=payload)
     assert response.status_code == 200
-    assert response.headers.get("content-type", "") == "audio/wav"
+    assert response.headers.get("content-type", "") == expected_media_type
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])
@@ -279,6 +304,15 @@ def test_audio_speech_provider_error_preserves_status_and_message(
         response = client.post(path, json=payload)
     assert response.status_code == 400
     assert response.json()["error"]["message"] == "Unsupported audio encoding."
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])
+def test_audio_speech_http_error_preserves_detail(client, auth_as, patched_speech_http_error, path):
+    payload = {"model": "tts-1", "input": "Hi", "voice": "alloy"}
+    with auth_as():
+        response = client.post(path, json=payload)
+    assert response.status_code == 422
+    assert response.json()["error"]["message"] == "Provider rejected the speech request."
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"])

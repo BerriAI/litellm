@@ -3,6 +3,9 @@ from pathlib import Path
 
 import pytest
 
+import litellm
+from litellm.utils import _invalidate_model_cost_lowercase_map, is_gemini_tts_model
+
 EXPECTED_MODELS = {
     "gemini-3.1-flash-tts-preview": "gemini",
     "gemini/gemini-3.1-flash-tts-preview": "gemini",
@@ -49,3 +52,19 @@ def test_gemini_3_1_flash_tts_backup_matches_main():
         assert backup_cost.get(model) == main_cost.get(model), (
             f"{model} differs between main and backup model cost maps"
         )
+
+
+def test_gemini_tts_detection_uses_model_metadata(monkeypatch):
+    model: str = "gemini/future-generative-speech"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "gemini",
+            "mode": "audio_speech",
+        },
+    )
+    litellm.get_model_info.cache_clear()
+    _invalidate_model_cost_lowercase_map()
+
+    assert is_gemini_tts_model(model)
