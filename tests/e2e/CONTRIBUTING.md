@@ -152,3 +152,5 @@ Before you push
 4. Capture screenshots of the test run and attach them to the PR as proof
 
 5. If a test fails because it surfaced a real issue in the product, flag that explicitly in the PR rather than reworking the test until it passes
+
+# e2e gate proof 2: docs-only fast-pass (throwaway)
