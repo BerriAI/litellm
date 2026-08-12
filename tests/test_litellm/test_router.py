@@ -7520,6 +7520,17 @@ class TestConsumedRequestTagsStamp:
         assert request_kwargs["metadata"][CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY] == "gemini-flash"
 
     @pytest.mark.asyncio
+    async def test_stamps_into_litellm_metadata_when_the_request_uses_that_bucket(self):
+        from litellm.constants import CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY
+
+        router = self._router()
+        request_kwargs = {"litellm_metadata": {"tags": ["route"]}}
+
+        await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
+
+        assert request_kwargs["litellm_metadata"][CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY] == "gemini-flash"
+
+    @pytest.mark.asyncio
     async def test_fallback_reentry_with_a_plain_group_clears_the_stale_stamp(self):
         from litellm.constants import CONSUMED_REQUEST_TAGS_MODEL_GROUP_METADATA_KEY
 
