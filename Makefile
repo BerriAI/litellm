@@ -61,7 +61,7 @@ UV_RUN := $(UV) run --no-sync
 LINT_DEP_INSTALL ?= install-dev
 LINT_E2E_DEP_INSTALL ?= lint-install
 LINT_DEP_BASE ?= lint-fetch-base
-LINT_JOBS := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+LINT_JOBS ?= 2
 LINT_OUTPUT_SYNC := $(if $(filter output-sync,$(.FEATURES)),--output-sync=target,)
 
 # Show info
@@ -235,10 +235,11 @@ check-import-safety: $(LINT_DEP_INSTALL)
 # does (merge-base with origin/litellm_internal_staging). Setup (env sync, Prisma client,
 # base fetch) runs once up front; the checks themselves are independent, so a sub-make
 # fans them out with -j and the fast ones finish under basedpyright's shadow.
-lint: lint-install lint-fetch-base
+lint:
+	$(MAKE) -j 2 $(LINT_OUTPUT_SYNC) lint-install lint-fetch-base
 	$(MAKE) -j $(LINT_JOBS) $(LINT_OUTPUT_SYNC) LINT_DEP_INSTALL= LINT_E2E_DEP_INSTALL= LINT_DEP_BASE= lint-checks
 
-lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-basedpyright lint-e2e-basedpyright check-circular-imports check-import-safety
+lint-checks: lint-basedpyright lint-type-discipline lint-e2e-basedpyright check-import-safety lint-gate lint-ruff check-circular-imports lint-format-check-changed
 
 # Faster linting for local development (only checks changed code)
 lint-dev: lint-format-changed check-circular-imports check-import-safety
