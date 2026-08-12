@@ -10,11 +10,11 @@ import {
   DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
   DEFAULT_CLASSIFIER_FALLBACK,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
-  DEFAULT_RUBRIC_PRESET,
-  NEW_CLASSIFIER_RUBRIC_PRESET,
-  RUBRIC_PRESET_DESCRIPTIONS,
-  RUBRIC_PRESET_KEYS,
-  RubricPreset,
+  DEFAULT_CLASSIFICATION_RUBRIC,
+  NEW_CLASSIFIER_CLASSIFICATION_RUBRIC,
+  CLASSIFICATION_RUBRIC_DESCRIPTIONS,
+  CLASSIFICATION_RUBRIC_KEYS,
+  ClassificationRubric,
   effectiveTierLabel,
 } from "./ComplexityRouterConfig";
 
@@ -70,7 +70,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   const classifierModelMissing =
     showValidationErrors && value.classifier_type === "llm" && !value.classifier_llm_config?.model;
   const usesCustomPrompt = Boolean(value.classifier_llm_config?.system_prompt?.trim());
-  const rubric = value.classifier_llm_config?.rubric ?? DEFAULT_RUBRIC_PRESET;
+  const classificationRubric = value.classifier_llm_config?.classification_rubric ?? DEFAULT_CLASSIFICATION_RUBRIC;
 
   const handleClassifierTypeChange = (classifierType: ClassifierType) => {
     const nextValue: ComplexityRouterConfigValue = {
@@ -81,7 +81,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           ? value.classifier_llm_config ?? {
               model: "",
               timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS,
-              rubric: NEW_CLASSIFIER_RUBRIC_PRESET,
+              classification_rubric: NEW_CLASSIFIER_CLASSIFICATION_RUBRIC,
             }
           : undefined,
       classifier_context_window_size:
@@ -121,14 +121,14 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     });
   };
 
-  const handleClassifierRubricChange = (rubric: RubricPreset) => {
+  const handleClassificationRubricChange = (classificationRubric: ClassificationRubric) => {
     onChange({
       ...value,
       classifier_llm_config: {
         ...value.classifier_llm_config,
         model: value.classifier_llm_config?.model ?? "",
         timeout_ms: value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
-        rubric,
+        classification_rubric: classificationRubric,
       },
     });
   };
@@ -226,28 +226,28 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           </div>
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <Text strong>Rubric</Text>
+              <Text strong>Classification Rubric</Text>
               <Tooltip title="Both rubrics use the same four tiers and the same tier definitions. They differ only in the worked examples that show the classifier where the boundary between tiers sits.">
                 <InfoCircleOutlined className="text-gray-400" />
               </Tooltip>
             </div>
             <Tooltip title={usesCustomPrompt ? "Your custom prompt replaces the built-in rubric entirely" : undefined}>
               <AntdSelect
-                value={rubric}
-                onChange={handleClassifierRubricChange}
+                value={classificationRubric}
+                onChange={handleClassificationRubricChange}
                 disabled={usesCustomPrompt}
                 style={{ width: "100%" }}
-                aria-label="Rubric"
-                options={RUBRIC_PRESET_KEYS.map((preset) => ({
+                aria-label="Classification Rubric"
+                options={CLASSIFICATION_RUBRIC_KEYS.map((preset) => ({
                   value: preset,
-                  label: RUBRIC_PRESET_DESCRIPTIONS[preset].label,
+                  label: CLASSIFICATION_RUBRIC_DESCRIPTIONS[preset].label,
                 }))}
               />
             </Tooltip>
             <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
               {usesCustomPrompt
                 ? "Not in use: the custom prompt below is the classifier's entire rubric."
-                : RUBRIC_PRESET_DESCRIPTIONS[rubric].description}
+                : CLASSIFICATION_RUBRIC_DESCRIPTIONS[classificationRubric].description}
             </Text>
           </div>
           <div>
@@ -259,7 +259,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               onChange={handleClassifierSystemPromptChange}
               contextWindowSize={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
               tierLabels={value.tier_labels}
-              rubric={rubric}
+              classificationRubric={classificationRubric}
             />
           </div>
           <div>

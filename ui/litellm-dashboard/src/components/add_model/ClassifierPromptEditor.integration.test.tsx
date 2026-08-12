@@ -2,7 +2,7 @@ import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils"
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
-import { RubricPreset } from "./ComplexityRouterConfig";
+import { ClassificationRubric } from "./ComplexityRouterConfig";
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: () => ({ accessToken: "sk-test" }),
@@ -25,7 +25,7 @@ interface OpenEditorOptions {
   onChange?: ReturnType<typeof vi.fn>;
   contextWindowSize?: number;
   tierLabels?: Record<string, string>;
-  rubric?: RubricPreset;
+  classificationRubric?: ClassificationRubric;
 }
 
 const openEditor = async ({
@@ -33,7 +33,7 @@ const openEditor = async ({
   onChange = vi.fn(),
   contextWindowSize = 3,
   tierLabels,
-  rubric = "agentic",
+  classificationRubric = "agentic",
 }: OpenEditorOptions = {}) => {
   renderWithProviders(
     <ClassifierPromptEditor
@@ -41,7 +41,7 @@ const openEditor = async ({
       onChange={onChange}
       contextWindowSize={contextWindowSize}
       tierLabels={tierLabels}
-      rubric={rubric}
+      classificationRubric={classificationRubric}
     />,
   );
   await userEvent.click(screen.getByRole("button", { name: /prompt/i }));
@@ -61,7 +61,7 @@ describe("ClassifierPromptEditor", () => {
   it("prefills the preset the router is on, not always the default one", async () => {
     // The editor is how an operator inspects the rubric before replacing it. Prefilling the agentic
     // text for a router on chat would show them examples their classifier never receives.
-    await openEditor({ contextWindowSize: 7, rubric: "chat" });
+    await openEditor({ contextWindowSize: 7, classificationRubric: "chat" });
     expect(getDefaultPrompt).toHaveBeenCalledWith("sk-test", 7, undefined, "chat");
   });
 
@@ -101,7 +101,7 @@ describe("ClassifierPromptEditor", () => {
         systemPrompt="Grade data sensitivity"
         onChange={onChange}
         contextWindowSize={3}
-        rubric="agentic"
+        classificationRubric="agentic"
       />,
     );
     expect(screen.getByRole("button", { name: "Edit custom prompt" })).toBeInTheDocument();

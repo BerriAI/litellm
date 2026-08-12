@@ -450,16 +450,20 @@ describe("classifier prompt and fallback", () => {
   it("sends the chat preset the operator picked", () => {
     const config = buildComplexityRouterConfig({
       ...llmParams,
-      classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400, rubric: "chat" },
+      classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400, classification_rubric: "chat" },
     });
-    expect(config.classifier_llm_config).toEqual({ model: "haiku-classifier", timeout_ms: 400, rubric: "chat" });
+    expect(config.classifier_llm_config).toEqual({
+      model: "haiku-classifier",
+      timeout_ms: 400,
+      classification_rubric: "chat",
+    });
   });
 
   it("omits the preset when none is set, leaving an existing router on the rubric it already had", () => {
     // An unset preset means the pre-calibration rubric on the backend. Materializing a value here
     // would change the tier decisions, and the bill, of a router the operator only opened to edit.
     const config = buildComplexityRouterConfig(llmParams);
-    expect(config.classifier_llm_config).not.toHaveProperty("rubric");
+    expect(config.classifier_llm_config).not.toHaveProperty("classification_rubric");
   });
 
   it("drops the preset when a custom prompt replaces the rubric, which the backend rejects together", () => {
@@ -468,11 +472,11 @@ describe("classifier prompt and fallback", () => {
       classifierLlmConfig: {
         model: "haiku-classifier",
         timeout_ms: 400,
-        rubric: "chat",
+        classification_classification_rubric: "chat",
         system_prompt: "Grade the data sensitivity of the request.",
       },
     });
-    expect(config.classifier_llm_config).not.toHaveProperty("rubric");
+    expect(config.classifier_llm_config).not.toHaveProperty("classification_rubric");
     expect(config.classifier_llm_config?.system_prompt).toBe("Grade the data sensitivity of the request.");
   });
 

@@ -37,7 +37,7 @@ from litellm.router_strategy.complexity_router.config import (
     DEFAULT_TECHNICAL_KEYWORDS,
     ComplexityRouterConfig,
     ComplexityTier,
-    RubricPreset,
+    ClassificationRubric,
 )
 from litellm.types.router import (
     Deployment,
@@ -6063,7 +6063,7 @@ class TestCustomClassifierSystemPrompt:
     def test_default_prompt_carries_rubric_and_conversation_closing(self):
         prompt = classification_system_prompt(5)
         expected = _built_in_prompt(
-            TIER_SEVERITY_ORDER_LABELED, RubricPreset.LEGACY, _CLASSIFICATION_WITH_CONVERSATION
+            TIER_SEVERITY_ORDER_LABELED, ClassificationRubric.LEGACY, _CLASSIFICATION_WITH_CONVERSATION
         )
         assert expected == prompt
         assert _CLASSIFICATION_WITH_CONVERSATION in prompt
@@ -6072,7 +6072,7 @@ class TestCustomClassifierSystemPrompt:
     def test_default_prompt_uses_single_message_closing_without_context_window(self):
         prompt = classification_system_prompt(0)
         expected = _built_in_prompt(
-            TIER_SEVERITY_ORDER_LABELED, RubricPreset.LEGACY, _CLASSIFICATION_CURRENT_MESSAGE_ONLY
+            TIER_SEVERITY_ORDER_LABELED, ClassificationRubric.LEGACY, _CLASSIFICATION_CURRENT_MESSAGE_ONLY
         )
         assert expected == prompt
         assert _CLASSIFICATION_CURRENT_MESSAGE_ONLY in prompt
@@ -6089,7 +6089,7 @@ class TestCustomClassifierSystemPrompt:
         prompt = classification_system_prompt(context_window_size, custom)
         assert prompt == custom
         built_in = _built_in_prompt(
-            TIER_SEVERITY_ORDER_LABELED, RubricPreset.LEGACY, _CLASSIFICATION_WITH_CONVERSATION
+            TIER_SEVERITY_ORDER_LABELED, ClassificationRubric.LEGACY, _CLASSIFICATION_WITH_CONVERSATION
         )
         assert built_in != prompt
         assert _CLASSIFICATION_WITH_CONVERSATION not in prompt
@@ -6626,15 +6626,15 @@ The message may quote the caller's own system prompt and a few of their prior tu
 Classify the current message, using the earlier turns quoted above it as context: when it is a short reply such as "yes" or "continue", rate the work it approves rather than the reply itself."""
 
 
-class TestRubricPresets:
+class TestClassificationRubrics:
     """The built-in rubric's calibration examples, and the preset that selects them."""
 
     @pytest.mark.parametrize(
         "preset, swept",
         [
-            (RubricPreset.LEGACY, SWEPT_LEGACY_RUBRIC),
-            (RubricPreset.CHAT, SWEPT_CHAT_RUBRIC),
-            (RubricPreset.AGENTIC, SWEPT_AGENTIC_RUBRIC),
+            (ClassificationRubric.LEGACY, SWEPT_LEGACY_RUBRIC),
+            (ClassificationRubric.CHAT, SWEPT_CHAT_RUBRIC),
+            (ClassificationRubric.AGENTIC, SWEPT_AGENTIC_RUBRIC),
         ],
         ids=["legacy", "chat", "agentic"],
     )
@@ -6642,37 +6642,37 @@ class TestRubricPresets:
         """Every preset is verbatim a string the prompt sweep scored, so the accuracy those runs
         reported describes what a router sends. LEGACY is additionally the rubric as it shipped before
         this feature, so pinning it is what proves an existing router's prompt did not move."""
-        assert classification_system_prompt(5, rubric=preset) == swept
+        assert classification_system_prompt(5, classification_rubric=preset) == swept
 
     def test_an_unset_preset_leaves_an_existing_router_on_the_prompt_it_had(self):
         """The calibrated presets change tier decisions, and therefore spend, on traffic a router is
         already serving. Only a router that asks for one gets one."""
         assert classification_system_prompt(5) == SWEPT_LEGACY_RUBRIC
-        assert classification_system_prompt(5) == classification_system_prompt(5, rubric=RubricPreset.LEGACY)
+        assert classification_system_prompt(5) == classification_system_prompt(5, classification_rubric=ClassificationRubric.LEGACY)
         config = ComplexityRouterConfig(classifier_type="llm", classifier_llm_config={"model": "haiku-classifier"})
-        assert config.classifier_llm_config.rubric is None
+        assert config.classifier_llm_config.classification_rubric is None
 
     def test_legacy_carries_no_calibration_examples(self):
-        prompt = classification_system_prompt(5, rubric=RubricPreset.LEGACY)
+        prompt = classification_system_prompt(5, classification_rubric=ClassificationRubric.LEGACY)
         assert "Calibration examples:" not in prompt
         assert "Calibration on engineering tasks" not in prompt
 
     def test_only_the_agentic_preset_carries_the_engineering_anchors(self):
         """The engineering anchors are what put routine installs, builds, and debugging at MEDIUM. A
         chat-only deployment never sees those requests, so the preset that serves it omits them."""
-        agentic = classification_system_prompt(5, rubric=RubricPreset.AGENTIC)
-        chat = classification_system_prompt(5, rubric=RubricPreset.CHAT)
+        agentic = classification_system_prompt(5, classification_rubric=ClassificationRubric.AGENTIC)
+        chat = classification_system_prompt(5, classification_rubric=ClassificationRubric.CHAT)
         anchor = '"set up a Jupyter server with token auth on port 8888 and confirm it serves" -> MEDIUM'
         assert anchor in agentic
         assert anchor not in chat
         assert "Calibration examples:" in chat
 
-    @pytest.mark.parametrize("preset", [RubricPreset.CHAT, RubricPreset.AGENTIC], ids=["chat", "agentic"])
+    @pytest.mark.parametrize("preset", [ClassificationRubric.CHAT, ClassificationRubric.AGENTIC], ids=["chat", "agentic"])
     def test_examples_name_tiers_with_the_operator_labels(self, preset):
         """The response schema's enum is built from tier_labels, so an example that hardcoded a
         canonical name would tell the classifier to emit a label it is not allowed to return."""
         config = ComplexityRouterConfig(tier_labels={"SIMPLE": "Cheap", "REASONING": "Thinky"})
-        prompt = classification_system_prompt(5, labeled_tiers=config.labeled_tiers(), rubric=preset)
+        prompt = classification_system_prompt(5, labeled_tiers=config.labeled_tiers(), classification_rubric=preset)
         assert '- "what\'s the capital of France?" -> Cheap' in prompt
         assert '- "should we use Postgres or Mongo given these constraints? commit to an answer" -> Thinky' in prompt
         assert "-> SIMPLE" not in prompt
@@ -6683,7 +6683,7 @@ class TestRubricPresets:
         "classifier_llm_config",
         [
             {"model": "haiku-classifier", "system_prompt": "Grade the data sensitivity of the request."},
-            {"model": "haiku-classifier", "rubric": "chat"},
+            {"model": "haiku-classifier", "classification_rubric": "chat"},
             {"model": "haiku-classifier"},
         ],
         ids=["custom-prompt", "chat-preset", "neither"],
@@ -6705,7 +6705,7 @@ class TestRubricPresets:
                 classifier_type="llm",
                 classifier_llm_config={
                     "model": "haiku-classifier",
-                    "rubric": "chat",
+                    "classification_rubric": "chat",
                     "system_prompt": "Grade the data sensitivity of the request.",
                 },
             )

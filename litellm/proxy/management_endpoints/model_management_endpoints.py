@@ -67,9 +67,9 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.router import Router
 from litellm.router_strategy.complexity_router import (
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
+    ClassificationRubric,
     ComplexityRouterConfig,
     ComplexityTier,
-    RubricPreset,
     classification_system_prompt,
 )
 from litellm.router_utils.auto_router_model_naming import (
@@ -2007,14 +2007,14 @@ def _labeled_tiers_from_query(tier_labels: str | None) -> tuple[tuple[Complexity
 async def get_auto_router_classifier_default_prompt(
     context_window_size: int = DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     tier_labels: str | None = None,
-    rubric: RubricPreset | None = None,
+    classification_rubric: ClassificationRubric | None = None,
 ) -> AutoRouterClassifierDefaultPromptResponse:
     """
     Get the default classifier system prompt, so the dashboard's prompt editor can prefill it.
 
     The prompt's closing line depends on whether prior conversation turns are quoted to the
     classifier, its tier bullets are named by the router's tier_labels, and its calibration examples
-    come from the router's rubric preset, so the caller passes all three to get the text that router
+    come from the router's classification rubric, so the caller passes all three to get the text that router
     would actually send rather than a rubric it does not use.
 
     Parameters:
@@ -2022,7 +2022,8 @@ async def get_auto_router_classifier_default_prompt(
       built-in default.
     - tier_labels: str | None - The router's tier_labels as a JSON object of canonical tier name to
       display name, e.g. `{"SIMPLE": "Cheap"}`. Omit or pass an empty object for the default names.
-    - rubric: RubricPreset | None - The router's classifier_llm_config.rubric. Omit for the default preset.
+    - classification_rubric: ClassificationRubric | None - The router's
+      classifier_llm_config.classification_rubric. Omit for the default.
     """
     if context_window_size < 0:
         raise ProxyException(
@@ -2035,9 +2036,11 @@ async def get_auto_router_classifier_default_prompt(
     labeled_tiers: Final = _labeled_tiers_from_query(tier_labels)
     return AutoRouterClassifierDefaultPromptResponse(
         system_prompt=(
-            classification_system_prompt(context_window_size, rubric=rubric)
+            classification_system_prompt(context_window_size, classification_rubric=classification_rubric)
             if labeled_tiers is None
-            else classification_system_prompt(context_window_size, labeled_tiers=labeled_tiers, rubric=rubric)
+            else classification_system_prompt(
+                context_window_size, labeled_tiers=labeled_tiers, classification_rubric=classification_rubric
+            )
         )
     )
 

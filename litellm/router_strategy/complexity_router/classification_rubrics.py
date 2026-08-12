@@ -9,7 +9,7 @@ move the boundary where more rules only restate the taxonomy.
 
 Each preset holds its examples in full rather than sharing a common block. They are measured artifacts:
 the accuracy reported for one describes that exact text, so tuning the chat examples must not silently
-edit the agentic ones. `RubricPreset.LEGACY` has no examples and so appears nowhere here.
+edit the agentic ones. `ClassificationRubric.LEGACY` has no examples and so appears nowhere here.
 
 Tiers are written as format placeholders because the response schema's enum is built from the operator's
 tier_labels; an example naming a canonical tier would tell the classifier to emit a label it is not
@@ -22,7 +22,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
-from .config import ComplexityTier, RubricPreset
+from .config import ClassificationRubric, ComplexityTier
 
 _CHAT_EXAMPLES: Final = """Calibration examples:
 - "what's the capital of France?" -> {SIMPLE}
@@ -62,14 +62,16 @@ Calibration on engineering tasks, which is where the boundary matters most. Thes
 - "allocate rare-earth minerals across 1,000 variables under these constraints, optimally" -> {COMPLEX}
 - "separability_matrix computes the wrong result for nested CompoundModels; find and fix the root cause" -> {COMPLEX}, the bug is in the semantics, not the syntax"""
 
-_CALIBRATION_EXAMPLES: Final[Mapping[RubricPreset, str]] = MappingProxyType(
+_CALIBRATION_EXAMPLES: Final[Mapping[ClassificationRubric, str]] = MappingProxyType(
     {
-        RubricPreset.CHAT: _CHAT_EXAMPLES,
-        RubricPreset.AGENTIC: _AGENTIC_EXAMPLES,
+        ClassificationRubric.CHAT: _CHAT_EXAMPLES,
+        ClassificationRubric.AGENTIC: _AGENTIC_EXAMPLES,
     }
 )
 
 
-def calibration_examples_section(preset: RubricPreset, labeled_tiers: Sequence[tuple[ComplexityTier, str]]) -> str:
+def calibration_examples_section(
+    preset: ClassificationRubric, labeled_tiers: Sequence[tuple[ComplexityTier, str]]
+) -> str:
     """The preset's worked examples, each tier named in the operator's own vocabulary."""
     return _CALIBRATION_EXAMPLES[preset].format(**{tier.value: label for tier, label in labeled_tiers})

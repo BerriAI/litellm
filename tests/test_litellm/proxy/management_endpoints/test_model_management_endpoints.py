@@ -3767,16 +3767,16 @@ class TestAutoRouterClassifierDefaultPrompt:
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             get_auto_router_classifier_default_prompt,
         )
-        from litellm.router_strategy.complexity_router import RubricPreset, classification_system_prompt
+        from litellm.router_strategy.complexity_router import ClassificationRubric, classification_system_prompt
 
-        for preset in RubricPreset:
-            response = await get_auto_router_classifier_default_prompt(context_window_size=5, rubric=preset)
-            assert response.system_prompt == classification_system_prompt(5, rubric=preset)
+        for preset in ClassificationRubric:
+            response = await get_auto_router_classifier_default_prompt(context_window_size=5, classification_rubric=preset)
+            assert response.system_prompt == classification_system_prompt(5, classification_rubric=preset)
 
         agentic = await get_auto_router_classifier_default_prompt(
-            context_window_size=5, rubric=RubricPreset.AGENTIC
+            context_window_size=5, classification_rubric=ClassificationRubric.AGENTIC
         )
-        chat = await get_auto_router_classifier_default_prompt(context_window_size=5, rubric=RubricPreset.CHAT)
+        chat = await get_auto_router_classifier_default_prompt(context_window_size=5, classification_rubric=ClassificationRubric.CHAT)
         unset = await get_auto_router_classifier_default_prompt(context_window_size=5)
         assert "Calibration on engineering tasks" in agentic.system_prompt
         assert "Calibration on engineering tasks" not in chat.system_prompt
@@ -3827,7 +3827,7 @@ class TestAutoRouterClassifierDefaultPrompt:
 
     @pytest.mark.asyncio
     async def test_malformed_tier_labels_are_rejected_rather_than_silently_ignored(self):
-        """An unparseable or invalid rename must not fall back to the canonical rubric: that would
+        """An unparseable or invalid rename must not fall back to the canonical classification_rubric: that would
         prefill tier names the router does not accept while looking like it worked."""
         from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.model_management_endpoints import (

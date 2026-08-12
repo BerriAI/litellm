@@ -37,19 +37,19 @@ from litellm.types.utils import (
     StandardLoggingRoutingDecisionTierBoundaries,
 )
 
+from .classification_rubrics import calibration_examples_section
 from .config import (
+    DEFAULT_CLASSIFICATION_RUBRIC,
     DEFAULT_CODE_KEYWORDS,
     DEFAULT_ESCALATION_KEYWORDS,
     DEFAULT_REASONING_KEYWORDS,
-    DEFAULT_RUBRIC_PRESET,
     DEFAULT_SIMPLE_KEYWORDS,
     DEFAULT_TECHNICAL_KEYWORDS,
     TIER_SEVERITY_ORDER,
+    ClassificationRubric,
     ComplexityRouterConfig,
     ComplexityTier,
-    RubricPreset,
 )
-from .rubric_presets import calibration_examples_section
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
@@ -120,7 +120,9 @@ def _tier_bullets(labeled_tiers: Sequence[tuple[ComplexityTier, str]]) -> str:
     return "\n".join(f"- {label}: {_CLASSIFICATION_TIER_CRITERIA[tier]}" for tier, label in labeled_tiers)
 
 
-def _built_in_prompt(labeled_tiers: Sequence[tuple[ComplexityTier, str]], preset: RubricPreset, closing: str) -> str:
+def _built_in_prompt(
+    labeled_tiers: Sequence[tuple[ComplexityTier, str]], preset: ClassificationRubric, closing: str
+) -> str:
     """The whole built-in system role for one preset.
 
     LEGACY is the rubric as it shipped before calibration examples existed, kept verbatim so upgrading
@@ -129,7 +131,7 @@ def _built_in_prompt(labeled_tiers: Sequence[tuple[ComplexityTier, str]], preset
     is why each shape is written out rather than assembled from shared fragments.
     """
     bullets: Final = _tier_bullets(labeled_tiers)
-    if preset is RubricPreset.LEGACY:
+    if preset is ClassificationRubric.LEGACY:
         return (
             f"{_CLASSIFICATION_RUBRIC_PREAMBLE_LEGACY}\n{bullets}\n\n{_CLASSIFICATION_RUBRIC_TRUST_BOUNDARY} {closing}"
         )
@@ -161,7 +163,7 @@ def classification_system_prompt(
     context_window_size: int,
     custom_prompt: str | None = None,
     labeled_tiers: Sequence[tuple[ComplexityTier, str]] = TIER_SEVERITY_ORDER_LABELED,
-    rubric: RubricPreset | None = None,
+    classification_rubric: ClassificationRubric | None = None,
 ) -> str:
     """The classifier's system role, closing on the line that matches the payload it will be sent.
 
@@ -182,10 +184,10 @@ def classification_system_prompt(
     injection-defense sentence goes with the rubric it belongs to, so a replacement that wants it must
     say so itself; the config field and the UI editor both warn about exactly that.
 
-    `rubric` selects which calibration examples the built-in rubric carries, with None meaning the
-    default preset, the same way None means the built-in rubric for `custom_prompt`.
+    `classification_rubric` selects which calibration examples the built-in rubric carries, with None meaning
+    the default, the same way None means the built-in rubric for `custom_prompt`.
 
-    `labeled_tiers` and `rubric` therefore only reach the built-in rubric. A custom prompt names the
+    `labeled_tiers` and `classification_rubric` therefore only reach the built-in rubric. A custom prompt names
     tiers itself, so renaming them cannot edit prose the operator wrote, and it is the operator's job to
     use their own labels. The response format's enum is built from those same labels either way, so a
     custom prompt still has to return them, whatever it calls the tiers in its own text.
@@ -193,7 +195,7 @@ def classification_system_prompt(
     if custom_prompt is not None:
         return custom_prompt
     closing = _CLASSIFICATION_WITH_CONVERSATION if context_window_size > 0 else _CLASSIFICATION_CURRENT_MESSAGE_ONLY
-    return _built_in_prompt(labeled_tiers, rubric or DEFAULT_RUBRIC_PRESET, closing)
+    return _built_in_prompt(labeled_tiers, classification_rubric or DEFAULT_CLASSIFICATION_RUBRIC, closing)
 
 
 def _append_custom_keywords(base_keywords: list[str], custom_keywords: list[str] | None) -> list[str]:
@@ -1086,7 +1088,7 @@ class ComplexityRouter(CustomLogger):
                     self.config.classifier_context_window_size,
                     llm_config.system_prompt,
                     labeled_tiers=labeled_tiers,
-                    rubric=llm_config.rubric,
+                    classification_rubric=llm_config.classification_rubric,
                 ),
             },
             {"role": "user", "content": user_payload},

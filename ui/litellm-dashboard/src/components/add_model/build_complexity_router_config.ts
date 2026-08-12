@@ -29,10 +29,12 @@ import {
 export const normalizeClassifierLlmConfig = ({
   model,
   timeout_ms,
-  rubric,
+  classification_rubric,
   system_prompt,
 }: ClassifierLLMConfig): ClassifierLLMConfig =>
-  system_prompt?.trim() ? { model, timeout_ms, system_prompt } : { model, timeout_ms, ...(rubric && { rubric }) };
+  system_prompt?.trim()
+    ? { model, timeout_ms, system_prompt }
+    : { model, timeout_ms, ...(classification_rubric && { classification_rubric }) };
 
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;

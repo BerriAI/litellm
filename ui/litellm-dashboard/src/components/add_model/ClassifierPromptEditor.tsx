@@ -6,7 +6,7 @@ import NotificationsManager from "@/components/molecules/notifications_manager";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
-import { RubricPreset } from "./ComplexityRouterConfig";
+import { ClassificationRubric } from "./ComplexityRouterConfig";
 import { hasCustomPrompt, initialDraftText, resolveCustomPrompt } from "./classifierPromptEditorState";
 
 interface ClassifierPromptEditorProps {
@@ -14,7 +14,7 @@ interface ClassifierPromptEditorProps {
   onChange: (systemPrompt: string | undefined) => void;
   contextWindowSize: number;
   tierLabels?: Record<string, string>;
-  rubric: RubricPreset;
+  classificationRubric: ClassificationRubric;
 }
 
 const ClassifierPromptEditor: React.FC<ClassifierPromptEditorProps> = ({
@@ -22,7 +22,7 @@ const ClassifierPromptEditor: React.FC<ClassifierPromptEditorProps> = ({
   onChange,
   contextWindowSize,
   tierLabels,
-  rubric,
+  classificationRubric,
 }) => {
   const { accessToken } = useAuthorized();
   const [isOpen, setIsOpen] = useState(false);
@@ -42,7 +42,7 @@ const ClassifierPromptEditor: React.FC<ClassifierPromptEditorProps> = ({
         accessToken,
         contextWindowSize,
         tierLabels,
-        rubric,
+        classificationRubric,
       );
       setDefaultPrompt(fetched);
       setDraft(initialDraftText(systemPrompt, fetched));
@@ -52,7 +52,7 @@ const ClassifierPromptEditor: React.FC<ClassifierPromptEditorProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [accessToken, contextWindowSize, systemPrompt, tierLabels, rubric]);
+  }, [accessToken, contextWindowSize, systemPrompt, tierLabels, classificationRubric]);
 
   const handleSave = () => {
     onChange(resolveCustomPrompt({ text: draft, defaultPrompt }));
@@ -116,7 +116,8 @@ const ClassifierPromptEditor: React.FC<ClassifierPromptEditorProps> = ({
           />
           <div className="mt-2 flex items-center justify-between">
             <p className="text-xs text-muted-foreground">
-              Prefilled from the {rubric} rubric this router would send at a context window of {contextWindowSize}.
+              Prefilled from the {classificationRubric} rubric this router would send at a context window of{" "}
+              {contextWindowSize}.
             </p>
             <Button
               type="button"

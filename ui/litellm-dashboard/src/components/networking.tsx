@@ -22,7 +22,7 @@ export const getAutoRouterClassifierDefaultPromptCall = async (
   accessToken: string,
   contextWindowSize: number,
   tierLabels?: Record<string, string>,
-  rubric?: string,
+  classificationRubric?: string,
 ): Promise<string> => {
   /**
    * Get the built-in system prompt an auto-router's LLM classifier uses when none is configured,
@@ -38,7 +38,7 @@ export const getAutoRouterClassifierDefaultPromptCall = async (
       query: {
         context_window_size: contextWindowSize,
         ...(tierLabels && Object.keys(tierLabels).length > 0 ? { tier_labels: JSON.stringify(tierLabels) } : {}),
-        ...(rubric ? { rubric } : {}),
+        ...(classificationRubric ? { classification_rubric: classificationRubric } : {}),
       },
     });
     return response.system_prompt;
