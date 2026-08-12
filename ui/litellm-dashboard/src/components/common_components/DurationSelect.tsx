@@ -1,4 +1,4 @@
-import { Select } from "antd";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface DurationSelectProps {
   className?: string;
@@ -8,10 +8,22 @@ interface DurationSelectProps {
 
 export default function DurationSelect({ className, value, onChange }: DurationSelectProps) {
   return (
-    <Select className={className} value={value} onChange={onChange}>
-      <Select.Option value="24h">Daily</Select.Option>
-      <Select.Option value="7d">Weekly</Select.Option>
-      <Select.Option value="30d">Monthly</Select.Option>
+    <Select
+      value={value}
+      onValueChange={(nextValue) => {
+        if (nextValue !== null) {
+          onChange?.(nextValue);
+        }
+      }}
+    >
+      <SelectTrigger className={className}>
+        <SelectValue placeholder="Select duration" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="24h">Daily</SelectItem>
+        <SelectItem value="7d">Weekly</SelectItem>
+        <SelectItem value="30d">Monthly</SelectItem>
+      </SelectContent>
     </Select>
   );
 }
