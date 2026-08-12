@@ -1056,3 +1056,15 @@ def test_as_routing_group_row_strips_access_groups():
     row = Router._as_routing_group_row(source)
     assert row["model_info"] == {"id": "d1"}
     assert source["model_info"]["access_groups"] == ["restricted"]
+
+
+@pytest.mark.asyncio
+async def test_group_call_429_cools_down_member_across_retries():
+    router = Router(
+        model_list=_model_list(),
+        routing_groups=_quality_group("simple-shuffle"),
+        num_retries=1,
+        cooldown_time=60,
+    )
+    cooldown_ids = await _call_and_get_cooldowns(router, "quality")
+    assert "deploy-3" in cooldown_ids
