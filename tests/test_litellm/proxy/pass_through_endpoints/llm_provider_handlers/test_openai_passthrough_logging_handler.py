@@ -593,6 +593,30 @@ class TestOpenAIPassthroughLoggingHandler:
             call_type="responses",
         )
 
+    @patch(f"{OpenAIPassthroughLoggingHandler.__module__}.get_standard_logging_object_payload")
+    @patch("litellm.completion_cost")
+    def test_streaming_responses_without_completed_event_returns_none(
+        self, mock_completion_cost, mock_get_standard_logging
+    ):
+        logging_obj = self._create_mock_logging_obj()
+
+        result = OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="https://api.openai.com/v1/responses",
+            request_body={"model": "gpt-4o-mini", "stream": True},
+            endpoint_type=MagicMock(),
+            start_time=self.start_time,
+            all_chunks=[
+                'data: {"type": "response.created", "sequence_number": 0}',
+                'data: {"type": "response.output_text.delta", "sequence_number": 1, "delta": "OK"}',
+            ],
+            end_time=self.end_time,
+        )
+
+        assert result == {"result": None, "kwargs": {}}
+        mock_completion_cost.assert_not_called()
+
     @patch("litellm.completion_cost")
     @patch(
         "litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload"

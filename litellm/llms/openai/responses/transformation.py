@@ -354,6 +354,15 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             return event_pydantic_model.model_construct(**parsed_chunk)
 
     @staticmethod
+    def parse_completed_response_from_stream_chunks(all_chunks: list[str]) -> ResponsesAPIResponse | None:
+        for chunk_str in reversed(all_chunks):
+            try:
+                return ResponseCompletedEvent.model_validate_json(chunk_str.removeprefix("data: ")).response
+            except ValueError:
+                continue
+        return None
+
+    @staticmethod
     def get_event_model_class(event_type: str) -> Any:
         """
         Returns the appropriate event model class based on the event type.
