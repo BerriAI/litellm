@@ -1983,7 +1983,9 @@ class TestPollPageStarvation:
         async def _retrieve(model, batch_id, litellm_metadata):
             if batch_id == "batch_deadbeef":
                 raise litellm.NotFoundError(
-                    message="No batch found", model=model, llm_provider="openai"
+                    message=f"No batch found with id '{batch_id}'.",
+                    model=model,
+                    llm_provider="openai",
                 )
             return in_progress
 
@@ -2000,3 +2002,30 @@ class TestPollPageStarvation:
         assert (
             llm_router.aretrieve_batch.await_args_list[-1][1]["batch_id"] == "batch_live"
         ), "the newer healthy batch must still be polled in the same cycle"
+
+    @pytest.mark.asyncio
+    async def test_404_that_does_not_name_the_batch_keeps_job_for_retry(self):
+        """A 404 about something other than the batch, e.g. a renamed Azure deployment, is
+        fixable in config, so the row must survive to be costed after the fix."""
+        import litellm
+
+        prisma = self._prisma(
+            [
+                self._job(
+                    "job-bad-deployment",
+                    self._encode("litellm_proxy;model_id:model-123;llm_batch_id:batch_real"),
+                )
+            ]
+        )
+        llm_router = MagicMock()
+        llm_router.aretrieve_batch = AsyncMock(
+            side_effect=litellm.NotFoundError(
+                message="Error code: 404 - DeploymentNotFound",
+                model="model-123",
+                llm_provider="azure",
+            )
+        )
+
+        await self._instance(prisma, llm_router).check_batch_cost()
+
+        prisma.db.litellm_managedobjecttable.update.assert_not_awaited()
