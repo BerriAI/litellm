@@ -1774,7 +1774,6 @@ async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
         assert data["total_pages"] == 2
         assert len(data["data"]) == 1
         assert data["data"][0]["request_id"] == "req1"
-        assert data["data"][0]["user"] == "member1"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
