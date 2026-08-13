@@ -3,15 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ChatComposer } from "./ChatComposer";
 
 const renderComposer = (props: Partial<React.ComponentProps<typeof ChatComposer>> = {}) =>
-  render(
-    <ChatComposer
-      value=""
-      onChange={vi.fn()}
-      onSubmit={vi.fn()}
-      placeholder="Send a message"
-      {...props}
-    />,
-  );
+  render(<ChatComposer value="" onChange={vi.fn()} onSubmit={vi.fn()} placeholder="Send a message" {...props} />);
 
 const addonOf = (container: HTMLElement) =>
   container.querySelector<HTMLElement>("[data-slot=input-group-addon]") as HTMLElement;

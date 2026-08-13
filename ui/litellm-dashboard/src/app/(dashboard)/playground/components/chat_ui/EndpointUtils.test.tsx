@@ -198,10 +198,9 @@ describe("determineEndpointType", () => {
 
 describe("isModelCompatibleWithEndpoint / filterModelsForEndpoint", () => {
   beforeEach(async () => {
-    const actual =
-      await vi.importActual<typeof import("@/components/chat_ui/mode_endpoint_mapping")>(
-        "@/components/chat_ui/mode_endpoint_mapping",
-      );
+    const actual = await vi.importActual<typeof import("@/components/chat_ui/mode_endpoint_mapping")>(
+      "@/components/chat_ui/mode_endpoint_mapping",
+    );
     vi.mocked(getEndpointType).mockImplementation(actual.getEndpointType);
   });
 
@@ -253,8 +252,8 @@ describe("isModelCompatibleWithEndpoint / filterModelsForEndpoint", () => {
     const imageModel: ModelGroup = { model_group: "dall-e-3", mode: "image_generation" };
 
     expect(isModelCompatibleWithEndpoint(imageEditModel, EndpointType.IMAGE_EDITS)).toBe(true);
-    expect(filterModelsForEndpoint([imageEditModel, imageModel], EndpointType.IMAGE_EDITS).map((m) => m.model_group)).toEqual(
-      ["gpt-image-1", "dall-e-3"],
-    );
+    expect(
+      filterModelsForEndpoint([imageEditModel, imageModel], EndpointType.IMAGE_EDITS).map((m) => m.model_group),
+    ).toEqual(["gpt-image-1", "dall-e-3"]);
   });
 });
