@@ -1,7 +1,6 @@
-import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi, MockedFunction } from "vitest";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { KeyResponse } from "../key_team_helpers/key_list";
@@ -264,7 +263,7 @@ describe("TeamVirtualKeysTable", () => {
 
     await user.click(await screen.findByTestId("datatable-filters-trigger"));
     const drawerBody = await screen.findByTestId("filter-drawer-body");
-    const userInput = drawerBody.querySelector("input") as HTMLElement;
+    const userInput = within(drawerBody).getByPlaceholderText("Filter by user ID…");
     await user.type(userInput, "user-42");
     await user.click(screen.getByTestId("filter-drawer-apply"));
 

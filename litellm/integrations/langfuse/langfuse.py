@@ -2,7 +2,7 @@
 #    On success, logs events to Langfuse
 import os
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -73,6 +73,22 @@ def _extract_cache_read_input_tokens(usage_obj) -> int:
                 cache_read_input_tokens = cached_tokens
 
     return cache_read_input_tokens
+
+
+def _as_steering_flag(value: object) -> bool:
+    """A string ``str_to_bool`` does not recognise falls back to its truthiness."""
+    if isinstance(value, str):
+        parsed: Final = str_to_bool(value)
+        return bool(value) if parsed is None else parsed
+    return bool(value)
+
+
+def _as_steering_key_sequence(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return tuple(key.strip() for key in value.split(",") if key.strip())
+    if isinstance(value, Iterable):
+        return tuple(str(key) for key in value)
+    return ()
 
 
 def resolve_langfuse_credentials(
@@ -552,10 +568,10 @@ class LangFuseLogger:
             # This allows continuing an existing trace while still returning the correct trace_id
             if existing_trace_id is not None:
                 trace_id = existing_trace_id
-            update_trace_keys: Final = cast(list, clean_metadata.pop("update_trace_keys", []))
+            update_trace_keys: Final = _as_steering_key_sequence(clean_metadata.pop("update_trace_keys", ()))
             debug: Final = clean_metadata.pop("debug_langfuse", None)
-            mask_input: Final = clean_metadata.pop("mask_input", False)
-            mask_output: Final = clean_metadata.pop("mask_output", False)
+            mask_input: Final = _as_steering_flag(clean_metadata.pop("mask_input", False))
+            mask_output: Final = _as_steering_flag(clean_metadata.pop("mask_output", False))
             # Look for masking function in the dedicated location first (set by scrub_sensitive_keys_in_metadata)
             # Fall back to metadata for backwards compatibility
             masking_function: Final = litellm_params.get("_langfuse_masking_function") or clean_metadata.pop(

@@ -189,6 +189,25 @@ describe("KeyInfoView", () => {
     });
   });
 
+  it("should render the key's saved router fallbacks", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, router_settings: { num_retries: 2, fallbacks: [{ "gpt-4": ["gpt-4o"] }] } }}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    expect(await screen.findByText("Router Settings")).toBeInTheDocument();
+    expect(screen.getByText("gpt-4")).toBeInTheDocument();
+    expect(screen.getByText("gpt-4o")).toBeInTheDocument();
+    expect(screen.getByText("Number of Retries: 2")).toBeInTheDocument();
+  });
+
   it("should render tags", async () => {
     vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
 
