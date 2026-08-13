@@ -1397,6 +1397,13 @@ class Logging(LiteLLMLoggingBaseClass):
         if margin_total_amount is not None:
             self.cost_breakdown["margin_total_amount"] = margin_total_amount
 
+    def _resolve_vertex_location(self) -> str | None:
+        from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+        if not (hasattr(self, "litellm_params") and self.litellm_params):
+            return None
+        return VertexBase.safe_get_vertex_ai_location(litellm_params=self.litellm_params)
+
     def _response_cost_calculator(
         self,
         result: Union[
@@ -1484,11 +1491,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     if hasattr(self, "litellm_params") and self.litellm_params
                     else None
                 ),
-                "vertex_location": (
-                    self.litellm_params.get("vertex_location") or self.litellm_params.get("vertex_ai_location")
-                    if hasattr(self, "litellm_params") and self.litellm_params
-                    else None
-                ),
+                "vertex_location": self._resolve_vertex_location(),
             }
         except Exception as e:  # error creating kwargs for cost calculation
             debug_info = StandardLoggingModelCostFailureDebugInformation(

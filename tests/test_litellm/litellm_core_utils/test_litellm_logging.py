@@ -4575,3 +4575,36 @@ def test_response_cost_calculator_passes_vertex_location(monkeypatch, vertex_loc
     cost = logging_obj._response_cost_calculator(result=response)
 
     assert cost == pytest.approx((1000 * 3e-6 + 200 * 1.5e-5) * uplift, rel=1e-9)
+
+
+def test_response_cost_calculator_uses_env_vertex_location(monkeypatch):
+    """A deployment can leave vertex_location unset and let the region come from the environment, which
+    still routes to a regional endpoint, so cost has to pick the same fallback the request dispatch does."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    monkeypatch.setenv("VERTEXAI_LOCATION", "us-east5")
+
+    logging_obj = LitellmLogging(
+        model="vertex_ai/claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=False,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="vertex-location-env-123",
+        function_id="test-fn",
+    )
+    logging_obj.update_environment_variables(
+        model="vertex_ai/claude-sonnet-4-6",
+        user="",
+        optional_params={},
+        litellm_params={"vertex_project": "test-project"},
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "vertex_ai"
+
+    response = ModelResponse(
+        model="claude-sonnet-4-6",
+        usage=litellm.Usage(prompt_tokens=1000, completion_tokens=200, total_tokens=1200),
+    )
+    cost = logging_obj._response_cost_calculator(result=response)
+
+    assert cost == pytest.approx((1000 * 3e-6 + 200 * 1.5e-5) * 1.1, rel=1e-9)
