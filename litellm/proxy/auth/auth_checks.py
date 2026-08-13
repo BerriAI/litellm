@@ -1294,8 +1294,7 @@ class _RegistryNotCached:
 
 _REGISTRY_NOT_CACHED: Final = _RegistryNotCached()
 
-#: One lock per registry, so a cold cache under load runs the scan once instead of once per
-#: concurrent request. Module-level because the stampede to collapse is worker-wide.
+#: One lock per registry; module-level because the stampede to collapse is worker-wide.
 _TAG_REGISTRY_LOAD_LOCK: Final = asyncio.Lock()
 _END_USER_REGISTRY_LOAD_LOCK: Final = asyncio.Lock()
 
@@ -1381,13 +1380,10 @@ async def _load_bounded_registry(
     user_api_key_cache: UserApiKeyCache,
 ) -> frozenset[str] | None:
     """
-    A bounded set of ids held under one cache key, so an id outside it costs no DB read.
+    A bounded id set under one cache key, so an id outside it costs no DB read.
 
-    ``None`` means the registry is unusable (more rows than ``max_size``, or a DB error inside the
-    negative-cache window) and callers must fall back to the per-id lookup. That is distinct from an
-    empty frozenset, which is the real answer when nothing is registered and is worth caching: it is
-    what makes the uncached-id path free. The load is single-flighted, because a TTL expiry under
-    load would otherwise let every concurrent request run the same unindexed scan.
+    ``None`` = unusable (overflow or recent DB error): fall back to per-id lookups. An empty
+    frozenset is a real, cacheable answer. Loads are single-flighted to stop TTL-expiry stampedes.
     """
     cached: Final = await _cached_registry(cache_key, overflow_sentinel, user_api_key_cache)
     if not isinstance(cached, _RegistryNotCached):
@@ -1698,12 +1694,7 @@ async def _fetch_uncached_tags(
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
 ) -> tuple[tuple[str, LiteLLM_TagTable], ...]:
-    """
-    Rows for the tags a cache probe missed, and the cache write-back for them.
-
-    Names with no row in the registry never reach the DB, which is what keeps a request tagged
-    with free-form attribution labels from costing a query per request.
-    """
+    """Rows for the tags a cache probe missed; names absent from the registry never reach the DB."""
     if not uncached_tags:
         return ()
 

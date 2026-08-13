@@ -1587,19 +1587,12 @@ DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL: Final = 10
 # in a single ``/{name1,name2,...}/mcp`` URL. Bounds the per-request DB / cache
 # fan-out an authenticated caller can trigger by stuffing the path with tokens.
 DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS: Final = 16
-# Ceiling on the cached tag-name registry that keeps unregistered request tags from
-# costing a DB read per request. Deployments past this many tag rows fall back to the
-# per-request lookup rather than holding an unbounded name set in every worker.
+# Ceilings on the cached auth registries; larger tables fall back to per-row lookups
+# instead of holding an unbounded id set in every worker.
 TAG_REGISTRY_MAX_SIZE: Final = 5000
-# Ceiling on the cached registry of end users that carry a restriction, which keeps the
-# auto-created unrestricted rows (one per distinct caller-supplied ``user``) from costing a DB
-# read per request. Deployments past this many restricted rows fall back to the per-id lookup
-# rather than holding an unbounded id set in every worker.
 END_USER_RESTRICTED_REGISTRY_MAX_SIZE: Final = 5000
-# How long a failed registry load is remembered as "unusable". A degraded Postgres would
-# otherwise re-run the failing registry scan on every request, on top of the per-id lookups it
-# falls back to, doubling the load exactly when the database is least able to take it. Short
-# enough that enforcement returns promptly once the database recovers.
+# How long a failed registry load is remembered as "unusable", so a degraded Postgres
+# is not re-scanned on every request on top of the per-id lookups it falls back to.
 REGISTRY_ERROR_NEGATIVE_CACHE_TTL: Final = 30
 
 # Sentry Scrubbing Configuration

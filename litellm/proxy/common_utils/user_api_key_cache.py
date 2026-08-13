@@ -170,56 +170,33 @@ def object_permission_cache_key(object_permission_id: str) -> str:
     return f"object_permission_id:{object_permission_id}"
 
 
-#: Value cached under ``tag_registry_cache_key`` when the tag table holds more than
-#: ``TAG_REGISTRY_MAX_SIZE`` rows, so the name set is not worth holding per worker. Lives beside
-#: the key builder because it is part of the same cache protocol: a reader that knows the key
-#: must know this value means "registry unusable, fall back to the per-tag lookup".
+#: Cached under ``tag_registry_cache_key`` when the table exceeds ``TAG_REGISTRY_MAX_SIZE``:
+#: registry unusable, fall back to the per-tag lookup.
 TAG_REGISTRY_OVERFLOW_SENTINEL: Final = "__tag_registry_overflow__"
 
 
 def tag_cache_key(tag_name: str) -> str:
-    """Cache key one tag row is stored under.
-
-    Lives here rather than next to any one owner because five modules read or write it: auth
-    reads it per request, spend tracking and the budget reset job write through it, and the
-    format drifting between them means a spend update that silently lands on nobody's key.
-    """
+    """Cache key one tag row is stored under; shared so its five reader/writer modules cannot drift."""
     return f"tag:{tag_name}"
 
 
 def tag_registry_cache_key() -> str:
-    """Cache key for the set of tag names that exist in ``LiteLLM_TagTable``.
-
-    Request tags are free-form attribution labels, so most carry no tag row. Without this set a
-    request tagged with an unregistered name re-queries Postgres on every single request, forever.
-    """
+    """Cache key for the set of tag names that exist in ``LiteLLM_TagTable``."""
     return "tag_registry"
 
 
-#: Value cached under ``end_user_restricted_registry_cache_key`` when more end users carry a
-#: restriction than ``END_USER_RESTRICTED_REGISTRY_MAX_SIZE``, so the id set is not worth holding
-#: per worker. Lives beside the key builder because it is part of the same cache protocol: a reader
-#: that knows the key must know this value means "registry unusable, fall back to the per-id fetch".
+#: Cached under ``end_user_restricted_registry_cache_key`` when the restricted set exceeds
+#: ``END_USER_RESTRICTED_REGISTRY_MAX_SIZE``: registry unusable, fall back to the per-id fetch.
 END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL: Final = "__end_user_restricted_registry_overflow__"
 
 
 def end_user_cache_key(end_user_id: str) -> str:
-    """Cache key one end-user row is stored under.
-
-    Lives here rather than next to any one owner because auth reads it per request while spend
-    tracking and budget reservation write through it, and the format drifting between them means
-    a spend update that silently lands on nobody's key.
-    """
+    """Cache key one end-user row is stored under; shared so auth and spend tracking cannot drift."""
     return f"end_user_id:{end_user_id}"
 
 
 def end_user_restricted_registry_cache_key() -> str:
-    """Cache key for the set of end-user ids whose row carries a restriction.
-
-    The ``user`` field is caller-supplied and spend tracking auto-creates an unrestricted row per
-    distinct value, so most ids resolve to a row that restricts nothing. Without this set each of
-    them re-queries Postgres on every single request, forever.
-    """
+    """Cache key for the set of end-user ids whose row carries a restriction auth enforces."""
     return "end_user_restricted_registry"
 
 
