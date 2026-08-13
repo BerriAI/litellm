@@ -184,9 +184,10 @@ class TestLoggingWorker:
     @pytest.mark.asyncio
     async def test_clear_queue_with_time_limit(self, logging_worker):
         """Test that clear_queue respects the time limit."""
+
         # Create several mock coroutines that take time to complete
-        slow_coro = AsyncMock()
-        slow_coro.return_value = asyncio.sleep(0.5)  # Takes 500ms
+        async def slow_coro() -> None:
+            await asyncio.sleep(0.5)
 
         # Initialize the worker and add items
         logging_worker._ensure_queue()
@@ -387,6 +388,25 @@ class TestLoggingWorker:
         await worker.clear_queue()
 
         assert len(processed) >= 4, f"Expected 4+ tasks processed, got {len(processed)}"
+
+    @pytest.mark.asyncio
+    async def test_delayed_enqueue_retry_restarts_workers_after_queue_drains(self):
+        worker = LoggingWorker(timeout=1.0, max_queue_size=1, concurrency=1)
+        worker.start()
+        processed = asyncio.Event()
+
+        async def retried_task() -> None:
+            processed.set()
+
+        try:
+            await worker._retry_enqueue_task(
+                {"coroutine": retried_task(), "context": contextvars.copy_context()},
+                0.0,
+            )
+
+            await asyncio.wait_for(processed.wait(), timeout=1.0)
+        finally:
+            await worker.stop()
 
     @pytest.mark.asyncio
     async def test_event_loop_change_handling(self):

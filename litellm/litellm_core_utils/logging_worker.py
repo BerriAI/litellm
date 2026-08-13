@@ -143,13 +143,17 @@ class LoggingWorker:
     def _close_queued_coroutines(self) -> None:
         if self._queue is None:
             return
-        while True:
-            try:
-                logging_task: Final = self._queue.get_nowait()
-            except asyncio.QueueEmpty:
-                return
+        while (logging_task := self._dequeue_task()) is not None:
             logging_task["coroutine"].close()
             self._queue.task_done()
+
+    def _dequeue_task(self) -> LoggingTask | None:
+        if self._queue is None:
+            return None
+        try:
+            return self._queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return None
 
     def _release_running_tasks(self) -> None:
         for task in tuple(self._running_tasks):
@@ -158,7 +162,7 @@ class LoggingWorker:
                     task.cancel()
                 except RuntimeError:
                     pass
-                setattr(task, "_log_destroy_pending", False)
+                task._log_destroy_pending = False  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # asyncio private shutdown flag
             if coroutine := self._task_coroutines.get(task):
                 coroutine.close()
         self._running_tasks.clear()
@@ -280,6 +284,7 @@ class LoggingWorker:
 
         try:
             self._queue.put_nowait(task)
+            self._start_queued_tasks()
         except asyncio.QueueFull:
             # Still full - handle it appropriately (clear or retry again)
             self._handle_queue_full(task)
