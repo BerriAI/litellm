@@ -14,6 +14,7 @@ import math
 import re
 import time
 from collections.abc import Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
 
 from fastapi import HTTPException, Request, status
@@ -376,6 +377,16 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
                     zero_cost_cache[model_name] = False
                 return False
 
+            if _has_ptu_flat_cost(model_name, llm_router):
+                verbose_proxy_logger.debug(
+                    "Model %s prices reserved PTU capacity as a flat cost, so its zero per-token "
+                    "rate is not a free model (enforce budget)",
+                    safe_name,
+                )
+                if zero_cost_cache is not None:
+                    zero_cost_cache[model_name] = False
+                return False
+
             verbose_proxy_logger.debug(
                 "Model %s has zero cost explicitly configured (input: %s, output: %s)",
                 safe_name,
@@ -392,6 +403,24 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
 
     # All models checked have zero cost
     return True
+
+
+_NO_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _has_ptu_flat_cost(model: str, llm_router: "Router") -> bool:
+    """Whether any deployment in the model group bills reserved PTU capacity as a flat cost.
+
+    Such a deployment carries an explicit zero per-token price so the flat cost is not charged
+    twice, which otherwise reads here as a free model and waives every budget check for it.
+    """
+    for deployment in llm_router.model_list:
+        if deployment.get("model_name") != model:
+            continue
+        model_info = deployment.get("model_info") or _NO_MODEL_INFO
+        if model_info.get("ptu_count") is not None and model_info.get("cost_per_ptu_per_hour") is not None:
+            return True
+    return False
 
 
 def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
