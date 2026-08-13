@@ -1321,7 +1321,7 @@ async def test_ui_view_spend_logs_internal_user_scoped_without_user_id(
 
 
 @pytest.mark.asyncio
-async def test_ui_view_spend_logs_team_admin_can_view_team_spend(client, monkeypatch):
+async def test_ui_view_spend_logs_team_admin_can_filter_team_spend_by_user(client, monkeypatch):
     """
     Team admins should be able to view team-wide spend when team_id is provided.
     """
@@ -1346,11 +1346,23 @@ async def test_ui_view_spend_logs_team_admin_can_view_team_spend(client, monkeyp
             "startTime": datetime.datetime.now(timezone.utc).isoformat(),
             "model": "gpt-4",
         },
+        {
+            "id": "log3",
+            "request_id": "req3",
+            "api_key": "sk-test-key",
+            "user": "member3",
+            "team_id": "team_admin_team",
+            "spend": 0.15,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+        },
     ]
 
     def filter_by_team(where):
-        if "team_id" in where and where["team_id"] == "team_admin_team":
+        if where.get("team_id") == "team_admin_team" and where.get("user") == "member1":
             return [mock_spend_logs[0]]
+        if where.get("team_id") == "team_admin_team":
+            return [mock_spend_logs[0], mock_spend_logs[2]]
         return mock_spend_logs
 
     class TeamTable:
@@ -1383,6 +1395,7 @@ async def test_ui_view_spend_logs_team_admin_can_view_team_spend(client, monkeyp
             "/spend/logs/ui",
             params={
                 "team_id": "team_admin_team",
+                "user_id": "member1",
                 "start_date": start_date,
                 "end_date": end_date,
             },
@@ -1394,6 +1407,66 @@ async def test_ui_view_spend_logs_team_admin_can_view_team_spend(client, monkeyp
         assert data["total"] == 1
         assert len(data["data"]) == 1
         assert data["data"][0]["team_id"] == "team_admin_team"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_user_filter_intersects_permitted_team_scope(client, monkeypatch):
+    member_log = {
+        "id": "log1",
+        "request_id": "req1",
+        "api_key": "sk-test-key",
+        "user": "member@example.com",
+        "team_id": "team-9",
+        "spend": 0.05,
+        "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+        "model": "gpt-4",
+    }
+    other_team_log = {
+        **member_log,
+        "id": "log2",
+        "request_id": "req2",
+        "team_id": "team-outside-scope",
+    }
+    seen_where = []
+
+    def filter_by_user_and_scope(where):
+        seen_where.append(where)
+        if where.get("user") == "member@example.com" and {"multi_team": True} in where.get("OR", []):
+            return [member_log]
+        return [member_log, other_team_log]
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma([member_log, other_team_log], filter_by_user_and_scope),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
+        AsyncMock(return_value=["team-9"]),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin"
+    )
+
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "user_id": "member@example.com",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        assert [row["request_id"] for row in response.json()["data"]] == ["req1"]
+        assert any(
+            where.get("user") == "member@example.com" and {"multi_team": True} in where.get("OR", [])
+            for where in seen_where
+        )
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -1578,6 +1651,7 @@ async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
         assert data["total_pages"] == 2
         assert len(data["data"]) == 1
         assert data["data"][0]["request_id"] == "req1"
+        assert data["data"][0]["user"] == "member1"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 

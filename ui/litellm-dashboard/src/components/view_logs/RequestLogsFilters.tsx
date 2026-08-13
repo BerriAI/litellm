@@ -3,9 +3,9 @@
 import { useMemo, useState } from "react";
 
 import { useInfiniteSpendLogEndUsers } from "@/app/(dashboard)/hooks/spendLogs/useSpendLogEndUsers";
+import { useInfiniteSpendLogUsers } from "@/app/(dashboard)/hooks/spendLogs/useSpendLogUsers";
 import { useInfiniteKeyAliases } from "@/app/(dashboard)/hooks/keys/useKeyAliases";
 import { useInfiniteModelInfo } from "@/app/(dashboard)/hooks/models/useModels";
-import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { DataTableFilterField } from "@/components/shared/DataTable";
 import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
@@ -145,9 +145,18 @@ function ModelFilterField({ value, onChange }: { value: string; onChange: (value
   );
 }
 
-function UserIdFilterField({ value, onChange }: { value: string; onChange: (value: string | undefined) => void }) {
+function UserIdFilterField({
+  value,
+  onChange,
+  logsWindow,
+}: {
+  value: string;
+  onChange: (value: string | undefined) => void;
+  logsWindow: LogsWindow;
+}) {
   const [search, setSearch] = useState("");
-  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteUsers(
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteSpendLogUsers(
+    logsWindow,
     PAGE_SIZE,
     emptyToUndefined(search),
   );
@@ -155,14 +164,10 @@ function UserIdFilterField({ value, onChange }: { value: string; onChange: (valu
   const options = useMemo<SearchSelectOption[]>(() => {
     const seen = new Set<string>();
     return (data?.pages ?? []).flatMap((page) =>
-      page.users.flatMap((user) => {
-        if (!user.user_id || seen.has(user.user_id)) return [];
-        seen.add(user.user_id);
-        const label = user.user_alias || user.user_email || user.user_id;
-        const email = user.user_email && user.user_email !== label ? user.user_email : "";
-        const sublabel =
-          user.user_id === label ? email : [email, `User ID: ${user.user_id}`].filter(Boolean).join(" | ");
-        return [{ label, value: user.user_id, sublabel }];
+      page.data.flatMap((userId) => {
+        if (!userId || seen.has(userId)) return [];
+        seen.add(userId);
+        return [{ label: userId, value: userId }];
       }),
     );
   }, [data]);
@@ -284,10 +289,9 @@ interface RequestLogsFiltersProps {
   set: (columnId: string, value: unknown) => void;
   teams: Team[];
   logsWindow: LogsWindow;
-  showUserIdFilter: boolean;
 }
 
-export function RequestLogsFilters({ get, set, teams, logsWindow, showUserIdFilter }: RequestLogsFiltersProps) {
+export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsFiltersProps) {
   const valueOf = (id: string): string => asString(get(id));
   const setter = (id: string) => (next: string | undefined) => set(id, next);
 
@@ -321,12 +325,11 @@ export function RequestLogsFilters({ get, set, teams, logsWindow, showUserIdFilt
         teamId={valueOf(LOG_FILTER_IDS.TEAM_ID)}
       />
 
-      {showUserIdFilter && (
-        <UserIdFilterField
-          value={valueOf(LOG_FILTER_IDS.USER_ID)}
-          onChange={setter(LOG_FILTER_IDS.USER_ID)}
-        />
-      )}
+      <UserIdFilterField
+        value={valueOf(LOG_FILTER_IDS.USER_ID)}
+        onChange={setter(LOG_FILTER_IDS.USER_ID)}
+        logsWindow={logsWindow}
+      />
 
       <EndUserFilterField
         value={valueOf(LOG_FILTER_IDS.END_USER)}
