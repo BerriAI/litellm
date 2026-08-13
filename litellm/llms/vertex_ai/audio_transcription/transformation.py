@@ -1,4 +1,5 @@
 import base64
+from typing import Final
 
 from httpx import Headers, Response
 
@@ -28,10 +29,10 @@ from litellm.types.llms.vertex_ai_speech_to_text import (
 )
 from litellm.types.utils import FileTypes, TranscriptionResponse
 
-DEFAULT_SPEECH_TO_TEXT_LOCATION = "us"
-AUTO_LANGUAGE_CODE = "auto"
-SUPPORTED_RESPONSE_FORMATS = ("json", "text")
-_URL_UNSAFE_PROJECT_CHARS = ("/", "?", "#", "\\", ":", " ", "\t", "\n", "\r")
+DEFAULT_SPEECH_TO_TEXT_LOCATION: Final = "us"
+AUTO_LANGUAGE_CODE: Final = "auto"
+SUPPORTED_RESPONSE_FORMATS: Final = ("json", "text")
+_URL_UNSAFE_PROJECT_CHARS: Final = ("/", "?", "#", "\\", ":", " ", "\t", "\n", "\r")
 
 
 class VertexAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase):
@@ -49,12 +50,12 @@ class VertexAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase)
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
-        mapped = {
+        supported_params: Final = self.get_supported_openai_params(model)
+        mapped: Final = {
             **optional_params,
             **{k: v for k, v in non_default_params.items() if k in supported_params},
         }
-        response_format = mapped.get("response_format")
+        response_format: Final = mapped.get("response_format")
         if response_format is None or response_format in SUPPORTED_RESPONSE_FORMATS:
             return mapped
         if drop_params or litellm.drop_params:
@@ -102,12 +103,12 @@ class VertexAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase)
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        location = self._validate_location(self.safe_get_vertex_ai_location(litellm_params))
-        project_id = self._validate_project_id(
+        location: Final = self._validate_location(self.safe_get_vertex_ai_location(litellm_params))
+        project_id: Final = self._validate_project_id(
             self.safe_get_vertex_ai_project(litellm_params) or self._resolve_project_id_from_credentials(litellm_params)
         )
-        host = "speech.googleapis.com" if location == "global" else f"{location}-speech.googleapis.com"
-        base_url = (api_base or f"https://{host}").rstrip("/")
+        host: Final = "speech.googleapis.com" if location == "global" else f"{location}-speech.googleapis.com"
+        base_url: Final = (api_base or f"https://{host}").rstrip("/")
         return f"{base_url}/v2/projects/{project_id}/locations/{location}/recognizers/_:recognize"
 
     @staticmethod
@@ -138,14 +139,14 @@ class VertexAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase)
         optional_params: dict,
         litellm_params: dict,
     ) -> AudioTranscriptionRequestData:
-        processed_audio = process_audio_file(audio_file)
-        language = optional_params.get("language")
-        language_codes = (
+        processed_audio: Final = process_audio_file(audio_file)
+        language: Final = optional_params.get("language")
+        language_codes: Final = (
             [normalize_transcription_language_to_bcp47(language)]
             if isinstance(language, str) and language
             else [AUTO_LANGUAGE_CODE]
         )
-        request_body = VertexSpeechToTextRecognizeRequest(
+        request_body: Final = VertexSpeechToTextRecognizeRequest(
             config=VertexSpeechToTextRecognitionConfig(
                 model=model.removeprefix("vertex_ai/"),
                 languageCodes=language_codes,
@@ -161,21 +162,21 @@ class VertexAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase)
         raw_response: Response,
     ) -> TranscriptionResponse:
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
         except ValueError:
             raise VertexAIError(
                 status_code=raw_response.status_code,
                 message=f"Received non-JSON response from Google Speech-to-Text: {raw_response.text}",
             )
-        parsed = VertexSpeechToTextRecognizeResponse.model_validate(response_json)
-        transcripts = tuple(
+        parsed: Final = VertexSpeechToTextRecognizeResponse.model_validate(response_json)
+        transcripts: Final = tuple(
             result.alternatives[0].transcript
             for result in parsed.results
             if result.alternatives and result.alternatives[0].transcript
         )
-        response = TranscriptionResponse(text=" ".join(transcripts))
+        response: Final = TranscriptionResponse(text=" ".join(transcripts))
         response["task"] = "transcribe"
-        detected_language = next((result.languageCode for result in parsed.results if result.languageCode), None)
+        detected_language: Final = next((result.languageCode for result in parsed.results if result.languageCode), None)
         if detected_language is not None:
             response["language"] = detected_language
         billed_duration = _parse_duration_seconds(parsed.metadata.totalBilledDuration if parsed.metadata else None)

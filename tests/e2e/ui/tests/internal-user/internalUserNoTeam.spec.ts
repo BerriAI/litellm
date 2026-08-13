@@ -17,9 +17,8 @@ test.describe("Internal User with no team memberships", () => {
     await page.getByPlaceholder("Enter your username").fill("noteam@test.local");
     await page.getByPlaceholder("Enter your password").fill("test");
     await page.getByRole("button", { name: "Login", exact: true }).click();
-    // A non-admin with no keys lands on /ui/connect, so the keys dashboard has
-    // to be asked for explicitly once that redirect settles.
-    await page.waitForURL(/\/ui\/connect/, { timeout: 30_000 });
+    await expect(page.getByRole("complementary").getByText("Virtual Keys")).toBeVisible({ timeout: 30_000 });
+    expect(new URL(page.url()).pathname).not.toMatch(/\/connect$/);
     await navigateToPage(page, Page.ApiKeys);
     // Scope to the sidebar; the top-bar breadcrumb also shows "Virtual Keys".
     await expect(page.getByRole("complementary").getByText("Virtual Keys")).toBeVisible({ timeout: 15_000 });

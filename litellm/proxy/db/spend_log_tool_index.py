@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import asyncio
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import groupby
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 
@@ -34,7 +35,7 @@ class ToolUsageTransaction:
     total_tokens: int
 
 
-def response_tool_call_names(completion_response: Any) -> tuple[str, ...]:
+def response_tool_call_names(completion_response: object) -> tuple[str, ...]:
     """Tool names invoked in a completion response, in call order, for any response
     surface get_tool_calls_from_response understands (chat completions, Responses
     API output items, Anthropic Messages tool_use blocks). Reads every choice of
@@ -58,7 +59,7 @@ def build_tool_usage_transaction(
     mcp_namespaced_tool_name: str | None,
     spend: float,
     total_tokens: int,
-    completion_response: Any,
+    completion_response: object,
     realtime_tool_calls: Any = None,
 ) -> ToolUsageTransaction | None:
     """None when the request invoked no tools. Realtime sessions carry invoked
@@ -67,19 +68,19 @@ def build_tool_usage_transaction(
     wrapping them in the chat-completion shape. Date derivation must match the
     daily spend writer's ``startTime.split("T")[0]`` so rollup rows land in the
     same UTC day bucket as LiteLLM_DailyUserSpend."""
-    mcp_names = (
+    mcp_names: Final = (
         (mcp_namespaced_tool_name.strip(),) if mcp_namespaced_tool_name and mcp_namespaced_tool_name.strip() else ()
     )
-    realtime_names = (
+    realtime_names: Final = (
         response_tool_call_names({"choices": [{"message": {"tool_calls": realtime_tool_calls}}]})
         if realtime_tool_calls
         else ()
     )
-    tool_names = tuple(dict.fromkeys(mcp_names + response_tool_call_names(completion_response) + realtime_names))
+    tool_names: Final = tuple(dict.fromkeys(mcp_names + response_tool_call_names(completion_response) + realtime_names))
     if not tool_names:
         return None
     try:
-        start_time = datetime.fromisoformat(start_time_iso.replace("Z", "+00:00"))
+        start_time: Final = datetime.fromisoformat(start_time_iso.replace("Z", "+00:00"))
     except ValueError:
         return None
     return ToolUsageTransaction(
@@ -108,12 +109,12 @@ async def flush_tool_usage_transactions(
     if not transactions:
         return
 
-    index_rows = [
+    index_rows: Final = [
         {"request_id": txn.request_id, "tool_name": tool_name, "start_time": txn.start_time}
         for txn in transactions
         for tool_name in txn.tool_names
     ]
-    per_tool_day = sorted(
+    per_tool_day: Final = sorted(
         ((txn.date, tool_name, txn.spend, txn.total_tokens) for txn in transactions for tool_name in txn.tool_names),
         key=lambda entry: (entry[0], entry[1]),
     )

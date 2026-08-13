@@ -1,7 +1,9 @@
 import React from "react";
-import { Card, Typography, Select, Table, Tag, Collapse, Button } from "antd";
+import { Card, Typography, Select, Tag, Collapse, Button } from "antd";
 import { DeleteOutlined, PlusOutlined, FileTextOutlined } from "@ant-design/icons";
+import type { ColumnDef } from "@tanstack/react-table";
 import { getCategoryYaml } from "@/components/networking";
+import { DataTable } from "@/components/shared/DataTable";
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -160,16 +162,15 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCategoryName, accessToken]);
 
-  const columns = [
+  const columns: ColumnDef<SelectedCategory>[] = [
     {
-      title: "Category",
-      dataIndex: "display_name",
-      key: "display_name",
-      render: (text: string, record: SelectedCategory) => {
-        const category = availableCategories.find((c) => c.name === record.category);
+      header: "Category",
+      accessorKey: "display_name",
+      cell: ({ row }) => {
+        const category = availableCategories.find((c) => c.name === row.original.category);
         return (
           <div>
-            <div style={{ fontWeight: 500 }}>{text}</div>
+            <div style={{ fontWeight: 500 }}>{row.original.display_name}</div>
             {category?.description && (
               <div style={{ fontSize: "12px", color: "#888", marginTop: "4px" }}>{category.description}</div>
             )}
@@ -178,14 +179,13 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
       },
     },
     {
-      title: "Action",
-      dataIndex: "action",
-      key: "action",
-      width: 150,
-      render: (action: string, record: SelectedCategory) => (
+      header: "Action",
+      accessorKey: "action",
+      size: 150,
+      cell: ({ row }) => (
         <Select
-          value={action}
-          onChange={(value) => onCategoryUpdate(record.id, "action", value)}
+          value={row.original.action}
+          onChange={(value) => onCategoryUpdate(row.original.id, "action", value)}
           style={{ width: "100%" }}
         >
           <Option value="BLOCK">
@@ -198,14 +198,13 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
       ),
     },
     {
-      title: "Severity Threshold",
-      dataIndex: "severity_threshold",
-      key: "severity_threshold",
-      width: 180,
-      render: (threshold: string, record: SelectedCategory) => (
+      header: "Severity Threshold",
+      accessorKey: "severity_threshold",
+      size: 180,
+      cell: ({ row }) => (
         <Select
-          value={threshold}
-          onChange={(value) => onCategoryUpdate(record.id, "severity_threshold", value)}
+          value={row.original.severity_threshold}
+          onChange={(value) => onCategoryUpdate(row.original.id, "severity_threshold", value)}
           style={{ width: "100%" }}
         >
           <Option value="low">Low</Option>
@@ -215,11 +214,11 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
       ),
     },
     {
-      title: "",
-      key: "actions",
-      width: 80,
-      render: (_: any, record: SelectedCategory) => (
-        <Button icon={<DeleteOutlined />} onClick={() => onCategoryRemove(record.id)} size="small">
+      header: "",
+      id: "actions",
+      size: 80,
+      cell: ({ row }) => (
+        <Button icon={<DeleteOutlined />} onClick={() => onCategoryRemove(row.original.id)} size="small">
           Remove
         </Button>
       ),
@@ -322,7 +321,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
 
       {selectedCategories.length > 0 ? (
         <>
-          <Table dataSource={selectedCategories} columns={columns} pagination={false} size="small" rowKey="id" />
+          <DataTable data={selectedCategories} columns={columns} getRowId={(row) => row.id} size="compact" />
           <div style={{ marginTop: 16 }}>
             <Collapse
               activeKey={expandedYamlCategories}

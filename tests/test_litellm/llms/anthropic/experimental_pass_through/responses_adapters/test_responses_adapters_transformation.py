@@ -9,6 +9,8 @@ import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock
 
+import pytest
+
 sys.path.insert(0, os.path.abspath("../../../../../../.."))
 
 from litellm.constants import (
@@ -20,6 +22,7 @@ from litellm.llms.anthropic.experimental_pass_through.responses_adapters.transfo
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.types.llms.anthropic import AnthropicMessagesRequest
+from litellm.types.llms.openai import ResponseAPIUsage
 
 
 def _make_request(**overrides) -> AnthropicMessagesRequest:
@@ -220,6 +223,106 @@ class TestTranslateMessagesToResponsesInput:
             {"type": "input_text", "text": "First part."},
             {"type": "input_text", "text": "Second part."},
         ]
+
+    @pytest.mark.parametrize(
+        "system_content",
+        [
+            "Use the corrected result.",
+            [{"type": "text", "text": "Use the corrected result."}],
+            [
+                {"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}},
+                {"type": "text", "text": "Use the corrected result."},
+            ],
+        ],
+    )
+    def test_midturn_system_correction_stays_system_in_sequence(self, system_content: object):
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01234",
+                        "name": "get_weather",
+                        "input": {"location": "Boston"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01234",
+                        "content": "Rainy, 55°F",
+                    }
+                ],
+            },
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": "Continue."},
+        ]
+
+        result = _translate_messages(messages)
+
+        assert result == [
+            {
+                "type": "function_call",
+                "call_id": "toolu_01234",
+                "name": "get_weather",
+                "arguments": '{"location": "Boston"}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "toolu_01234",
+                "output": "Rainy, 55°F",
+            },
+            {
+                "type": "message",
+                "role": "system",
+                "content": [{"type": "input_text", "text": "Use the corrected result."}],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Continue."}],
+            },
+        ]
+
+    def test_midturn_system_correction_keeps_multiple_text_blocks(self):
+        messages = [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "First correction."},
+                    {"type": "text", "text": "Second correction."},
+                ],
+            }
+        ]
+
+        assert _translate_messages(messages) == [
+            {
+                "type": "message",
+                "role": "system",
+                "content": [
+                    {"type": "input_text", "text": "First correction."},
+                    {"type": "input_text", "text": "Second correction."},
+                ],
+            }
+        ]
+
+    @pytest.mark.parametrize(
+        "system_content",
+        [
+            "",
+            [{"type": "text", "text": ""}],
+            [{"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}}],
+            None,
+        ],
+    )
+    def test_empty_or_unsupported_midturn_system_correction_is_dropped(self, system_content: object):
+        messages = [{"role": "system", "content": system_content}]
+
+        assert _translate_messages(messages) == []
 
     def test_user_base64_image(self):
         """User message with base64 image source becomes input_image with data URL."""
@@ -722,6 +825,42 @@ class TestTranslateRequestBroaderCoverage:
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs["instructions"] == "You are a helpful assistant."
 
+    def test_top_level_system_and_midturn_correction_are_not_duplicated(self):
+        """
+        Request level: the trusted top-level prompt goes to `instructions` only, and the
+        in-sequence correction stays a `role: "system"` input item in its original position.
+        Neither appears twice, and the surrounding turns keep their order.
+        """
+        req = _make_request(
+            system="Trusted top-level prompt.",
+            messages=[
+                {"role": "user", "content": "First question."},
+                {"role": "system", "content": "Use the corrected result."},
+                {"role": "user", "content": "Continue."},
+            ],
+        )
+
+        kwargs = _ADAPTER.translate_request(req)
+
+        assert kwargs["instructions"] == "Trusted top-level prompt."
+        assert kwargs["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "First question."}],
+            },
+            {
+                "type": "message",
+                "role": "system",
+                "content": [{"type": "input_text", "text": "Use the corrected result."}],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Continue."}],
+            },
+        ]
+
     def test_system_list_of_text_blocks_joined(self):
         req = _make_request(
             system=[
@@ -823,11 +962,19 @@ def _make_mock_response(
     model: str = "gpt-4o",
     input_tokens: int = 100,
     output_tokens: int = 50,
+    cached_tokens: int = 0,
+    cache_write_tokens: int = 0,
 ) -> MagicMock:
     """Build a minimal mock ResponsesAPIResponse."""
-    usage = MagicMock()
-    usage.input_tokens = input_tokens
-    usage.output_tokens = output_tokens
+    usage = ResponseAPIUsage(
+        input_tokens=input_tokens,
+        input_tokens_details={
+            "cached_tokens": cached_tokens,
+            "cache_write_tokens": cache_write_tokens,
+        },
+        output_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+    )
 
     resp = MagicMock()
     resp.id = response_id
@@ -960,6 +1107,32 @@ class TestTranslateResponse:
         result: Any = _ADAPTER.translate_response(response)
         assert result["usage"]["input_tokens"] == 200
         assert result["usage"]["output_tokens"] == 75
+
+    def test_cache_tokens_mapped_to_anthropic_usage(self):
+        """Cache reads/writes reported by the Responses API must survive the
+        Anthropic mapping, and input_tokens must exclude them so spend is not
+        billed at the uncached input rate."""
+        response = _make_mock_response(
+            output=[_make_output_message(["OK"])],
+            input_tokens=4017,
+            output_tokens=5,
+            cached_tokens=4004,
+            cache_write_tokens=10,
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"] == {
+            "input_tokens": 3,
+            "output_tokens": 5,
+            "cache_creation_input_tokens": 10,
+            "cache_read_input_tokens": 4004,
+        }
+
+    def test_missing_usage_maps_to_zero_tokens(self):
+        """A response without a usage object must map to zeroed Anthropic usage."""
+        assert LiteLLMAnthropicToResponsesAPIAdapter.translate_responses_api_usage_to_anthropic_usage(None) == {
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
 
     def test_model_and_id_preserved(self):
         """Model and response ID from the Responses API are forwarded."""

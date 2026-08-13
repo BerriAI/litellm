@@ -5,5 +5,3 @@ class AzureFoundryDallE3ImageGenerationConfig(DallE3ImageGenerationConfig):
     """
     Azure dall-e-3 image generation config
     """
-
-    pass
