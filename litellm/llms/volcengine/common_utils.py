@@ -2,7 +2,7 @@
 Common utilities for Volcengine LLM provider
 """
 
-from typing import Optional
+from typing import Final
 
 import httpx
 
@@ -14,18 +14,14 @@ class VolcEngineError(BaseLLMException):
     Custom exception class for Volcengine provider errors.
     """
 
-    def __init__(
-        self, status_code: int, message: str, headers: Optional[httpx.Headers] = None
-    ):
+    def __init__(self, status_code: int, message: str, headers: httpx.Headers | None = None):
         self.status_code = status_code
         self.message = message
         self.headers = headers or httpx.Headers()
-        super().__init__(
-            status_code=status_code, message=message, headers=dict(self.headers)
-        )
+        super().__init__(status_code=status_code, message=message, headers=dict(self.headers))
 
 
-def get_volcengine_base_url(api_base: Optional[str] = None) -> str:
+def get_volcengine_base_url(api_base: str | None = None) -> str:
     """
     Get the base URL for Volcengine API calls.
 
@@ -40,7 +36,7 @@ def get_volcengine_base_url(api_base: Optional[str] = None) -> str:
     return "https://ark.cn-beijing.volces.com"
 
 
-def get_volcengine_headers(api_key: str, extra_headers: Optional[dict] = None) -> dict:
+def get_volcengine_headers(api_key: str, extra_headers: dict | None = None) -> dict:
     """
     Get headers for Volcengine API calls.
 
@@ -51,7 +47,7 @@ def get_volcengine_headers(api_key: str, extra_headers: Optional[dict] = None) -
     Returns:
         Dictionary of headers
     """
-    headers = {
+    headers: Final = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
     }

@@ -19,7 +19,6 @@ const TagSelector: React.FC<TagSelectorProps> = ({ onChange, value, className, a
       if (!accessToken) return;
       try {
         const response = await tagListCall(accessToken);
-        console.log("List tags response:", response);
         setTags(Object.values(response));
       } catch (error) {
         console.error("Error fetching tags:", error);

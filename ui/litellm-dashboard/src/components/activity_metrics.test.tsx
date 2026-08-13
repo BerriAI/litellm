@@ -48,15 +48,6 @@ vi.mock("antd", () => {
   };
 });
 
-vi.mock("./UsagePage/utils/value_formatters", () => ({
-  valueFormatter: (value: number) => value.toString(),
-}));
-
-vi.mock("./common_components/chartUtils", () => ({
-  CustomTooltip: () => null,
-  CustomLegend: () => <div>Legend</div>,
-}));
-
 vi.mock("@/utils/dataUtils", () => ({
   formatNumberWithCommas: (value: number, decimals?: number) => {
     return value.toFixed(decimals || 0);
@@ -365,7 +356,7 @@ describe("ActivityMetrics", () => {
     };
 
     render(<ActivityMetrics modelMetrics={modelWithTopModels} />);
-    expect(screen.getByRole("heading", { name: "Model Usage" })).toBeInTheDocument();
+    expect(screen.getByText("Model Usage").closest('[data-slot="card-title"]')).toBeInTheDocument();
   });
 
   it("should display Spend per day in model section", () => {
@@ -435,9 +426,9 @@ describe("ActivityMetrics", () => {
   });
 
   it("should display charts for tokens over time", () => {
-    render(<ActivityMetrics modelMetrics={mockModelMetrics} />);
+    const { container } = render(<ActivityMetrics modelMetrics={mockModelMetrics} />);
     expect(screen.getByText("Total Tokens Over Time")).toBeInTheDocument();
-    expect(screen.getAllByText("AreaChart").length).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".recharts-area").length).toBeGreaterThan(0);
   });
 
   it("should display charts for requests over time", () => {
@@ -460,6 +451,152 @@ describe("ActivityMetrics", () => {
 
     render(<ActivityMetrics modelMetrics={modelWithEmptyLabel} />);
     expect(screen.getByText("Unknown Item")).toBeInTheDocument();
+  });
+});
+
+describe("ActivityMetrics charts", () => {
+  const twoDayModelMetrics: Record<string, ModelActivityData> = {
+    "gpt-4": createMockModelActivityData("GPT-4", {
+      daily_data: [
+        {
+          date: "2025-01-01",
+          metrics: {
+            prompt_tokens: 30000,
+            completion_tokens: 20000,
+            total_tokens: 50000,
+            api_requests: 100,
+            spend: 100.5,
+            successful_requests: 95,
+            failed_requests: 5,
+            cache_read_input_tokens: 1000,
+            cache_creation_input_tokens: 500,
+          },
+        },
+        {
+          date: "2025-01-02",
+          metrics: {
+            prompt_tokens: 15000,
+            completion_tokens: 10000,
+            total_tokens: 25000,
+            api_requests: 50,
+            spend: 25.25,
+            successful_requests: 48,
+            failed_requests: 2,
+            cache_read_input_tokens: 500,
+            cache_creation_input_tokens: 250,
+          },
+        },
+      ],
+    }),
+  };
+
+  const chartsOf = (container: HTMLElement) => Array.from(container.querySelectorAll('[data-slot="chart"]'));
+
+  const areaStrokes = (chart: Element) =>
+    Array.from(chart.querySelectorAll("path.recharts-area-curve")).map((path) => path.getAttribute("stroke"));
+
+  const barFills = (chart: Element) =>
+    Array.from(
+      new Set(Array.from(chart.querySelectorAll("path.recharts-rectangle")).map((path) => path.getAttribute("fill"))),
+    );
+
+  const tickTexts = (chart: Element) =>
+    Array.from(chart.querySelectorAll("text.recharts-cartesian-axis-tick-value")).map((tick) => tick.textContent ?? "");
+
+  const chartTitled = (title: string): Element => {
+    for (const titleElement of screen.getAllByText(title)) {
+      let node = titleElement.parentElement;
+      while (node) {
+        const charts = node.querySelectorAll('[data-slot="chart"]');
+        if (charts.length === 1) return charts[0];
+        if (charts.length > 1) break;
+        node = node.parentElement;
+      }
+    }
+    throw new Error(`No chart card titled "${title}"`);
+  };
+
+  it("renders all seven chart sites as real recharts charts indexed by date", () => {
+    const { container } = render(<ActivityMetrics modelMetrics={twoDayModelMetrics} />);
+
+    expect(chartsOf(container)).toHaveLength(7);
+    expect(container.querySelectorAll(".recharts-bar")).toHaveLength(2);
+    expect(container.querySelectorAll(".recharts-area")).toHaveLength(12);
+    expect(screen.getAllByText("2025-01-01").length).toBeGreaterThanOrEqual(7);
+    expect(screen.getAllByText("2025-01-02").length).toBeGreaterThanOrEqual(7);
+  });
+
+  it("shows the No data placeholder on both global charts when there is no usage data", () => {
+    const { container } = render(<ActivityMetrics modelMetrics={{}} />);
+
+    expect(screen.getAllByText("No data")).toHaveLength(2);
+    expect(chartsOf(container)).toHaveLength(0);
+  });
+
+  it("drops only the prompt caching chart when hidePromptCachingMetrics is true", () => {
+    const { container } = render(<ActivityMetrics modelMetrics={twoDayModelMetrics} hidePromptCachingMetrics={true} />);
+
+    expect(chartsOf(container)).toHaveLength(6);
+    expect(container.querySelectorAll(".recharts-area")).toHaveLength(10);
+  });
+
+  it("maps the configured colors onto every series", () => {
+    render(<ActivityMetrics modelMetrics={twoDayModelMetrics} />);
+
+    expect(areaStrokes(chartTitled("Total Tokens Over Time"))).toEqual([
+      "var(--color-blue-500, #3b82f6)",
+      "var(--color-cyan-500, #06b6d4)",
+      "var(--color-indigo-500, #6366f1)",
+    ]);
+    expect(areaStrokes(chartTitled("Total Requests Over Time"))).toEqual([
+      "var(--color-emerald-500, #10b981)",
+      "var(--color-red-500, #ef4444)",
+    ]);
+    expect(barFills(chartTitled("Spend per day"))).toEqual(["var(--color-green-500, #22c55e)"]);
+    expect(areaStrokes(chartTitled("Total Tokens"))).toEqual([
+      "var(--color-blue-500, #3b82f6)",
+      "var(--color-cyan-500, #06b6d4)",
+      "var(--color-indigo-500, #6366f1)",
+    ]);
+    expect(barFills(chartTitled("Requests per day"))).toEqual(["var(--color-blue-500, #3b82f6)"]);
+    expect(areaStrokes(chartTitled("Success vs Failed Requests"))).toEqual([
+      "var(--color-green-500, #22c55e)",
+      "var(--color-red-500, #ef4444)",
+    ]);
+    expect(areaStrokes(chartTitled("Prompt Caching Metrics"))).toEqual([
+      "var(--color-cyan-500, #06b6d4)",
+      "var(--color-purple-500, #a855f7)",
+    ]);
+  });
+
+  it("shows the built-in chart legend only on the spend per day chart", () => {
+    const { container } = render(<ActivityMetrics modelMetrics={twoDayModelMetrics} />);
+
+    expect(container.querySelectorAll(".recharts-legend-wrapper")).toHaveLength(1);
+    expect(screen.getByText("metrics.spend")).toBeInTheDocument();
+  });
+
+  it("renders formatted header legends for each chart card", () => {
+    render(<ActivityMetrics modelMetrics={twoDayModelMetrics} />);
+
+    expect(screen.getAllByText("Spend").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Api Requests").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Successful Requests").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Cache Creation Input Tokens").length).toBeGreaterThan(0);
+  });
+
+  it("formats axis ticks as currency on the spend chart and compact numbers on token charts", () => {
+    render(<ActivityMetrics modelMetrics={twoDayModelMetrics} />);
+
+    const spendTicks = tickTexts(chartTitled("Spend per day"));
+    expect(spendTicks.some((text) => text.startsWith("$"))).toBe(true);
+
+    const tokenTicks = tickTexts(chartTitled("Total Tokens"));
+    expect(tokenTicks.some((text) => text.endsWith("k"))).toBe(true);
+    expect(tokenTicks.some((text) => text.startsWith("$"))).toBe(false);
+
+    const requestTicks = tickTexts(chartTitled("Requests per day"));
+    expect(requestTicks.some((text) => text.startsWith("$"))).toBe(false);
   });
 });
 
@@ -577,6 +714,60 @@ describe("processActivityData", () => {
     expect(result["gpt-4"].label).toBe("gpt-4");
     expect(result["gpt-4"].total_requests).toBe(100);
     expect(result["gpt-4"].total_spend).toBe(100.5);
+  });
+
+  it("should process model_groups data keyed by public model name including fallback entries", () => {
+    const upstreamModelMetrics = {
+      ...EMPTY_SPEND_METRICS,
+      spend: 10,
+      api_requests: 10,
+      successful_requests: 10,
+    };
+    const dailyActivityWithModelGroups: { results: DailyData[] } = {
+      results: [
+        {
+          date: "2025-01-01",
+          metrics: upstreamModelMetrics,
+          breakdown: {
+            ...EMPTY_BREAKDOWN,
+            models: {
+              "gpt-5.2": {
+                metrics: upstreamModelMetrics,
+                metadata: {},
+                api_key_breakdown: {},
+              },
+            },
+            model_groups: {
+              "gpt-5.2-eu": {
+                metrics: { ...EMPTY_SPEND_METRICS, spend: 7, api_requests: 7, successful_requests: 7 },
+                metadata: {},
+                api_key_breakdown: {
+                  "key-1": {
+                    metrics: { ...EMPTY_SPEND_METRICS, spend: 7, api_requests: 7, total_tokens: 700 },
+                    metadata: { key_alias: "eu-key", team_id: "team1" },
+                  },
+                },
+              },
+              "gpt-5.2": {
+                metrics: { ...EMPTY_SPEND_METRICS, spend: 3, api_requests: 3, successful_requests: 3 },
+                metadata: {},
+                api_key_breakdown: {},
+              },
+            },
+          },
+        },
+      ],
+    };
+
+    const result = processActivityData(dailyActivityWithModelGroups, "model_groups");
+
+    expect(Object.keys(result).sort()).toEqual(["gpt-5.2", "gpt-5.2-eu"]);
+    expect(result["gpt-5.2-eu"].label).toBe("gpt-5.2-eu");
+    expect(result["gpt-5.2-eu"].total_spend).toBe(7);
+    expect(result["gpt-5.2-eu"].top_api_keys).toHaveLength(1);
+    expect(result["gpt-5.2-eu"].top_api_keys[0].key_alias).toBe("eu-key");
+    expect(result["gpt-5.2"].total_spend).toBe(3);
+    expect(result["gpt-5.2"].total_requests).toBe(3);
   });
 
   it("should process data for mcp_servers key", () => {

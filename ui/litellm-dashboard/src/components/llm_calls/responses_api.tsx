@@ -14,6 +14,49 @@ import {
 
 export type { CodeInterpreterResult } from "./code_interpreter_handler";
 
+interface ResponseOutputPart {
+  type?: string;
+  text?: string;
+}
+
+interface ResponseOutputItem {
+  type?: string;
+  content?: ResponseOutputPart[];
+  summary?: ResponseOutputPart[];
+}
+
+interface NonStreamedResponse {
+  output?: ResponseOutputItem[];
+}
+
+type SynthesizedResponseEvent =
+  | { type: "response.output_item.done"; item: ResponseOutputItem }
+  | { type: "response.reasoning.delta"; delta: string }
+  | { type: "response.output_text.delta"; delta: string }
+  | { type: "response.completed"; response: NonStreamedResponse };
+
+const responseAsEvents = (response: NonStreamedResponse): SynthesizedResponseEvent[] => {
+  const outputItems = response.output ?? [];
+  const outputText = outputItems
+    .filter((item) => item.type === "message")
+    .flatMap((item) => item.content ?? [])
+    .filter((part) => part.type === "output_text")
+    .map((part) => part.text ?? "")
+    .join("");
+  const reasoningText = outputItems
+    .filter((item) => item.type === "reasoning")
+    .flatMap((item) => item.summary ?? [])
+    .map((part) => part.text ?? "")
+    .join("");
+
+  return [
+    ...outputItems.map((item) => ({ type: "response.output_item.done" as const, item })),
+    ...(reasoningText ? [{ type: "response.reasoning.delta" as const, delta: reasoningText }] : []),
+    ...(outputText ? [{ type: "response.output_text.delta" as const, delta: outputText }] : []),
+    { type: "response.completed" as const, response },
+  ];
+};
+
 export async function makeOpenAIResponsesRequest(
   messages: MessageType[],
   updateTextUI: (role: string, delta: string, model?: string) => void,
@@ -38,6 +81,8 @@ export async function makeOpenAIResponsesRequest(
   mcpServers?: MCPServer[],
   mcpServerToolRestrictions?: Record<string, string[]>,
   mcpToolsets?: MCPToolset[],
+  streamingEnabled: boolean = true,
+  onTotalLatency?: (latency: number) => void,
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -143,29 +188,26 @@ export async function makeOpenAIResponsesRequest(
       });
     }
 
+    const requestBody = {
+      model: selectedModel,
+      input: formattedInput,
+      litellm_trace_id: traceId,
+      ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
+      ...(vector_store_ids ? { vector_store_ids } : {}),
+      ...(guardrails ? { guardrails } : {}),
+      ...(policies ? { policies } : {}),
+      ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
+    };
+
     // Create request to OpenAI responses API
     // Use 'any' type to avoid TypeScript issues with the experimental API
-    const response = await (client as any).responses.create(
-      {
-        model: selectedModel,
-        input: formattedInput,
-        stream: true,
-        litellm_trace_id: traceId,
-        ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
-        ...(vector_store_ids ? { vector_store_ids } : {}),
-        ...(guardrails ? { guardrails } : {}),
-        ...(policies ? { policies } : {}),
-        ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
-      },
-      { signal },
-    );
+    const response = await (client as any).responses.create({ ...requestBody, stream: streamingEnabled }, { signal });
+    const events = streamingEnabled ? response : responseAsEvents(response);
 
     let mcpToolUsed = "";
     let codeInterpreterState: CodeInterpreterState = { code: "", containerId: "" };
 
-    for await (const event of response) {
-      console.log("Response event:", event);
-
+    for await (const event of events) {
       // Use a type-safe approach to handle events
       if (typeof event === "object" && event !== null) {
         // Handle MCP events first
@@ -174,8 +216,6 @@ export async function makeOpenAIResponsesRequest(
           (event.type === "response.output_item.done" &&
             (event.item?.type === "mcp_list_tools" || event.item?.type === "mcp_call"))
         ) {
-          console.log("MCP event received:", event);
-
           if (onMCPEvent) {
             const mcpEvent: MCPEvent = {
               type: event.type,
@@ -196,7 +236,6 @@ export async function makeOpenAIResponsesRequest(
         // Check for MCP tool usage
         if (event.type === "response.output_item.done" && event.item?.type === "mcp_call" && event.item?.name) {
           mcpToolUsed = event.item.name;
-          console.log("MCP tool used:", mcpToolUsed);
         }
 
         // Handle code interpreter events
@@ -212,7 +251,6 @@ export async function makeOpenAIResponsesRequest(
         // 2) only handle actual text deltas
         if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
           const delta = event.delta;
-          console.log("Text delta", delta);
           if (delta.length > 0) {
             updateTextUI("assistant", delta, selectedModel);
 
@@ -220,9 +258,8 @@ export async function makeOpenAIResponsesRequest(
             if (!firstTokenReceived) {
               firstTokenReceived = true;
               const timeToFirstToken = Date.now() - startTime;
-              console.log("First token received! Time:", timeToFirstToken, "ms");
 
-              if (onTimingData) {
+              if (onTimingData && streamingEnabled) {
                 onTimingData(timeToFirstToken);
               }
             }
@@ -241,18 +278,13 @@ export async function makeOpenAIResponsesRequest(
         if (event.type === "response.completed" && "response" in event) {
           const response_obj = event.response;
           const usage = response_obj.usage;
-          console.log("Usage data:", usage);
-          console.log("Response completed event:", response_obj);
 
           // Extract response_id for session management
           if (response_obj.id && onResponseId) {
-            console.log("Response ID for session management:", response_obj.id);
             onResponseId(response_obj.id);
           }
 
           if (usage && onUsageData) {
-            console.log("Usage data:", usage);
-
             // Extract usage data safely
             const usageData: TokenUsage = {
               completionTokens: usage.output_tokens,
@@ -271,10 +303,13 @@ export async function makeOpenAIResponsesRequest(
       }
     }
 
+    if (onTotalLatency) {
+      onTotalLatency(Date.now() - startTime);
+    }
+
     return response;
   } catch (error) {
     if (signal?.aborted) {
-      console.log("Responses API request was cancelled");
     } else {
       NotificationManager.fromBackend(
         `Error occurred while generating model response. Please try again. Error: ${error}`,

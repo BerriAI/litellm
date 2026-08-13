@@ -7,7 +7,6 @@ import {
   CodeOutlined,
   DatabaseOutlined,
   DeleteOutlined,
-  FilePdfOutlined,
   InfoCircleOutlined,
   KeyOutlined,
   LinkOutlined,
@@ -19,15 +18,14 @@ import {
   SoundOutlined,
   TagsOutlined,
   ToolOutlined,
-  UserOutlined,
 } from "@ant-design/icons";
 import { Card, Text, TextInput, Title, Button as TremorButton } from "@tremor/react";
-import { Button, Input, Modal, Popover, Select, Spin, Tooltip, Typography, Upload } from "antd";
+import { Button, Input, Modal, Popover, Select, Spin, Tooltip, Upload } from "antd";
 import React, { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { v4 as uuidv4 } from "uuid";
+import useCan from "@/app/(dashboard)/hooks/useCan";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
 import PolicySelector from "@/components/policies/PolicySelector";
 import MCPToolArgumentsForm, { MCPToolArgumentsFormRef } from "@/components/mcp_tools/MCPToolArgumentsForm";
@@ -50,14 +48,10 @@ import { makeOpenAIImageEditsRequest } from "../../llm_calls/image_edits";
 import { makeOpenAIImageGenerationRequest } from "../../llm_calls/image_generation";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
 import { makeInteractionsRequest } from "../../llm_calls/interactions_api";
-import A2AMetrics from "./A2AMetrics";
 import AdditionalModelSettings from "./AdditionalModelSettings";
-import AudioRenderer from "./AudioRenderer";
 import { OPEN_AI_VOICE_SELECT_OPTIONS, OpenAIVoice } from "./chatConstants";
-import ChatImageRenderer from "./ChatImageRenderer";
 import ChatImageUpload from "./ChatImageUpload";
 import { createChatDisplayMessage, createChatMultimodalMessage } from "./ChatImageUtils";
-import CodeInterpreterOutput from "./CodeInterpreterOutput";
 import CodeInterpreterTool from "./CodeInterpreterTool";
 import { generateCodeSnippet } from "@/components/chat_ui/CodeSnippets";
 import EndpointSelector from "./EndpointSelector";
@@ -65,18 +59,15 @@ import FilePreviewCard from "./FilePreviewCard";
 import ChatMessageBubble from "./ChatMessageBubble";
 import MCPEventsDisplay from "@/components/chat_ui/MCPEventsDisplay";
 import { EndpointType, getEndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
-import ReasoningContent from "@/components/chat_ui/ReasoningContent";
-import ResponseMetrics, { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
-import ResponsesImageRenderer from "./ResponsesImageRenderer";
 import ResponsesImageUpload from "./ResponsesImageUpload";
 import { createDisplayMessage, createMultimodalMessage } from "./ResponsesImageUtils";
-import { SearchResultsDisplay } from "./SearchResultsDisplay";
 import SessionManagement from "./SessionManagement";
 import RealtimePlayground from "./RealtimePlayground";
-import { A2ATaskMetadata, MessageType } from "@/components/chat_ui/types";
+import { MessageType } from "@/components/chat_ui/types";
 import { useCodeInterpreter } from "../../hooks/useCodeInterpreter";
 import { useChatHistory } from "../../hooks/useChatHistory";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
+import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -97,7 +88,14 @@ interface ChatUIProps {
   fixedModel?: string;
 }
 
-const MCP_SUPPORTED_ENDPOINTS = new Set<EndpointType>([EndpointType.CHAT, EndpointType.RESPONSES, EndpointType.MCP]);
+const MCP_SUPPORTED_ENDPOINTS = new Set<EndpointType>([
+  EndpointType.CHAT,
+  EndpointType.RESPONSES,
+  EndpointType.MCP,
+  EndpointType.ANTHROPIC_MESSAGES,
+]);
+
+const CUSTOM_MODEL_DEBOUNCE_WAIT_MS = 500;
 
 const ChatUI: React.FC<ChatUIProps> = ({
   accessToken,
@@ -109,6 +107,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   simplified = false,
   fixedModel,
 }) => {
+  const canViewPolicies = useCan("viewPolicies");
   const [mcpServers, setMCPServers] = useState<MCPServer[]>([]);
   const [mcpToolsets, setMCPToolsets] = useState<MCPToolset[]>([]);
   const [isToolsetsInfoModalVisible, setIsToolsetsInfoModalVisible] = useState(false);
@@ -139,13 +138,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
     chatHistory,
     setChatHistory,
     mcpEvents,
-    setMCPEvents,
     messageTraceId,
     setMessageTraceId,
     responsesSessionId,
-    setResponsesSessionId,
     useApiSessionManagement,
-    setUseApiSessionManagement,
     updateTextUI,
     updateReasoningContent,
     updateTimingData,
@@ -185,7 +181,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [agentInfo, setAgentInfo] = useState<Agent[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<string | undefined>(undefined);
-  const customModelTimeout = useRef<NodeJS.Timeout | null>(null);
+  const debouncedSetSelectedModel = useDebouncedCallback((value: string) => setSelectedModel(value), {
+    wait: CUSTOM_MODEL_DEBOUNCE_WAIT_MS,
+  });
   const [endpointType, setEndpointType] = useState<string>(
     () => sessionStorage.getItem("endpointType") || EndpointType.CHAT,
   );
@@ -251,6 +249,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [maxTokens, setMaxTokens] = useState<number>(2048);
   const [useAdvancedParams, setUseAdvancedParams] = useState<boolean>(false);
   const [mockTestFallbacks, setMockTestFallbacks] = useState<boolean>(false);
+  const [streamingEnabled, setStreamingEnabled] = useState<boolean>(() => {
+    if (simplified) return true;
+    const saved = sessionStorage.getItem("streamingEnabled");
+    return saved === null ? true : saved === "true";
+  });
 
   // Code Interpreter state (using custom hook)
   const codeInterpreter = useCodeInterpreter();
@@ -362,6 +365,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     sessionStorage.removeItem("selectedMCPTools"); // Clean up old key
 
     if (!simplified) {
+      sessionStorage.setItem("streamingEnabled", JSON.stringify(streamingEnabled));
       if (selectedModel) {
         sessionStorage.setItem("selectedModel", selectedModel);
       } else {
@@ -382,12 +386,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
     selectedMCPServers,
     mcpServerToolRestrictions,
     selectedVoice,
+    streamingEnabled,
   ]);
 
   useEffect(() => {
     let userApiKey = apiKeySource === "session" ? accessToken : apiKey;
     if (!userApiKey || !token || !userRole || !userID) {
-      console.log("userApiKey or token or userRole or userID is missing = ", userApiKey, token, userRole, userID);
       return;
     }
 
@@ -395,12 +399,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
     const loadModels = async () => {
       try {
         if (!userApiKey) {
-          console.log("userApiKey is missing");
           return;
         }
         const uniqueModels = await fetchAvailableModels(userApiKey);
-
-        console.log("Fetched models:", uniqueModels);
 
         setModelInfo(uniqueModels);
 
@@ -590,8 +591,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
         NotificationsManager.fromBackend("Please select an MCP server to test");
         return;
       }
-      // Resolve the real server ID (toolsets use toolset: prefix)
-      const mcpServerId = rawSelected.startsWith("toolset:") ? rawSelected : rawSelected;
       if (!selectedMCPDirectTool) {
         NotificationsManager.fromBackend("Please select an MCP tool to call");
         return;
@@ -765,6 +764,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             handleMCPEvent,
             mockTestFallbacks,
             mcpToolsets,
+            streamingEnabled,
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -846,6 +846,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             mcpServers,
             mcpServerToolRestrictions,
             mcpToolsets,
+            streamingEnabled,
+            updateTotalLatency,
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [
@@ -869,8 +871,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
             selectedPolicies.length > 0 ? selectedPolicies : undefined,
-            selectedMCPServers, // Pass the selected tools array
+            selectedMCPServers,
             customProxyBaseUrl || undefined,
+            mcpServers,
+            mcpServerToolRestrictions,
+            mcpToolsets,
           );
         } else if (endpointType === EndpointType.EMBEDDINGS) {
           await makeOpenAIEmbeddingsRequest(
@@ -960,7 +965,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
       }
     } catch (error) {
       if (signal.aborted) {
-        console.log("Request was cancelled");
       } else {
         console.error("Error fetching response", error);
         updateTextUI("assistant", "Error fetching response:" + error);
@@ -998,18 +1002,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     NotificationsManager.success("Chat history cleared.");
   };
 
-  if (userRole && userRole === "Admin Viewer") {
-    const { Title, Paragraph } = Typography;
-    return (
-      <div>
-        <Title level={1}>Access Denied</Title>
-        <Paragraph>Ask your proxy admin for access to test models</Paragraph>
-      </div>
-    );
-  }
-
   const onModelChange = (value: string) => {
-    console.log(`selected ${value}`);
     setSelectedModel(value);
 
     setShowCustomModelInput(value === "custom");
@@ -1027,6 +1020,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
     // Check if mode is explicitly "chat" or undefined (which defaults to chat per backend)
     return !model.mode || model.mode === "chat";
   };
+
+  const supportsStreamingToggle = endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES;
 
   const antIcon = <LoadingOutlined style={{ fontSize: 24 }} spin />;
 
@@ -1177,10 +1172,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       <span className="flex items-center">
                         <RobotOutlined className="mr-2" /> Select Model
                       </span>
-                      {isChatModel() ? (
+                      {isChatModel() || supportsStreamingToggle ? (
                         <Popover
                           content={
                             <AdditionalModelSettings
+                              showAdvancedParams={isChatModel()}
                               temperature={temperature}
                               maxTokens={maxTokens}
                               useAdvancedParams={useAdvancedParams}
@@ -1189,6 +1185,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                               onUseAdvancedParamsChange={setUseAdvancedParams}
                               mockTestFallbacks={mockTestFallbacks}
                               onMockTestFallbacksChange={setMockTestFallbacks}
+                              streamingEnabled={streamingEnabled}
+                              onStreamingChange={supportsStreamingToggle ? setStreamingEnabled : undefined}
                             />
                           }
                           title="Model Settings"
@@ -1261,16 +1259,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       <TextInput
                         className="mt-2"
                         placeholder="Enter custom model name"
-                        onValueChange={(value) => {
-                          // Using setTimeout to create a simple debounce effect
-                          if (customModelTimeout.current) {
-                            clearTimeout(customModelTimeout.current);
-                          }
-
-                          customModelTimeout.current = setTimeout(() => {
-                            setSelectedModel(value);
-                          }, 500); // 500ms delay after typing stops
-                        }}
+                        onValueChange={debouncedSetSelectedModel}
                       />
                     )}
                   </div>
@@ -1447,7 +1436,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                               <div className="flex items-center gap-1">
                                 <span className="font-medium">{toolset.toolset_name}</span>
                                 <span
-                                  className="text-xs px-1 rounded"
+                                  className="text-xs px-1 rounded-sm"
                                   style={{ background: "#ede9fe", color: "#7c3aed" }}
                                 >
                                   Toolset
@@ -1540,7 +1529,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                           if (tools.length === 0) return null;
 
                           return (
-                            <div key={serverId} className="border rounded p-2">
+                            <div key={serverId} className="border rounded-sm p-2">
                               <Text className="text-xs text-gray-600 mb-1">
                                 Limit tools for {server?.alias || server?.server_name || serverId}:
                               </Text>
@@ -1583,7 +1572,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                           return (
                             <div
                               key={serverId}
-                              className="border border-blue-100 rounded p-2 bg-blue-50 flex items-center justify-between"
+                              className="border border-blue-100 rounded-sm p-2 bg-blue-50 flex items-center justify-between"
                             >
                               <Text className="text-xs text-blue-700">{serverName} requires your API key</Text>
                               {server.has_user_credential ? (
@@ -1665,32 +1654,34 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   />
                 </div>
 
-                <div>
-                  <Text className="font-medium block mb-2 text-gray-700 flex items-center">
-                    <SafetyOutlined className="mr-2" /> Policies
-                    <Tooltip
-                      className="ml-1"
-                      title={
-                        <span>
-                          Select policy/policies to apply to this LLM API call. Policies define which guardrails are
-                          applied based on conditions. You can set up your policies{" "}
-                          <a href="?page=policies" style={{ color: "#1890ff" }}>
-                            here
-                          </a>
-                          .
-                        </span>
-                      }
-                    >
-                      <InfoCircleOutlined />
-                    </Tooltip>
-                  </Text>
-                  <PolicySelector
-                    value={selectedPolicies}
-                    onChange={setSelectedPolicies}
-                    className="mb-4"
-                    accessToken={accessToken || ""}
-                  />
-                </div>
+                {canViewPolicies && (
+                  <div>
+                    <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                      <SafetyOutlined className="mr-2" /> Policies
+                      <Tooltip
+                        className="ml-1"
+                        title={
+                          <span>
+                            Select policy/policies to apply to this LLM API call. Policies define which guardrails are
+                            applied based on conditions. You can set up your policies{" "}
+                            <a href="?page=policies" style={{ color: "#1890ff" }}>
+                              here
+                            </a>
+                            .
+                          </span>
+                        }
+                      >
+                        <InfoCircleOutlined />
+                      </Tooltip>
+                    </Text>
+                    <PolicySelector
+                      value={selectedPolicies}
+                      onChange={setSelectedPolicies}
+                      className="mb-4"
+                      accessToken={accessToken || ""}
+                    />
+                  </div>
+                )}
 
                 {/* Code Interpreter Toggle - Only for Responses endpoint */}
                 {endpointType === EndpointType.RESPONSES && (
@@ -1770,7 +1761,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     chatHistory[chatHistory.length - 1].role === "user" && (
                       <div className="text-left mb-4">
                         <div
-                          className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4"
+                          className="inline-block max-w-[80%] rounded-lg shadow-xs p-3.5 px-4"
                           style={{
                             backgroundColor: "#ffffff",
                             border: "1px solid #f0f0f0",
@@ -1834,7 +1825,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                                 className="max-w-32 max-h-32 rounded-md border border-gray-200 object-cover"
                               />
                               <button
-                                className="absolute top-1 right-1 bg-white shadow-sm border border-gray-200 rounded px-1 py-1 text-red-500 hover:bg-red-50 text-xs"
+                                className="absolute top-1 right-1 bg-white shadow-xs border border-gray-200 rounded-sm px-1 py-1 text-red-500 hover:bg-red-50 text-xs"
                                 onClick={() => handleRemoveImage(index)}
                               >
                                 <DeleteOutlined />
@@ -1894,7 +1885,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                             </span>
                           </div>
                           <button
-                            className="bg-white shadow-sm border border-gray-200 rounded px-2 py-1 text-red-500 hover:bg-red-50 text-xs"
+                            className="bg-white shadow-xs border border-gray-200 rounded-sm px-2 py-1 text-red-500 hover:bg-red-50 text-xs"
                             onClick={handleRemoveAudio}
                           >
                             <DeleteOutlined /> Remove
@@ -1924,7 +1915,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   {/* Code Interpreter indicator and sample prompts when enabled */}
                   {endpointType === EndpointType.RESPONSES && codeInterpreter.enabled && (
                     <div className="mb-2 space-y-2">
-                      <div className="px-3 py-2 bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg border border-blue-200 flex items-center justify-between">
+                      <div className="px-3 py-2 bg-linear-to-r from-blue-50 to-purple-50 rounded-lg border border-blue-200 flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           {isLoading ? (
                             <>
@@ -1988,7 +1979,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   <div className="flex items-center gap-2">
                     <div className="flex items-center flex-1 bg-white border border-gray-300 rounded-xl px-3 py-1 min-h-[44px]">
                       {/* Left: attachment and code interpreter icons */}
-                      <div className="flex-shrink-0 mr-2 flex items-center gap-1">
+                      <div className="shrink-0 mr-2 flex items-center gap-1">
                         {endpointType === EndpointType.RESPONSES && !responsesUploadedImage && (
                           <ResponsesImageUpload
                             responsesUploadedImage={responsesUploadedImage}
@@ -2116,7 +2107,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                               ? !uploadedAudio
                               : !inputMessage.trim())
                         }
-                        className="flex-shrink-0 ml-2 !w-8 !h-8 !min-w-8 !p-0 !rounded-full !bg-blue-600 hover:!bg-blue-700 disabled:!bg-gray-300 !border-none !text-white disabled:!text-gray-500 !flex !items-center !justify-center"
+                        className="shrink-0 ml-2 w-8! h-8! min-w-8! p-0! rounded-full! bg-blue-600! hover:bg-blue-700! disabled:bg-gray-300! border-none! text-white! disabled:text-gray-500! flex! items-center! justify-center!"
                       >
                         <ArrowUpOutlined style={{ fontSize: "14px" }} />
                       </TremorButton>
@@ -2192,7 +2183,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
             loadMCPServers();
             setByokModalServer(null);
           }}
-          accessToken={accessToken || ""}
         />
       )}
 
@@ -2225,7 +2215,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               <li>The tool call is routed to the correct underlying MCP server automatically.</li>
             </ol>
           </div>
-          <div className="bg-purple-50 border border-purple-200 rounded p-3">
+          <div className="bg-purple-50 border border-purple-200 rounded-sm p-3">
             <p className="text-sm text-purple-800">
               <strong>Example:</strong> A &quot;GitHub Read-only&quot; toolset might include only{" "}
               <code>list_repos</code> and <code>get_file</code> from a GitHub MCP server — preventing agents from making

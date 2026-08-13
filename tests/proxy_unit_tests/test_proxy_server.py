@@ -1252,6 +1252,17 @@ async def test_create_team_member_add(prisma_client, new_member_method):
             return_value=LiteLLM_TeamTableCachedObj(team_id="1234")
         )
 
+        tx_mock = AsyncMock()
+        tx_mock.query_raw = AsyncMock(return_value=[{"members_with_roles": []}])
+        tx_mock.litellm_teamtable = team_mock_client
+        tx_cm = MagicMock()
+        tx_cm.__aenter__ = AsyncMock(return_value=tx_mock)
+        tx_cm.__aexit__ = AsyncMock(return_value=None)
+        original_tx = litellm.proxy.proxy_server.prisma_client.tx
+        litellm.proxy.proxy_server.prisma_client.tx = MagicMock(
+            return_value=tx_cm
+        )
+
         print(f"team_member_add_request={team_member_add_request}")
         await team_member_add(
             data=team_member_add_request,
@@ -1273,6 +1284,7 @@ async def test_create_team_member_add(prisma_client, new_member_method):
         )
 
         litellm.proxy.proxy_server.prisma_client.db.litellm_teamtable = original_val
+        litellm.proxy.proxy_server.prisma_client.tx = original_tx
 
 
 @pytest.mark.parametrize("team_member_role", ["admin", "user"])
@@ -1434,42 +1446,51 @@ async def test_create_team_member_add_team_admin(
         mock_litellm_usertable.find_unique = AsyncMock(return_value=None)
 
         team_mock_client = AsyncMock()
-        original_val = getattr(
-            litellm.proxy.proxy_server.prisma_client.db, "litellm_teamtable"
-        )
-        litellm.proxy.proxy_server.prisma_client.db.litellm_teamtable = team_mock_client
-
         team_mock_client.update = AsyncMock(
             return_value=LiteLLM_TeamTableCachedObj(team_id="1234")
         )
 
-        try:
-            await team_member_add(
-                data=team_member_add_request,
-                user_api_key_dict=valid_token,
+        tx_mock = AsyncMock()
+        tx_mock.query_raw = AsyncMock(return_value=[{"members_with_roles": []}])
+        tx_mock.litellm_teamtable = team_mock_client
+        tx_cm = MagicMock()
+        tx_cm.__aenter__ = AsyncMock(return_value=tx_mock)
+        tx_cm.__aexit__ = AsyncMock(return_value=None)
+
+        with (
+            patch.object(
+                litellm.proxy.proxy_server.prisma_client.db,
+                "litellm_teamtable",
+                team_mock_client,
+            ),
+            patch.object(
+                litellm.proxy.proxy_server.prisma_client,
+                "tx",
+                MagicMock(return_value=tx_cm),
+            ),
+        ):
+            try:
+                await team_member_add(
+                    data=team_member_add_request,
+                    user_api_key_dict=valid_token,
+                )
+            except HTTPException as e:
+                if user_role == "user" or new_member_method == "user_id":
+                    assert e.status_code == 403
+                    return
+                else:
+                    raise e
+
+            mock_client.assert_called()
+
+            assert (
+                mock_client.call_args.kwargs["data"]["create"]["max_budget"]
+                == litellm.max_internal_user_budget
             )
-        except HTTPException as e:
-            if user_role == "user":
-                assert e.status_code == 403
-                return
-            else:
-                raise e
-
-        mock_client.assert_called()
-
-        print(f"mock_client.call_args: {mock_client.call_args}")
-        print("mock_client.call_args.kwargs: {}".format(mock_client.call_args.kwargs))
-
-        assert (
-            mock_client.call_args.kwargs["data"]["create"]["max_budget"]
-            == litellm.max_internal_user_budget
-        )
-        assert (
-            mock_client.call_args.kwargs["data"]["create"]["budget_duration"]
-            == litellm.internal_user_budget_duration
-        )
-
-        litellm.proxy.proxy_server.prisma_client.db.litellm_teamtable = original_val
+            assert (
+                mock_client.call_args.kwargs["data"]["create"]["budget_duration"]
+                == litellm.internal_user_budget_duration
+            )
 
 
 @pytest.mark.asyncio
@@ -2676,6 +2697,79 @@ def test_get_timeout_from_request():
     assert timeout == 90.5
 
 
+def test_add_litellm_data_for_backend_llm_call_marks_client_side_timeout():
+    """A caller-supplied x-litellm-timeout must be marked with client_side_timeout=True,
+    so the router's fallback-cooldown trigger can tell it apart from a deployment
+    actually timing out (a caller could otherwise force every deployment in a fallback
+    chain to look unhealthy with a single near-zero timeout request)."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="test_api_key")
+
+    data = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+        headers={"x-litellm-timeout": "0.001"},
+        request_data={},
+        user_api_key_dict=user_api_key_dict,
+    )
+    assert data["timeout"] == 0.001
+    assert data["client_side_timeout"] is True
+
+    data_without_header = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+        headers={},
+        request_data={},
+        user_api_key_dict=user_api_key_dict,
+    )
+    assert "client_side_timeout" not in data_without_header
+
+
+@pytest.mark.parametrize(
+    "request_data",
+    [
+        {"timeout": 0.001},
+        {"request_timeout": 0.001},
+        {"stream_timeout": 0.001},
+    ],
+)
+def test_add_litellm_data_for_backend_llm_call_marks_client_side_timeout_from_body(
+    request_data,
+):
+    """Router._get_timeout resolves the effective timeout from kwargs["timeout"],
+    kwargs["request_timeout"], or kwargs["stream_timeout"], and a caller can supply any
+    of those directly in the request body, not just via the x-litellm-timeout header.
+    Missing this would let a caller force a 408 on every deployment in a fallback chain
+    without it being recognized as caller-controlled, cooling down deployments other
+    tenants rely on."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="test_api_key")
+
+    data = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+        headers={},
+        request_data=request_data,
+        user_api_key_dict=user_api_key_dict,
+    )
+    assert data["client_side_timeout"] is True
+
+
+def test_add_litellm_data_for_backend_llm_call_ignores_forged_client_side_timeout():
+    """The caller-supplied client_side_timeout key itself must never be trusted verbatim:
+    the marker is always recomputed from the actual timeout sources, so a caller can't
+    forge client_side_timeout=True to dodge cooldown on a real deployment failure."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="test_api_key")
+
+    data = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+        headers={},
+        request_data={"client_side_timeout": True},
+        user_api_key_dict=user_api_key_dict,
+    )
+    assert "client_side_timeout" not in data
+
+
 @pytest.mark.parametrize(
     "ui_exists, ui_has_content",
     [
@@ -2844,7 +2938,9 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
 async def test_get_config_callbacks_environment_variables(client_no_auth):
     """
     Test that /get/config/callbacks correctly includes environment variables
-    for each callback type. Values are returned as-is from the config (no decryption).
+    for each callback type. Under ``client_no_auth`` the resolved role is
+    not ``PROXY_ADMIN``, so values matched by the redaction helper come back
+    as ``"REDACTED"`` and other values pass through verbatim.
     """
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -2886,12 +2982,11 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
         assert langfuse_callback["type"] == "success"
         assert "variables" in langfuse_callback
 
-        # Verify langfuse env vars are present (values returned as-is, no decryption)
         langfuse_vars = langfuse_callback["variables"]
         assert "LANGFUSE_PUBLIC_KEY" in langfuse_vars
-        assert langfuse_vars["LANGFUSE_PUBLIC_KEY"] == "test-public-key"
+        assert langfuse_vars["LANGFUSE_PUBLIC_KEY"] == "REDACTED"
         assert "LANGFUSE_SECRET_KEY" in langfuse_vars
-        assert langfuse_vars["LANGFUSE_SECRET_KEY"] == "test-secret-key"
+        assert langfuse_vars["LANGFUSE_SECRET_KEY"] == "REDACTED"
         assert "LANGFUSE_HOST" in langfuse_vars
         assert langfuse_vars["LANGFUSE_HOST"] == "https://cloud.langfuse.com"
 
@@ -2901,14 +2996,13 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
         assert otel_callback["type"] == "success_and_failure"
         assert "variables" in otel_callback
 
-        # Verify otel env vars are present
         otel_vars = otel_callback["variables"]
         assert "OTEL_EXPORTER" in otel_vars
         assert otel_vars["OTEL_EXPORTER"] == "otlp"
         assert "OTEL_ENDPOINT" in otel_vars
         assert otel_vars["OTEL_ENDPOINT"] == "http://localhost:4317"
         assert "OTEL_HEADERS" in otel_vars
-        assert otel_vars["OTEL_HEADERS"] == "key=value"
+        assert otel_vars["OTEL_HEADERS"] == "REDACTED"
 
 
 @pytest.mark.asyncio

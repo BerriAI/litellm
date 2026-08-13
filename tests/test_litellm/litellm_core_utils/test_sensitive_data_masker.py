@@ -197,3 +197,121 @@ def test_cost_per_token_fields_not_masked():
     # Actual secrets must still be masked
     assert "*" in masked["api_key"]
     assert "*" in masked["access_token"]
+
+
+def test_mask_sensitive_structure_passes_through_plain_topology_names():
+    """Fallback groups are usually lists of model-group name strings; those
+    carry no secrets and must survive verbatim so opt-in debug output stays useful."""
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
+
+    assert mask_sensitive_structure(["gpt-4", "claude-3-haiku"]) == ["gpt-4", "claude-3-haiku"]
+    assert mask_sensitive_structure([{"gpt-3.5-turbo": ["claude-3-haiku"]}]) == [
+        {"gpt-3.5-turbo": ["claude-3-haiku"]}
+    ]
+    assert mask_sensitive_structure(None) is None
+
+
+def test_mask_sensitive_structure_masks_credentials_in_inline_fallback_dicts():
+    """An inline-dict fallback can carry provider credentials; those values must be
+    masked before the structure is embedded in a client-facing error message."""
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
+
+    secret = "sk-INLINEFALLBACKSECRET1234567890"
+    aws_secret = "wJalrXUtnFEMIK7MDENGbPxRfiCYSECRETKEY"
+    masked = mask_sensitive_structure(
+        [{"model": "openai/gpt-4", "api_key": secret, "aws_secret_access_key": aws_secret}]
+    )
+
+    rendered = str(masked)
+    assert secret not in rendered
+    assert aws_secret not in rendered
+    # Non-secret keys stay visible so the fallback wiring remains debuggable
+    assert masked[0]["model"] == "openai/gpt-4"
+    assert "*" in masked[0]["api_key"]
+    assert "*" in masked[0]["aws_secret_access_key"]
+
+
+def test_mask_sensitive_structure_masks_credentials_nested_in_config_shape():
+    """Credentials nested inside the {group: [fallbacks]} config shape must also be masked."""
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
+
+    secret = "sk-NESTEDINLINESECRET0987654321"
+    masked = mask_sensitive_structure(
+        [{"primary-group": [{"model": "gpt-4o", "api_key": secret}]}]
+    )
+    assert secret not in str(masked)
+
+
+def test_mask_credentials_in_payload_preserves_none_and_scalars():
+    """The payload variant does not distort JSON-shaped values: None stays None,
+    ints/floats/bools stay themselves, lists stay lists. This is what makes it
+    safe for logging pipelines that persist the record verbatim."""
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+
+    result = mask_credentials_in_payload(
+        {
+            "reason": None,
+            "confidence": 0.42,
+            "flagged": True,
+            "tokens_used": 17,
+            "categories": ["pii", "toxicity"],
+            "nested": {"end_user_id": None},
+        }
+    )
+    assert result == {
+        "reason": None,
+        "confidence": 0.42,
+        "flagged": True,
+        "tokens_used": 17,
+        "categories": ["pii", "toxicity"],
+        "nested": {"end_user_id": None},
+    }
+
+
+def test_mask_credentials_in_payload_masks_inside_pydantic_models():
+    """A Pydantic model reached during the walk gets dumped to a dict so its
+    sensitive-named string fields are masked. Without this the credentials
+    inside a nested ``UserAPIKeyAuth`` in a guardrail_response reach the
+    logging pipeline unmasked once JSON serialization flattens it."""
+    from pydantic import BaseModel
+
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+
+    class Auth(BaseModel):
+        token: str = "1b01552f6e52e0d41963dd6a185bd6b074624e330999534ca7ff5adfdf622dfc"
+        team_alias: str = "acme"
+
+    result = mask_credentials_in_payload({"user_api_key_auth": Auth()})
+    auth_dict = result["user_api_key_auth"]
+    assert isinstance(auth_dict, dict)
+    assert auth_dict["team_alias"] == "acme"
+    assert (
+        auth_dict["token"]
+        != "1b01552f6e52e0d41963dd6a185bd6b074624e330999534ca7ff5adfdf622dfc"
+    )
+    assert "*" in auth_dict["token"]
+
+
+def test_mask_credentials_in_payload_masks_only_sensitive_string_leaves():
+    """Sensitive-named string leaves get masked; sibling non-string values
+    (including None) under the same key stay verbatim."""
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+
+    plaintext = "lsv2_pt_abcdef1234567890"
+    result = mask_credentials_in_payload(
+        {
+            "model": "gpt-4o-mini",
+            "callback_vars": {
+                "langsmith_api_key": plaintext,
+                "langsmith_project": "proj",
+                "extra_token_count": 5,
+            },
+        }
+    )
+    assert result["model"] == "gpt-4o-mini"
+    assert result["callback_vars"]["langsmith_project"] == "proj"
+    assert result["callback_vars"]["extra_token_count"] == 5
+    masked = result["callback_vars"]["langsmith_api_key"]
+    assert masked != plaintext
+    assert masked.startswith(plaintext[:4])
+    assert masked.endswith(plaintext[-4:])

@@ -95,7 +95,7 @@ export function ComparisonPanel({
       {/* Close button in top right */}
       <button
         onClick={handleClosePopover}
-        className="absolute top-0 right-0 p-1 hover:bg-gray-100 rounded transition-colors text-gray-500 hover:text-gray-700 z-10"
+        className="absolute top-0 right-0 p-1 hover:bg-gray-100 rounded-sm transition-colors text-gray-500 hover:text-gray-700 z-10"
       >
         <X size={14} />
       </button>

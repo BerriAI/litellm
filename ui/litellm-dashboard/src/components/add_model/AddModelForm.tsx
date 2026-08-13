@@ -2,6 +2,7 @@ import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProvider
 import { useGuardrails } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
 import { useTags } from "@/app/(dashboard)/hooks/tags/useTags";
 import { all_admin_roles, isUserTeamAdminForAnyTeam } from "@/utils/roles";
+import { modelCreationScope } from "@/utils/modelPermissions";
 import { Switch, Text } from "@tremor/react";
 import type { FormInstance } from "antd";
 import { Select as AntdSelect, Button, Card, Col, Form, Modal, Row, Tooltip, Typography, Alert } from "antd";
@@ -10,7 +11,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import TeamDropdown from "../common_components/team_dropdown";
 import type { Team } from "../key_team_helpers/key_list";
 import { type CredentialItem, type ProviderCreateInfo, modelAvailableCall } from "../networking";
-import { Providers, providerLogoMap } from "../provider_info_helpers";
+import { Providers } from "../provider_info_helpers";
 import { ProviderLogo } from "../molecules/models/ProviderLogo";
 import AdvancedSettings from "./advanced_settings";
 import ConditionalPublicModelName from "./conditional_public_model_name";
@@ -65,7 +66,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   } = useProviderFields();
   const { data: guardrailsData } = useGuardrails();
   const guardrailsList = guardrailsData?.guardrails.map((g) => g.guardrail_name);
-  const { data: tagsList, isLoading: isTagsLoading, error: tagsError } = useTags();
+  const { data: tagsList } = useTags();
 
   const handleTestConnection = async () => {
     setIsTestingConnection(true);
@@ -101,6 +102,10 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
 
   const isAdmin = all_admin_roles.includes(userRole);
   const isTeamAdmin = isUserTeamAdminForAnyTeam(teams, userId);
+  // Same owner the Auto-Routers tab uses, so the two creation forms cannot disagree about
+  // who has to name a team. This form is only reachable when creation is allowed at all.
+  const createScope = modelCreationScope({ userRole, userID: userId }, { teams, disabledForInternalUsers: false });
+  const requiresTeamScope = createScope === "team-required";
 
   return (
     <>
@@ -110,20 +115,17 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
         <Form
           form={form}
           onFinish={async (values) => {
-            console.log("🔥 Form onFinish triggered with values:", values);
             await handleOk().then(() => {
               setTeamAdminSelectedTeam(null);
             });
           }}
-          onFinishFailed={(errorInfo) => {
-            console.log("💥 Form onFinishFailed triggered:", errorInfo);
-          }}
+          onFinishFailed={(errorInfo) => {}}
           labelCol={{ span: 10 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
         >
           <>
-            {isTeamAdmin && !isAdmin && (
+            {requiresTeamScope && (
               <>
                 <Form.Item
                   label="Select Team"
@@ -184,7 +186,6 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                     {sortedProviderMetadata.map((providerInfo) => {
                       const displayName = providerInfo.provider_display_name;
                       const providerKey = providerInfo.provider;
-                      const logoSrc = providerLogoMap[displayName] ?? "";
 
                       return (
                         <AntdSelect.Option key={providerKey} value={providerKey} data-label={displayName}>
@@ -260,15 +261,14 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                 >
                   {({ getFieldValue }) => {
                     const credentialName = getFieldValue("litellm_credential_name");
-                    console.log("🔑 Credential Name Changed:", credentialName);
                     // Only show provider specific fields if no credentials selected
                     if (!credentialName) {
                       return (
                         <>
                           <div className="flex items-center my-4">
-                            <div className="flex-grow border-t border-gray-200"></div>
+                            <div className="grow border-t border-gray-200"></div>
                             <span className="px-4 text-gray-500 text-sm">OR</span>
-                            <div className="flex-grow border-t border-gray-200"></div>
+                            <div className="grow border-t border-gray-200"></div>
                           </div>
                           <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
                         </>
@@ -278,9 +278,9 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                   }}
                 </Form.Item>
                 <div className="flex items-center my-4">
-                  <div className="flex-grow border-t border-gray-200"></div>
+                  <div className="grow border-t border-gray-200"></div>
                   <span className="px-4 text-gray-500 text-sm">Additional Model Info Settings</span>
-                  <div className="flex-grow border-t border-gray-200"></div>
+                  <div className="grow border-t border-gray-200"></div>
                 </div>
                 {/* Team-only Model Switch - Only show for proxy admins, not team admins */}
                 {(isAdmin || !isTeamAdmin) && (
@@ -312,7 +312,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                 )}
 
                 {/* Conditional Team Selection */}
-                {isTeamOnly && (isAdmin || !isTeamAdmin) && (
+                {isTeamOnly && !requiresTeamScope && (
                   <Form.Item
                     label="Select Team"
                     name="team_id"

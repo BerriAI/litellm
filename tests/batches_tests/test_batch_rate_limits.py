@@ -913,7 +913,7 @@ async def test_batch_logging_azure_credentials_regression():
     from unittest.mock import AsyncMock, MagicMock, patch
     from litellm.batches.batch_utils import (
         _extract_file_access_credentials,
-        _get_batch_output_file_content_as_dictionary,
+        _fetch_batch_output_file_content,
         _handle_completed_batch,
     )
     from litellm.types.llms.openai import Batch, HttpxBinaryResponseContent
@@ -996,7 +996,7 @@ async def test_batch_logging_azure_credentials_regression():
     with patch(
         "litellm.files.main.afile_content", side_effect=mock_afile_content_tracker
     ):
-        result = await _get_batch_output_file_content_as_dictionary(
+        result = await _fetch_batch_output_file_content(
             batch=mock_batch,
             custom_llm_provider="azure",
             litellm_params=azure_credentials,
@@ -1092,7 +1092,7 @@ async def test_batch_logging_azure_credentials_regression():
         )
 
         # Call without litellm_params (should still work for OpenAI)
-        result = await _get_batch_output_file_content_as_dictionary(
+        result = await _fetch_batch_output_file_content(
             batch=mock_batch,
             custom_llm_provider="openai",
             litellm_params=None,

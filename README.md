@@ -156,35 +156,41 @@ response = await client.send_message(request)
 
 ### AI Gateway (Proxy Server)
 
-**Step 1.** [Add your Agent to the AI Gateway](https://docs.litellm.ai/docs/a2a#adding-your-agent)
+**Step 1.** [Add your Agent to the AI Gateway](https://docs.litellm.ai/docs/a2a#adding-your-agent) — set `protocolVersion` to `1.0` or `0.3` per agent
 
-**Step 2.** Call Agent via A2A SDK
+**Step 2.** Call Agent via A2A SDK (requires `a2a-sdk>=1.1.0`)
 
 ```python
-from a2a.client import A2ACardResolver, A2AClient
-from a2a.types import MessageSendParams, SendMessageRequest
-from uuid import uuid4
 import httpx
+from a2a.client import A2ACardResolver, ClientConfig, ClientFactory
+from a2a.types import Message, Part, Role, SendMessageRequest
+from a2a.utils.constants import TransportProtocol
+from uuid import uuid4
 
 base_url = "http://localhost:4000/a2a/my-agent"  # LiteLLM proxy + agent name
 headers = {"Authorization": "Bearer sk-1234"}    # LiteLLM Virtual Key
 
-async with httpx.AsyncClient(headers=headers) as httpx_client:
-    resolver = A2ACardResolver(httpx_client=httpx_client, base_url=base_url)
+async with httpx.AsyncClient(headers=headers, timeout=60.0) as http_client:
+    resolver = A2ACardResolver(httpx_client=http_client, base_url=base_url)
     agent_card = await resolver.get_agent_card()
-    client = A2AClient(httpx_client=httpx_client, agent_card=agent_card)
+    config = ClientConfig(
+        httpx_client=http_client,
+        streaming=False,
+        supported_protocol_bindings=[TransportProtocol.JSONRPC, TransportProtocol.HTTP_JSON],
+    )
+    client = ClientFactory(config).create(agent_card)
 
     request = SendMessageRequest(
-        id=str(uuid4()),
-        params=MessageSendParams(
-            message={
-                "role": "user",
-                "parts": [{"kind": "text", "text": "Hello!"}],
-                "messageId": uuid4().hex,
-            }
+        message=Message(
+            message_id=uuid4().hex,
+            role=Role.ROLE_USER,
+            parts=[Part(text="Hello!")],
         )
     )
-    response = await client.send_message(request)
+    async for event in client.send_message(request):
+        populated = event.ListFields()
+        if populated and populated[0][0].name in ("message", "msg"):
+            print("".join(getattr(p, "text", "") or "" for p in populated[0][1].parts))
 ```
 
 [**Docs: A2A Agent Gateway**](https://docs.litellm.ai/docs/a2a)
@@ -546,17 +552,12 @@ The Terraform modules live at [`terraform/litellm/aws/`](./terraform/litellm/aws
 2. Run dependent services `docker-compose up db prometheus`
 
 #### Backend
-1. (In root) create virtual environment `python -m venv .venv`
-2. Activate virtual environment `source .venv/bin/activate`
-3. Install dependencies `uv sync --all-extras --group proxy-dev`
-4. `uv run prisma generate`
-5. `prisma generate`
-6. Start proxy backend `python litellm/proxy/proxy_cli.py`
+1. Run `make bootstrap`
+2. Start proxy backend: `uv run python litellm/proxy/proxy_cli.py`
 
 #### Frontend
-1. Navigate to `ui/litellm-dashboard`
-2. Install dependencies `npm install`
-3. Run `npm run dev` to start the dashboard
+1. Navigate to `ui/litellm-dashboard` (dependencies were already installed w/ `make bootstrap`)
+2. Start dashboard: `npm run dev`
 
 ### Verify Docker Image Signatures
 

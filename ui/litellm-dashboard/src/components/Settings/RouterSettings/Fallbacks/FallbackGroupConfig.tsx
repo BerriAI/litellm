@@ -18,9 +18,16 @@ interface FallbackGroupConfigProps {
   onChange: (updatedGroup: FallbackGroup) => void;
   availableModels: string[];
   maxFallbacks: number;
+  disablePrimaryModel?: boolean;
 }
 
-export function FallbackGroupConfig({ group, onChange, availableModels, maxFallbacks }: FallbackGroupConfigProps) {
+export function FallbackGroupConfig({
+  group,
+  onChange,
+  availableModels,
+  maxFallbacks,
+  disablePrimaryModel = false,
+}: FallbackGroupConfigProps) {
   // Filter available options for fallbacks (exclude primary only, allow already selected to be shown for deselection)
   const availableFallbackOptions = availableModels.filter((m) => m !== group.primaryModel);
 
@@ -70,13 +77,14 @@ export function FallbackGroupConfig({ group, onChange, availableModels, maxFallb
           placeholder="Select primary model"
           value={group.primaryModel}
           onChange={handlePrimaryChange}
+          disabled={disablePrimaryModel}
           showSearch
           getPopupContainer={(trigger) => trigger.parentElement || document.body}
           filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
           options={availableModels.map((m) => ({ label: m, value: m }))}
         />
-        {!group.primaryModel && (
-          <div className="mt-2 flex items-center gap-2 text-amber-600 text-xs bg-amber-50 p-2 rounded">
+        {!disablePrimaryModel && !group.primaryModel && (
+          <div className="mt-2 flex items-center gap-2 text-amber-600 text-xs bg-amber-50 p-2 rounded-sm">
             <AlertCircle className="w-4 h-4" />
             <span>Select a model to begin configuring fallbacks</span>
           </div>
@@ -85,7 +93,7 @@ export function FallbackGroupConfig({ group, onChange, availableModels, maxFallb
 
       {/* Visual Connection */}
       <div className="flex items-center justify-center -my-4 z-10">
-        <div className="bg-indigo-50 text-indigo-500 px-4 py-1 rounded-full text-xs font-bold border border-indigo-100 flex items-center gap-2 shadow-sm">
+        <div className="bg-indigo-50 text-indigo-500 px-4 py-1 rounded-full text-xs font-bold border border-indigo-100 flex items-center gap-2 shadow-xs">
           <ArrowDown className="w-4 h-4" />
           IF FAILS, TRY...
         </div>
@@ -124,7 +132,7 @@ export function FallbackGroupConfig({ group, onChange, availableModels, maxFallb
                 return (
                   <div className="flex items-center gap-2">
                     {isSelected && orderIndex !== null && (
-                      <span className="flex items-center justify-center w-5 h-5 rounded bg-indigo-100 text-indigo-600 text-xs font-bold">
+                      <span className="flex items-center justify-center w-5 h-5 rounded-sm bg-indigo-100 text-indigo-600 text-xs font-bold">
                         {orderIndex}
                       </span>
                     )}
@@ -163,10 +171,10 @@ export function FallbackGroupConfig({ group, onChange, availableModels, maxFallb
                 return (
                   <div
                     key={`${modelValue}-${index}`}
-                    className="group flex items-center justify-between p-3 bg-white rounded-lg border border-gray-200 hover:border-indigo-300 hover:shadow-sm transition-all"
+                    className="group flex items-center justify-between p-3 bg-white rounded-lg border border-gray-200 hover:border-indigo-300 hover:shadow-xs transition-all"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="flex items-center justify-center w-6 h-6 rounded bg-gray-100 text-gray-400 group-hover:text-indigo-500 group-hover:bg-indigo-50">
+                      <div className="flex items-center justify-center w-6 h-6 rounded-sm bg-gray-100 text-gray-400 group-hover:text-indigo-500 group-hover:bg-indigo-50">
                         <span className="text-xs font-bold">{index + 1}</span>
                       </div>
                       <div>
@@ -176,6 +184,7 @@ export function FallbackGroupConfig({ group, onChange, availableModels, maxFallb
 
                     <button
                       type="button"
+                      data-testid={`remove-fallback-${modelValue}`}
                       onClick={() => removeFallback(index)}
                       className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-red-500 p-1"
                     >

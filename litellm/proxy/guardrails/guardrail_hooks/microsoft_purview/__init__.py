@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -11,14 +11,12 @@ if TYPE_CHECKING:
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
 
-    tenant_id = getattr(litellm_params, "tenant_id", None)
-    client_id = getattr(litellm_params, "client_id", None)
+    tenant_id: Final = getattr(litellm_params, "tenant_id", None)
+    client_id: Final = getattr(litellm_params, "client_id", None)
 
     # client_secret can be passed via the standard api_key field or as
     # a dedicated client_secret parameter.
-    client_secret = litellm_params.api_key or getattr(
-        litellm_params, "client_secret", None
-    )
+    client_secret: Final = litellm_params.api_key or getattr(litellm_params, "client_secret", None)
 
     if not tenant_id:
         raise ValueError("Microsoft Purview: tenant_id is required")
@@ -27,18 +25,16 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     if not client_secret:
         raise ValueError("Microsoft Purview: client_secret (or api_key) is required")
 
-    guardrail_name = guardrail.get("guardrail_name")
+    guardrail_name: Final = guardrail.get("guardrail_name")
     if not guardrail_name:
         raise ValueError("Microsoft Purview: guardrail_name is required")
 
-    purview_guardrail = MicrosoftPurviewDLPGuardrail(
+    purview_guardrail: Final = MicrosoftPurviewDLPGuardrail(
         guardrail_name=guardrail_name,
         tenant_id=str(tenant_id),
         client_id=str(client_id),
         client_secret=str(client_secret),
-        purview_app_name=str(
-            getattr(litellm_params, "purview_app_name", None) or "LiteLLM"
-        ),
+        purview_app_name=str(getattr(litellm_params, "purview_app_name", None) or "LiteLLM"),
         user_id_field=str(getattr(litellm_params, "user_id_field", None) or "user_id"),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
@@ -48,10 +44,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return purview_guardrail
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.MICROSOFT_PURVIEW.value: initialize_guardrail,
 }
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.MICROSOFT_PURVIEW.value: MicrosoftPurviewDLPGuardrail,
 }

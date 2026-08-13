@@ -1,13 +1,12 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
-import { keyUpdateCall } from "../networking";
+import { keyDeleteCall, keyUpdateCall } from "../networking";
+import { QueryClient } from "@tanstack/react-query";
 import KeyInfoView from "./key_info_view";
 
 const editViewMocks = vi.hoisted(() => ({
@@ -146,6 +145,69 @@ describe("KeyInfoView", () => {
     showSSOBanner: false,
   };
 
+  const openMoreKeyActions = async () => {
+    await userEvent.click(await screen.findByRole("button", { name: /more key actions/i }));
+  };
+
+  describe("last updated", () => {
+    const renderWithTimestamps = (overrides: Partial<KeyResponse>) => {
+      vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+      return renderWithProviders(
+        <KeyInfoView
+          keyData={{
+            ...MOCK_KEY_DATA,
+            created_at: "2021-06-15T12:00:00Z",
+            updated_at: "2023-06-15T12:00:00Z",
+            ...overrides,
+          }}
+          onClose={() => {}}
+          keyId={"test-key-id"}
+          onKeyDataUpdate={() => {}}
+          teams={[]}
+        />,
+      );
+    };
+
+    const findLastUpdatedText = async () => {
+      const label = await screen.findByText("Last Updated");
+      return label.closest("div")?.parentElement?.parentElement?.textContent ?? "";
+    };
+
+    it("should show when the key was last configured, not when it last recorded spend", async () => {
+      renderWithTimestamps({ settings_updated_at: "2022-06-15T12:00:00Z" });
+
+      expect(await findLastUpdatedText()).toMatch(/Jun \d+, 2022/);
+      expect(screen.queryByText(/Jun \d+, 2023/)).not.toBeInTheDocument();
+    });
+
+    it("should fall back to creation time for a key that was never reconfigured", async () => {
+      renderWithTimestamps({ settings_updated_at: null });
+
+      expect(await findLastUpdatedText()).toMatch(/Jun \d+, 2021/);
+      expect(screen.queryByText(/Jun \d+, 2023/)).not.toBeInTheDocument();
+    });
+  });
+
+  it("should render the key's saved router fallbacks", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, router_settings: { num_retries: 2, fallbacks: [{ "gpt-4": ["gpt-4o"] }] } }}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    expect(await screen.findByText("Router Settings")).toBeInTheDocument();
+    expect(screen.getByText("gpt-4")).toBeInTheDocument();
+    expect(screen.getByText("gpt-4o")).toBeInTheDocument();
+    expect(screen.getByText("Number of Retries: 2")).toBeInTheDocument();
+  });
+
   it("should render tags", async () => {
     vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
 
@@ -183,6 +245,42 @@ describe("KeyInfoView", () => {
     });
   });
 
+  it("should render the estimated output token settings from key metadata", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+    const keyData = {
+      ...MOCK_KEY_DATA,
+      metadata: {
+        ...MOCK_KEY_DATA.metadata,
+        default_estimated_output_tokens: 512,
+        default_estimated_output_tokens_per_model: { "gpt-4": 4096 },
+      },
+    };
+    renderWithProviders(
+      <KeyInfoView keyData={keyData} onClose={() => {}} keyId={"test-key-id"} onKeyDataUpdate={() => {}} teams={[]} />,
+    );
+
+    expect(await screen.findByText("Estimated Output Tokens: 512")).toBeInTheDocument();
+    expect(await screen.findByText('Estimated Output Tokens Per Model: {"gpt-4":4096}')).toBeInTheDocument();
+  });
+
+  it("should fall back to Default when no estimated output tokens are configured", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={MOCK_KEY_DATA}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    expect(await screen.findByText("Estimated Output Tokens: Default")).toBeInTheDocument();
+    expect(await screen.findByText("Estimated Output Tokens Per Model: Default")).toBeInTheDocument();
+  });
+
   it("should allow proxy admin to modify key", async () => {
     vi.mocked(useTeams).mockReturnValue({
       teams: [],
@@ -202,8 +300,9 @@ describe("KeyInfoView", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Regenerate Key")).toBeInTheDocument();
-      expect(screen.getByText("Delete Key")).toBeInTheDocument();
     });
+    await openMoreKeyActions();
+    expect(await screen.findByRole("menuitem", { name: /delete key/i })).toBeInTheDocument();
   });
 
   it("should allow team admin to modify key", async () => {
@@ -247,8 +346,9 @@ describe("KeyInfoView", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Regenerate Key")).toBeInTheDocument();
-      expect(screen.getByText("Delete Key")).toBeInTheDocument();
     });
+    await openMoreKeyActions();
+    expect(await screen.findByRole("menuitem", { name: /delete key/i })).toBeInTheDocument();
   });
 
   it("should allow owner to modify their own key", async () => {
@@ -271,8 +371,9 @@ describe("KeyInfoView", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Regenerate Key")).toBeInTheDocument();
-      expect(screen.getByText("Delete Key")).toBeInTheDocument();
     });
+    await openMoreKeyActions();
+    expect(await screen.findByRole("menuitem", { name: /delete key/i })).toBeInTheDocument();
   });
 
   it("should not allow other user to modify key", async () => {
@@ -294,7 +395,7 @@ describe("KeyInfoView", () => {
 
     await waitFor(() => {
       expect(screen.queryByText("Regenerate Key")).not.toBeInTheDocument();
-      expect(screen.queryByText("Delete Key")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /more key actions/i })).not.toBeInTheDocument();
     });
   });
 
@@ -318,7 +419,7 @@ describe("KeyInfoView", () => {
 
     await waitFor(() => {
       expect(screen.queryByText("Regenerate Key")).not.toBeInTheDocument();
-      expect(screen.queryByText("Delete Key")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /more key actions/i })).not.toBeInTheDocument();
     });
   });
 
@@ -362,7 +463,7 @@ describe("KeyInfoView", () => {
 
     await waitFor(() => {
       expect(screen.queryByText("Regenerate Key")).not.toBeInTheDocument();
-      expect(screen.queryByText("Delete Key")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /more key actions/i })).not.toBeInTheDocument();
     });
   });
 
@@ -572,9 +673,8 @@ describe("KeyInfoView", () => {
         />,
       );
 
-      await waitFor(() => {
-        expect(screen.getByRole("button", { name: /reset spend/i })).toBeInTheDocument();
-      });
+      await openMoreKeyActions();
+      expect(await screen.findByRole("menuitem", { name: /reset spend/i })).toBeInTheDocument();
     });
 
     it("should show Reset Spend button for team admin of key's team", async () => {
@@ -613,9 +713,8 @@ describe("KeyInfoView", () => {
         />,
       );
 
-      await waitFor(() => {
-        expect(screen.getByRole("button", { name: /reset spend/i })).toBeInTheDocument();
-      });
+      await openMoreKeyActions();
+      expect(await screen.findByRole("menuitem", { name: /reset spend/i })).toBeInTheDocument();
     });
 
     it("should not show Reset Spend button for regular key owner", async () => {
@@ -637,9 +736,9 @@ describe("KeyInfoView", () => {
         />,
       );
 
-      await waitFor(() => {
-        expect(screen.queryByRole("button", { name: /reset spend/i })).not.toBeInTheDocument();
-      });
+      await openMoreKeyActions();
+      expect(await screen.findByRole("menuitem", { name: /delete key/i })).toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: /reset spend/i })).not.toBeInTheDocument();
     });
   });
 
@@ -662,11 +761,8 @@ describe("KeyInfoView", () => {
         />,
       );
 
-      await waitFor(() => {
-        expect(screen.getByRole("button", { name: /reset spend/i })).toBeInTheDocument();
-      });
-
-      await userEvent.click(screen.getByRole("button", { name: /reset spend/i }));
+      await openMoreKeyActions();
+      await userEvent.click(await screen.findByRole("menuitem", { name: /reset spend/i }));
 
       await waitFor(() => {
         expect(screen.getByText("Reset Key Spend")).toBeInTheDocument();
@@ -693,11 +789,8 @@ describe("KeyInfoView", () => {
         />,
       );
 
-      await waitFor(() => {
-        expect(screen.getByRole("button", { name: /reset spend/i })).toBeInTheDocument();
-      });
-
-      await userEvent.click(screen.getByRole("button", { name: /reset spend/i }));
+      await openMoreKeyActions();
+      await userEvent.click(await screen.findByRole("menuitem", { name: /reset spend/i }));
 
       await waitFor(() => {
         expect(screen.getByText("Reset Key Spend")).toBeInTheDocument();
@@ -785,6 +878,41 @@ describe("KeyInfoView", () => {
       await editViewMocks.onSubmit!({ key: keyData.token, token: keyData.token, policies: [] });
 
       expect(keyUpdateCall).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ policies: [] }));
+    });
+  });
+
+  describe("delete flow", () => {
+    it("invalidates the keys list query after a successful delete so active filters survive (LIT-4080)", async () => {
+      const invalidateSpy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+      vi.mocked(useAuthorized).mockReturnValue({
+        ...baseUseAuthorizedMock,
+        userId: "proxy-admin-user",
+        userRole: "proxy_admin",
+      });
+
+      renderWithProviders(
+        <KeyInfoView
+          keyData={MOCK_KEY_DATA}
+          onClose={() => {}}
+          keyId="test-key-id"
+          onKeyDataUpdate={() => {}}
+          teams={[]}
+        />,
+      );
+
+      await openMoreKeyActions();
+      await userEvent.click(await screen.findByRole("menuitem", { name: /delete key/i }));
+
+      const confirmInput = await screen.findByPlaceholderText(MOCK_KEY_DATA.key_alias);
+      await userEvent.type(confirmInput, MOCK_KEY_DATA.key_alias);
+      await userEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+
+      await waitFor(() => {
+        expect(keyDeleteCall).toHaveBeenCalledWith("test-token", MOCK_KEY_DATA.token);
+        expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["keys", "list"] });
+      });
+
+      invalidateSpy.mockRestore();
     });
   });
 });

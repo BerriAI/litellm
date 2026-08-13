@@ -4,7 +4,7 @@ Translation from OpenAI's `/chat/completions` endpoint to IBM WatsonX's `/text/c
 Docs: https://cloud.ibm.com/apidocs/watsonx-ai#text-chat
 """
 
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Final
 
 from litellm import verbose_logger
 from litellm.secret_managers.main import get_secret_str
@@ -19,7 +19,7 @@ from ..common_utils import IBMWatsonXMixin
 
 
 class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
-    def get_supported_openai_params(self, model: str) -> List:
+    def get_supported_openai_params(self, model: str) -> list:
         return [
             "temperature",  # equivalent to temperature
             "max_tokens",  # equivalent to max_new_tokens
@@ -38,7 +38,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
             "reasoning_effort",
         ]
 
-    def is_tool_choice_option(self, tool_choice: Optional[Union[str, dict]]) -> bool:
+    def is_tool_choice_option(self, tool_choice: str | dict | None) -> bool:
         if tool_choice is None:
             return False
         if isinstance(tool_choice, str):
@@ -64,60 +64,46 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
 
         ## TOOL CHOICE ##
 
-        _tool_choice = non_default_params.pop("tool_choice", None)
+        _tool_choice: Final = non_default_params.pop("tool_choice", None)
         if self.is_tool_choice_option(_tool_choice):
             optional_params["tool_choice_option"] = _tool_choice
         elif _tool_choice is not None:
             optional_params["tool_choice"] = _tool_choice
-        return super().map_openai_params(
-            non_default_params, optional_params, model, drop_params
-        )
+        return super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
-        api_base = api_base or get_secret_str("HOSTED_VLLM_API_BASE")  # type: ignore
-        dynamic_api_key = (
-            api_key or get_secret_str("HOSTED_VLLM_API_KEY") or ""
-        )  # vllm does not require an api key
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
+        api_base = api_base or get_secret_str("HOSTED_VLLM_API_BASE")
+        dynamic_api_key = api_key or get_secret_str("HOSTED_VLLM_API_KEY") or ""  # vllm does not require an api key
         return api_base, dynamic_api_key
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         url = self._get_base_url(api_base=api_base)
         if model.startswith("deployment/"):
-            deployment_id = "/".join(model.split("/")[1:])
+            deployment_id: Final = "/".join(model.split("/")[1:])
             endpoint = (
-                WatsonXAIEndpoint.DEPLOYMENT_CHAT_STREAM.value
-                if stream
-                else WatsonXAIEndpoint.DEPLOYMENT_CHAT.value
+                WatsonXAIEndpoint.DEPLOYMENT_CHAT_STREAM.value if stream else WatsonXAIEndpoint.DEPLOYMENT_CHAT.value
             )
             endpoint = endpoint.format(deployment_id=deployment_id)
         else:
-            endpoint = (
-                WatsonXAIEndpoint.CHAT_STREAM.value
-                if stream
-                else WatsonXAIEndpoint.CHAT.value
-            )
+            endpoint = WatsonXAIEndpoint.CHAT_STREAM.value if stream else WatsonXAIEndpoint.CHAT.value
         url = url.rstrip("/") + endpoint
 
         ## add api version
-        url = self._add_api_version_to_url(
-            url=url, api_version=optional_params.pop("api_version", None)
-        )
+        url = self._add_api_version_to_url(url=url, api_version=optional_params.pop("api_version", None))
         return url
 
     @staticmethod
-    def _apply_prompt_template_core(
-        model: str, messages: List[Dict[str, str]], hf_template_fn
-    ) -> Optional[str]:
+    def _apply_prompt_template_core(model: str, messages: list[dict[str, str]], hf_template_fn) -> str | None:
         """Core logic for applying prompt templates"""
         from litellm.litellm_core_utils.prompt_templates.factory import (
             custom_prompt,
@@ -138,7 +124,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
             else:
                 hf_model = model
             try:
-                result = hf_template_fn(model=hf_model, messages=messages)
+                result: Final = hf_template_fn(model=hf_model, messages=messages)
                 # Return result if it's truthy (not None and not empty string)
                 # The caller will handle None/empty by falling back to default
                 if result:
@@ -169,9 +155,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
         return None
 
     @staticmethod
-    async def aapply_prompt_template(
-        model: str, messages: List[Dict[str, str]]
-    ) -> Optional[str]:
+    async def aapply_prompt_template(model: str, messages: list[dict[str, str]]) -> str | None:
         """Apply prompt template (async version)"""
         import litellm
         from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -208,9 +192,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
                 # Log the exception for debugging but don't raise it
                 # The caller will fall back to default prompt factory
                 try:
-                    verbose_logger.debug(
-                        f"Failed to apply HuggingFace template for model {hf_model}: {e}"
-                    )
+                    verbose_logger.debug("Failed to apply HuggingFace template for model %s: %s", hf_model, e)
                 except Exception:
                     # If logging fails, silently continue - don't break the flow
                     pass
@@ -237,9 +219,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
         return None
 
     @staticmethod
-    def apply_prompt_template(
-        model: str, messages: List[Dict[str, str]]
-    ) -> Optional[str]:
+    def apply_prompt_template(model: str, messages: list[dict[str, str]]) -> str | None:
         """Apply prompt template (sync version)"""
         from litellm.litellm_core_utils.prompt_templates.factory import (
             hf_chat_template,

@@ -12,7 +12,7 @@ Translations handled by LiteLLM:
 - Temperature => drop param (if user opts in to dropping param)
 """
 
-from typing import List, Optional
+from typing import Final
 
 import litellm
 from litellm import verbose_logger
@@ -27,10 +27,8 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         """
         Get the supported OpenAI params for the Azure O-Series models
         """
-        all_openai_params = litellm.OpenAIGPTConfig().get_supported_openai_params(
-            model=model
-        )
-        non_supported_params = [
+        all_openai_params: Final = litellm.OpenAIGPTConfig().get_supported_openai_params(model=model)
+        non_supported_params: Final = [
             "logprobs",
             "top_p",
             "presence_penalty",
@@ -38,12 +36,10 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
             "top_logprobs",
         ]
 
-        o_series_only_param = self._get_o_series_only_params(model)
+        o_series_only_param: Final = self._get_o_series_only_params(model)
 
         all_openai_params.extend(o_series_only_param)
-        return [
-            param for param in all_openai_params if param not in non_supported_params
-        ]
+        return [param for param in all_openai_params if param not in non_supported_params]
 
     def _get_o_series_only_params(self, model: str) -> list:
         """
@@ -51,7 +47,7 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
 
         - reasoning_effort
         """
-        o_series_only_param = []
+        o_series_only_param: Final = []
 
         #########################################################
         # Case 1: If the model is recognized and in litellm model cost map
@@ -72,9 +68,9 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
 
     def should_fake_stream(
         self,
-        model: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Optional[str] = None,
+        model: str | None,
+        stream: bool | None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         """
         Currently no Azure O Series models support native streaming.
@@ -83,14 +79,12 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         if stream is not True:
             return False
 
-        if (
-            model and "o3" in model
-        ):  # o3 models support streaming - https://github.com/BerriAI/litellm/issues/8274
+        if model and "o3" in model:  # o3 models support streaming - https://github.com/BerriAI/litellm/issues/8274
             return False
 
         if model is not None:
             try:
-                model_info = get_model_info(
+                model_info: Final = get_model_info(
                     model=model, custom_llm_provider=custom_llm_provider
                 )  # allow user to override default with model_info={"supports_native_streaming": true}
 
@@ -99,9 +93,7 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
                 ):  # allow user to override default with model_info={"supports_native_streaming": true}
                     return False
             except Exception as e:
-                verbose_logger.debug(
-                    f"Error getting model info in AzureOpenAIO1Config: {e}"
-                )
+                verbose_logger.debug("Error getting model info in AzureOpenAIO1Config: %s", e)
         return True
 
     def is_o_series_model(self, model: str) -> bool:
@@ -110,14 +102,10 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        model = model.replace(
-            "o_series/", ""
-        )  # handle o_series/my-random-deployment-name
-        return super().transform_request(
-            model, messages, optional_params, litellm_params, headers
-        )
+        model = model.replace("o_series/", "")  # handle o_series/my-random-deployment-name
+        return super().transform_request(model, messages, optional_params, litellm_params, headers)

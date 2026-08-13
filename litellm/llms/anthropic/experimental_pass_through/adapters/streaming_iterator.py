@@ -4,30 +4,70 @@ import copy
 import json
 import traceback
 from collections import deque
+from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Dict,
-    Iterator,
-    List,
+    Final,
     Literal,
-    Optional,
+    Protocol,
+    get_args,
 )
+
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.types.llms.anthropic import (
     AppliedEdit,
     CompactionBlock,
+    ContentBlockDelta,
     ContextManagementResponse,
+    MessageBlockDelta,
+    StreamingContentBlockDeltaType,
     UsageDelta,
     UsageIteration,
 )
-from litellm.types.utils import AdapterCompletionStreamWrapper
+from litellm.types.utils import AdapterCompletionStreamWrapper, Delta
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelResponseStream
+
+
+_STREAMING_DELTA_TYPES: Final = frozenset(get_args(StreamingContentBlockDeltaType))
+
+
+class _UsageDeltaWithIterations(UsageDelta, total=False):
+    iterations: list[UsageIteration]
+
+
+class _ChunkStream(Protocol):
+    def __iter__(self) -> "Iterator[ModelResponseStream]": ...
+
+    def __aiter__(self) -> "AsyncIterator[ModelResponseStream]": ...
+
+
+def _optional_attr(obj: object, name: str) -> object:
+    return getattr(obj, name, None)
+
+
+def _optional_attr_sequence(obj: object, name: str) -> Sequence[object]:
+    value: Final = getattr(obj, name, None)
+    return value if value else ()
+
+
+def _delta_payload_field(delta_type: StreamingContentBlockDeltaType) -> str:
+    match delta_type:
+        case "text_delta":
+            return "text"
+        case "input_json_delta":
+            return "partial_json"
+        case "thinking_delta":
+            return "thinking"
+        case "signature_delta":
+            return "signature"
+        case _:
+            assert_never(delta_type)
 
 
 class _CombinedChunkSplitter:
@@ -50,44 +90,129 @@ class _CombinedChunkSplitter:
     would advance them out of sync.
     """
 
-    def __init__(self, completion_stream: Any):
-        self._stream = completion_stream
-        self._sync_iter: Optional[Iterator[Any]] = None
-        self._async_iter: Optional[AsyncIterator[Any]] = None
-        self._buffer: deque = deque()
+    def __init__(self, completion_stream: _ChunkStream):
+        self._stream: _ChunkStream = completion_stream
+        self._sync_iter: Iterator[ModelResponseStream] | None = None
+        self._async_iter: AsyncIterator[ModelResponseStream] | None = None
+        self._buffer: deque[ModelResponseStream] = deque()
 
     @staticmethod
-    def _is_combined(chunk: Any) -> bool:
+    def _is_combined(chunk: "ModelResponseStream") -> bool:
         """True if ``chunk`` carries response content AND a finish_reason."""
-        choices = getattr(chunk, "choices", None)
+        choices: Final = _optional_attr_sequence(chunk, "choices")
         if not choices:
             return False
-        choice = choices[0]
-        if getattr(choice, "finish_reason", None) is None:
+        choice: Final = choices[0]
+        if _optional_attr(choice, "finish_reason") is None:
             return False
-        delta = getattr(choice, "delta", None)
+        delta: Final = _optional_attr(choice, "delta")
         if delta is None:
             return False
         return bool(
-            getattr(delta, "content", None)
-            or getattr(delta, "tool_calls", None)
-            or getattr(delta, "reasoning_content", None)
-            or getattr(delta, "thinking_blocks", None)
+            _optional_attr(delta, "content")
+            or _optional_attr(delta, "tool_calls")
+            or _optional_attr(delta, "reasoning_content")
+            or _optional_attr(delta, "thinking_blocks")
         )
 
+    _PAYLOAD_FIELD_GROUPS: "tuple[tuple[str, ...], ...]" = (
+        ("reasoning_content", "thinking_blocks"),
+        ("content",),
+        ("tool_calls",),
+    )
+
     @staticmethod
-    def _split(chunk: Any) -> List[Any]:
+    def _clear_usage(chunk: "ModelResponseStream") -> None:
+        if hasattr(chunk, "usage"):
+            chunk.usage = None
+        hidden_params: Final = getattr(chunk, "_hidden_params", None)
+        if isinstance(hidden_params, dict) and "usage" in hidden_params:
+            chunk._hidden_params = {key: value for key, value in hidden_params.items() if key != "usage"}
+
+    @staticmethod
+    def _split_by_payload_kind(chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
+        """Return ``(chunk,)``, or one piece per payload kind it carries.
+
+        Each piece's delta is rebuilt as a fresh ``Delta`` carrying exactly one
+        payload kind (reasoning, text, tool calls), in native Anthropic block
+        order: thinking, then text, then tool_use. Runs downstream of
+        ``_split``, which has already peeled ``finish_reason`` and usage onto
+        their own finish chunk.
+
+        Chunks that must not be split pass through unchanged: multi-choice
+        chunks (the translators read every choice, so slicing one would drop
+        or repeat payload) and tool-argument continuations (splitting one
+        would close the in-flight ``tool_use`` block mid-arguments). A
+        reasoning piece whose ``thinking_blocks`` carry no signature is
+        normalized to ``reasoning_content`` so the synthesized block start
+        stays empty and the thinking text is emitted exactly once.
+        """
+        choices: Final = _optional_attr_sequence(chunk, "choices")
+        if len(choices) != 1:
+            return (chunk,)
+        delta: Final = _optional_attr(choices[0], "delta")
+        if delta is None:
+            return (chunk,)
+        tool_calls: Final = _optional_attr_sequence(delta, "tool_calls")
+        if tool_calls and not any(
+            _optional_attr(_optional_attr(tool_call, "function"), "name") for tool_call in tool_calls
+        ):
+            return (chunk,)
+        present_groups: Final = tuple(
+            group
+            for group in _CombinedChunkSplitter._PAYLOAD_FIELD_GROUPS
+            if any(_optional_attr(delta, field) for field in group)
+        )
+        if len(present_groups) <= 1:
+            return (chunk,)
+
+        pieces: Final = tuple(copy.deepcopy(chunk) for _ in present_groups)
+        for index, (piece, group) in enumerate(zip(pieces, present_groups)):
+            copied_delta = piece.choices[0].delta
+            fields = {field: value for field in group if (value := getattr(copied_delta, field, None))}
+            fields = _CombinedChunkSplitter._normalize_reasoning_fields(fields)
+            role = getattr(copied_delta, "role", None) if index == 0 else None
+            piece.choices[0].delta = Delta(role=role, **fields)
+        return pieces
+
+    @staticmethod
+    def _normalize_reasoning_fields(fields: "dict[str, Any]") -> "dict[str, Any]":
+        """Collapse signature-less ``thinking_blocks`` into ``reasoning_content``.
+
+        The block opener seeds a ``thinking_blocks`` start body with the full
+        thinking text while the delta re-emits it, so SSE accumulators would
+        collect it twice; the ``reasoning_content`` branch opens an empty body.
+        Signature-carrying blocks are kept intact so ``signature_delta``
+        suppression of the full-text snapshot still applies.
+        """
+        thinking_blocks: Final = fields.get("thinking_blocks")
+        if not thinking_blocks:
+            return fields
+        if any(block.get("signature") for block in thinking_blocks if isinstance(block, dict)):
+            return fields
+        thinking_text: Final = "".join(
+            block.get("thinking") or ""
+            for block in thinking_blocks
+            if isinstance(block, dict) and block.get("type") == "thinking"
+        )
+        if not thinking_text:
+            return fields
+        return {"reasoning_content": thinking_text}
+
+    @staticmethod
+    def _split(chunk: "ModelResponseStream") -> "list[ModelResponseStream]":
         """Return ``[chunk]``, or ``[content_chunk, finish_chunk]`` if combined."""
         if not _CombinedChunkSplitter._is_combined(chunk):
             return [chunk]
 
         # Content chunk: keep the delta payload, clear the finish_reason.
-        content_chunk = copy.deepcopy(chunk)
+        content_chunk: Final = copy.deepcopy(chunk)
         content_chunk.choices[0].finish_reason = None
+        _CombinedChunkSplitter._clear_usage(content_chunk)
 
         # Finish chunk: keep finish_reason (and usage), clear the delta payload.
-        finish_chunk = copy.deepcopy(chunk)
-        finish_delta = finish_chunk.choices[0].delta
+        finish_chunk: Final = copy.deepcopy(chunk)
+        finish_delta: Final = finish_chunk.choices[0].delta
         finish_delta.content = None
         if hasattr(finish_delta, "tool_calls"):
             finish_delta.tool_calls = None
@@ -97,28 +222,36 @@ class _CombinedChunkSplitter:
             finish_delta.thinking_blocks = None
         return [content_chunk, finish_chunk]
 
-    def __iter__(self) -> "Iterator[Any]":
+    def __iter__(self) -> "Iterator[ModelResponseStream]":
         return self
 
-    def __next__(self) -> Any:
+    def __next__(self) -> "ModelResponseStream":
         if self._buffer:
             return self._buffer.popleft()
         if self._sync_iter is None:
             self._sync_iter = iter(self._stream)
-        chunk = next(self._sync_iter)  # propagates StopIteration when exhausted
-        self._buffer.extend(self._split(chunk))
+        chunk: Final = next(self._sync_iter)  # propagates StopIteration when exhausted
+        self._buffer.extend(
+            split_chunk
+            for combined_chunk in self._split(chunk)
+            for split_chunk in self._split_by_payload_kind(combined_chunk)
+        )
         return self._buffer.popleft()
 
-    def __aiter__(self) -> "AsyncIterator[Any]":
+    def __aiter__(self) -> "AsyncIterator[ModelResponseStream]":
         return self
 
-    async def __anext__(self) -> Any:
+    async def __anext__(self) -> "ModelResponseStream":
         if self._buffer:
             return self._buffer.popleft()
         if self._async_iter is None:
             self._async_iter = self._stream.__aiter__()
-        chunk = await self._async_iter.__anext__()  # propagates StopAsyncIteration
-        self._buffer.extend(self._split(chunk))
+        chunk: Final = await self._async_iter.__anext__()  # propagates StopAsyncIteration
+        self._buffer.extend(
+            split_chunk
+            for combined_chunk in self._split(chunk)
+            for split_chunk in self._split_by_payload_kind(combined_chunk)
+        )
         return self._buffer.popleft()
 
 
@@ -141,19 +274,19 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     sent_content_block_finish: bool = False
     current_content_block_type: Literal["text", "tool_use", "thinking"] = "text"
     sent_last_message: bool = False
-    holding_chunk: Optional[Any] = None
-    holding_stop_reason_chunk: Optional[Any] = None
+    holding_chunk: ContentBlockDelta | None = None
+    holding_stop_reason_chunk: MessageBlockDelta | None = None
     queued_usage_chunk: bool = False
     current_content_block_index: int = 0
 
     def __init__(
         self,
-        completion_stream: Any,
+        completion_stream: _ChunkStream,
         model: str,
-        tool_name_mapping: Optional[Dict[str, str]] = None,
-        applied_edits: Optional[List[AppliedEdit]] = None,
-        compaction_block: Optional[CompactionBlock] = None,
-        iterations_usage: Optional[List[UsageIteration]] = None,
+        tool_name_mapping: dict[str, str] | None = None,
+        applied_edits: list[AppliedEdit] | None = None,
+        compaction_block: CompactionBlock | None = None,
+        iterations_usage: list[UsageIteration] | None = None,
     ):
         # Wrap the upstream stream so chunks that carry both content and a
         # finish_reason (fake-streamed providers) are split into two — see
@@ -163,7 +296,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # Mapping of truncated tool names to original names (for OpenAI's 64-char limit)
         self.tool_name_mapping = tool_name_mapping or {}
         # Polyfill applied_edits on final message_delta.
-        self.applied_edits: List[AppliedEdit] = list(applied_edits or [])
+        self.applied_edits: list[AppliedEdit] = list(applied_edits or [])
         # Synthesized compaction block from compact_20260112 polyfill (streaming).
         self.compaction_block = compaction_block
         self.iterations_usage = iterations_usage
@@ -184,14 +317,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # class level) so concurrent streams don't share the same mutable dict
         # — `_should_start_new_content_block` mutates `tool_block["name"]` in
         # place, which would otherwise leak across streams.
-        self.current_content_block_start: (
-            "AnthropicStreamWrapper.ContentBlockContentBlockDict"
-        ) = self.TextBlock(
+        self.current_content_block_start: AnthropicStreamWrapper.ContentBlockContentBlockDict = self.TextBlock(
             type="text",
             text="",
         )
 
-    def _merge_usage_into_held_stop_reason_chunk(self, chunk: Any) -> Dict[str, Any]:
+    def _merge_usage_into_held_stop_reason_chunk(self, chunk: Any) -> MessageBlockDelta:
         """Merge usage data from ``chunk`` into the held ``message_delta`` chunk.
 
         Shared by both the sync ``__next__`` and async ``__anext__`` paths so
@@ -203,46 +334,41 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         merged chunk.
         """
         assert self.holding_stop_reason_chunk is not None
-        merged_chunk = self.holding_stop_reason_chunk.copy()
+        merged_chunk: Final = self.holding_stop_reason_chunk.copy()
         if "delta" not in merged_chunk:
             merged_chunk["delta"] = {}
 
-        uncached_input_tokens = chunk.usage.prompt_tokens or 0
-        if (
-            hasattr(chunk.usage, "prompt_tokens_details")
-            and chunk.usage.prompt_tokens_details
-        ):
-            cached_tokens = (
-                getattr(chunk.usage.prompt_tokens_details, "cached_tokens", 0) or 0
-            )
-            uncached_input_tokens -= cached_tokens
+        from .transformation import LiteLLMAnthropicMessagesAdapter
 
-        usage_dict: UsageDelta = {
-            "input_tokens": uncached_input_tokens,
-            "output_tokens": chunk.usage.completion_tokens or 0,
-        }
-        if (
-            hasattr(chunk.usage, "_cache_creation_input_tokens")
-            and chunk.usage._cache_creation_input_tokens > 0
-        ):
-            usage_dict["cache_creation_input_tokens"] = (
-                chunk.usage._cache_creation_input_tokens
-            )
-        if (
-            hasattr(chunk.usage, "_cache_read_input_tokens")
-            and chunk.usage._cache_read_input_tokens > 0
-        ):
-            usage_dict["cache_read_input_tokens"] = chunk.usage._cache_read_input_tokens
+        usage_dict: UsageDelta = LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage_delta(
+            chunk.usage
+        )
         merged_chunk["usage"] = usage_dict
         if self.applied_edits and "context_management" not in merged_chunk:
-            merged_chunk["context_management"] = ContextManagementResponse(
-                applied_edits=list(self.applied_edits)
-            )
+            merged_chunk["context_management"] = ContextManagementResponse(applied_edits=list(self.applied_edits))
         return self._augment_message_delta_usage(merged_chunk)
 
-    def _ensure_context_management_attached(
-        self, message_delta_chunk: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _handle_choiceless_chunk(self, chunk: "ModelResponseStream") -> bool:
+        """Consume an OpenAI-compatible chunk that carries no ``choices``.
+
+        ``choices`` is legitimately empty on metadata-only chunks; the final
+        usage chunk emitted when ``stream_options.include_usage`` is set is the
+        common case (vLLM and other OpenAI-compatible servers do this). Such a
+        chunk carries no content-block information, so the caller must not run
+        the content-block state machine over it.
+
+        Returns True when a merged ``message_delta`` was queued (usage folded
+        into the held stop-reason chunk); False when the chunk should be
+        skipped entirely.
+        """
+        if self.holding_stop_reason_chunk is not None and _optional_attr(chunk, "usage") is not None:
+            self.chunk_queue.append(self._merge_usage_into_held_stop_reason_chunk(chunk))
+            self.queued_usage_chunk = True
+            self.holding_stop_reason_chunk = None
+            return True
+        return False
+
+    def _ensure_context_management_attached(self, message_delta_chunk: MessageBlockDelta) -> MessageBlockDelta:
         """Attach ``context_management`` to a ``message_delta`` chunk if
         ``self.applied_edits`` is non-empty and the chunk does not already
         carry it. Returns the (possibly new) chunk dict.
@@ -253,52 +379,46 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         """
         if not self.applied_edits or "context_management" in message_delta_chunk:
             return message_delta_chunk
-        augmented = message_delta_chunk.copy()
-        augmented["context_management"] = ContextManagementResponse(
-            applied_edits=list(self.applied_edits)
-        )
+        augmented: Final = message_delta_chunk.copy()
+        augmented["context_management"] = ContextManagementResponse(applied_edits=list(self.applied_edits))
         return augmented
 
-    def _augment_message_delta_usage(
-        self, message_delta_chunk: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _augment_message_delta_usage(self, message_delta_chunk: MessageBlockDelta) -> MessageBlockDelta:
         """Attach polyfill compaction iteration usage to the final message_delta.
 
         Also defensively re-attaches ``context_management`` so the direct
         held-chunk flush path stays in sync with the merge path's guarantee
         when ``self.applied_edits`` is non-empty.
         """
-        message_delta_chunk = self._ensure_context_management_attached(
-            message_delta_chunk
-        )
+        message_delta_chunk = self._ensure_context_management_attached(message_delta_chunk)
         if self.iterations_usage is None:
             return message_delta_chunk
-        usage = message_delta_chunk.get("usage")
+        usage: Final = message_delta_chunk.get("usage")
         if not isinstance(usage, dict) or "iterations" in usage:
             return message_delta_chunk
 
-        input_tokens = usage.get("input_tokens", 0) or 0
-        output_tokens = usage.get("output_tokens", 0) or 0
-        augmented = message_delta_chunk.copy()
-        augmented_usage = dict(usage)
-        iterations: List[UsageIteration] = list(self.iterations_usage)
+        input_tokens: Final = usage.get("input_tokens", 0) or 0
+        output_tokens: Final = usage.get("output_tokens", 0) or 0
+        augmented: Final = message_delta_chunk.copy()
+        augmented_usage: Final[_UsageDeltaWithIterations] = {**usage}
+        iterations: Final[list[UsageIteration]] = list(self.iterations_usage)
         # Only emit a ``message`` iteration when we have real token data.
         # Without a separate usage chunk (e.g. provider sent finish_reason
         # alone), the held ``message_delta`` carries placeholder zeros from
         # the translate step; reporting a zero-token iteration would be
         # misleading and inconsistent with the non-streaming path.
         if input_tokens > 0 or output_tokens > 0:
-            message_iteration: UsageIteration = {
+            message_iteration: Final[UsageIteration] = {
                 "type": "message",
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
             }
             iterations.append(message_iteration)
-        augmented_usage["iterations"] = iterations  # type: ignore[typeddict-unknown-key]
+        augmented_usage["iterations"] = iterations
         augmented["usage"] = augmented_usage
         return augmented
 
-    def _next_compaction_event(self) -> Optional[Dict[str, Any]]:
+    def _next_compaction_event(self) -> dict[str, Any] | None:
         """Return the next compaction content-block SSE event, or ``None``.
 
         Anthropic delivers compaction as a single delta (no token-by-token
@@ -313,7 +433,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         if self.compaction_block is None or self.sent_compaction_block:
             return None
 
-        compaction_index = self.current_content_block_index
+        compaction_index: Final = self.current_content_block_index
 
         if not self.sent_compaction_block_start:
             self.sent_compaction_block_start = True
@@ -330,14 +450,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
         if not self.sent_compaction_block_delta:
             self.sent_compaction_block_delta = True
-            summary_content = self.compaction_block.get("content") or ""
+            summary_content: Final = self.compaction_block.get("content") or ""
             return {
                 "type": "content_block_delta",
                 "index": compaction_index,
                 "delta": {"type": "compaction_delta", "content": summary_content},
             }
 
-        stop_event = {
+        stop_event: Final = {
             "type": "content_block_stop",
             "index": compaction_index,
         }
@@ -387,7 +507,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     {
                         "type": "message_start",
                         "message": {
-                            "id": "msg_{}".format(uuid.uuid4()),
+                            "id": f"msg_{uuid.uuid4()}",
                             "type": "message",
                             "role": "assistant",
                             "content": [],
@@ -400,32 +520,35 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
                 return self.chunk_queue.popleft()
 
-            if (
-                self.sent_compaction_block is False
-                and self.compaction_block is not None
-            ):
-                compaction_event = self._next_compaction_event()
+            if self.sent_compaction_block is False and self.compaction_block is not None:
+                compaction_event: Final = self._next_compaction_event()
                 if compaction_event is not None:
                     return compaction_event
-
-            if self.sent_content_block_start is False:
-                self.sent_content_block_start = True
-                self.sent_content_block_finish = False
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
 
             for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
 
+                if not getattr(chunk, "choices", None):
+                    if self._handle_choiceless_chunk(chunk):
+                        return self.chunk_queue.popleft()
+                    continue
+
                 should_start_new_block = self._should_start_new_content_block(chunk)
-                if should_start_new_block:
+                is_opening_first_block = self.sent_content_block_start is False
+                if is_opening_first_block and self._is_blank_delta(chunk):
+                    continue
+                if is_opening_first_block:
+                    self.sent_content_block_start = True
+                    self.sent_content_block_finish = False
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": self.current_content_block_start,
+                        }
+                    )
+                elif should_start_new_block:
                     self._increment_content_block_index()
 
                 # applied_edits only needs to flow to the final message_delta
@@ -436,18 +559,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 # skip the applied_edits attachment in that case to avoid
                 # allocating a throwaway ``MessageBlockDelta``.
                 will_merge_into_held = (
-                    self.holding_stop_reason_chunk is not None
-                    and getattr(chunk, "usage", None) is not None
+                    self.holding_stop_reason_chunk is not None and getattr(chunk, "usage", None) is not None
                 )
                 is_final_chunk = chunk.choices[0].finish_reason is not None
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
-                    applied_edits=(
-                        self.applied_edits
-                        if is_final_chunk and not will_merge_into_held
-                        else None
-                    ),
+                    applied_edits=(self.applied_edits if is_final_chunk and not will_merge_into_held else None),
                 )
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
@@ -467,7 +585,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     # ``not self.queued_usage_chunk``.
                     continue
 
-                if should_start_new_block and not self.sent_content_block_finish:
+                if should_start_new_block and not is_opening_first_block and not self.sent_content_block_finish:
                     # Queue the sequence: content_block_stop -> content_block_start
                     # -> (optionally) the trigger chunk's delta.
                     #
@@ -499,16 +617,16 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                     # 3. If the trigger chunk carries delta content, queue it
                     # so the first delta of the new block is not silently dropped.
-                    if self._trigger_delta_has_content(processed_chunk):
+                    if self._delta_has_content(processed_chunk):
                         self.chunk_queue.append(processed_chunk)
 
                     self.sent_content_block_finish = False
                     return self.chunk_queue.popleft()
 
-                if (
-                    processed_chunk["type"] == "message_delta"
-                    and self.sent_content_block_finish is False
-                ):
+                if processed_chunk["type"] == "content_block_delta" and not self._delta_has_content(processed_chunk):
+                    continue
+
+                if processed_chunk["type"] == "message_delta" and self.sent_content_block_finish is False:
                     # Queue both the content_block_stop and the message_delta
                     self.chunk_queue.append(
                         {
@@ -520,25 +638,19 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     if processed_chunk.get("delta", {}).get("stop_reason") is not None:
                         self.holding_stop_reason_chunk = processed_chunk
                     else:
-                        processed_chunk = self._augment_message_delta_usage(
-                            processed_chunk
-                        )
+                        processed_chunk = self._augment_message_delta_usage(processed_chunk)
                         self.chunk_queue.append(processed_chunk)
                     return self.chunk_queue.popleft()
                 elif self.holding_chunk is not None:
                     self.chunk_queue.append(self.holding_chunk)
                     if processed_chunk.get("type") == "message_delta":
-                        processed_chunk = self._augment_message_delta_usage(
-                            processed_chunk
-                        )
+                        processed_chunk = self._augment_message_delta_usage(processed_chunk)
                     self.chunk_queue.append(processed_chunk)
                     self.holding_chunk = None
                     return self.chunk_queue.popleft()
                 else:
                     if processed_chunk.get("type") == "message_delta":
-                        processed_chunk = self._augment_message_delta_usage(
-                            processed_chunk
-                        )
+                        processed_chunk = self._augment_message_delta_usage(processed_chunk)
                     self.chunk_queue.append(processed_chunk)
                     return self.chunk_queue.popleft()
 
@@ -568,11 +680,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             }
                         )
                         self.sent_content_block_finish = True
-                    self.chunk_queue.append(
-                        self._augment_message_delta_usage(
-                            self.holding_stop_reason_chunk
-                        )
-                    )
+                    self.chunk_queue.append(self._augment_message_delta_usage(self.holding_stop_reason_chunk))
                     self.holding_stop_reason_chunk = None
             else:
                 self.holding_chunk = None
@@ -595,17 +703,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             if self.holding_stop_reason_chunk is not None:
                 if not self.sent_content_block_finish:
                     self.sent_content_block_finish = True
-                    self.chunk_queue.append(
-                        self._augment_message_delta_usage(
-                            self.holding_stop_reason_chunk
-                        )
-                    )
+                    self.chunk_queue.append(self._augment_message_delta_usage(self.holding_stop_reason_chunk))
                     self.holding_stop_reason_chunk = None
                     return {
                         "type": "content_block_stop",
                         "index": self.current_content_block_index,
                     }
-                held = self._augment_message_delta_usage(self.holding_stop_reason_chunk)
+                held: Final = self._augment_message_delta_usage(self.holding_stop_reason_chunk)
                 self.holding_stop_reason_chunk = None
                 return held
             if self.sent_last_message is False:
@@ -613,9 +717,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return {"type": "message_stop"}
             raise StopIteration
         except Exception as e:
-            verbose_logger.error(
-                "Anthropic Adapter - {}\n{}".format(e, traceback.format_exc())
-            )
+            verbose_logger.error("Anthropic Adapter - %s\n%s", e, traceback.format_exc())
             raise StopIteration
 
     async def __anext__(self):
@@ -633,7 +735,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     {
                         "type": "message_start",
                         "message": {
-                            "id": "msg_{}".format(uuid.uuid4()),
+                            "id": f"msg_{uuid.uuid4()}",
                             "type": "message",
                             "role": "assistant",
                             "content": [],
@@ -646,33 +748,35 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
                 return self.chunk_queue.popleft()
 
-            if (
-                self.sent_compaction_block is False
-                and self.compaction_block is not None
-            ):
-                compaction_event = self._next_compaction_event()
+            if self.sent_compaction_block is False and self.compaction_block is not None:
+                compaction_event: Final = self._next_compaction_event()
                 if compaction_event is not None:
                     return compaction_event
-
-            if self.sent_content_block_start is False:
-                self.sent_content_block_start = True
-                self.sent_content_block_finish = False
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
 
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
 
-                # Check if we need to start a new content block
+                if not getattr(chunk, "choices", None):
+                    if self._handle_choiceless_chunk(chunk):
+                        return self.chunk_queue.popleft()
+                    continue
+
                 should_start_new_block = self._should_start_new_content_block(chunk)
-                if should_start_new_block:
+                is_opening_first_block = self.sent_content_block_start is False
+                if is_opening_first_block and self._is_blank_delta(chunk):
+                    continue
+                if is_opening_first_block:
+                    self.sent_content_block_start = True
+                    self.sent_content_block_finish = False
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": self.current_content_block_start,
+                        }
+                    )
+                elif should_start_new_block:
                     self._increment_content_block_index()
 
                 # applied_edits only needs to flow to the final message_delta
@@ -683,18 +787,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 # skip the applied_edits attachment in that case to avoid
                 # allocating a throwaway ``MessageBlockDelta``.
                 will_merge_into_held = (
-                    self.holding_stop_reason_chunk is not None
-                    and getattr(chunk, "usage", None) is not None
+                    self.holding_stop_reason_chunk is not None and getattr(chunk, "usage", None) is not None
                 )
                 is_final_chunk = chunk.choices[0].finish_reason is not None
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
-                    applied_edits=(
-                        self.applied_edits
-                        if is_final_chunk and not will_merge_into_held
-                        else None
-                    ),
+                    applied_edits=(self.applied_edits if is_final_chunk and not will_merge_into_held else None),
                 )
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
@@ -708,7 +807,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 # Check if this processed chunk has a stop_reason - hold it for next chunk
 
                 if not self.queued_usage_chunk:
-                    if should_start_new_block and not self.sent_content_block_finish:
+                    if should_start_new_block and not is_opening_first_block and not self.sent_content_block_finish:
                         # Queue the sequence: content_block_stop -> content_block_start
                         # -> (optionally) the trigger chunk's delta.
                         #
@@ -738,17 +837,19 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                         # 3. If the trigger chunk carries delta content, queue it
                         # so the first delta of the new block is not silently dropped.
-                        if self._trigger_delta_has_content(processed_chunk):
+                        if self._delta_has_content(processed_chunk):
                             self.chunk_queue.append(processed_chunk)
 
                         # Reset state for new block
                         self.sent_content_block_finish = False
                         return self.chunk_queue.popleft()
 
-                    if (
-                        processed_chunk["type"] == "message_delta"
-                        and self.sent_content_block_finish is False
+                    if processed_chunk["type"] == "content_block_delta" and not self._delta_has_content(
+                        processed_chunk
                     ):
+                        continue
+
+                    if processed_chunk["type"] == "message_delta" and self.sent_content_block_finish is False:
                         # Queue both the content_block_stop and the holding chunk
                         self.chunk_queue.append(
                             {
@@ -757,32 +858,23 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             }
                         )
                         self.sent_content_block_finish = True
-                        if (
-                            processed_chunk.get("delta", {}).get("stop_reason")
-                            is not None
-                        ):
+                        if processed_chunk.get("delta", {}).get("stop_reason") is not None:
                             self.holding_stop_reason_chunk = processed_chunk
                         else:
-                            processed_chunk = self._augment_message_delta_usage(
-                                processed_chunk
-                            )
+                            processed_chunk = self._augment_message_delta_usage(processed_chunk)
                             self.chunk_queue.append(processed_chunk)
                         return self.chunk_queue.popleft()
                     elif self.holding_chunk is not None:
                         # Queue both chunks
                         self.chunk_queue.append(self.holding_chunk)
                         if processed_chunk.get("type") == "message_delta":
-                            processed_chunk = self._augment_message_delta_usage(
-                                processed_chunk
-                            )
+                            processed_chunk = self._augment_message_delta_usage(processed_chunk)
                         self.chunk_queue.append(processed_chunk)
                         self.holding_chunk = None
                         return self.chunk_queue.popleft()
                     else:
                         if processed_chunk.get("type") == "message_delta":
-                            processed_chunk = self._augment_message_delta_usage(
-                                processed_chunk
-                            )
+                            processed_chunk = self._augment_message_delta_usage(processed_chunk)
                         self.chunk_queue.append(processed_chunk)
                         return self.chunk_queue.popleft()
 
@@ -812,11 +904,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             }
                         )
                         self.sent_content_block_finish = True
-                    self.chunk_queue.append(
-                        self._augment_message_delta_usage(
-                            self.holding_stop_reason_chunk
-                        )
-                    )
+                    self.chunk_queue.append(self._augment_message_delta_usage(self.holding_stop_reason_chunk))
                     self.holding_stop_reason_chunk = None
             else:
                 self.holding_chunk = None
@@ -844,17 +932,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             if self.holding_stop_reason_chunk is not None:
                 if not self.sent_content_block_finish:
                     self.sent_content_block_finish = True
-                    self.chunk_queue.append(
-                        self._augment_message_delta_usage(
-                            self.holding_stop_reason_chunk
-                        )
-                    )
+                    self.chunk_queue.append(self._augment_message_delta_usage(self.holding_stop_reason_chunk))
                     self.holding_stop_reason_chunk = None
                     return {
                         "type": "content_block_stop",
                         "index": self.current_content_block_index,
                     }
-                held = self._augment_message_delta_usage(self.holding_stop_reason_chunk)
+                held: Final = self._augment_message_delta_usage(self.holding_stop_reason_chunk)
                 self.holding_stop_reason_chunk = None
                 return held
             if not self.sent_last_message:
@@ -896,36 +980,59 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         self.current_content_block_index += 1
 
     @staticmethod
-    def _trigger_delta_has_content(processed_chunk: Dict[str, Any]) -> bool:
-        """Return True if a translated trigger chunk carries a non-empty
-        ``content_block_delta`` payload that must be re-emitted after a
-        block transition.
+    def _delta_has_content(processed_chunk: dict[str, Any]) -> bool:
+        """Return True if a translated chunk carries a non-empty
+        ``content_block_delta`` payload.
 
-        When an upstream chunk both *triggers* a new content block (its type
-        differs from the active block) and *carries* delta content, that
-        content belongs to the new block. The synthesized
-        ``content_block_start`` only ever carries an empty body — see
+        Gates every ``content_block_delta`` emission. An empty delta carries
+        no information, and the translate fallback types empty deltas as
+        ``text_delta`` regardless of the active block's type — emitting one
+        into an open ``thinking`` block (e.g. Bedrock Converse sends an empty
+        reasoning delta mid-block) crashes strict Anthropic SDK clients with
+        "Content block is not a text block".
+
+        Also gates re-emission after a block transition: when an upstream
+        chunk both *triggers* a new content block (its type differs from the
+        active block) and *carries* delta content, that content belongs to
+        the new block. The synthesized ``content_block_start`` only ever
+        carries an empty body — see
         ``_translate_streaming_openai_chunk_to_anthropic_content_block``,
         which returns an empty ``TextBlock``/``ToolUseBlock``/thinking block —
         so the trigger chunk's delta must be re-queued or the first token of
         the new block (the first non-empty text/thinking delta, or bundled
         tool arguments) is silently dropped.
+
+        Delta types outside ``StreamingContentBlockDeltaType`` — the closed
+        set the translate layer can produce — are treated as empty. The
+        per-type payload lookup is exhaustively matched against that set in
+        ``_delta_payload_field``, so extending the translate layer with a new
+        delta type fails type-checking here until it is handled.
         """
         if processed_chunk.get("type") != "content_block_delta":
             return False
-        delta = processed_chunk.get("delta")
+        delta: Final = processed_chunk.get("delta")
         if not isinstance(delta, dict):
             return False
-        delta_type = delta.get("type")
-        if delta_type == "text_delta":
-            return bool(delta.get("text"))
-        if delta_type == "input_json_delta":
-            return bool(delta.get("partial_json"))
-        if delta_type == "thinking_delta":
-            return bool(delta.get("thinking"))
-        if delta_type == "signature_delta":
-            return bool(delta.get("signature"))
-        return False
+        delta_type: Final = delta.get("type")
+        if delta_type not in _STREAMING_DELTA_TYPES:
+            return False
+        return bool(delta.get(_delta_payload_field(delta_type)))
+
+    @staticmethod
+    def _is_blank_delta(chunk: "ModelResponseStream") -> bool:
+        choice: Final = chunk.choices[0]
+        if choice.finish_reason is not None:
+            return False
+        delta: Final = choice.delta
+        if getattr(delta, "tool_calls", None):
+            return False
+        if getattr(delta, "content", None):
+            return False
+        if getattr(delta, "reasoning_content", None):
+            return False
+        if getattr(delta, "thinking_blocks", None):
+            return False
+        return True
 
     def _should_start_new_content_block(self, chunk: "ModelResponseStream") -> bool:
         """
@@ -948,7 +1055,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             block_type,
             content_block_start,
         ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
-            choices=chunk.choices  # type: ignore
+            choices=chunk.choices
         )
 
         # Restore original tool name if it was truncated for OpenAI's 64-char limit
@@ -961,10 +1068,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             tool_block = cast(ToolUseBlock, content_block_start)
 
             if tool_block.get("name"):
-                truncated_name = tool_block["name"]
-                original_name = self.tool_name_mapping.get(
-                    truncated_name, truncated_name
-                )
+                truncated_name: Final = tool_block["name"]
+                original_name: Final = self.tool_name_mapping.get(truncated_name, truncated_name)
                 tool_block["name"] = original_name
 
         if block_type != self.current_content_block_type:

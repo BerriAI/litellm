@@ -19,7 +19,7 @@
     "/v1/fine-tuning" "/fine-tuning" "/v1/responses" "/responses" "/v1/threads" "/threads"
     "/v1/assistants" "/assistants" "/v1/vector_stores" "/vector_stores" "/v1/indexes"
     "/v1/models" "/models" "/openai" "/engines"
-    "/v1/messages" "/messages" "/v1/skills" "/v1/a2a"
+    "/v1/messages" "/messages" "/v1/skills" "/v1/a2a" "/a2a"
     "/v1/rerank" "/v2/rerank" "/rerank" "/v1/ocr" "/ocr" "/v1/rag" "/rag"
     "/v1/video" "/v1/videos" "/video" "/videos" "/v1/search" "/search"
     "/v1/containers" "/containers" "/v1/evals" "/v1/memory" "/queue/chat"

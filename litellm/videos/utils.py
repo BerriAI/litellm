@@ -1,4 +1,4 @@
-from typing import Any, Dict, cast
+from typing import Any, Final, cast
 
 import litellm
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
@@ -14,7 +14,7 @@ class VideoGenerationRequestUtils:
         model: str,
         video_generation_provider_config: BaseVideoConfig,
         video_generation_optional_params: VideoCreateOptionalRequestParams,
-    ) -> Dict:
+    ) -> dict:
         """
         Get optional parameters for the video generation API.
 
@@ -27,7 +27,7 @@ class VideoGenerationRequestUtils:
             A dictionary of supported parameters for the video generation API
         """
         # Map parameters to provider-specific format
-        mapped_params = video_generation_provider_config.map_openai_params(
+        mapped_params: Final = video_generation_provider_config.map_openai_params(
             video_create_optional_params=video_generation_optional_params,
             model=model,
             drop_params=litellm.drop_params,
@@ -35,7 +35,7 @@ class VideoGenerationRequestUtils:
 
         # Merge extra_body params if present (for provider-specific parameters)
         if "extra_body" in video_generation_optional_params:
-            extra_body = video_generation_optional_params["extra_body"]
+            extra_body: Final = video_generation_optional_params["extra_body"]
             if extra_body and isinstance(extra_body, dict):
                 # extra_body params override mapped params
                 mapped_params.update(extra_body)
@@ -46,7 +46,7 @@ class VideoGenerationRequestUtils:
 
     @staticmethod
     def get_requested_video_generation_optional_param(
-        params: Dict[str, Any],
+        params: dict[str, Any],
     ) -> VideoCreateOptionalRequestParams:
         """
         Filter parameters to only include those defined in VideoCreateOptionalRequestParams.
@@ -63,27 +63,24 @@ class VideoGenerationRequestUtils:
         if not isinstance(raw_kwargs, dict):
             raw_kwargs = {}
 
-        kwargs_extra_body = raw_kwargs.pop("extra_body", None)
-        top_level_extra_body = params.get("extra_body")
+        kwargs_extra_body: Final = raw_kwargs.pop("extra_body", None)
+        top_level_extra_body: Final = params.get("extra_body")
 
-        base_params_raw = {
+        base_params_raw: Final = {
             key: value
             for key, value in params.items()
-            if key not in {"kwargs", "extra_body", "prompt", "model"}
-            and value is not None
+            if key not in {"kwargs", "extra_body", "prompt", "model"} and value is not None
         }
-        base_params = filter_out_litellm_params(kwargs=base_params_raw)
+        base_params: Final = filter_out_litellm_params(kwargs=base_params_raw)
 
-        cleaned_kwargs = filter_out_litellm_params(
-            kwargs={k: v for k, v in raw_kwargs.items() if v is not None}
-        )
+        cleaned_kwargs: Final = filter_out_litellm_params(kwargs={k: v for k, v in raw_kwargs.items() if v is not None})
 
-        optional_params: Dict[str, Any] = {
+        optional_params: Final[dict[str, Any]] = {
             **base_params,
             **cleaned_kwargs,
         }
 
-        merged_extra_body: Dict[str, Any] = {}
+        merged_extra_body: dict[str, Any] = {}
         for extra_body_candidate in (top_level_extra_body, kwargs_extra_body):
             if isinstance(extra_body_candidate, dict):
                 for key, value in extra_body_candidate.items():

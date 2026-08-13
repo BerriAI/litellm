@@ -1,5 +1,6 @@
 import React from "react";
 import { Alert, Button } from "antd";
+import { getLoginUrl } from "@/utils/returnUrlUtils";
 
 export function OnboardingErrorView() {
   return (
@@ -11,7 +12,7 @@ export function OnboardingErrorView() {
         showIcon
       />
       <div className="mt-4">
-        <Button href="/ui/login">Back to Login</Button>
+        <Button href={getLoginUrl()}>Back to Login</Button>
       </div>
     </div>
   );

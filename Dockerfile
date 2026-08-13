@@ -1,11 +1,32 @@
+# syntax=docker/dockerfile:1.7
+
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:c61ac6919b811ea53c4782d69f1fe05218ba3c25d53f01b6ab7892e621bd4370
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:42df77a9974d6ec8b17a5ee8bc23b532600a44d705acef2409e0933c1251b45f
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:c61ac6919b811ea53c4782d69f1fe05218ba3c25d53f01b6ab7892e621bd4370
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:42df77a9974d6ec8b17a5ee8bc23b532600a44d705acef2409e0933c1251b45f
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
+# Pinned by digest like the other base images; bump explicitly on Node upgrades.
+ARG UI_BUILD_IMAGE=node:24.19-alpine3.24@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43
 
 FROM $UV_IMAGE AS uvbin
+
+# Admin UI builder. Pinned to the build platform so the architecture-independent
+# Next.js static export compiles once natively even in a multi-arch build,
+# instead of once per target arch under QEMU.
+FROM --platform=$BUILDPLATFORM $UI_BUILD_IMAGE AS ui-builder
+
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    npm_config_fund=false \
+    npm_config_audit=false
+
+WORKDIR /ui
+
+COPY ui/litellm-dashboard/package.json ui/litellm-dashboard/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --prefer-offline
+
+COPY ui/litellm-dashboard/ ./
+RUN npm run build
 
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
@@ -21,6 +42,7 @@ RUN apk add --no-cache \
     gcc \
     python3 \
     python3-dev \
+    rust \
     openssl \
     openssl-dev \
     nodejs \
@@ -42,12 +64,19 @@ RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-gr
     --extra proxy-runtime \
     --extra extra_proxy \
     --extra semantic-router \
+    --extra saml \
     --python python3
 
 # Copy full source tree
 COPY . .
 
-# Build Admin UI before final sync
+# Replace the committed UI bundle with the one built from this exact source.
+# Clearing first drops the committed bundle's content-hashed chunks that COPY
+# would otherwise leave behind alongside the fresh ones.
+RUN rm -rf litellm/proxy/_experimental/out
+COPY --from=ui-builder /ui/out/. litellm/proxy/_experimental/out/
+
+# Build Admin UI before final sync (applies the enterprise color override when present)
 RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 # Install project and workspace packages (fast - deps already cached)
@@ -56,9 +85,12 @@ RUN uv sync --frozen --no-default-groups --no-editable \
     --extra proxy-runtime \
     --extra extra_proxy \
     --extra semantic-router \
+    --extra saml \
     --python python3
 
-RUN prisma generate --schema=./schema.prisma
+RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
+    npm_config_cache=/root/.npm \
+    prisma generate --schema=./schema.prisma
 
 RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh && \
     sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
@@ -72,7 +104,11 @@ USER root
 RUN apk add --no-cache bash openssl tzdata nodejs python3 libsndfile
 
 WORKDIR /app
-ENV PATH="/app/.venv/bin:${PATH}"
+ENV PATH="/app/.venv/bin:${PATH}" \
+    PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
+    PRISMA_CLI_PATH=/opt/prisma/binaries/node_modules/.bin/prisma \
+    PRISMA_CLI_QUERY_ENGINE_TYPE=binary \
+    PRISMA_OFFLINE_MODE=true
 
 # Copy only what runtime needs. The application is installed inside the venv;
 # the rest of the builder's /app is source and build metadata that must not
@@ -86,16 +122,20 @@ COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/pr
 # working directory on sys.path; litellm/proxy/hooks resolves
 # enterprise.enterprise_hooks from it)
 COPY --from=builder /app/enterprise /app/enterprise
-# Prisma binaries live in $HOME/.cache (default prisma-python location),
-# which is /root/.cache here. Copy only the Prisma subdirs — copying the
-# whole /root/.cache drags in the uv build cache (~660 MB, includes a
-# setuptools wheel that surfaces as a CVE finding even though it's not
-# on the runtime sys.path).
-COPY --from=builder /root/.cache/prisma /root/.cache/prisma
-COPY --from=builder /root/.cache/prisma-python /root/.cache/prisma-python
+COPY --from=builder /app/litellm-proxy-extras /app/litellm-proxy-extras
+# Prisma CLI + engines are baked under /opt/prisma, a fixed path every
+# runtime uid can read and that no cache volume mount shadows. The paths are
+# pinned via PRISMA_BINARY_CACHE_DIR / PRISMA_CLI_PATH and recorded into the
+# generated client at build time, so `prisma migrate deploy` on a fresh
+# database needs no npm and no network access (#33650, #24554).
+COPY --from=builder /opt/prisma /opt/prisma
 
 RUN find /app/.venv -type f -path "*/tornado/test/*" -delete && \
-    find /app/.venv -type d -path "*/tornado/test" -delete
+    find /app/.venv -type d -path "*/tornado/test" -delete && \
+    chmod -R a+rX /opt/prisma && \
+    test -x /opt/prisma/binaries/node_modules/.bin/prisma && \
+    test -f /opt/prisma/binaries/node_modules/prisma/build/index.js && \
+    python -c "from prisma.client import BINARY_PATHS; paths = list(BINARY_PATHS.query_engine.values()); assert paths and all(p.startswith('/opt/prisma/') for p in paths), paths"
 
 EXPOSE 4000/tcp
 

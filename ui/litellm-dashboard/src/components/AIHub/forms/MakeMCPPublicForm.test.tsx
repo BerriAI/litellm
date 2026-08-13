@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import MakeMCPPublicForm from "./MakeMCPPublicForm";
-import { MCPServerData } from "../../mcp_hub_table_columns";
+import { MCPServerData } from "@/components/AIHub/MCPHubTableColumns";
 
 // Mock the networking function
 vi.mock("../../networking", () => ({

@@ -2,7 +2,7 @@
 Azure Anthropic transformation config - extends AnthropicConfig with Azure authentication
 """
 
-from typing import TYPE_CHECKING, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Dict, Final, List, Optional, Union
 
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.azure.common_utils import BaseAzureLLM
@@ -11,9 +11,6 @@ from litellm.llms.azure_ai.anthropic.output_params_utils import (
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
-
-if TYPE_CHECKING:
-    pass
 
 
 def _promote_extra_body_to_optional_params(optional_params: dict) -> None:
@@ -25,7 +22,7 @@ def _promote_extra_body_to_optional_params(optional_params: dict) -> None:
     route those keys must reach the request body and be validated, so promote
     them. ``setdefault`` keeps explicit top-level values authoritative.
     """
-    extra_body = optional_params.get("extra_body")
+    extra_body: Final = optional_params.get("extra_body")
     if not isinstance(extra_body, dict) or not extra_body:
         return
     for k, v in extra_body.items():
@@ -41,7 +38,7 @@ class AzureAnthropicConfig(AnthropicConfig):
     """
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "azure_ai"
 
     def should_strip_billing_metadata(self) -> bool:
@@ -51,12 +48,12 @@ class AzureAnthropicConfig(AnthropicConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: Union[dict, GenericLiteLLMParams],
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> Dict:
+        litellm_params: dict | GenericLiteLLMParams,
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:
         """
         Validate environment and set up Azure authentication headers.
         Azure supports:
@@ -78,25 +75,21 @@ class AzureAnthropicConfig(AnthropicConfig):
                 litellm_params_obj.api_key = api_key
 
         # Use Azure authentication logic
-        headers = BaseAzureLLM._base_validate_azure_environment(
-            headers=headers, litellm_params=litellm_params_obj
-        )
+        headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         # Get tools and other anthropic-specific setup
-        tools = optional_params.get("tools")
-        prompt_caching_set = self.is_cache_control_set(messages=messages)
-        computer_tool_used = self.is_computer_tool_used(tools=tools)
-        mcp_server_used = self.is_mcp_server_used(
-            mcp_servers=optional_params.get("mcp_servers")
-        )
-        pdf_used = self.is_pdf_used(messages=messages)
-        file_id_used = self.is_file_id_used(messages=messages)
-        user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
+        tools: Final = optional_params.get("tools")
+        prompt_caching_set: Final = self.is_cache_control_set(messages=messages)
+        computer_tool_used: Final = self.is_computer_tool_used(tools=tools)
+        mcp_server_used: Final = self.is_mcp_server_used(mcp_servers=optional_params.get("mcp_servers"))
+        pdf_used: Final = self.is_pdf_used(messages=messages)
+        file_id_used: Final = self.is_file_id_used(messages=messages)
+        user_anthropic_beta_headers: Final = self._get_user_anthropic_beta_headers(
             anthropic_beta_header=headers.get("anthropic-beta")
         )
 
         # Get anthropic headers (but we'll replace x-api-key with Azure auth)
-        anthropic_headers = self.get_anthropic_headers(
+        anthropic_headers: Final = self.get_anthropic_headers(
             computer_tool_used=computer_tool_used,
             prompt_caching_set=prompt_caching_set,
             pdf_used=pdf_used,
@@ -118,7 +111,7 @@ class AzureAnthropicConfig(AnthropicConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -129,7 +122,7 @@ class AzureAnthropicConfig(AnthropicConfig):
         """
         _promote_extra_body_to_optional_params(optional_params)
 
-        data = super().transform_request(
+        data: Final = super().transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,

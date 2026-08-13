@@ -1,7 +1,9 @@
 "use client";
 
 import NotificationsManager from "@/components/molecules/notifications_manager";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { ClearOutlined, DeleteOutlined, FilePdfOutlined, PlusOutlined } from "@ant-design/icons";
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { Button, Input, Select, Tooltip } from "antd";
 import { useEffect, useMemo, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
@@ -105,14 +107,8 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
     disabledPersonalKeyCreation ? "custom" : "session",
   );
   const [customApiKey, setCustomApiKey] = useState("");
-  const [debouncedCustomApiKey, setDebouncedCustomApiKey] = useState("");
+  const [debouncedCustomApiKey] = useDebouncedValue(customApiKey, { wait: DEBOUNCE_WAIT_MS });
   const [customProxyBaseUrl] = useState<string>(() => sessionStorage.getItem("customProxyBaseUrl") || "");
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedCustomApiKey(customApiKey);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [customApiKey]);
   useEffect(() => {
     return () => {
       if (uploadedFilePreviewUrl) {
@@ -689,7 +685,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
   const showSuggestedPrompts = !hasMessages && !isAnyComparisonLoading && !hasAttachment;
   return (
     <div className="w-full h-full p-4 bg-white">
-      <div className="rounded-2xl border border-gray-200 bg-white shadow-sm min-h-[calc(100vh-160px)] flex flex-col">
+      <div className="rounded-2xl border border-gray-200 bg-white shadow-xs min-h-[calc(100vh-160px)] flex flex-col">
         <div className="border-b px-4 py-2">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
@@ -746,7 +742,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
         </div>
 
         <div
-          className="grid flex-1 min-h-0 auto-rows-[minmax(0,1fr)]"
+          className="grid flex-1 min-h-0 auto-rows-fr"
           style={{
             gridTemplateColumns: `repeat(${comparisons.length}, minmax(0, 1fr))`,
           }}

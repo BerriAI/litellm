@@ -322,7 +322,7 @@ npm run build
 ## Submitting Your PR
 
 1. **Push your branch**: `git push origin your-feature-branch`
-2. **Create a PR**: Go to GitHub and create a pull request
+2. **Create a PR**: Go to GitHub and open a pull request against [`litellm_internal_staging`](https://github.com/BerriAI/litellm/tree/litellm_internal_staging), which is the default base branch. Do not target `main`.
 3. **Fill out the PR template**: Provide clear description of changes
 4. **Wait for review**: Maintainers will review and provide feedback
 5. **Address feedback**: Make requested changes and push updates

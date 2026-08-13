@@ -3,7 +3,8 @@ Anthropic Batches API Handler
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Coroutine, Optional, Union
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -36,11 +37,11 @@ class AnthropicBatchesHandler:
     async def aretrieve_batch(
         self,
         batch_id: str,
-        api_base: Optional[str],
-        api_key: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        logging_obj: Optional[LiteLLMLoggingObj] = None,
+        api_base: str | None,
+        api_key: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+        logging_obj: LiteLLMLoggingObj | None = None,
     ) -> LiteLLMBatch:
         """
         Async: Retrieve a batch from Anthropic.
@@ -80,7 +81,7 @@ class AnthropicBatchesHandler:
             )
 
         # Get the complete URL for batch retrieval
-        retrieve_url = self.provider_config.get_retrieve_batch_url(
+        retrieve_url: Final = self.provider_config.get_retrieve_batch_url(
             api_base=api_base,
             batch_id=batch_id,
             optional_params={},
@@ -88,7 +89,7 @@ class AnthropicBatchesHandler:
         )
 
         # Validate environment and get headers
-        headers = self.provider_config.validate_environment(
+        headers: Final = self.provider_config.validate_environment(
             headers={},
             model="",
             messages=[],
@@ -108,8 +109,8 @@ class AnthropicBatchesHandler:
             },
         )
         # Make the request
-        async_client = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC)
-        response = await async_client.get(url=retrieve_url, headers=headers)
+        async_client: Final = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC)
+        response: Final = await async_client.get(url=retrieve_url, headers=headers)
         response.raise_for_status()
 
         # Transform response to LiteLLM format
@@ -124,12 +125,12 @@ class AnthropicBatchesHandler:
         self,
         _is_async: bool,
         batch_id: str,
-        api_base: Optional[str],
-        api_key: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        logging_obj: Optional[LiteLLMLoggingObj] = None,
-    ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
+        api_base: str | None,
+        api_key: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
         """
         Retrieve a batch from Anthropic.
 

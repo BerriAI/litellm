@@ -29,9 +29,14 @@ import litellm
 # was added on this branch).  Backfill any entries that are missing from the
 # remote-fetched map so cost-calculator lookups in tests succeed against the
 # cassette state the branch is being tested with.
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.get_model_cost_map import (
+    RESERVED_TOP_LEVEL_KEYS,
+    GetModelCostMap,
+)
 
 for _k, _v in GetModelCostMap.load_local_model_cost_map().items():
+    if _k in RESERVED_TOP_LEVEL_KEYS:
+        continue
     litellm.model_cost.setdefault(_k, _v)
 
 from tests._vcr_conftest_common import (  # noqa: E402,F401

@@ -1,11 +1,21 @@
 // fetch_models.ts
 
-import { modelHubCall } from "@/components/networking";
+import { excludeProxyWideSentinel } from "@/components/key_team_helpers/fetch_available_models_team_key";
+import { modelAvailableCall, modelHubCall } from "@/components/networking";
 
 export interface ModelGroup {
   model_group: string;
   mode?: string;
 }
+
+export const fetchAvailableModelsForTeam = async (accessToken: string, teamId: string): Promise<ModelGroup[]> => {
+  const response = await modelAvailableCall(accessToken, "", "", false, teamId);
+  const modelNames: string[] = (response?.data ?? []).map((model: { id: string }) => model.id);
+
+  return excludeProxyWideSentinel(Array.from(new Set(modelNames)))
+    .sort((a, b) => a.localeCompare(b))
+    .map((model) => ({ model_group: model }));
+};
 
 /**
  * Fetches available models using modelHubCall and formats them for the selection dropdown.
@@ -13,7 +23,6 @@ export interface ModelGroup {
 export const fetchAvailableModels = async (accessToken: string): Promise<ModelGroup[]> => {
   try {
     const fetchedModels = await modelHubCall(accessToken);
-    console.log("model_info:", fetchedModels);
 
     if (fetchedModels?.data.length > 0) {
       const models: ModelGroup[] = fetchedModels.data.map((item: any) => ({

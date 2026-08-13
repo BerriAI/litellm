@@ -73,7 +73,7 @@ export function AgentPermissions({ agents, agentAccessGroups = [], accessToken }
                   {item.type === "agent" ? (
                     <Tooltip title={`Full ID: ${item.value}`} placement="top">
                       <div className="inline-flex items-center gap-2 min-w-0">
-                        <span className="inline-block w-1.5 h-1.5 bg-purple-500 rounded-full flex-shrink-0"></span>
+                        <span className="inline-block w-1.5 h-1.5 bg-purple-500 rounded-full shrink-0"></span>
                         <span className="text-sm font-medium text-gray-900 truncate">
                           {getAgentDisplayName(item.value)}
                         </span>
@@ -81,9 +81,9 @@ export function AgentPermissions({ agents, agentAccessGroups = [], accessToken }
                     </Tooltip>
                   ) : (
                     <div className="inline-flex items-center gap-2 min-w-0">
-                      <span className="inline-block w-1.5 h-1.5 bg-green-500 rounded-full flex-shrink-0"></span>
+                      <span className="inline-block w-1.5 h-1.5 bg-green-500 rounded-full shrink-0"></span>
                       <span className="text-sm font-medium text-gray-900 truncate">{item.value}</span>
-                      <span className="ml-1 px-1.5 py-0.5 text-[9px] font-semibold text-green-600 bg-green-50 border border-green-200 rounded uppercase tracking-wide flex-shrink-0">
+                      <span className="ml-1 px-1.5 py-0.5 text-[9px] font-semibold text-green-600 bg-green-50 border border-green-200 rounded-sm uppercase tracking-wide shrink-0">
                         Group
                       </span>
                     </div>

@@ -2,6 +2,7 @@ import json
 import os
 import sys
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -9,6 +10,7 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import litellm
 from litellm.anthropic_interface import messages
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import Delta, ModelResponse, StreamingChoices
@@ -35,6 +37,68 @@ def test_anthropic_experimental_pass_through_messages_handler():
             print(f"Error: {e}")
         mock_responses.assert_called_once()
         assert mock_responses.call_args.kwargs["api_key"] == "test-api-key"
+
+
+@pytest.mark.asyncio
+async def test_openai_model_does_not_forward_stream_options_to_responses_api():
+    """
+    Regression test for LIT-4779. `always_include_stream_usage` injects
+    stream_options={'include_usage': True} into every streaming request, but OpenAI
+    models on /v1/messages go to the Responses API, which 400s on that param.
+    """
+    responses_payload = {
+        "id": "resp_stream_options",
+        "object": "response",
+        "created_at": 1734366691,
+        "status": "completed",
+        "model": "gpt-5.5",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "metadata": None,
+        "temperature": None,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": None,
+        "max_output_tokens": None,
+        "previous_response_id": None,
+        "reasoning": None,
+        "truncation": None,
+        "user": None,
+    }
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.text = json.dumps(responses_payload)
+    mock_response.headers = httpx.Headers({})
+    mock_response.json.return_value = responses_payload
+
+    with patch.object(AsyncHTTPHandler, "post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_response
+
+        await litellm.anthropic.messages.acreate(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            model="openai/gpt-5.5",
+            api_key="test-api-key",
+            stream_options={"include_usage": True},
+        )
+
+    mock_post.assert_called_once()
+    post_kwargs = mock_post.call_args.kwargs
+    request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
+    assert "stream_options" not in request_body
 
 
 def test_anthropic_experimental_pass_through_messages_handler_dynamic_api_key_and_api_base_and_custom_values():
@@ -103,6 +167,48 @@ async def test_anthropic_messages_sanitizes_empty_text_blocks_before_dispatch():
 
     assert [b["type"] for b in captured["messages"][0]["content"]] == ["tool_use"]
     assert len(msgs[0]["content"]) == 2  # caller untouched
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_sanitizes_tool_use_ids_before_dispatch():
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    msgs = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "functions.Bash:0",
+                    "name": "Bash",
+                    "input": {},
+                }
+            ],
+        }
+    ]
+    captured = {}
+
+    def fake_handler(*args, **kwargs):
+        captured["messages"] = kwargs.get("messages")
+        return "stub"
+
+    fake_loop = MagicMock()
+    fake_loop.run_in_executor = lambda _e, func: _async_return(func())
+
+    with (
+        patch.object(handler, "anthropic_messages_handler", side_effect=fake_handler),
+        patch("asyncio.get_event_loop", return_value=fake_loop),
+    ):
+        await handler.anthropic_messages(
+            max_tokens=100,
+            messages=msgs,
+            model="anthropic/claude-sonnet-4-5-20250929",
+            custom_llm_provider="anthropic",
+            api_key="k",
+        )
+
+    assert captured["messages"][0]["content"][0]["id"] == "functions_Bash_0"
+    assert msgs[0]["content"][0]["id"] == "functions.Bash:0"
 
 
 async def _async_return(value):
@@ -228,9 +334,9 @@ def test_openai_model_with_thinking_converts_to_reasoning():
             "reasoning" in call_kwargs
         ), "reasoning should be passed to litellm.responses"
 
-        # budget_tokens=1024 -> effort="minimal" (< 2000 threshold)
+        # budget_tokens=1024 -> effort="low" (at the LOW budget threshold)
         # reasoning_auto_summary is False by default, so no summary key
-        expected_reasoning = {"effort": "minimal"}
+        expected_reasoning = {"effort": "low"}
         assert call_kwargs["reasoning"] == expected_reasoning, (
             f"reasoning should be {expected_reasoning} for budget_tokens=1024, "
             f"got {call_kwargs.get('reasoning')}"
@@ -274,7 +380,7 @@ class TestThinkingParameterTransformation:
         )
 
         # reasoning_auto_summary is False by default, so no summary key
-        assert result == {"reasoning_effort": "minimal"}
+        assert result == {"reasoning_effort": "low"}
         assert "thinking" not in result
         assert "summary" not in str(result["reasoning_effort"])
 
@@ -294,7 +400,7 @@ class TestThinkingParameterTransformation:
                 model="openai/gpt-5.2",
             )
             assert result == {
-                "reasoning_effort": {"effort": "medium", "summary": "detailed"}
+                "reasoning_effort": {"effort": "high", "summary": "detailed"}
             }
         finally:
             litellm.reasoning_auto_summary = original
@@ -507,7 +613,7 @@ class TestThinkingSummaryPreservation:
         result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(
             thinking
         )
-        assert result == {"effort": "medium", "summary": "concise"}
+        assert result == {"effort": "high", "summary": "concise"}
 
     def test_responses_adapter_no_summary_by_default(self):
         """translate_thinking_to_reasoning should not include summary by default (opt-in)."""
@@ -525,7 +631,7 @@ class TestThinkingSummaryPreservation:
                     thinking
                 )
             )
-            assert result == {"effort": "medium"}
+            assert result == {"effort": "high"}
             assert result is not None and "summary" not in result
         finally:
             litellm.reasoning_auto_summary = original
@@ -542,8 +648,28 @@ class TestThinkingSummaryPreservation:
             model="openai/gpt-5.2",
         )
         assert result == {
-            "reasoning_effort": {"effort": "medium", "summary": "concise"}
+            "reasoning_effort": {"effort": "high", "summary": "concise"}
         }
+
+    def test_translate_thinking_for_model_disabled_stays_plain_string_when_auto_summary_enabled(self):
+        """Disabled thinking must stay a plain string even when reasoning_auto_summary is on."""
+        import litellm
+        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+            LiteLLMAnthropicMessagesAdapter,
+        )
+
+        original = litellm.reasoning_auto_summary
+        try:
+            litellm.reasoning_auto_summary = True
+            thinking = {"type": "disabled"}
+            result = LiteLLMAnthropicMessagesAdapter.translate_thinking_for_model(
+                thinking=thinking,
+                model="openai/gpt-5.2",
+            )
+        finally:
+            litellm.reasoning_auto_summary = original
+
+        assert result == {"reasoning_effort": "none"}
 
 
 # ---------------------------------------------------------------------------
@@ -604,6 +730,61 @@ def test_handler_skips_strip_when_presanitized():
         )
     assert spy.call_count == 0  # skipped the redundant scan
     assert result is not None
+
+
+def test_handler_flattens_replayed_unencrypted_web_search_results():
+    """Synthesized search blocks replayed as history must reach the provider as text."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    captured = {}
+
+    def fake_base_handler(*args, **kwargs):
+        captured.update(kwargs)
+        return "stub"
+
+    with patch.object(
+        handler.base_llm_http_handler,
+        "anthropic_messages_handler",
+        side_effect=fake_base_handler,
+    ):
+        handler.anthropic_messages_handler(
+            max_tokens=10,
+            messages=[
+                {"role": "user", "content": "latest litellm version?"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "server_tool_use",
+                            "id": "srvtoolu_1",
+                            "name": "web_search",
+                            "input": {"query": "latest litellm version"},
+                        },
+                        {
+                            "type": "web_search_tool_result",
+                            "tool_use_id": "srvtoolu_1",
+                            "content": [
+                                {
+                                    "type": "web_search_result",
+                                    "url": "https://github.com/BerriAI/litellm/releases",
+                                    "title": "Releases",
+                                    "page_age": None,
+                                    "encrypted_content": "",
+                                    "snippet": "Latest release v1.95.0",
+                                }
+                            ],
+                        },
+                    ],
+                },
+                {"role": "user", "content": "which version?"},
+            ],
+            model="anthropic/claude-3-5-sonnet-20241022",
+            custom_llm_provider="anthropic",
+        )
+
+    replayed = captured["messages"][1]["content"]
+    assert [b["type"] for b in replayed] == ["text"]
+    assert "Snippet: Latest release v1.95.0" in replayed[0]["text"]
 
 
 def test_presanitized_flag_not_leaked_to_provider_params():
@@ -673,3 +854,109 @@ async def test_async_wrapper_sets_presanitized_and_sanitizes_once():
     assert spy.call_count == 1
     assert captured["presanitized"] is True
     assert [b["type"] for b in captured["messages"][0]["content"]] == ["tool_use"]
+
+
+def _gate_stubs(monkeypatch):
+    """Patch the gate's downstream dispatch targets so config selection can be
+    observed without making a network call.
+
+    Returns ``(captured, translation_calls)`` where ``captured["config"]`` is the
+    provider config handed to the native passthrough path and ``translation_calls``
+    counts hits on the Anthropic->OpenAI translation handlers.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    captured = {}
+    translation_calls = {"count": 0}
+
+    def fake_native(**kwargs):
+        captured["config"] = kwargs.get("anthropic_messages_provider_config")
+        return "native-passthrough"
+
+    def fake_translation(**kwargs):
+        translation_calls["count"] += 1
+        return "translated"
+
+    monkeypatch.setattr(handler.base_llm_http_handler, "anthropic_messages_handler", fake_native)
+    monkeypatch.setattr(
+        handler.LiteLLMMessagesToResponsesAPIHandler,
+        "anthropic_messages_handler",
+        staticmethod(fake_translation),
+    )
+    monkeypatch.setattr(
+        handler.LiteLLMMessagesToCompletionTransformationHandler,
+        "anthropic_messages_handler",
+        staticmethod(fake_translation),
+    )
+    return captured, translation_calls
+
+
+def test_gate_passthrough_when_supported_endpoints_opts_in(monkeypatch):
+    """provider=openai + model_info.supported_endpoints containing /v1/messages
+    must route to the native passthrough config, NOT the translation handlers."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+    from litellm.llms.openai_like.messages.transformation import (
+        OpenAILikeAnthropicMessagesConfig,
+    )
+
+    captured, translation_calls = _gate_stubs(monkeypatch)
+
+    result = anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="openai/some-model",
+        api_key="sk-test",
+        api_base="https://host/v1",
+        model_info={"supported_endpoints": ["/v1/chat/completions", "/v1/messages"]},
+    )
+
+    assert result == "native-passthrough"
+    assert isinstance(captured["config"], OpenAILikeAnthropicMessagesConfig)
+    assert translation_calls["count"] == 0
+
+
+def test_gate_translates_when_supported_endpoints_absent(monkeypatch):
+    """Default behavior is unchanged: without the /v1/messages opt-in, an openai
+    deployment is translated (Responses API), never passed through natively."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    captured, translation_calls = _gate_stubs(monkeypatch)
+
+    result = anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="openai/some-model",
+        api_key="sk-test",
+        api_base="https://host/v1",
+    )
+
+    assert result == "translated"
+    assert translation_calls["count"] == 1
+    assert "config" not in captured
+
+
+def test_gate_passthrough_skipped_when_only_chat_completions_supported(monkeypatch):
+    """A deployment that lists only /v1/chat/completions is still translated;
+    the opt-in is specifically the /v1/messages entry."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    captured, translation_calls = _gate_stubs(monkeypatch)
+
+    result = anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="openai/some-model",
+        api_key="sk-test",
+        api_base="https://host/v1",
+        model_info={"supported_endpoints": ["/v1/chat/completions"]},
+    )
+
+    assert result == "translated"
+    assert translation_calls["count"] == 1
+    assert "config" not in captured

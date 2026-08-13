@@ -6,6 +6,7 @@ import ChatUI from "@/app/(dashboard)/playground/components/chat_ui/ChatUI";
 import CompareUI from "@/app/(dashboard)/playground/components/compareUI/CompareUI";
 import ComplianceUI from "@/app/(dashboard)/playground/components/complianceUI/ComplianceUI";
 import { TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
+import { DeprecationBanner } from "@/components/DeprecationBanner";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchProxySettings } from "@/utils/proxyUtils";
 
@@ -15,7 +16,7 @@ interface ProxySettings {
 }
 
 export default function PlaygroundPage() {
-  const { accessToken, userRole, userId, disabledPersonalKeyCreation, token } = useAuthorized();
+  const { accessToken, userRole, userId, disabledPersonalKeyCreation, token, isViewOnly } = useAuthorized();
   const [proxySettings, setProxySettings] = useState<ProxySettings | undefined>(undefined);
 
   useEffect(() => {
@@ -33,6 +34,17 @@ export default function PlaygroundPage() {
 
     initializeProxySettings();
   }, [accessToken]);
+
+  if (isViewOnly) {
+    return (
+      <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-8 text-center">
+        <h1 className="text-2xl font-semibold">Access Denied</h1>
+        <p className="text-muted-foreground">
+          Your role does not have access to the Playground. Ask your proxy admin for access to test models.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full w-full flex flex-col">
@@ -61,6 +73,7 @@ export default function PlaygroundPage() {
             <ComplianceUI accessToken={accessToken} disabledPersonalKeyCreation={disabledPersonalKeyCreation} />
           </TabPanel>
           <TabPanel className="h-full">
+            <DeprecationBanner featureName="The Playground's Agent Builder" />
             <AgentBuilderView
               accessToken={accessToken}
               token={token}

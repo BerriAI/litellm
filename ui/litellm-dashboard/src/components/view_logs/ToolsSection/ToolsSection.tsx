@@ -32,7 +32,7 @@ export function ToolsSection({ log }: ToolsSectionProps) {
   const hasMoreTools = tools.length > 2;
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Collapse
         expandIconPosition="start"
         items={[

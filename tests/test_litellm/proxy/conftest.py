@@ -13,11 +13,34 @@ from typing import Dict, Optional
 import pytest
 import yaml
 from fastapi.testclient import TestClient
+from prisma.errors import ClientNotConnectedError
 
 _PROXY_MODULE_GLOBALS_TO_ISOLATE = (
     "master_key",
     "prisma_client",
 )
+
+
+class StubClientNotConnectedError(ClientNotConnectedError):
+    pass
+
+
+class DisconnectedPrisma:
+    """Mimics prisma-client-py after disconnect(): ``is_connected()`` is False
+    and the ``_engine`` property raises ``ClientNotConnectedError``."""
+
+    def is_connected(self) -> bool:
+        return False
+
+    @property
+    def _engine(self) -> None:
+        raise StubClientNotConnectedError()
+
+
+@pytest.fixture
+def disconnected_prisma() -> DisconnectedPrisma:
+    """A stand-in for a Prisma client wedged in the disconnected state."""
+    return DisconnectedPrisma()
 
 
 @pytest.fixture(autouse=True)

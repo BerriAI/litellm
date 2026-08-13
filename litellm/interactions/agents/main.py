@@ -30,8 +30,9 @@ Usage:
 
 import asyncio
 import contextvars
+from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Coroutine, Dict, Optional, Union
+from typing import Any, Final
 
 import httpx
 
@@ -55,7 +56,7 @@ from litellm.utils import client
 
 
 def _get_agents_api_config(custom_llm_provider: str):
-    config = get_provider_agents_api_config(custom_llm_provider)
+    config: Final = get_provider_agents_api_config(custom_llm_provider)
     if config is None:
         raise litellm.BadRequestError(
             message=(
@@ -70,14 +71,14 @@ def _get_agents_api_config(custom_llm_provider: str):
 
 
 def _make_logging_obj(
-    kwargs: Dict[str, Any],
+    kwargs: dict[str, Any],
     model: str,
     custom_llm_provider: str,
     call_type: str,
-    optional_params: Dict[str, Any],
+    optional_params: dict[str, Any],
 ) -> LiteLLMLoggingObj:
-    litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-    litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+    litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
         model=model,
@@ -96,21 +97,21 @@ def _make_logging_obj(
 @client
 async def acreate(
     name: str,
-    base_agent: Optional[str] = None,
-    instructions: Optional[str] = None,
-    base_environment: Optional[InteractionEnvironment] = None,
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    base_agent: str | None = None,
+    instructions: str | None = None,
+    base_environment: InteractionEnvironment | None = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> AgentCreateResponse:
     """Async: Create a managed agent on the provider side."""
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["acreate_agent"] = True
-        func = partial(
+        func: Final = partial(
             create,
             name=name,
             base_agent=base_agent,
@@ -122,8 +123,8 @@ async def acreate(
             timeout=timeout,
             **kwargs,
         )
-        ctx = contextvars.copy_context()
-        init_response = await loop.run_in_executor(None, partial(ctx.run, func))
+        ctx: Final = contextvars.copy_context()
+        init_response: Final = await loop.run_in_executor(None, partial(ctx.run, func))
         if asyncio.iscoroutine(init_response):
             return await init_response
         return init_response
@@ -140,15 +141,15 @@ async def acreate(
 @client
 def create(
     name: str,
-    base_agent: Optional[str] = None,
-    instructions: Optional[str] = None,
-    base_environment: Optional[InteractionEnvironment] = None,
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    base_agent: str | None = None,
+    instructions: str | None = None,
+    base_environment: InteractionEnvironment | None = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
-) -> Union[AgentCreateResponse, Coroutine[Any, Any, AgentCreateResponse]]:
+) -> AgentCreateResponse | Coroutine[Any, Any, AgentCreateResponse]:
     """
     Sync: Create a managed agent on the provider side.
 
@@ -164,12 +165,10 @@ def create(
         timeout: Request timeout.
         **kwargs: Forwarded to GenericLiteLLMParams (api_key, api_base, etc.).
     """
-    local_vars = locals()
-    custom_llm_provider = (
-        custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
-    )
+    local_vars: Final = locals()
+    custom_llm_provider = custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
     try:
-        _is_async = kwargs.pop("acreate_agent", False) is True
+        _is_async: Final = kwargs.pop("acreate_agent", False) is True
         if base_agent is not None:
             kwargs["base_agent"] = base_agent
         if instructions is not None:
@@ -177,11 +176,9 @@ def create(
         if base_environment is not None:
             kwargs["base_environment"] = base_environment
         kwargs.setdefault("custom_llm_provider", custom_llm_provider)
-        litellm_params = GenericLiteLLMParams(**kwargs)
-        logging_obj = _make_logging_obj(
-            kwargs, name, custom_llm_provider, "create_agent", {}
-        )
-        config = _get_agents_api_config(custom_llm_provider)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        logging_obj: Final = _make_logging_obj(kwargs, name, custom_llm_provider, "create_agent", {})
+        config: Final = _get_agents_api_config(custom_llm_provider)
         return agents_http_handler.create_agent(
             agents_api_config=config,
             name=name,
@@ -209,25 +206,25 @@ def create(
 
 @client
 async def alist(
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> AgentListResponse:
     """Async: List all agents on the provider side."""
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["alist_agents"] = True
-        func = partial(
+        func: Final = partial(
             list,
             custom_llm_provider=custom_llm_provider or "gemini",
             extra_headers=extra_headers,
             timeout=timeout,
             **kwargs,
         )
-        ctx = contextvars.copy_context()
-        init_response = await loop.run_in_executor(None, partial(ctx.run, func))
+        ctx: Final = contextvars.copy_context()
+        init_response: Final = await loop.run_in_executor(None, partial(ctx.run, func))
         if asyncio.iscoroutine(init_response):
             return await init_response
         return init_response
@@ -243,24 +240,20 @@ async def alist(
 
 @client
 def list(
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
-) -> Union[AgentListResponse, Coroutine[Any, Any, AgentListResponse]]:
+) -> AgentListResponse | Coroutine[Any, Any, AgentListResponse]:
     """Sync: List all agents on the provider side."""
-    local_vars = locals()
-    custom_llm_provider = (
-        custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
-    )
+    local_vars: Final = locals()
+    custom_llm_provider = custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
     try:
-        _is_async = kwargs.pop("alist_agents", False) is True
+        _is_async: Final = kwargs.pop("alist_agents", False) is True
         kwargs.setdefault("custom_llm_provider", custom_llm_provider)
-        litellm_params = GenericLiteLLMParams(**kwargs)
-        logging_obj = _make_logging_obj(
-            kwargs, "", custom_llm_provider, "list_agents", {}
-        )
-        config = _get_agents_api_config(custom_llm_provider)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        logging_obj: Final = _make_logging_obj(kwargs, "", custom_llm_provider, "list_agents", {})
+        config: Final = _get_agents_api_config(custom_llm_provider)
         return agents_http_handler.list_agents(
             agents_api_config=config,
             litellm_params=litellm_params,
@@ -287,17 +280,17 @@ def list(
 @client
 async def aget(
     name: str,
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> AgentCreateResponse:
     """Async: Get a specific agent by name."""
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["aget_agent"] = True
-        func = partial(
+        func: Final = partial(
             get,
             name=name,
             custom_llm_provider=custom_llm_provider or "gemini",
@@ -305,8 +298,8 @@ async def aget(
             timeout=timeout,
             **kwargs,
         )
-        ctx = contextvars.copy_context()
-        init_response = await loop.run_in_executor(None, partial(ctx.run, func))
+        ctx: Final = contextvars.copy_context()
+        init_response: Final = await loop.run_in_executor(None, partial(ctx.run, func))
         if asyncio.iscoroutine(init_response):
             return await init_response
         return init_response
@@ -323,24 +316,20 @@ async def aget(
 @client
 def get(
     name: str,
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
-) -> Union[AgentCreateResponse, Coroutine[Any, Any, AgentCreateResponse]]:
+) -> AgentCreateResponse | Coroutine[Any, Any, AgentCreateResponse]:
     """Sync: Get a specific agent by name."""
-    local_vars = locals()
-    custom_llm_provider = (
-        custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
-    )
+    local_vars: Final = locals()
+    custom_llm_provider = custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
     try:
-        _is_async = kwargs.pop("aget_agent", False) is True
+        _is_async: Final = kwargs.pop("aget_agent", False) is True
         kwargs.setdefault("custom_llm_provider", custom_llm_provider)
-        litellm_params = GenericLiteLLMParams(**kwargs)
-        logging_obj = _make_logging_obj(
-            kwargs, name, custom_llm_provider, "get_agent", {"name": name}
-        )
-        config = _get_agents_api_config(custom_llm_provider)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        logging_obj: Final = _make_logging_obj(kwargs, name, custom_llm_provider, "get_agent", {"name": name})
+        config: Final = _get_agents_api_config(custom_llm_provider)
         return agents_http_handler.get_agent(
             agents_api_config=config,
             name=name,
@@ -368,17 +357,17 @@ def get(
 @client
 async def adelete(
     name: str,
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> AgentDeleteResult:
     """Async: Delete a specific agent by name."""
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["adelete_agent"] = True
-        func = partial(
+        func: Final = partial(
             delete,
             name=name,
             custom_llm_provider=custom_llm_provider or "gemini",
@@ -386,8 +375,8 @@ async def adelete(
             timeout=timeout,
             **kwargs,
         )
-        ctx = contextvars.copy_context()
-        init_response = await loop.run_in_executor(None, partial(ctx.run, func))
+        ctx: Final = contextvars.copy_context()
+        init_response: Final = await loop.run_in_executor(None, partial(ctx.run, func))
         if asyncio.iscoroutine(init_response):
             return await init_response
         return init_response
@@ -404,24 +393,20 @@ async def adelete(
 @client
 def delete(
     name: str,
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
-) -> Union[AgentDeleteResult, Coroutine[Any, Any, AgentDeleteResult]]:
+) -> AgentDeleteResult | Coroutine[Any, Any, AgentDeleteResult]:
     """Sync: Delete a specific agent by name."""
-    local_vars = locals()
-    custom_llm_provider = (
-        custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
-    )
+    local_vars: Final = locals()
+    custom_llm_provider = custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
     try:
-        _is_async = kwargs.pop("adelete_agent", False) is True
+        _is_async: Final = kwargs.pop("adelete_agent", False) is True
         kwargs.setdefault("custom_llm_provider", custom_llm_provider)
-        litellm_params = GenericLiteLLMParams(**kwargs)
-        logging_obj = _make_logging_obj(
-            kwargs, name, custom_llm_provider, "delete_agent", {"name": name}
-        )
-        config = _get_agents_api_config(custom_llm_provider)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        logging_obj: Final = _make_logging_obj(kwargs, name, custom_llm_provider, "delete_agent", {"name": name})
+        config: Final = _get_agents_api_config(custom_llm_provider)
         return agents_http_handler.delete_agent(
             agents_api_config=config,
             name=name,
@@ -449,17 +434,17 @@ def delete(
 @client
 async def alist_versions(
     name: str,
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> AgentVersionsResponse:
     """Async: List versions of a specific agent."""
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["alist_agent_versions"] = True
-        func = partial(
+        func: Final = partial(
             list_versions,
             name=name,
             custom_llm_provider=custom_llm_provider or "gemini",
@@ -467,8 +452,8 @@ async def alist_versions(
             timeout=timeout,
             **kwargs,
         )
-        ctx = contextvars.copy_context()
-        init_response = await loop.run_in_executor(None, partial(ctx.run, func))
+        ctx: Final = contextvars.copy_context()
+        init_response: Final = await loop.run_in_executor(None, partial(ctx.run, func))
         if asyncio.iscoroutine(init_response):
             return await init_response
         return init_response
@@ -485,24 +470,20 @@ async def alist_versions(
 @client
 def list_versions(
     name: str,
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
-) -> Union[AgentVersionsResponse, Coroutine[Any, Any, AgentVersionsResponse]]:
+) -> AgentVersionsResponse | Coroutine[Any, Any, AgentVersionsResponse]:
     """Sync: List versions of a specific agent."""
-    local_vars = locals()
-    custom_llm_provider = (
-        custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
-    )
+    local_vars: Final = locals()
+    custom_llm_provider = custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
     try:
-        _is_async = kwargs.pop("alist_agent_versions", False) is True
+        _is_async: Final = kwargs.pop("alist_agent_versions", False) is True
         kwargs.setdefault("custom_llm_provider", custom_llm_provider)
-        litellm_params = GenericLiteLLMParams(**kwargs)
-        logging_obj = _make_logging_obj(
-            kwargs, name, custom_llm_provider, "list_agent_versions", {"name": name}
-        )
-        config = _get_agents_api_config(custom_llm_provider)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        logging_obj: Final = _make_logging_obj(kwargs, name, custom_llm_provider, "list_agent_versions", {"name": name})
+        config: Final = _get_agents_api_config(custom_llm_provider)
         return agents_http_handler.list_agent_versions(
             agents_api_config=config,
             name=name,

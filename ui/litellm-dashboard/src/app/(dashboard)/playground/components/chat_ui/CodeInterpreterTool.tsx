@@ -46,7 +46,7 @@ const CodeInterpreterTool: React.FC<CodeInterpreterToolProps> = ({
   };
 
   return (
-    <div className="border border-gray-200 rounded-lg p-3 bg-gradient-to-r from-blue-50 to-purple-50">
+    <div className="border border-gray-200 rounded-lg p-3 bg-linear-to-r from-blue-50 to-purple-50">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <CodeOutlined className="text-blue-500" />

@@ -1,6 +1,6 @@
 # What is this?
 ## Handler file for calling claude-3 on vertex ai
-from typing import Any, List, Optional
+from typing import Any, Final
 
 import httpx
 
@@ -17,13 +17,9 @@ class VertexAIError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
-        self.request = httpx.Request(
-            method="POST", url=" https://cloud.google.com/vertex-ai/"
-        )
+        self.request = httpx.Request(method="POST", url=" https://cloud.google.com/vertex-ai/")
         self.response = httpx.Response(status_code=status_code, request=self.request)
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
+        super().__init__(self.message)  # Call the base class constructor with the parameters it needs
 
 
 class VertexAIAnthropicConfig(AnthropicConfig):
@@ -49,15 +45,13 @@ class VertexAIAnthropicConfig(AnthropicConfig):
     """
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "vertex_ai"
 
     def should_strip_billing_metadata(self) -> bool:
         return True
 
-    def _add_context_management_beta_headers(
-        self, beta_set: set, context_management: dict
-    ) -> None:
+    def _add_context_management_beta_headers(self, beta_set: set, context_management: dict) -> None:
         """
         Add context_management beta headers to the beta_set.
 
@@ -70,7 +64,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         """
         from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 
-        edits = context_management.get("edits", [])
+        edits: Final = context_management.get("edits", [])
         has_compact = False
         has_other = False
 
@@ -87,19 +81,17 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         # Add context management header if any other edits exist
         if has_other:
-            beta_set.add(
-                ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
-            )
+            beta_set.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value)
 
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        data = super().transform_request(
+        data: Final = super().transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -111,30 +103,29 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         sanitize_vertex_anthropic_output_params(data, model)
 
-        tools = optional_params.get("tools")
-        tool_search_used = self.is_tool_search_used(tools)
-        auto_betas = self.get_anthropic_beta_list(
+        tools: Final = optional_params.get("tools")
+        tool_search_used: Final = self.is_tool_search_used(tools)
+        auto_betas: Final = self.get_anthropic_beta_list(
             model=model,
             optional_params=optional_params,
             computer_tool_used=self.is_computer_tool_used(tools),
             prompt_caching_set=self.is_cache_control_set(messages),
             file_id_used=self.is_file_id_used(messages),
             mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
+            custom_llm_provider="vertex_ai",
         )
 
-        beta_set = set(auto_betas)
+        beta_set: Final = set(auto_betas)
         if tool_search_used:
-            beta_set.add(
-                "tool-search-tool-2025-10-19"
-            )  # Vertex requires this header for tool search
+            beta_set.add("tool-search-tool-2025-10-19")  # Vertex requires this header for tool search
 
         # Add context_management beta headers (compact and/or context-management)
-        context_management = optional_params.get("context_management")
+        context_management: Final = optional_params.get("context_management")
         if context_management:
             self._add_context_management_beta_headers(beta_set, context_management)
 
-        extra_headers = optional_params.get("extra_headers") or {}
-        anthropic_beta_value = extra_headers.get("anthropic-beta", "")
+        extra_headers: Final = optional_params.get("extra_headers") or {}
+        anthropic_beta_value: Final = extra_headers.get("anthropic-beta", "")
         if isinstance(anthropic_beta_value, str) and anthropic_beta_value:
             for beta in anthropic_beta_value.split(","):
                 beta = beta.strip()
@@ -165,7 +156,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         """
         # Temporarily override model name to force tool-based approach
         # This ensures Claude Sonnet 4.5 uses tools instead of output_format
-        original_model = model
+        original_model: Final = model
         if "response_format" in non_default_params:
             model = "claude-3-sonnet-20240229"  # Use a model that will use tool-based approach
 
@@ -189,14 +180,14 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
-        response = super().transform_response(
+        response: Final = super().transform_response(
             model,
             raw_response,
             model_response,
@@ -218,13 +209,8 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         """
         Check if the model is supported by the VertexAI Anthropic API.
         """
-        if (
-            custom_llm_provider != "vertex_ai"
-            and custom_llm_provider != "vertex_ai_beta"
-        ):
+        if custom_llm_provider != "vertex_ai" and custom_llm_provider != "vertex_ai_beta":
             return False
-        if "claude" in model.lower():
-            return True
-        elif model in litellm.vertex_anthropic_models:
+        if "claude" in model.lower() or model in litellm.vertex_anthropic_models:
             return True
         return False

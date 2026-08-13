@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BAD_MESSAGE_ERROR_STR,
+    BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
@@ -179,6 +181,79 @@ def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
     # toolUse blocks must still be present
     tool_use_blocks = [b for b in assistant_blocks[0]["content"] if "toolUse" in b]
     assert len(tool_use_blocks) == 2
+
+
+@pytest.mark.parametrize(
+    "thinking_block",
+    [
+        {"type": "thinking", "thinking": "oss reasoning", "signature": None},
+        {"type": "thinking", "thinking": "oss reasoning", "signature": ""},
+        {"type": "thinking", "thinking": "oss reasoning"},
+    ],
+    ids=["null_signature", "empty_signature", "missing_signature"],
+)
+def test_anthropic_messages_pt_drops_unsignable_thinking_block(thinking_block):
+    """Open-source reasoning models (DeepSeek-R1, Qwen, etc.) emit thinking blocks
+    with no Anthropic signature. Anthropic verifies the signature cryptographically,
+    so replaying a null/empty/missing-signature thinking block is rejected with
+    400 ... thinking.signature.str: Input should be a valid string.
+    anthropic_messages_pt must drop the unsignable thinking block while preserving
+    the assistant's answer text. Regression for LIT-4007.
+    """
+    messages = [
+        {"role": "user", "content": "What is 2+2?"},
+        {
+            "role": "assistant",
+            "content": "2+2 equals 4.",
+            "thinking_blocks": [thinking_block],
+        },
+        {"role": "user", "content": "Now what is 3+3?"},
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic"
+    )
+
+    assistant = next(m for m in result if m["role"] == "assistant")
+    content = assistant["content"]
+    assert all(
+        block.get("type") != "thinking" for block in content
+    ), f"unsignable thinking block must be dropped, got {content!r}"
+    assert any(
+        block.get("type") == "text" and block.get("text") == "2+2 equals 4."
+        for block in content
+    ), f"assistant answer text must be preserved, got {content!r}"
+
+
+def test_anthropic_messages_pt_keeps_signed_thinking_block():
+    """A genuine Anthropic round-trip still holds its original signature, so that
+    thinking block must be forwarded unchanged (we only drop unsignable blocks).
+    Regression for LIT-4007.
+    """
+    signed_block = {
+        "type": "thinking",
+        "thinking": "genuine anthropic reasoning",
+        "signature": "ErcBCkgIValidSignatureBytes",
+    }
+    messages = [
+        {"role": "user", "content": "What is 2+2?"},
+        {
+            "role": "assistant",
+            "content": "2+2 equals 4.",
+            "thinking_blocks": [signed_block],
+        },
+        {"role": "user", "content": "Now what is 3+3?"},
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic"
+    )
+
+    assistant = next(m for m in result if m["role"] == "assistant")
+    thinking_blocks = [b for b in assistant["content"] if b.get("type") == "thinking"]
+    assert len(thinking_blocks) == 1
+    assert thinking_blocks[0]["signature"] == "ErcBCkgIValidSignatureBytes"
+    assert thinking_blocks[0]["thinking"] == "genuine anthropic reasoning"
 
 
 def test_convert_to_azure_openai_messages():
@@ -1553,6 +1628,69 @@ def test_bedrock_tools_pt_does_not_handle_system_tool():
     assert tool_spec["name"] == "get_weather"
 
 
+def test_bedrock_tools_pt_drops_unmappable_responses_builtin_tools():
+    """
+    Regression for LIT-3858: Responses built-in tools (image_generation, namespace,
+    tool_search, custom) have no Bedrock toolSpec equivalent. They must be dropped, not
+    emitted as junk ``litellm_unnamed_tool_N`` toolSpecs the model can hallucinate calls to.
+    Mappable ``function`` and Anthropic ``input_schema`` tools must survive untouched.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "noop",
+                "description": "x",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {"type": "image_generation", "output_format": "png"},
+        {"type": "namespace", "name": "grp", "description": "g", "tools": []},
+        {"type": "custom", "name": "free_form"},
+    ]
+
+    result = _bedrock_tools_pt(
+        tools=tools, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
+    )
+
+    names = [block["toolSpec"]["name"] for block in result if "toolSpec" in block]
+    assert names == ["noop"]
+    assert not any(name.startswith("litellm_unnamed_tool_") for name in names)
+
+
+def test_bedrock_tools_pt_keeps_anthropic_input_schema_tools():
+    """
+    The drop guard for unmappable tools must not regress Anthropic Messages format tools,
+    which carry an ``input_schema`` instead of an OpenAI ``function`` key.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    tools = [
+        {
+            "type": "image_generation",
+            "output_format": "png",
+        },
+        {
+            "name": "lookup",
+            "description": "look something up",
+            "input_schema": {
+                "type": "object",
+                "properties": {"q": {"type": "string"}},
+                "required": ["q"],
+            },
+        },
+    ]
+
+    result = _bedrock_tools_pt(
+        tools=tools, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
+    )
+
+    names = [block["toolSpec"]["name"] for block in result if "toolSpec" in block]
+    assert names == ["lookup"]
+
+
 def test_convert_to_anthropic_tool_result_image_with_cache_control():
     """
     Test that cache_control is properly applied to image content in tool results.
@@ -1939,7 +2077,7 @@ def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
     assert "$defs" not in tool_schema, "$defs should be removed after expansion"
 
 
-def test_anthropic_messages_pt_file_block_preserves_cache_control():
+def test_anthropic_messages_pt_file_block_cache_control_with_explicit_provider():
     """
     Test that cache_control on file-type content blocks is preserved
     when translating to Anthropic message format.
@@ -2608,102 +2746,132 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
     TTL ordering constraint (tools -> system -> messages).
 
     Ref: https://github.com/BerriAI/litellm/issues/XXXXX
+
+    Forces the bundled local cost map so ttl eligibility (driven by
+    `cache_creation_input_token_cost_above_1hr` in litellm.model_cost) reads
+    this branch's pricing data rather than the network-fetched `main` copy,
+    which lacks the fix until merge.
     """
     from litellm.litellm_core_utils.prompt_templates.factory import (
         add_cache_point_tool_block,
     )
 
-    tool_with_1h = {
-        "type": "function",
-        "function": {"name": "get_weather", "parameters": {"type": "object"}},
-        "cache_control": {"type": "ephemeral", "ttl": "1h"},
-    }
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        tool_with_1h = {
+            "type": "function",
+            "function": {"name": "get_weather", "parameters": {"type": "object"}},
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        }
 
-    # Claude 4.5 model: ttl should be preserved
-    result = add_cache_point_tool_block(
-        tool_with_1h, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
-    )
-    assert result is not None
-    assert result["cachePoint"]["type"] == "default"
-    assert result["cachePoint"]["ttl"] == "1h"
+        # Claude 4.5 model: ttl should be preserved
+        result = add_cache_point_tool_block(
+            tool_with_1h, model="jp.anthropic.claude-opus-4-7"
+        )
+        assert result is not None
+        assert result["cachePoint"]["type"] == "default"
+        assert result["cachePoint"]["ttl"] == "1h"
 
-    # Claude 4.5 model with 5m ttl: also preserved
-    tool_with_5m = {
-        "cache_control": {"type": "ephemeral", "ttl": "5m"},
-    }
-    result_5m = add_cache_point_tool_block(
-        tool_with_5m, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
-    )
-    assert result_5m is not None
-    assert result_5m["cachePoint"]["ttl"] == "5m"
+        # Claude 4.5 model with 5m ttl: also preserved
+        tool_with_5m = {
+            "cache_control": {"type": "ephemeral", "ttl": "5m"},
+        }
+        result_5m = add_cache_point_tool_block(
+            tool_with_5m, model="jp.anthropic.claude-opus-4-7"
+        )
+        assert result_5m is not None
+        assert result_5m["cachePoint"]["ttl"] == "5m"
 
-    # Older model: ttl should be stripped
-    result_old = add_cache_point_tool_block(
-        tool_with_1h, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
-    )
-    assert result_old is not None
-    assert result_old["cachePoint"]["type"] == "default"
-    assert "ttl" not in result_old["cachePoint"]
+        # Older model: ttl should be stripped
+        result_old = add_cache_point_tool_block(
+            tool_with_1h, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
+        )
+        assert result_old is not None
+        assert result_old["cachePoint"]["type"] == "default"
+        assert "ttl" not in result_old["cachePoint"]
 
-    # No model provided: ttl should be stripped (safe default)
-    result_no_model = add_cache_point_tool_block(tool_with_1h, model=None)
-    assert result_no_model is not None
-    assert "ttl" not in result_no_model["cachePoint"]
+        # No model provided: ttl should be stripped (safe default)
+        result_no_model = add_cache_point_tool_block(tool_with_1h, model=None)
+        assert result_no_model is not None
+        assert "ttl" not in result_no_model["cachePoint"]
 
-    # No cache_control: returns None (unchanged behavior)
-    tool_no_cache = {
-        "type": "function",
-        "function": {"name": "get_weather", "parameters": {"type": "object"}},
-    }
-    assert add_cache_point_tool_block(tool_no_cache) is None
+        # No cache_control: returns None (unchanged behavior)
+        tool_no_cache = {
+            "type": "function",
+            "function": {"name": "get_weather", "parameters": {"type": "object"}},
+        }
+        assert add_cache_point_tool_block(tool_no_cache) is None
 
-    # cache_control without ttl: returns default cachePoint (unchanged behavior)
-    tool_no_ttl = {"cache_control": {"type": "ephemeral"}}
-    result_no_ttl = add_cache_point_tool_block(
-        tool_no_ttl, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
-    )
-    assert result_no_ttl is not None
-    assert result_no_ttl["cachePoint"]["type"] == "default"
-    assert "ttl" not in result_no_ttl["cachePoint"]
+        # cache_control without ttl: returns default cachePoint (unchanged behavior)
+        tool_no_ttl = {"cache_control": {"type": "ephemeral"}}
+        result_no_ttl = add_cache_point_tool_block(
+            tool_no_ttl, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        )
+        assert result_no_ttl is not None
+        assert result_no_ttl["cachePoint"]["type"] == "default"
+        assert "ttl" not in result_no_ttl["cachePoint"]
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
 
 
 def test_bedrock_tools_pt_passes_ttl_for_claude_4_5():
     """
     End-to-end: _bedrock_tools_pt should produce cachePoint blocks with ttl
     for Claude 4.5+ models when tools have cache_control with ttl.
+
+    Forces the bundled local cost map so ttl eligibility (driven by
+    `cache_creation_input_token_cost_above_1hr` in litellm.model_cost) reads
+    this branch's pricing data rather than the network-fetched `main` copy,
+    which lacks the fix until merge.
     """
     from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
 
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_weather",
-                "description": "Get weather",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"city": {"type": "string"}},
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                    },
                 },
-            },
-            "cache_control": {"type": "ephemeral", "ttl": "1h"},
-        }
-    ]
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            }
+        ]
 
-    # Claude 4.5: cachePoint should have ttl
-    result = _bedrock_tools_pt(
-        tools, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
-    )
-    cache_blocks = [b for b in result if "cachePoint" in b]
-    assert len(cache_blocks) == 1
-    assert cache_blocks[0]["cachePoint"]["ttl"] == "1h"
+        # Claude 4.5: cachePoint should have ttl
+        result = _bedrock_tools_pt(tools, model="jp.anthropic.claude-opus-4-7")
+        cache_blocks = [b for b in result if "cachePoint" in b]
+        assert len(cache_blocks) == 1
+        assert cache_blocks[0]["cachePoint"]["ttl"] == "1h"
 
-    # Older model: cachePoint should not have ttl
-    result_old = _bedrock_tools_pt(
-        tools, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
-    )
-    cache_blocks_old = [b for b in result_old if "cachePoint" in b]
-    assert len(cache_blocks_old) == 1
-    assert "ttl" not in cache_blocks_old[0]["cachePoint"]
+        # Older model: cachePoint should not have ttl
+        result_old = _bedrock_tools_pt(
+            tools, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
+        )
+        cache_blocks_old = [b for b in result_old if "cachePoint" in b]
+        assert len(cache_blocks_old) == 1
+        assert "ttl" not in cache_blocks_old[0]["cachePoint"]
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
 
 
 def test_convert_to_anthropic_tool_result_openai_file_pdf_becomes_document():
@@ -2918,3 +3086,324 @@ def test_bedrock_converse_messages_pt_document_rejects_url_source():
         _bedrock_converse_messages_pt(
             messages, "anthropic.claude-sonnet-4-6", "bedrock"
         )
+
+
+def _collect_cache_points(blocks):
+    return [
+        block["cachePoint"]
+        for message in blocks
+        for block in message["content"]
+        if "cachePoint" in block
+    ]
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "conversation history",
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    }
+                ],
+            },
+        ],
+        [
+            {"role": "user", "content": "hello"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "assistant reply",
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    }
+                ],
+            },
+        ],
+    ],
+)
+def test_bedrock_converse_message_level_cache_point_preserves_ttl(messages):
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/32154: message-level
+    cache_control ttl was silently dropped because the message-level
+    _get_cache_point_block call sites never passed model=, so multi-turn prefixes
+    fell back to the 5m default while the system prompt kept 1h, churning the
+    cache every turn on models like Opus 4.8.
+    """
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="eu.anthropic.claude-opus-4-8",
+        llm_provider="bedrock",
+    )
+
+    cache_points = _collect_cache_points(result)
+    assert cache_points == [{"type": "default", "ttl": "1h"}]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_converse_message_level_cache_point_preserves_ttl_async():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "conversation history",
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                }
+            ],
+        },
+    ]
+
+    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="eu.anthropic.claude-opus-4-8",
+        llm_provider="bedrock",
+    )
+
+    assert _collect_cache_points(result) == [{"type": "default", "ttl": "1h"}]
+
+
+def _n_choices_response(*names_per_choice):
+    from types import SimpleNamespace
+
+    choices = [
+        SimpleNamespace(
+            message=SimpleNamespace(
+                tool_calls=[SimpleNamespace(id=f"c{i}", function=SimpleNamespace(name=name, arguments="{}"))]
+            )
+        )
+        for i, name in enumerate(names_per_choice)
+    ]
+    return SimpleNamespace(choices=choices)
+
+
+def test_get_tool_calls_from_response_defaults_to_primary_choice_only():
+    from litellm.litellm_core_utils.prompt_templates.factory import get_tool_calls_from_response
+
+    response = _n_choices_response("tool_alpha", "tool_beta")
+
+    assert [tc["name"] for tc in get_tool_calls_from_response(response)] == ["tool_alpha"]
+
+
+def test_get_tool_calls_from_response_include_all_choices_reads_every_choice():
+    from litellm.litellm_core_utils.prompt_templates.factory import get_tool_calls_from_response
+
+    response = _n_choices_response("tool_alpha", "tool_beta")
+
+    names = [tc["name"] for tc in get_tool_calls_from_response(response, include_all_choices=True)]
+    assert names == ["tool_alpha", "tool_beta"]
+
+
+def test_group_tool_exchanges_pairs_assistant_with_its_tool_rows():
+    from litellm.litellm_core_utils.prompt_templates.factory import group_tool_exchanges
+
+    messages = [
+        {"role": "user", "content": "first turn"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "tu_1", "type": "function", "function": {"name": "Read", "arguments": "{}"}},
+                {"id": "tu_2", "type": "function", "function": {"name": "Grep", "arguments": "{}"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "tu_1", "content": "file body"},
+        {"role": "tool", "tool_call_id": "tu_2", "content": "matches"},
+        {"role": "user", "content": "live instruction"},
+    ]
+
+    assert group_tool_exchanges(messages) == ((0,), (1, 2, 3), (4,))
+
+
+def test_group_tool_exchanges_uses_ownership_not_adjacency():
+    """A tool row answering some other call must not be swept into the exchange
+    it happens to sit next to."""
+    from litellm.litellm_core_utils.prompt_templates.factory import group_tool_exchanges
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "tu_1", "type": "function", "function": {"name": "Read", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "unrelated", "content": "not an answer to tu_1"},
+        {"role": "tool", "tool_call_id": "tu_1", "content": "file body"},
+    ]
+
+    assert group_tool_exchanges(messages) == ((0,), (1,), (2,))
+
+
+def test_group_tool_exchanges_assistant_without_tool_calls_stands_alone():
+    from litellm.litellm_core_utils.prompt_templates.factory import group_tool_exchanges
+
+    messages = [
+        {"role": "assistant", "content": "no tools here"},
+        {"role": "user", "content": "next"},
+    ]
+
+    assert group_tool_exchanges(messages) == ((0,), (1,))
+    assert group_tool_exchanges([]) == ()
+
+
+def test_group_tool_exchanges_is_linear_in_message_count():
+    """Grouping runs on every guardrail write-back, over a message array the
+    caller controls, so it has to stay linear. Accumulating groups by rebuilding
+    a tuple each iteration made this O(n^2): 20k standalone messages took 312ms
+    and 100k would take minutes. Linear finishes in single-digit ms, so this
+    ceiling has ~200x headroom while a quadratic rewrite blows straight past it.
+    """
+    import time
+
+    from litellm.litellm_core_utils.prompt_templates.factory import group_tool_exchanges
+
+    messages = [{"role": "user", "content": "x"} for _ in range(100_000)]
+
+    started = time.perf_counter()
+    groups = group_tool_exchanges(messages)
+    elapsed = time.perf_counter() - started
+
+    assert len(groups) == 100_000
+    assert elapsed < 3.0, f"grouping 100k messages took {elapsed:.2f}s; suspect superlinear accumulation"
+
+
+_PDF_DATA_URI = "data:application/pdf;base64," + base64.b64encode(b"%PDF-1.4 regression fixture").decode()
+_PNG_DATA_URI = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+def _text_blocks(message):
+    return [block["text"] for block in message["content"] if "text" in block]
+
+
+def test_bedrock_converse_pdf_only_user_message_gets_text_block():
+    """
+    Regression for LIT-4523: Claude Code sends a PDF as a user turn whose only
+    content is the document (an image_url part with a pdf data URI after the
+    /v1/messages -> completion bridge). Bedrock Converse rejects any user
+    message carrying a document without a sibling text block, so the builder
+    must inject a placeholder text block.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": _PDF_DATA_URI}}],
+        }
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-haiku-4-5", "bedrock"
+    )
+
+    assert len(result) == 1
+    assert any("document" in block for block in result[0]["content"])
+    assert _text_blocks(result[0]) == [BEDROCK_DOCUMENT_PLACEHOLDER_TEXT]
+
+
+def test_bedrock_converse_document_with_text_gets_no_extra_text_block():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": _PDF_DATA_URI}},
+                {"type": "text", "text": "summarize this"},
+            ],
+        }
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-haiku-4-5", "bedrock"
+    )
+
+    assert _text_blocks(result[0]) == ["summarize this"]
+
+
+def test_bedrock_converse_image_only_user_message_gets_no_text_block():
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": _PNG_DATA_URI}}],
+        }
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-haiku-4-5", "bedrock"
+    )
+
+    assert any("image" in block for block in result[0]["content"])
+    assert _text_blocks(result[0]) == []
+
+
+def test_bedrock_converse_tool_round_trip_document_injects_text_before_cache_point():
+    """
+    Claude Code shape: after a Read tool round trip, the document-only user
+    turn (with cache_control) merges into the toolResult message. The injected
+    text block must land before the trailing cachePoint so the cache boundary
+    stays the final block, and earlier turns must stay untouched.
+    """
+    messages = [
+        {"role": "user", "content": "read the pdf"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "tooluse_pdf1",
+                    "type": "function",
+                    "function": {"name": "Read", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "tooluse_pdf1", "content": "read ok"},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "dGVzdA==",
+                    },
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-haiku-4-5", "bedrock"
+    )
+
+    assert _text_blocks(result[0]) == ["read the pdf"]
+    document_message = result[-1]
+    block_keys = [next(iter(block)) for block in document_message["content"]]
+    assert block_keys == ["toolResult", "document", "text", "cachePoint"]
+    assert _text_blocks(document_message) == [BEDROCK_DOCUMENT_PLACEHOLDER_TEXT]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_converse_pdf_only_user_message_gets_text_block_async():
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": _PDF_DATA_URI}}],
+        }
+    ]
+
+    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+    )
+
+    assert len(result) == 1
+    assert any("document" in block for block in result[0]["content"])
+    assert _text_blocks(result[0]) == [BEDROCK_DOCUMENT_PLACEHOLDER_TEXT]
