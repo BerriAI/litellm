@@ -54,12 +54,16 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+    END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
     TAG_REGISTRY_MAX_SIZE,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import (
+    END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
     UserApiKeyCache,
+    end_user_cache_key,
+    end_user_restricted_registry_cache_key,
     tag_cache_key,
     tag_registry_cache_key,
 )
@@ -5608,6 +5612,332 @@ async def test_get_end_user_object_db_fetch_returns_validated_end_user():
     assert result.user_id == "eu-1"
     assert result.blocked is False
     assert result.spend == 3.0
+
+
+def _end_user_registry_row(user_id: str):
+    """A row as the restricted-id registry query sees it: only ``user_id`` is read off it."""
+    return SimpleNamespace(user_id=user_id)
+
+
+def _end_user_db_row(user_id: str, **fields):
+    row = MagicMock()
+    row.user_id = user_id
+    row.dict = lambda: {"user_id": user_id, "blocked": False, "spend": 0.0, **fields}
+    return row
+
+
+_RESTRICTED_END_USER_WHERE = {
+    "OR": [
+        {"blocked": True},
+        {"budget_id": {"not": None}},
+        {"allowed_model_region": {"not": None}},
+        {"default_model": {"not": None}},
+        {"object_permission_id": {"not": None}},
+    ]
+}
+
+
+class _TtlRecordingCache(UserApiKeyCache):
+    """A real cache that also records the ttl each write carried, so tests can catch unbounded entries."""
+
+    def __init__(self):
+        super().__init__()
+        self.writes = []
+
+    async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
+        self.writes.append((key, kwargs.get("ttl")))
+        return await super().async_set_cache(key, value, local_only=local_only, **kwargs)
+
+
+@pytest.fixture
+def end_user_registry_skip_enabled(monkeypatch):
+    """Both bypass gates off: the default deployment, and the only state the registry skip runs in."""
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
+    monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_never_queries_db_for_unrestricted_end_users(
+    end_user_registry_skip_enabled,
+):
+    """
+    Regression: an end user carrying no restriction must not cost a DB read per request.
+
+    Spend tracking auto-creates a row for every distinct caller-supplied ``user`` id with every
+    restriction field null, so a high-cardinality deployment misses the per-pod cache on virtually
+    every request. Before the cached registry each miss ran its own Postgres find_unique, twice per
+    request, and under Prisma pool contention those queued for minutes inside user_api_key_auth.
+    """
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[_end_user_registry_row("eu-blocked")])
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1"))
+    cache = UserApiKeyCache()
+
+    assert (
+        await get_end_user_object(
+            end_user_id="eu-anon-1",
+            prisma_client=mock_prisma,
+            user_api_key_cache=cache,
+        )
+        is None
+    )
+    mock_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
+
+    mock_prisma.db.litellm_endusertable.find_many.assert_awaited_once()
+    registry_call = mock_prisma.db.litellm_endusertable.find_many.call_args
+    assert registry_call.kwargs["take"] == END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1
+    # Every field the callers of get_end_user_object consume has to be in this predicate, or an id
+    # the registry calls unrestricted would silently lose a restriction that is actually enforced.
+    assert registry_call.kwargs["where"] == _RESTRICTED_END_USER_WHERE
+
+    mock_prisma.db.litellm_endusertable.find_many.reset_mock()
+    assert (
+        await get_end_user_object(
+            end_user_id="eu-anon-2",
+            prisma_client=mock_prisma,
+            user_api_key_cache=cache,
+        )
+        is None
+    )
+    # A second, different unknown id inside the TTL costs nothing: no rebuild, no row fetch.
+    mock_prisma.db.litellm_endusertable.find_many.assert_not_awaited()
+    mock_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_still_fetches_restricted_end_user(end_user_registry_skip_enabled):
+    """An id in the registry keeps today's path: fetched, TTL-bounded in cache, then served cached."""
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[_end_user_registry_row("eu-blocked")])
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(
+        return_value=_end_user_db_row("eu-blocked", blocked=True)
+    )
+    cache = _TtlRecordingCache()
+
+    blocked = await get_end_user_object(
+        end_user_id="eu-blocked",
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+    )
+    assert isinstance(blocked, LiteLLM_EndUserTable)
+    assert blocked.blocked is True
+    mock_prisma.db.litellm_endusertable.find_unique.assert_awaited_once()
+    # Without a ttl the Redis entry never expires, so a later unblock would never be picked up.
+    assert (end_user_cache_key("eu-blocked"), DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL) in cache.writes
+
+    mock_prisma.db.litellm_endusertable.find_unique.reset_mock()
+    again = await get_end_user_object(
+        end_user_id="eu-blocked",
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+    )
+    assert again is not None and again.blocked is True
+    mock_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_caches_empty_restricted_registry(end_user_registry_skip_enabled):
+    """No restricted end users at all is a valid answer and must be cached, not re-queried."""
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1"))
+    cache = UserApiKeyCache()
+
+    assert (
+        await get_end_user_object(
+            end_user_id="eu-anon-1",
+            prisma_client=mock_prisma,
+            user_api_key_cache=cache,
+        )
+        is None
+    )
+    # "Nobody is restricted" is a cached answer, not a cache miss (which would read back as None).
+    cached_registry = await cache.async_get_cache(key=end_user_restricted_registry_cache_key())
+    assert cached_registry is not None
+    assert tuple(cached_registry) == ()
+
+    assert (
+        await get_end_user_object(
+            end_user_id="eu-anon-2",
+            prisma_client=mock_prisma,
+            user_api_key_cache=cache,
+        )
+        is None
+    )
+    mock_prisma.db.litellm_endusertable.find_many.assert_awaited_once()
+    mock_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_registry_db_error_falls_back_to_per_id_fetch(
+    end_user_registry_skip_enabled,
+):
+    """
+    A registry query failure must not blind auth to real restrictions for a whole TTL window.
+
+    Nothing is cached, the per-id fetch runs exactly as it did before the registry existed, and the
+    next request retries the registry.
+    """
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(side_effect=Exception("registry query failed"))
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(
+        side_effect=lambda **kwargs: _end_user_db_row(kwargs["where"]["user_id"], blocked=True)
+    )
+    cache = UserApiKeyCache()
+
+    first = await get_end_user_object(
+        end_user_id="eu-blocked-1",
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+    )
+    assert first is not None and first.blocked is True
+    assert await cache.async_get_cache(key=end_user_restricted_registry_cache_key()) is None
+
+    second = await get_end_user_object(
+        end_user_id="eu-blocked-2",
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+    )
+    assert second is not None and second.blocked is True
+    assert mock_prisma.db.litellm_endusertable.find_many.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_oversized_registry_falls_back_and_stops_refetching(
+    end_user_registry_skip_enabled,
+):
+    """Past the cap the registry is unusable: keep the per-id path, but stop rebuilding the set."""
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    oversized = [_end_user_registry_row(f"eu-{index}") for index in range(END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1)]
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=oversized)
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(
+        side_effect=lambda **kwargs: _end_user_db_row(kwargs["where"]["user_id"], blocked=True)
+    )
+    cache = UserApiKeyCache()
+
+    first = await get_end_user_object(
+        end_user_id="eu-anon-1",
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+    )
+    assert first is not None and first.blocked is True
+    assert (
+        await cache.async_get_cache(key=end_user_restricted_registry_cache_key())
+        == END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL
+    )
+
+    second = await get_end_user_object(
+        end_user_id="eu-anon-2",
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+    )
+    assert second is not None and second.blocked is True
+    mock_prisma.db.litellm_endusertable.find_many.assert_awaited_once()
+    assert mock_prisma.db.litellm_endusertable.find_unique.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_default_budget_gate_keeps_fetching_unrestricted_end_users(monkeypatch):
+    """
+    With ``max_end_user_budget_id`` set, an existing unrestricted row is not equivalent to a missing
+    one: the default budget is grafted onto whatever row exists and is then enforced, so the skip
+    has to stay off entirely.
+    """
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", "default-eu-budget")
+    monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
+
+    budget_row = MagicMock()
+    budget_row.dict = lambda: {"budget_id": "default-eu-budget", "max_budget": 25.0}
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1"))
+    mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
+
+    result = await get_end_user_object(
+        end_user_id="eu-anon-1",
+        prisma_client=mock_prisma,
+        user_api_key_cache=UserApiKeyCache(),
+    )
+
+    assert result is not None
+    assert result.litellm_budget_table is not None
+    assert result.litellm_budget_table.max_budget == 25.0
+    mock_prisma.db.litellm_endusertable.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_token_budget_gate_keeps_fetching_unrestricted_end_users(
+    end_user_registry_skip_enabled,
+):
+    """
+    A token-supplied end-user budget is enforced against the row's recorded spend, so the row has
+    to be loaded even though nothing on it is restricted.
+
+    A ``user_custom_auth`` callable can set ``end_user_max_budget`` on the returned token for an
+    end user whose row carries no budget of its own, which keeps it out of the registry.
+    """
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(
+        return_value=_end_user_db_row("eu-anon-1", spend=100.0)
+    )
+    cache = UserApiKeyCache()
+
+    result = await get_end_user_object(
+        end_user_id="eu-anon-1",
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+        token_end_user_max_budget=50.0,
+    )
+
+    assert result is not None
+    assert result.spend == 100.0
+    mock_prisma.db.litellm_endusertable.find_unique.assert_awaited_once()
+    mock_prisma.db.litellm_endusertable.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_end_user_id_validation_gate_still_resolves_unrestricted_end_users(monkeypatch):
+    """
+    With ``validate_end_user_id_in_db`` on, existence itself is the answer, so the skip stays off.
+
+    Skipping here would turn every unrestricted customer into an unknown id and drop it from the
+    request, which for a deployment with no default budget means the id silently stops being tracked.
+    """
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
+    monkeypatch.setattr(litellm, "validate_end_user_id_in_db", True)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-known-1"))
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+
+    resolved = await resolve_and_validate_end_user_id(
+        raw_end_user_id="eu-known-1",
+        prisma_client=mock_prisma,
+        user_api_key_cache=UserApiKeyCache(),
+    )
+
+    assert resolved == "eu-known-1"
+    mock_prisma.db.litellm_endusertable.find_many.assert_not_awaited()
 
 
 @pytest.mark.asyncio

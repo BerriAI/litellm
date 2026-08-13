@@ -10,6 +10,7 @@ All /customer management endpoints
 """
 
 #### END-USER/CUSTOMER MANAGEMENT ####
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Final
 
@@ -22,6 +23,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import (
+    end_user_cache_key,
+    end_user_restricted_registry_cache_key,
+)
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_helpers.object_permission_utils import (
@@ -42,6 +47,36 @@ from litellm.types.proxy.management_endpoints.customer_endpoints import (
 )
 
 router: Final = APIRouter()
+
+
+async def _evict_end_user_cache_keys(cache_keys: Sequence[str]) -> None:
+    """
+    Every endpoint that mutates an end-user row must call this: auth serves end users cache-first
+    with no freshness check, and the cached restricted-id registry decides whether the row is read
+    at all, so without invalidation a newly blocked or budgeted customer keeps being served
+    unrestricted until the TTL expires. Best-effort: the DB write has already committed, so a cache
+    backend error must not fail the endpoint.
+    """
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+        publish_auth_cache_invalidation,
+    )
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    for cache_key in cache_keys:
+        try:
+            await user_api_key_cache.async_delete_cache(key=cache_key)
+        except Exception as e:  # noqa: BLE001  # best-effort eviction: any cache backend error must not fail the mutation
+            verbose_proxy_logger.warning(
+                "Failed to evict cached end-user entry %s; a stale customer may be served until its TTL expires: %s",
+                cache_key,
+                e,
+            )
+        await publish_auth_cache_invalidation(cache_key=cache_key)
+
+
+def _end_user_cache_keys(user_ids: Sequence[str]) -> tuple[str, ...]:
+    """The per-id entries plus the registry, which any restriction change can move ids in or out of."""
+    return (*(end_user_cache_key(user_id) for user_id in user_ids), end_user_restricted_registry_cache_key())
 
 
 def _to_customer_response(record: BaseModel) -> CustomerResponse:
@@ -97,6 +132,7 @@ async def block_user(data: BlockUsers):
                     },
                 )
                 records.append(record)
+            await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
         else:
             raise HTTPException(
                 status_code=500,
@@ -391,6 +427,8 @@ async def new_end_user(
             include={"litellm_budget_table": True, "object_permission": True},
         )
 
+        await _evict_end_user_cache_keys(_end_user_cache_keys((data.user_id,)))
+
         return _to_customer_response(end_user_record)
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -634,6 +672,8 @@ async def update_end_user(
                 raise ValueError(f"Failed updating customer data. User ID does not exist passed user_id={data.user_id}")
             verbose_proxy_logger.debug("received response from updating prisma client. response=%s", response)
 
+            await _evict_end_user_cache_keys(_end_user_cache_keys((data.user_id,)))
+
             return _to_customer_response(response)
         else:
             raise ValueError(f"user_id is required, passed user_id = {data.user_id}")
@@ -707,6 +747,9 @@ async def delete_end_user(
                 where={"user_id": {"in": data.user_ids}}
             )
             verbose_proxy_logger.debug("received response from updating prisma client. response=%s", response)
+
+            await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
+
             return DeleteCustomersResponse(
                 deleted_customers=response,
                 message="Successfully deleted customers with ids: " + str(data.user_ids),

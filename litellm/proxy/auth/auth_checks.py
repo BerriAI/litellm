@@ -29,6 +29,7 @@ from litellm.constants import (
     DEFAULT_IN_MEMORY_TTL,
     DEFAULT_MAX_RECURSE_DEPTH,
     EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
+    END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
     TAG_REGISTRY_MAX_SIZE,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
@@ -73,8 +74,11 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import (
+    END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
     UserApiKeyCache,
+    end_user_cache_key,
+    end_user_restricted_registry_cache_key,
     get_management_object_ttl,
     object_permission_cache_key,
     tag_cache_key,
@@ -219,6 +223,16 @@ class _PrismaTagRow(Protocol):
 
 
 def _tag_table(repo: _PrismaTableHolder[_PrismaTagRow]) -> _PrismaAuthTable[_PrismaTagRow]:
+    return repo.table
+
+
+class _PrismaEndUserRow(Protocol):
+    user_id: str
+
+    def dict(self) -> Mapping[str, object]: ...
+
+
+def _end_user_table(repo: _PrismaTableHolder[_PrismaEndUserRow]) -> _PrismaAuthTable[_PrismaEndUserRow]:
     return repo.table
 
 
@@ -1258,6 +1272,96 @@ async def _check_end_user_budget(
         )
 
 
+#: Columns whose non-null value makes an end-user row restrict something auth enforces. ``blocked``
+#: is separate: it restricts when true rather than when merely set.
+_RESTRICTED_COLUMNS: Final = ("budget_id", "allowed_model_region", "default_model", "object_permission_id")
+
+
+def _column_is_set(column: str) -> Mapping[str, object]:
+    """``column IS NOT NULL`` as a plain dict, which is the only shape prisma's builder accepts."""
+    return {column: {"not": None}}  # mutable-ok: prisma's query builder isinstance-checks for dict
+
+
+def _restricted_end_user_where() -> Mapping[str, object]:
+    """Prisma filter selecting every end-user row that carries a restriction auth enforces."""
+    return {"OR": [{"blocked": True}, *map(_column_is_set, _RESTRICTED_COLUMNS)]}  # mutable-ok: prisma needs dict/list
+
+
+async def _load_end_user_restricted_registry(
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> frozenset[str] | None:
+    """
+    The set of end-user ids whose ``LiteLLM_EndUserTable`` row carries a restriction, cached whole.
+
+    ``None`` means the registry is unusable (DB error, or more restricted rows than
+    ``END_USER_RESTRICTED_REGISTRY_MAX_SIZE``) and callers must not skip the per-id fetch. That is
+    distinct from an empty frozenset, which is the answer when no end user is restricted at all and
+    is worth caching: it is what lets a caller-supplied ``user`` id cost zero DB reads.
+    """
+    cache_key: Final = end_user_restricted_registry_cache_key()
+    cached: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=cache_key)
+    if cached == END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL:
+        return None
+    # Memory hands back the tuple that was written; Redis round-trips it through JSON as a list.
+    if isinstance(cached, (list, tuple)):
+        return frozenset(user_id for user_id in cached if isinstance(user_id, str))
+
+    try:
+        restricted_rows: Final = await _end_user_table(EndUserRepository(prisma_client)).find_many(
+            where=_restricted_end_user_where(),
+            take=END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1,
+        )
+        if len(restricted_rows) > END_USER_RESTRICTED_REGISTRY_MAX_SIZE:
+            await user_api_key_cache.async_set_cache(
+                key=cache_key,
+                value=END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
+                ttl=get_management_object_ttl(user_api_key_cache),
+            )
+            return None
+        restricted_ids: Final = tuple(row.user_id for row in restricted_rows)
+        await user_api_key_cache.async_set_cache(
+            key=cache_key,
+            value=restricted_ids,
+            ttl=get_management_object_ttl(user_api_key_cache),
+        )
+        return frozenset(restricted_ids)
+    except Exception as e:
+        verbose_proxy_logger.debug("Error loading restricted end-user registry from database: %s", e)
+        return None
+
+
+async def _end_user_is_known_unrestricted(
+    end_user_id: str,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    token_end_user_max_budget: float | None,
+) -> bool:
+    """
+    True when the cached registry proves the id restricts nothing, so its row need not be read.
+
+    Every field ``get_end_user_object`` callers consume (budget, spend under that budget, region,
+    default model, object permission, blocked) is part of the registry predicate, so an id outside
+    it is indistinguishable from one with no row at all. The skip is off whenever mere existence of
+    the row is meaningful: ``max_end_user_budget_id`` grafts a default budget onto any row that
+    exists, ``validate_end_user_id_in_db`` rejects ids that resolve to no row, and a token-supplied
+    ``end_user_max_budget`` (a ``user_custom_auth`` callable can set one against an otherwise
+    unrestricted row) is enforced against the row's recorded spend.
+    """
+    if (
+        litellm.max_end_user_budget_id is not None
+        or litellm.validate_end_user_id_in_db
+        or token_end_user_max_budget is not None
+    ):
+        return False
+
+    registry: Final = await _load_end_user_restricted_registry(
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    return registry is not None and end_user_id not in registry
+
+
 @log_db_metrics
 async def get_end_user_object(
     end_user_id: str | None,
@@ -1266,6 +1370,7 @@ async def get_end_user_object(
     route: str | None = "",
     parent_otel_span: Span | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
+    token_end_user_max_budget: float | None = None,
 ) -> LiteLLM_EndUserTable | None:
     """
     Returns end user object from database or cache.
@@ -1280,6 +1385,9 @@ async def get_end_user_object(
         route: The request route
         parent_otel_span: Optional OpenTelemetry span for tracing
         proxy_logging_obj: Optional proxy logging object
+        token_end_user_max_budget: ``valid_token.end_user_max_budget``, when the caller holds a
+            token. Budget enforcement reads the row's spend, so a row that restricts nothing on
+            its own must still be loaded when the token carries a budget for it.
 
     Returns:
         LiteLLM_EndUserTable if found, None otherwise
@@ -1290,7 +1398,7 @@ async def get_end_user_object(
     if end_user_id is None:
         return None
 
-    _key: Final = f"end_user_id:{end_user_id}"
+    _key: Final = end_user_cache_key(end_user_id)
 
     # Check cache first
     cached_user_obj: Final = await user_api_key_cache.async_get_cache(
@@ -1308,6 +1416,14 @@ async def get_end_user_object(
         )
 
         return return_obj
+
+    if await _end_user_is_known_unrestricted(
+        end_user_id=end_user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        token_end_user_max_budget=token_end_user_max_budget,
+    ):
+        return None
 
     # Fetch from database
     try:
@@ -1332,9 +1448,10 @@ async def get_end_user_object(
 
         # Save to cache
         await user_api_key_cache.async_set_cache(
-            key=f"end_user_id:{end_user_id}",
+            key=_key,
             value=_response,
             model_type=LiteLLM_EndUserTable,
+            ttl=get_management_object_ttl(user_api_key_cache),
         )
 
         return _response

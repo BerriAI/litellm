@@ -24,7 +24,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_utils import get_model_from_request
 from litellm.proxy.auth.budget_throttle import should_throttle_budget_exceeded
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.user_api_key_cache import tag_cache_key
+from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key, tag_cache_key
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
 
@@ -449,7 +449,7 @@ async def _get_end_user_budget_counter(
     if end_user_id is None:
         return None
 
-    source_cache_key: Final = f"end_user_id:{end_user_id}"
+    source_cache_key: Final = end_user_cache_key(end_user_id)
     max_budget = _to_float(valid_token.end_user_max_budget)
     fallback_spend = 0.0
     if end_user_object is not None:

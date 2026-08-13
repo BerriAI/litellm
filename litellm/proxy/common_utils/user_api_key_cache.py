@@ -196,6 +196,33 @@ def tag_registry_cache_key() -> str:
     return "tag_registry"
 
 
+#: Value cached under ``end_user_restricted_registry_cache_key`` when more end users carry a
+#: restriction than ``END_USER_RESTRICTED_REGISTRY_MAX_SIZE``, so the id set is not worth holding
+#: per worker. Lives beside the key builder because it is part of the same cache protocol: a reader
+#: that knows the key must know this value means "registry unusable, fall back to the per-id fetch".
+END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL: Final = "__end_user_restricted_registry_overflow__"
+
+
+def end_user_cache_key(end_user_id: str) -> str:
+    """Cache key one end-user row is stored under.
+
+    Lives here rather than next to any one owner because auth reads it per request while spend
+    tracking and budget reservation write through it, and the format drifting between them means
+    a spend update that silently lands on nobody's key.
+    """
+    return f"end_user_id:{end_user_id}"
+
+
+def end_user_restricted_registry_cache_key() -> str:
+    """Cache key for the set of end-user ids whose row carries a restriction.
+
+    The ``user`` field is caller-supplied and spend tracking auto-creates an unrestricted row per
+    distinct value, so most ids resolve to a row that restricts nothing. Without this set each of
+    them re-queries Postgres on every single request, forever.
+    """
+    return "end_user_restricted_registry"
+
+
 def get_management_object_ttl(cache: DualCache) -> float:
     """
     In-memory TTL for management-object cache writes (keys, teams, users, budgets, ...).

@@ -358,6 +358,7 @@ from litellm.proxy.common_utils.timezone_utils import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
+    end_user_cache_key,
     get_management_object_ttl,
     tag_cache_key,
 )
@@ -2775,7 +2776,7 @@ async def _increment_end_user_and_tag_spend_counters(
     if end_user_id is not None:
         await _init_and_increment_unreserved_spend_counter(
             counter_key=f"spend:end_user:{end_user_id}",
-            source_cache_key=f"end_user_id:{end_user_id}",
+            source_cache_key=end_user_cache_key(end_user_id),
             increment=response_cost,
             reserved_counter_keys=reserved_counter_keys,
         )
@@ -3129,7 +3130,7 @@ async def update_cache(
         if end_user_id is None or response_cost is None:
             return
 
-        _id: Final = f"end_user_id:{end_user_id}"
+        _id: Final = end_user_cache_key(end_user_id)
         try:
             # Fetch the existing cost for the given user
             cached_end_user: Final = await user_api_key_cache.async_get_cache(key=_id)

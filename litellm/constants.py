@@ -1591,6 +1591,11 @@ DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS: Final = 16
 # costing a DB read per request. Deployments past this many tag rows fall back to the
 # per-request lookup rather than holding an unbounded name set in every worker.
 TAG_REGISTRY_MAX_SIZE: Final = 5000
+# Ceiling on the cached registry of end users that carry a restriction, which keeps the
+# auto-created unrestricted rows (one per distinct caller-supplied ``user``) from costing a DB
+# read per request. Deployments past this many restricted rows fall back to the per-id lookup
+# rather than holding an unbounded id set in every worker.
+END_USER_RESTRICTED_REGISTRY_MAX_SIZE: Final = 5000
 
 # Sentry Scrubbing Configuration
 SENTRY_DENYLIST: Final = [
