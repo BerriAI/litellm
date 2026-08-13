@@ -56,7 +56,6 @@ const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData })
         return (
           <div className="flex items-center space-x-3">
             <div className="flex-1 relative">
-              {/* The failed share is the track showing through behind the successful share. */}
               <Meter value={successPercentage} max={totalPercentage || 100} aria-label="Successful requests">
                 <MeterTrack className={failurePercentage > 0 ? "bg-red-500" : undefined}>
                   <MeterIndicator className="bg-green-500" />

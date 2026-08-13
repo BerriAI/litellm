@@ -211,8 +211,6 @@ const ModelSection = ({
   );
 };
 
-// Mirrors the antd Collapse this replaced: a panel's subtree is not built until it is first
-// opened, and it stays mounted afterwards so its view-mode state survives being collapsed.
 const ModelCollapsible = ({
   defaultOpen,
   header,
