@@ -50,6 +50,7 @@ from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
+    McpServerPayloadLike,
     build_env_var_setup_url,
     collect_env_var_references,
     get_server_prefix,
@@ -196,7 +197,7 @@ if MCP_AVAILABLE:
         server: MCPServer
         expires_at: datetime
 
-    def _validate_mcp_server_name_fields(payload: Any) -> None:
+    def _validate_mcp_server_name_fields(payload: McpServerPayloadLike) -> None:
         candidates: Final[list[tuple[str, str | None]]] = []
 
         server_name: Final = getattr(payload, "server_name", None)
@@ -223,7 +224,7 @@ if MCP_AVAILABLE:
                 detail={"error": error_messages_text},
             )
 
-    def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
+    def validate_and_normalize_mcp_server_payload(payload: McpServerPayloadLike) -> None:
         _base_validate_and_normalize_mcp_server_payload(payload)
         _validate_mcp_server_name_fields(payload)
 

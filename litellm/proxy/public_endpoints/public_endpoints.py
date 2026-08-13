@@ -1,10 +1,12 @@
 import json
 import os
 import re
+from collections.abc import Awaitable, Mapping, Sequence
 from importlib.resources import files
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import APIRouter, HTTPException, Request
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -32,14 +34,66 @@ from litellm.types.proxy.public_endpoints.public_endpoints import (
 )
 from litellm.types.utils import LlmProviders
 
+if TYPE_CHECKING:
+    from datetime import datetime
+
 router: Final = APIRouter()
+
+
+class _ProviderSupportEntry(TypedDict, total=False):
+    display_name: ReadOnly[str]
+    endpoints: ReadOnly[Mapping[str, bool]]
+
+
+class _ProvidersFile(TypedDict, total=False):
+    providers: ReadOnly[Mapping[str, _ProviderSupportEntry]]
+
+
+class _EndpointProviderEntry(TypedDict):
+    slug: ReadOnly[str]
+    display_name: ReadOnly[str]
+
+
+class _EndpointEntry(TypedDict):
+    key: ReadOnly[str]
+    label: ReadOnly[str]
+    endpoint: ReadOnly[str]
+    providers: ReadOnly[Sequence[_EndpointProviderEntry]]
+
+
+class _PluginRow(Protocol):
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def enabled(self) -> bool: ...
+
+    @property
+    def created_at(self) -> "datetime | None": ...
+
+    @property
+    def updated_at(self) -> "datetime | None": ...
+
+    @property
+    def manifest_json(self) -> str | None: ...
+
+
+class _PluginTableActions(Protocol):
+    def find_many(self, *, where: Mapping[str, bool]) -> Awaitable[Sequence[_PluginRow]]: ...
+
+
+def _plugin_table(prisma_client: object) -> _PluginTableActions:
+    return ClaudeCodePluginRepository(prisma_client).table
 
 
 # ---------------------------------------------------------------------------
 # /public/endpoints — helpers
 # ---------------------------------------------------------------------------
 
-_ENDPOINT_METADATA: Final[dict[str, dict[str, str]]] = {
+_ENDPOINT_METADATA: Final[Mapping[str, Mapping[str, str]]] = {
     "chat_completions": {"label": "Chat Completions", "endpoint": "/chat/completions"},
     "messages": {"label": "Messages", "endpoint": "/messages"},
     "responses": {"label": "Responses", "endpoint": "/responses"},
@@ -108,12 +162,12 @@ def _clean_display_name(raw: str) -> str:
     return _SLUG_SUFFIX_RE.sub("", raw).strip()
 
 
-def _build_endpoints(raw: dict[str, Any]) -> list[dict[str, Any]]:
+def _build_endpoints(raw: _ProvidersFile) -> list[_EndpointEntry]:
     """Transform raw provider_endpoints_support_backup.json into the response shape."""
-    providers: Final[dict[str, Any]] = raw.get("providers", {})
+    providers: Final = raw.get("providers", {})
 
     # Collect endpoint keys in insertion order (union across all providers).
-    seen: Final[set] = set()
+    seen: Final[set[str]] = set()
     all_keys: Final[list[str]] = []
     for provider_data in providers.values():
         for key in provider_data.get("endpoints", {}):
@@ -121,13 +175,13 @@ def _build_endpoints(raw: dict[str, Any]) -> list[dict[str, Any]]:
                 seen.add(key)
                 all_keys.append(key)
 
-    result: Final[list[dict[str, Any]]] = []
+    result: Final[list[_EndpointEntry]] = []
     for key in all_keys:
         meta = _ENDPOINT_METADATA.get(key)
         label = meta["label"] if meta else key.replace("_", " ").title()
         path = meta["endpoint"] if meta else "/" + key.replace("_", "/")
 
-        supporting: list[dict[str, str]] = [
+        supporting: list[_EndpointProviderEntry] = [
             {
                 "slug": slug,
                 "display_name": _clean_display_name(pd.get("display_name", slug)),
@@ -140,8 +194,10 @@ def _build_endpoints(raw: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-def _load_endpoints() -> list[dict[str, Any]]:
-    raw = json.loads(files("litellm").joinpath("provider_endpoints_support_backup.json").read_text(encoding="utf-8"))
+def _load_endpoints() -> list[_EndpointEntry]:
+    raw: Final[_ProvidersFile] = json.loads(
+        files("litellm").joinpath("provider_endpoints_support_backup.json").read_text(encoding="utf-8")
+    )
     return _build_endpoints(raw)
 
 
@@ -235,12 +291,7 @@ async def get_mcp_servers():
     )
 
     public_mcp_servers: Final = global_mcp_server_manager.get_public_mcp_servers()
-    return [
-        MCPPublicServer(
-            **server.model_dump(),
-        )
-        for server in public_mcp_servers
-    ]
+    return [MCPPublicServer.model_validate(server.model_dump()) for server in public_mcp_servers]
 
 
 @router.get(
@@ -259,7 +310,7 @@ async def public_skill_hub():
 
     try:
         prisma_client: Final = await _get_prisma_client()
-        plugins: Final = await ClaudeCodePluginRepository(prisma_client).table.find_many(where={"enabled": True})
+        plugins: Final = await _plugin_table(prisma_client).find_many(where={"enabled": True})
         items: Final = []
         for plugin in plugins:
             raw = plugin.manifest_json or {}

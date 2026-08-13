@@ -11,6 +11,7 @@ import requests
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from requests.auth import HTTPBasicAuth
+from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -53,6 +54,26 @@ class _HiddenlayerResponse(TypedDict, total=False):
     evaluation: _HiddenlayerEvaluation
     analysis: Sequence[_HiddenlayerAnalysisEntry]
     modified_data: Mapping[str, _HiddenlayerModifiedSide]
+
+
+class _LoggedCallMetadata(TypedDict, total=False):
+    headers: ReadOnly[Mapping[str, str]]
+
+
+class _LoggedCallLitellmParams(TypedDict, total=False):
+    metadata: ReadOnly[_LoggedCallMetadata]
+
+
+class _HiddenlayerOutputMessage(TypedDict, total=False):
+    content: ReadOnly[str | Sequence[Mapping[str, str]]]
+
+
+class _HiddenlayerChoiceMessage(TypedDict, total=False):
+    content: ReadOnly[str]
+
+
+class _HiddenlayerChoice(TypedDict, total=False):
+    message: ReadOnly[_HiddenlayerChoiceMessage]
 
 
 def is_saas(host: str) -> bool:
@@ -155,7 +176,10 @@ class HiddenlayerGuardrail(CustomGuardrail):
         # from the logger object on the response from the model.
         headers = request_data.get("proxy_server_request", {}).get("headers", {})
         if not headers and logging_obj and logging_obj.model_call_details:
-            headers = logging_obj.model_call_details.get("litellm_params", {}).get("metadata", {}).get("headers", {})
+            logged_litellm_params: Final[_LoggedCallLitellmParams] = logging_obj.model_call_details.get(
+                "litellm_params", {}
+            )
+            headers = logged_litellm_params.get("metadata", {}).get("headers", {})
 
         hl_request_metadata["requester_id"] = headers.get("hl-requester-id") or "LiteLLM"
         project_id: Final = headers.get("hl-project-id")
@@ -408,7 +432,8 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
         if input_type == "request":
             inputs["structured_messages"] = output
 
-            for message in output.get("messages", []):
+            modified_messages: Final[Sequence[_HiddenlayerOutputMessage]] = output.get("messages", [])
+            for message in modified_messages:
                 content = message.get("content", "")
                 if isinstance(content, list):
                     text_parts = [
@@ -422,7 +447,8 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
             inputs["texts"] = new_texts
 
         elif input_type == "response" and inputs.get("texts"):
-            inputs["texts"] = [output.get("choices", [{}])[-1].get("message", {}).get("content", "")]
+            redacted_choices: Final[Sequence[_HiddenlayerChoice]] = output.get("choices", [{}])
+            inputs["texts"] = [redacted_choices[-1].get("message", {}).get("content", "")]
         elif input_type == "response" and inputs.get("tool_calls"):
             inputs["tool_calls"] = output
 

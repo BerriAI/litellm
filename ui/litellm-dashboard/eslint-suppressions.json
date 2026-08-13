@@ -244,6 +244,11 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/multi_cost_results.test.tsx": {
+    "unused-imports/no-unused-imports": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/multi_cost_results.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -259,6 +264,11 @@
   },
   "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/use_multi_cost_estimate.ts": {
     "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/cost-tracking/_components/provider_discount_table.test.tsx": {
+    "unused-imports/no-unused-imports": {
       "count": 1
     }
   },
@@ -775,6 +785,11 @@
   },
   "src/app/(dashboard)/mcp-servers/_components/IdJagFormFields.tsx": {
     "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/MCPLogoSelector.test.tsx": {
+    "unused-imports/no-unused-imports": {
       "count": 1
     }
   },
@@ -1965,6 +1980,11 @@
       "count": 1
     },
     "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/components/HelpLink.test.tsx": {
+    "unused-imports/no-unused-imports": {
       "count": 1
     }
   },
@@ -3415,6 +3435,11 @@
       "count": 2
     }
   },
+  "src/components/templates/key_info_view.test.tsx": {
+    "unused-imports/no-unused-imports": {
+      "count": 2
+    }
+  },
   "src/components/templates/key_info_view.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -3670,22 +3695,7 @@
       "count": 1
     }
   },
-  "src/components/view_logs/LogDetailsDrawer/CollapsibleMessage.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/view_logs/LogDetailsDrawer/DrawerHeader.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/HistoryTree.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/JsonViewer.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -3709,37 +3719,12 @@
       "count": 2
     }
   },
-  "src/components/view_logs/LogDetailsDrawer/OutputCard.tsx": {
-    "no-restricted-imports": {
-      "count": 1
+  "src/components/view_logs/LogDetailsDrawer/RealtimePrettyView.test.tsx": {
+    "unused-imports/no-unused-imports": {
+      "count": 2
     }
   },
   "src/components/view_logs/LogDetailsDrawer/RealtimePrettyView.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/SectionHeader.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/SimpleMessageBlock.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/SimpleToolCallBlock.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/TokenFlow.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/TruncatedValue.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -3760,11 +3745,6 @@
     }
   },
   "src/components/view_logs/ToolsSection/ToolItem.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/ToolsSection/ToolsSection.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -3897,36 +3877,6 @@
     },
     "react/display-name": {
       "count": 1
-    }
-  },
-  "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/multi_cost_results.test.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/cost-tracking/_components/provider_discount_table.test.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/MCPLogoSelector.test.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
-  "src/components/HelpLink.test.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
-  "src/components/templates/key_info_view.test.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 2
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/RealtimePrettyView.test.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 2
     }
   }
 }
