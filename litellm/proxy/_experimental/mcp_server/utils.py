@@ -859,6 +859,51 @@ _SYNTHETIC_REQUEST_EXCLUDED_HEADERS: Final = _HOP_BY_HOP_HEADERS | frozenset({"c
 
 _SYNTHETIC_REQUEST_SERVER: Final = ("127.0.0.1", 4000)
 
+_MCP_SERVER_AUTH_HEADER_PREFIX: Final = "x-mcp-"
+
+
+def _custom_litellm_key_header_name() -> str | None:
+    """``general_settings.litellm_key_header_name``, the deployment's custom header name for
+    the proxy virtual key, so it is stripped from observability copies like the standard ones."""
+    try:
+        from litellm.proxy.proxy_server import general_settings
+    except ImportError:
+        return None
+    return general_settings.get("litellm_key_header_name") if general_settings else None
+
+
+def _mcp_client_side_auth_header_name() -> str:
+    """The header name the client passes the upstream MCP credential in, falling back to the
+    default when ``general_settings`` is unavailable (the SDK, outside a running proxy)."""
+    from .auth.user_api_key_auth_mcp import MCPRequestHandler
+
+    try:
+        return MCPRequestHandler._get_mcp_client_side_auth_header_name()
+    except ImportError:
+        return MCPRequestHandler.LITELLM_MCP_AUTH_HEADER_NAME
+
+
+def _upstream_credential_headers(header_names: Iterable[str]) -> frozenset[str]:
+    """Lowercased names of the headers in ``header_names`` that carry an upstream MCP
+    credential rather than request context: the configured client side auth header and
+    the per-server ``x-mcp-{alias}-{header}`` family. ``clean_headers`` only knows the
+    credential headers of the chat completions path, so these are dropped on top of it.
+    """
+    from .auth.user_api_key_auth_mcp import MCPRequestHandler
+
+    non_credential: Final = frozenset(
+        {
+            MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME.lower(),
+            MCPRequestHandler.LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME.lower(),
+        }
+    )
+    client_side_auth: Final = _mcp_client_side_auth_header_name().lower()
+    return frozenset(
+        name
+        for name in (raw_name.lower() for raw_name in header_names)
+        if name == client_side_auth or (name.startswith(_MCP_SERVER_AUTH_HEADER_PREFIX) and name not in non_credential)
+    )
+
 
 def build_synthetic_mcp_request(
     *,
@@ -874,17 +919,22 @@ def build_synthetic_mcp_request(
     ``proxy_server_request``, header-based tags, guardrails and trace correlation
     exactly as on the chat completions path. Hop-by-hop headers describe the
     original HTTP framing rather than the logical request, so they are dropped, and
-    ``x-forwarded-for`` comes from the resolved ``client_ip`` to avoid spoofing.
+    ``x-forwarded-for`` comes from the resolved ``client_ip`` to avoid spoofing. Upstream
+    MCP credentials are dropped so they cannot reach a callback or a guardrail through the
+    derived metadata.
     """
     from fastapi import Request
 
+    excluded: Final = _SYNTHETIC_REQUEST_EXCLUDED_HEADERS | _upstream_credential_headers(
+        raw_headers.keys() if raw_headers else ()
+    )
     forwarded: Final = tuple(
         (
             name.lower().encode("latin-1", errors="replace"),
             value.encode("utf-8", errors="replace"),
         )
         for name, value in (raw_headers.items() if raw_headers else ())
-        if name.lower() not in _SYNTHETIC_REQUEST_EXCLUDED_HEADERS
+        if name.lower() not in excluded
     )
     xff: Final = ((b"x-forwarded-for", client_ip.encode("utf-8")),) if client_ip else ()
     return Request(
@@ -905,9 +955,15 @@ def build_synthetic_mcp_request(
 def logging_safe_mcp_headers(raw_headers: Mapping[str, str] | None) -> Mapping[str, str]:
     """The MCP request's client headers, sanitized the way the chat completions path
     sanitizes them before they reach a logging callback or a guardrail: proxy key
-    headers stripped, credential-bearing values masked."""
+    headers stripped, including the custom key header name the deployment configured,
+    upstream MCP credentials dropped, and credential-bearing values masked."""
     from starlette.datastructures import Headers
 
     from litellm.proxy.litellm_pre_call_utils import clean_headers, redact_credential_headers
 
-    return redact_credential_headers(clean_headers(Headers(raw_headers)))
+    excluded: Final = _upstream_credential_headers(raw_headers.keys() if raw_headers else ())
+    cleaned: Final = clean_headers(
+        Headers(raw_headers),
+        litellm_key_header_name=_custom_litellm_key_header_name(),
+    )
+    return redact_credential_headers({name: value for name, value in cleaned.items() if name.lower() not in excluded})

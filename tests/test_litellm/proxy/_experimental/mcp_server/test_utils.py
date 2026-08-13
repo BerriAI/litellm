@@ -1,7 +1,10 @@
+from unittest.mock import patch
+
 import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._experimental.mcp_server.utils import (
+    build_synthetic_mcp_request,
     logging_safe_mcp_headers,
     validate_and_normalize_mcp_server_payload,
     validate_tool_display_names,
@@ -69,3 +72,55 @@ class TestLoggingSafeMcpHeaders:
             "x-app-id": "app-1",
             "cookie": "***REDACTED***",
         }
+
+    def test_strips_custom_litellm_key_header(self):
+        """general_settings.litellm_key_header_name carries the proxy virtual key, so it must
+        never reach a callback or a guardrail even though clean_headers cannot know its name."""
+        with patch.dict(
+            "litellm.proxy.proxy_server.general_settings",
+            {"litellm_key_header_name": "x-company-key"},
+            clear=False,
+        ):
+            safe = logging_safe_mcp_headers({"x-company-key": "sk-proxy", "x-nuid": "nuid-1"})
+
+        assert safe == {"x-nuid": "nuid-1"}
+
+    def test_strips_upstream_mcp_credentials(self):
+        safe = logging_safe_mcp_headers(
+            {
+                "x-mcp-auth": "Bearer upstream",
+                "x-mcp-github-authorization": "Bearer gh_token",
+                "x-mcp-zapier-x-api-key": "zapier-key",
+                "x-nuid": "nuid-1",
+            }
+        )
+
+        assert safe == {"x-nuid": "nuid-1"}
+
+    def test_strips_custom_mcp_client_side_auth_header(self):
+        with patch.dict(
+            "litellm.proxy.proxy_server.general_settings",
+            {"mcp_client_side_auth_header_name": "x-upstream-token"},
+            clear=False,
+        ):
+            safe = logging_safe_mcp_headers({"x-upstream-token": "Bearer upstream", "x-nuid": "nuid-1"})
+
+        assert safe == {"x-nuid": "nuid-1"}
+
+
+class TestBuildSyntheticMcpRequest:
+    def test_forwards_client_headers_without_upstream_credentials(self):
+        """The synthetic request feeds add_litellm_data_to_request, which derives
+        metadata.headers, so upstream MCP credentials must not ride along."""
+        request = build_synthetic_mcp_request(
+            path="/mcp/tools/call",
+            raw_headers={
+                "x-nuid": "nuid-1",
+                "x-mcp-auth": "Bearer upstream",
+                "x-mcp-github-authorization": "Bearer gh_token",
+            },
+        )
+
+        assert request.headers.get("x-nuid") == "nuid-1"
+        assert "x-mcp-auth" not in request.headers
+        assert "x-mcp-github-authorization" not in request.headers
