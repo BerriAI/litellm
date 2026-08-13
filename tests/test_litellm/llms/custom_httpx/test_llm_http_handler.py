@@ -94,6 +94,10 @@ def test_prepare_fake_stream_request():
 
 
 def test_response_api_handler_streams_when_provider_transform_adds_stream():
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
     handler = BaseLLMHTTPHandler()
     config = Mock()
     config.validate_environment.return_value = {}
@@ -111,7 +115,22 @@ def test_response_api_handler_streams_when_provider_transform_adds_stream():
             request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
         )
     )
-    logging_obj = Mock()
+    logging_obj = Logging(
+        model="gpt-5.3-codex",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-call",
+        function_id="test-function",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-5.3-codex",
+        user=None,
+        optional_params={"stream": False},
+        litellm_params={},
+        custom_llm_provider="chatgpt",
+    )
 
     handler.response_api_handler(
         model="gpt-5.3-codex",
@@ -126,6 +145,10 @@ def test_response_api_handler_streams_when_provider_transform_adds_stream():
 
     assert client.post.call_args.kwargs["stream"] is True
     assert client.post.call_args.kwargs["json"]["stream"] is True
+    assert logging_obj.stream is True
+    assert logging_obj.model_call_details["stream"] is True
+    logging_obj.has_run_logging(event_type="async_success")
+    assert logging_obj.should_run_logging(event_type="async_success") is True
 
 
 def test_response_api_handler_runs_agentic_hooks_in_sync_path(monkeypatch):
@@ -255,6 +278,7 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
         )
     )
     logging_obj = Mock()
+    logging_obj.model_call_details = {}
 
     await handler.async_response_api_handler(
         model="gpt-5.3-codex",
@@ -269,6 +293,8 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
 
     assert client.post.call_args.kwargs["stream"] is True
     assert client.post.call_args.kwargs["json"]["stream"] is True
+    assert logging_obj.stream is True
+    assert logging_obj.model_call_details["stream"] is True
 
 
 @pytest.mark.asyncio
