@@ -94,9 +94,7 @@ async def create_missing_views(db: _db):
         GROUP BY 
         DATE("startTime");
         """
-        await db.execute_raw(query=sql_query)
-
-        verbose_logger.debug("MonthlyGlobalSpend Created!")
+        await create_view_tolerating_race(db, "MonthlyGlobalSpend", sql_query)
 
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dKeysBySpend" LIMIT 1""")
@@ -125,9 +123,7 @@ async def create_missing_views(db: _db):
         ORDER BY
         total_spend DESC;
         """
-        await db.execute_raw(query=sql_query)
-
-        verbose_logger.debug("Last30dKeysBySpend Created!")
+        await create_view_tolerating_race(db, "Last30dKeysBySpend", sql_query)
 
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dModelsBySpend" LIMIT 1""")
@@ -151,9 +147,7 @@ async def create_missing_views(db: _db):
         ORDER BY
         total_spend DESC;
         """
-        await db.execute_raw(query=sql_query)
-
-        verbose_logger.debug("Last30dModelsBySpend Created!")
+        await create_view_tolerating_race(db, "Last30dModelsBySpend", sql_query)
     try:
         await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpendPerKey" LIMIT 1""")
         verbose_logger.debug("MonthlyGlobalSpendPerKey Exists!")
@@ -175,9 +169,7 @@ async def create_missing_views(db: _db):
             DATE("startTime"),
             api_key;
         """
-        await db.execute_raw(query=sql_query)
-
-        verbose_logger.debug("MonthlyGlobalSpendPerKey Created!")
+        await create_view_tolerating_race(db, "MonthlyGlobalSpendPerKey", sql_query)
     try:
         await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpendPerUserPerKey" LIMIT 1""")
         verbose_logger.debug("MonthlyGlobalSpendPerUserPerKey Exists!")
@@ -201,9 +193,7 @@ async def create_missing_views(db: _db):
             "user",
             api_key;
         """
-        await db.execute_raw(query=sql_query)
-
-        verbose_logger.debug("MonthlyGlobalSpendPerUserPerKey Created!")
+        await create_view_tolerating_race(db, "MonthlyGlobalSpendPerUserPerKey", sql_query)
 
     try:
         await db.query_raw("""SELECT 1 FROM "DailyTagSpend" LIMIT 1""")
@@ -222,9 +212,7 @@ async def create_missing_views(db: _db):
         FROM "LiteLLM_SpendLogs" s
         GROUP BY individual_request_tag, DATE(s."startTime");
         """
-        await db.execute_raw(query=sql_query)
-
-        verbose_logger.debug("DailyTagSpend Created!")
+        await create_view_tolerating_race(db, "DailyTagSpend", sql_query)
 
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dTopEndUsersSpend" LIMIT 1""")
