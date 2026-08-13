@@ -799,6 +799,7 @@ export function KeyEditView({
           <Input value={projectDisplay ?? ""} disabled />
         </Form.Item>
       )}
+
       <Form.Item label="Logging Settings" name="logging_settings">
         <EditLoggingSettings
           value={form.getFieldValue("logging_settings")}

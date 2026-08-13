@@ -13,6 +13,11 @@ interface LoggingConfig {
 interface LoggingSettingsViewProps {
   loggingConfigs?: LoggingConfig[];
   disabledCallbacks?: string[];
+  // Destinations that route to this identity via credential_info.access
+  // (teams/orgs/global), resolved server-side. Display only. Left undefined by a
+  // caller that has not resolved them, which hides the section rather than
+  // asserting there are none.
+  scopedExporters?: string[];
   variant?: "card" | "inline";
   className?: string;
 }
@@ -20,6 +25,7 @@ interface LoggingSettingsViewProps {
 export function LoggingSettingsView({
   loggingConfigs = [],
   disabledCallbacks = [],
+  scopedExporters,
   variant = "card",
   className = "",
 }: LoggingSettingsViewProps) {
@@ -57,6 +63,30 @@ export function LoggingSettingsView({
 
   const content = (
     <div className="space-y-6">
+      {scopedExporters !== undefined && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <CogIcon className="h-4 w-4 text-blue-600" />
+            <span className="font-semibold text-gray-900">Logging Exporters</span>
+            <Tag color="blue">{scopedExporters.length}</Tag>
+          </div>
+          {scopedExporters.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {scopedExporters.map((name, index) => (
+                <Tag key={index} color="geekblue">
+                  {name}
+                </Tag>
+              ))}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200">
+              <CogIcon className="h-4 w-4 text-gray-400" />
+              <span className="text-gray-500 text-sm">No logging exporters assigned</span>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Logging Integrations Section */}
       <div className="space-y-3">
         <div className="flex items-center gap-2">

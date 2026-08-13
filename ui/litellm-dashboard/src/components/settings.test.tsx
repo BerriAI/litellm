@@ -2,8 +2,26 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { Form } from "antd";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { alertingSettingsCall, getCallbackConfigsCall, getCallbacksCall } from "./networking";
 import Settings, { backendCallbackLogoSrc, CallbackSelector } from "./settings";
+
+type SettingsTestProps = {
+  accessToken: string | null;
+  userRole: string | null;
+  userID: string | null;
+  premiumUser: boolean;
+};
+
+// Settings (and its CloudZero cost-tracking child) renders react-query hooks, so
+// every render must sit under a QueryClientProvider. Retries off so a failed
+// query surfaces immediately instead of hanging the test.
+const renderSettings = (props: SettingsTestProps) =>
+  render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <Settings {...props} />
+    </QueryClientProvider>,
+  );
 
 vi.mock("./networking", () => ({
   getCallbacksCall: vi.fn(),
@@ -40,6 +58,12 @@ vi.mock("./CloudZeroCostTracking/CloudZeroCostTracking", () => ({
   default: () => <div>Mock CloudZero Cost Tracking</div>,
 }));
 
+let credentialsFixture: { credentials: unknown[] } = { credentials: [] };
+
+vi.mock("@/app/(dashboard)/hooks/credentials/useCredentials", () => ({
+  useCredentials: () => ({ data: credentialsFixture, refetch: vi.fn() }),
+}));
+
 // Polyfill ResizeObserver for components relying on it in tests
 if (typeof window !== "undefined" && !window.ResizeObserver) {
   window.ResizeObserver = class ResizeObserver {
@@ -68,7 +92,7 @@ beforeAll(() => {
 describe("Settings", () => {
   const defaultProps = {
     accessToken: "token",
-    userRole: "admin",
+    userRole: "Admin",
     userID: "user-123",
     premiumUser: false,
   };
@@ -78,6 +102,7 @@ describe("Settings", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    credentialsFixture = { credentials: [] };
     mockGetCallbacksCall.mockResolvedValue({
       callbacks: [],
       available_callbacks: [],
@@ -88,7 +113,7 @@ describe("Settings", () => {
   });
 
   it("should render the logging callbacks tab when access token is provided", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    const { getByText } = renderSettings(defaultProps);
 
     await waitFor(() => {
       expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
@@ -96,7 +121,7 @@ describe("Settings", () => {
   });
 
   it("should display additional settings tabs", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    const { getByText } = renderSettings(defaultProps);
 
     await waitFor(() => {
       expect(getByText("CloudZero Cost Tracking")).toBeInTheDocument();
@@ -107,7 +132,7 @@ describe("Settings", () => {
   });
 
   it("should load callback configs from the backend when access token is provided", async () => {
-    render(<Settings {...defaultProps} />);
+    renderSettings(defaultProps);
 
     await waitFor(() => {
       expect(mockGetCallbackConfigsCall).toHaveBeenCalledWith(defaultProps.accessToken);
@@ -115,35 +140,30 @@ describe("Settings", () => {
   });
 
   it("should display edit modal with fields when edit is clicked", async () => {
+    // Datadog is a plain config callback that renders a row with the legacy
+    // Test/Edit/Delete actions. Config-owned OTEL callbacks (arize, langfuse_otel,
+    // etc.) also render as their own rows now; see the regression test below.
     const mockCallback = {
-      name: "langfuse",
+      name: "datadog",
       variables: {
-        LANGFUSE_PUBLIC_KEY: "test-public-key",
-        LANGFUSE_SECRET_KEY: "test-secret-key",
-        LANGFUSE_HOST: "https://test.langfuse.com",
-        SLACK_WEBHOOK_URL: null,
-        OPENMETER_API_KEY: null,
+        DD_API_KEY: "test-api-key",
+        DD_SITE: "us5.datadoghq.com",
       },
     };
 
     const mockCallbackConfig = {
-      id: "langfuse",
-      displayName: "Langfuse",
+      id: "datadog",
+      displayName: "Datadog",
       dynamic_params: {
-        LANGFUSE_PUBLIC_KEY: {
-          type: "text",
-          ui_name: "Public Key",
-          required: true,
-        },
-        LANGFUSE_SECRET_KEY: {
+        DD_API_KEY: {
           type: "password",
-          ui_name: "Secret Key",
+          ui_name: "API Key",
           required: true,
         },
-        LANGFUSE_HOST: {
+        DD_SITE: {
           type: "text",
-          ui_name: "Host",
-          required: false,
+          ui_name: "Site",
+          required: true,
         },
       },
     };
@@ -151,10 +171,10 @@ describe("Settings", () => {
     mockGetCallbacksCall.mockResolvedValue({
       callbacks: [mockCallback],
       available_callbacks: {
-        langfuse: {
-          litellm_callback_name: "langfuse",
-          litellm_callback_params: ["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST"],
-          ui_callback_name: "Langfuse",
+        datadog: {
+          litellm_callback_name: "datadog",
+          litellm_callback_params: ["DD_API_KEY", "DD_SITE"],
+          ui_callback_name: "Datadog",
         },
       },
       alerts: [],
@@ -163,17 +183,17 @@ describe("Settings", () => {
     mockGetCallbackConfigsCall.mockResolvedValue([mockCallbackConfig]);
 
     const user = userEvent.setup();
-    const { getByText } = render(<Settings {...defaultProps} />);
+    const { getByText } = renderSettings(defaultProps);
 
     await waitFor(() => {
       expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
     });
 
     await waitFor(() => {
-      expect(getByText("Langfuse")).toBeInTheDocument();
+      expect(getByText("Datadog")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByTestId("callback-actions-langfuse-success"));
+    await user.click(screen.getByTestId("callback-actions-datadog-success"));
     await user.click(await screen.findByTestId("callback-action-edit"));
 
     await waitFor(() => {
@@ -181,10 +201,105 @@ describe("Settings", () => {
     });
 
     await waitFor(() => {
-      expect(getByText("Public Key")).toBeInTheDocument();
-      expect(getByText("Secret Key")).toBeInTheDocument();
-      expect(getByText("Host")).toBeInTheDocument();
+      expect(getByText("API Key")).toBeInTheDocument();
+      expect(getByText("Site")).toBeInTheDocument();
     });
+  });
+
+  it("should render a config-owned OTEL callback (langfuse_otel) as its own row", async () => {
+    // Regression: a proxy-wide langfuse_otel/arize/weave/generic callback configured
+    // via /config/update must stay visible and manageable in the table. It was being
+    // filtered out by backend id, removing config-owned rows (not just duplicates).
+    mockGetCallbacksCall.mockResolvedValue({
+      callbacks: [{ name: "langfuse_otel", variables: { LANGFUSE_PUBLIC_KEY: "pk", LANGFUSE_SECRET_KEY: "sk" } }],
+      available_callbacks: {
+        langfuse_otel: {
+          litellm_callback_name: "langfuse_otel",
+          litellm_callback_params: ["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"],
+          ui_callback_name: "Langfuse OTEL",
+        },
+      },
+      alerts: [],
+    });
+    mockGetCallbackConfigsCall.mockResolvedValue([
+      { id: "langfuse_otel", displayName: "Langfuse OTEL", dynamic_params: {} },
+    ]);
+
+    const { getByText } = renderSettings(defaultProps);
+
+    await waitFor(() => {
+      expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(getByText("Langfuse OTEL")).toBeInTheDocument();
+    });
+  });
+
+  it("should keep rendering every destination when one stored access scope is not a list", async () => {
+    credentialsFixture = {
+      credentials: [
+        {
+          credential_name: "legacy-shape",
+          credential_info: { credential_type: "logging", description: "langfuse_otel", access: { teams: "team-1" } },
+        },
+        {
+          credential_name: "well-formed",
+          credential_info: { credential_type: "logging", description: "langfuse_otel", access: { teams: ["team-2"] } },
+        },
+      ],
+    };
+
+    const { getByText } = renderSettings(defaultProps);
+
+    await waitFor(() => {
+      expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
+    });
+    expect(getByText("legacy-shape")).toBeInTheDocument();
+    expect(getByText("well-formed")).toBeInTheDocument();
+  });
+
+  // Regression: the Edit scope dialog is driven by a Form store that Form.useForm() owns.
+  // initialValues only seeds that store on first mount, so reopening the dialog for a second
+  // destination left the first one's scope in the fields while only the title changed. Save
+  // sends the whole access object, so pressing it wrote the stale scope -- silently turning a
+  // team-scoped destination global and leaking every tenant's traces to it. The parent keys
+  // the modal per destination so the store is rebuilt each time.
+  it("should show each destination's own scope when Edit scope is reopened for another one", async () => {
+    const user = userEvent.setup();
+    credentialsFixture = {
+      credentials: [
+        {
+          credential_name: "global-dest",
+          credential_info: { credential_type: "logging", description: "generic", access: { global: true } },
+        },
+        {
+          credential_name: "team-dest",
+          credential_info: { credential_type: "logging", description: "generic", access: { teams: ["team-1"] } },
+        },
+      ],
+    };
+
+    const { findByText } = renderSettings(defaultProps);
+    await findByText("Active Logging Callbacks");
+
+    const openEditScope = async (name: string) => {
+      await user.click(await screen.findByTestId(`callback-actions-${name}-success`));
+      await user.click(await screen.findByTestId("destination-action-edit-access"));
+      return await screen.findByText(`Edit scope — ${name}`);
+    };
+    const globalSwitch = () => document.querySelector(".ant-modal .ant-switch");
+    const closeDialog = async () => {
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(document.querySelector(".ant-modal-title")).not.toBeInTheDocument());
+    };
+
+    await openEditScope("global-dest");
+    expect(globalSwitch()).toHaveAttribute("aria-checked", "true");
+    await closeDialog();
+
+    await openEditScope("team-dest");
+    // Before the fix this read "true", carried over from global-dest.
+    expect(globalSwitch()).toHaveAttribute("aria-checked", "false");
   });
 
   it("should hold the callbacks table in loading state until the fetch settles", async () => {
@@ -199,7 +314,7 @@ describe("Settings", () => {
       }),
     );
 
-    render(<Settings {...defaultProps} />);
+    renderSettings(defaultProps);
 
     expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
 
@@ -214,7 +329,7 @@ describe("Settings", () => {
   });
 
   it("should resolve loading without fetching when the user id is missing", async () => {
-    render(<Settings {...defaultProps} userID={null as unknown as string} />);
+    renderSettings({ ...defaultProps, userID: null });
 
     await waitFor(() => {
       expect(screen.queryByTestId("skeleton-row")).not.toBeInTheDocument();
@@ -224,7 +339,7 @@ describe("Settings", () => {
   });
 
   it("should display CloudZero Cost Tracking tab", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    const { getByText } = renderSettings(defaultProps);
 
     await waitFor(() => {
       expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
@@ -272,5 +387,89 @@ describe("CallbackSelector logos", () => {
     expect(screen.getByAltText("Hosted logo")).toHaveAttribute("src", "https://logos.example.com/hosted.png");
     expect(screen.queryByAltText("NoLogo logo")).toBeNull();
     expect(screen.getByText("N")).toBeInTheDocument();
+  });
+});
+
+describe("Add Callback dropdown", () => {
+  // Regression: the four OTEL backend ids were filtered out of the config-owned
+  // callback list and re-added as destinations under the SAME ids, so picking "Arize"
+  // silently switched from creating a proxy-wide callback (/config/update) to creating
+  // a by-default-inert logging credential (/credentials). Both paths must be offered,
+  // and distinguishable, so the pre-existing flow still exists.
+  const defaultProps = {
+    accessToken: "token",
+    userRole: "Admin",
+    userID: "user-123",
+    premiumUser: false,
+  };
+
+  it("offers the config-owned OTEL callback and the scoped destination as separate options", async () => {
+    vi.clearAllMocks();
+    vi.mocked(alertingSettingsCall).mockResolvedValue([]);
+    vi.mocked(getCallbacksCall).mockResolvedValue({
+      callbacks: [],
+      available_callbacks: {
+        arize: {
+          litellm_callback_name: "arize",
+          litellm_callback_params: ["ARIZE_SPACE_ID", "ARIZE_API_KEY"],
+          ui_callback_name: "Arize",
+        },
+      },
+      alerts: [],
+    });
+    vi.mocked(getCallbackConfigsCall).mockResolvedValue([{ id: "arize", displayName: "Arize", dynamic_params: {} }]);
+
+    const { getByText } = renderSettings(defaultProps);
+    await waitFor(() => {
+      expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
+    });
+
+    fireEvent.click(getByText("Add Callback"));
+    fireEvent.mouseDown(await screen.findByRole("combobox"));
+
+    expect(await screen.findByText("Arize")).toBeInTheDocument();
+    expect(screen.getByText("Arize (scoped destination)")).toBeInTheDocument();
+  });
+});
+
+describe("Settings read-only admin", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    credentialsFixture = { credentials: [] };
+    vi.mocked(getCallbacksCall).mockResolvedValue({ callbacks: [], available_callbacks: [], alerts: [] });
+    vi.mocked(getCallbackConfigsCall).mockResolvedValue([]);
+    vi.mocked(alertingSettingsCall).mockResolvedValue([]);
+  });
+
+  it("gives a view-only session no write affordances even though its role reads as Admin", async () => {
+    // Regression: proxy_admin_viewer is mapped to the effective role "Admin" so it gets
+    // read parity, and the write restriction travels separately on isViewOnly. Deriving
+    // write access from the role alone handed the viewer Add, Edit scope and Delete.
+    const { queryByText } = renderSettings({
+      accessToken: "token",
+      userRole: "Admin",
+      userID: "viewer-1",
+      premiumUser: false,
+      isViewOnly: true,
+    } as never);
+
+    await waitFor(() => {
+      expect(queryByText("Active Logging Callbacks")).toBeInTheDocument();
+    });
+    expect(queryByText("Add Callback")).not.toBeInTheDocument();
+  });
+
+  it("keeps the write affordances for a real proxy admin", async () => {
+    const { queryByText } = renderSettings({
+      accessToken: "token",
+      userRole: "Admin",
+      userID: "admin-1",
+      premiumUser: false,
+    });
+
+    await waitFor(() => {
+      expect(queryByText("Active Logging Callbacks")).toBeInTheDocument();
+    });
+    expect(queryByText("Add Callback")).toBeInTheDocument();
   });
 });
