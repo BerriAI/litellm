@@ -1,19 +1,18 @@
-// hooks/useHideAgentPlatformBanner.ts
 import { useSyncExternalStore } from "react";
 import { getLocalStorageItem, LOCAL_STORAGE_EVENT } from "@/utils/localStorageUtils";
 
-export const HIDE_AGENT_PLATFORM_BANNER_KEY = "litellmHideAgentPlatformBanner";
+export const HIDE_AUTO_ROUTER_ANNOUNCEMENT_KEY = "litellmHideAutoRouterAnnouncement";
 
 function subscribe(callback: () => void) {
   const onStorage = (e: StorageEvent) => {
-    if (e.key === HIDE_AGENT_PLATFORM_BANNER_KEY) {
+    if (e.key === HIDE_AUTO_ROUTER_ANNOUNCEMENT_KEY) {
       callback();
     }
   };
 
   const onCustom = (e: Event) => {
     const { key } = (e as CustomEvent).detail;
-    if (key === HIDE_AGENT_PLATFORM_BANNER_KEY) {
+    if (key === HIDE_AUTO_ROUTER_ANNOUNCEMENT_KEY) {
       callback();
     }
   };
@@ -28,9 +27,9 @@ function subscribe(callback: () => void) {
 }
 
 function getSnapshot() {
-  return getLocalStorageItem(HIDE_AGENT_PLATFORM_BANNER_KEY) === "true";
+  return getLocalStorageItem(HIDE_AUTO_ROUTER_ANNOUNCEMENT_KEY) === "true";
 }
 
-export function useHideAgentPlatformBanner() {
+export function useHideAutoRouterAnnouncement() {
   return useSyncExternalStore(subscribe, getSnapshot);
 }
