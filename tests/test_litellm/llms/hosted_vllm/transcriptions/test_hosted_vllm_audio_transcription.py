@@ -10,7 +10,7 @@ import litellm
 from litellm.llms.hosted_vllm.transcriptions.transformation import (
     HostedVLLMAudioTranscriptionConfig,
 )
-from litellm.types.utils import TranscriptionResponse
+from litellm.types.utils import ImageResponse, TranscriptionResponse
 
 
 def _complete_url(api_base: str | None) -> str:
@@ -105,3 +105,34 @@ class TestAtranscriptionCustomLlmProvider:
             )
 
         mock_speech.assert_called()
+
+
+class TestAimageGenerationCustomLlmProvider:
+    @pytest.mark.asyncio
+    async def test_unprefixed_model_uses_custom_llm_provider(self) -> None:
+        mock_response = ImageResponse(
+            created=1234567890,
+            data=[{"url": "https://example.com/image.png"}],
+        )
+        with patch(
+            "litellm.images.main.image_generation",
+            return_value=mock_response,
+        ) as mock_image_generation:
+            response = await litellm.aimage_generation(
+                model="unprefixed-image-model",
+                prompt="a cat",
+                custom_llm_provider="openai",
+                api_base="http://vllm.example.com/v1",
+            )
+
+        assert response.data is not None
+        mock_image_generation.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_unprefixed_model_without_provider_still_fails(self) -> None:
+        with pytest.raises(Exception, match="LLM Provider NOT provided"):
+            await litellm.aimage_generation(
+                model="unprefixed-image-model",
+                prompt="a cat",
+                api_base="http://vllm.example.com/v1",
+            )
