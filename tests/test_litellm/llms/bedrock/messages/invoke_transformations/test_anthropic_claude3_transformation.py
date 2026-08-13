@@ -2474,6 +2474,91 @@ def test_filter_and_transform_beta_headers_passes_context_management_for_bedrock
     assert out_converse == []
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "us.anthropic.claude-opus-4-7",
+    ],
+)
+def test_bedrock_messages_tool_search_adds_beta_header(local_beta_headers_config, model):
+    """
+    LIT-4522: Bedrock InvokeModel only admits ``tool_search_tool_*`` tool types
+    when the request body carries the ``tool-search-tool-2025-10-19`` beta;
+    without it Bedrock 400s with "Input tag 'tool_search_tool_regex_20251119'
+    ... does not match any of the expected tags". The allowlist in
+    ``_supports_tool_search_on_bedrock`` previously omitted Haiku 4.5 and
+    Opus 4.7, so the beta was silently dropped for those models and every
+    tool-search request failed. Verified live 2026-08-11: Bedrock returns 200
+    with ``server_tool_use`` for all three models once the beta is sent.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
+    optional_params = {
+        "max_tokens": 64,
+        "tools": [
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+            {
+                "name": "add_numbers",
+                "description": "Add two integers",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+                    "required": ["a", "b"],
+                },
+            },
+        ],
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model=model,
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "tool-search-tool-2025-10-19" in (result.get("anthropic_beta") or [])
+
+
+def test_bedrock_messages_tool_search_model_map_flag_is_authoritative(local_model_cost_map, monkeypatch):
+    """``supports_tool_search`` lives in the model map; the name patterns in
+    ``_supports_tool_search_on_bedrock`` are only a fallback for ids the map
+    cannot resolve. Flipping the mapped entry's flag to ``False`` must win even
+    though the model name still matches the ``haiku-4-5`` pattern."""
+    import litellm
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    model = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    assert AnthropicModelInfo._get_provider_resolved_capability(model, "supports_tool_search", "bedrock") is True
+    assert cfg._supports_tool_search_on_bedrock(model) is True
+
+    monkeypatch.setitem(litellm.model_cost[model], "supports_tool_search", False)
+    litellm.get_model_info.cache_clear()
+
+    assert cfg._supports_tool_search_on_bedrock(model) is False
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        pytest.param("us.anthropic.claude-opus-4-6-v99:9", True, id="unmapped_id_falls_back_to_patterns"),
+        pytest.param("anthropic.claude-3-5-sonnet-20240620-v1:0", False, id="mapped_entry_without_flag_no_pattern"),
+    ],
+)
+def test_bedrock_messages_tool_search_pattern_fallback(local_model_cost_map, model, expected):
+    """Ids the model map cannot resolve (or resolves without a
+    ``supports_tool_search`` opinion) fall through to the name patterns, so
+    ARNs and unlisted regional variants of supported families keep working."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    assert cfg._supports_tool_search_on_bedrock(model) is expected
+
 
 def test_bedrock_messages_thinking_shape_follows_exact_bedrock_entry_flag(
     local_model_cost_map, monkeypatch
@@ -2580,3 +2665,52 @@ def test_replayed_intercepted_search_turn_leaves_no_unsupported_block_for_bedroc
     assert "server_tool_use" not in serialized
     assert expected_evidence in serialized
     assert "Rome was founded in 753 BC." in serialized
+
+
+@pytest.mark.parametrize("tool_type", ["web_search_20250305", "web_search_20260209"])
+def test_bedrock_invoke_messages_rejects_server_web_search_tool(tool_type: str):
+    """Bedrock can't execute Anthropic's server-side web search; the transform
+    must raise an actionable 400 pointing at the interception docs instead of
+    letting Bedrock return an opaque "provided request is not valid"."""
+    import litellm
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        cfg.transform_anthropic_messages_request(
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "search the web for litellm"}],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 128,
+                "tools": [{"type": tool_type, "name": "web_search", "max_uses": 5}],
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+    assert "https://docs.litellm.ai/docs/integrations/websearch_interception" in str(exc_info.value)
+    assert "us.anthropic.claude-haiku-4-5-20251001-v1:0" in str(exc_info.value)
+
+
+def test_bedrock_invoke_messages_allows_converted_websearch_function_tool():
+    """The interception hook rewrites web_search into a plain custom tool
+    (litellm_web_search); that converted shape must pass through untouched."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "search the web for litellm"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 128,
+            "tools": [
+                {
+                    "name": "litellm_web_search",
+                    "description": "Search the web",
+                    "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+                }
+            ],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result["tools"][0]["name"] == "litellm_web_search"

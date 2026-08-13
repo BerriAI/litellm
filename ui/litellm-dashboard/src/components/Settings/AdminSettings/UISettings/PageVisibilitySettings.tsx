@@ -1,8 +1,13 @@
 "use client";
 
-import { getAvailablePages } from "@/components/page_utils";
-import { Button, Checkbox, Collapse, Space, Tag, Typography } from "antd";
+import { ChevronDown } from "lucide-react";
 import { useMemo, useState } from "react";
+
+import { getAvailablePages } from "@/components/page_utils";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 interface PageVisibilitySettingsProps {
   enabledPagesInternalUsers: string[] | null | undefined;
@@ -17,13 +22,8 @@ export default function PageVisibilitySettings({
   isUpdating,
   onUpdate,
 }: PageVisibilitySettingsProps) {
-  // Check if page visibility is set (null/undefined means "not set" = all pages visible)
   const isPageVisibilitySet = enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined;
-
-  // Get available pages from leftnav configuration
   const availablePages = useMemo(() => getAvailablePages(), []);
-
-  // Group pages by their group for better UI
   const pagesByGroup = useMemo(() => {
     const grouped: Record<string, typeof availablePages> = {};
     availablePages.forEach((page) => {
@@ -34,18 +34,15 @@ export default function PageVisibilitySettings({
     });
     return grouped;
   }, [availablePages]);
-
-  // Local state for page selection
   const [selectedPages, setSelectedPages] = useState<string[]>(enabledPagesInternalUsers || []);
 
-  // Update local state when data changes
   useMemo(() => {
-    if (enabledPagesInternalUsers) {
-      setSelectedPages(enabledPagesInternalUsers);
-    } else {
-      setSelectedPages([]);
-    }
+    setSelectedPages(enabledPagesInternalUsers || []);
   }, [enabledPagesInternalUsers]);
+
+  const togglePage = (page: string, checked: boolean) => {
+    setSelectedPages((current) => (checked ? [...current, page] : current.filter((item) => item !== page)));
+  };
 
   const handleSavePageVisibility = () => {
     onUpdate({ enabled_ui_pages_internal_users: selectedPages.length > 0 ? selectedPages : null });
@@ -57,90 +54,74 @@ export default function PageVisibilitySettings({
   };
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-      <Space direction="vertical" size={4}>
-        <Space align="center">
-          <Typography.Text strong>Internal User Page Visibility</Typography.Text>
-          {!isPageVisibilitySet && (
-            <Tag color="default" style={{ marginLeft: "8px" }}>
-              Not set (all pages visible)
-            </Tag>
-          )}
-          {isPageVisibilitySet && (
-            <Tag color="blue" style={{ marginLeft: "8px" }}>
-              {selectedPages.length} page{selectedPages.length !== 1 ? "s" : ""} selected
-            </Tag>
-          )}
-        </Space>
+    <div className="space-y-4">
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-medium text-foreground">Internal User Page Visibility</p>
+          <Badge variant={isPageVisibilitySet ? "secondary" : "outline"}>
+            {isPageVisibilitySet
+              ? `${selectedPages.length} page${selectedPages.length !== 1 ? "s" : ""} selected`
+              : "Not set (all pages visible)"}
+          </Badge>
+        </div>
         {enabledPagesPropertyDescription && (
-          <Typography.Text type="secondary">{enabledPagesPropertyDescription}</Typography.Text>
+          <p className="text-sm text-muted-foreground">{enabledPagesPropertyDescription}</p>
         )}
-        <Typography.Text type="secondary" style={{ fontSize: "12px", fontStyle: "italic" }}>
+        <p className="text-xs italic text-muted-foreground">
           By default, all pages are visible to internal users. Select specific pages to restrict visibility.
-        </Typography.Text>
-        <Typography.Text type="secondary" style={{ fontSize: "12px", color: "#8b5cf6" }}>
+        </p>
+        <p className="text-xs text-primary">
           Note: Only pages accessible to internal user roles are shown here. Admin-only pages are excluded as they
           cannot be made visible to internal users regardless of this setting.
-        </Typography.Text>
-      </Space>
+        </p>
+      </div>
 
-      <Collapse
-        items={[
-          {
-            key: "page-visibility",
-            label: "Configure Page Visibility",
-            children: (
-              <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-                <Checkbox.Group value={selectedPages} onChange={setSelectedPages} style={{ width: "100%" }}>
-                  <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-                    {Object.entries(pagesByGroup).map(([groupName, pages]) => (
-                      <div key={groupName}>
-                        <Typography.Text
-                          strong
-                          style={{
-                            fontSize: "11px",
-                            color: "#6b7280",
-                            letterSpacing: "0.05em",
-                            display: "block",
-                            marginBottom: "8px",
-                          }}
-                        >
-                          {groupName}
-                        </Typography.Text>
-                        <Space direction="vertical" size="small" style={{ marginLeft: "16px", width: "100%" }}>
-                          {pages.map((page) => (
-                            <div key={page.page} style={{ marginBottom: "4px" }}>
-                              <Checkbox value={page.page}>
-                                <Space direction="vertical" size={0}>
-                                  <Typography.Text>{page.label}</Typography.Text>
-                                  <Typography.Text type="secondary" style={{ fontSize: "12px" }}>
-                                    {page.description}
-                                  </Typography.Text>
-                                </Space>
-                              </Checkbox>
-                            </div>
-                          ))}
-                        </Space>
-                      </div>
-                    ))}
-                  </Space>
-                </Checkbox.Group>
+      <Collapsible className="rounded-lg border border-border">
+        <CollapsibleTrigger className="group flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm font-medium hover:bg-muted">
+          Configure Page Visibility
+          <ChevronDown className="size-4 transition-transform group-data-[panel-open]:rotate-180" />
+        </CollapsibleTrigger>
+        <CollapsibleContent className="border-t border-border p-4">
+          <div className="space-y-4">
+            {Object.entries(pagesByGroup).map(([groupName, pages]) => (
+              <fieldset key={groupName} className="space-y-2">
+                <legend className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+                  {groupName}
+                </legend>
+                <div className="ml-4 space-y-2">
+                  {pages.map((page) => {
+                    const checkboxId = `page-visibility-${page.page}`;
+                    return (
+                      <label key={page.page} htmlFor={checkboxId} className="flex cursor-pointer items-start gap-2">
+                        <Checkbox
+                          id={checkboxId}
+                          checked={selectedPages.includes(page.page)}
+                          onCheckedChange={(checked) => togglePage(page.page, checked === true)}
+                        />
+                        <span className="space-y-0.5">
+                          <span className="block text-sm text-foreground">{page.label}</span>
+                          <span className="block text-xs text-muted-foreground">{page.description}</span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </fieldset>
+            ))}
 
-                <Space>
-                  <Button type="primary" onClick={handleSavePageVisibility} loading={isUpdating} disabled={isUpdating}>
-                    Save Page Visibility Settings
-                  </Button>
-                  {isPageVisibilitySet && (
-                    <Button onClick={handleResetToDefault} loading={isUpdating} disabled={isUpdating}>
-                      Reset to Default (All Pages)
-                    </Button>
-                  )}
-                </Space>
-              </Space>
-            ),
-          },
-        ]}
-      />
-    </Space>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" onClick={handleSavePageVisibility} disabled={isUpdating}>
+                Save Page Visibility Settings
+              </Button>
+              {isPageVisibilitySet && (
+                <Button type="button" variant="outline" onClick={handleResetToDefault} disabled={isUpdating}>
+                  Reset to Default (All Pages)
+                </Button>
+              )}
+            </div>
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
+    </div>
   );
 }

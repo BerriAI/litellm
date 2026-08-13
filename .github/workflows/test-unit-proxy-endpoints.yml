@@ -76,4 +76,5 @@ jobs:
       workers: 4
       reruns: 2
       timeout-minutes: 60
+      job-timeout-minutes: 95
       artifact-name: proxy-server

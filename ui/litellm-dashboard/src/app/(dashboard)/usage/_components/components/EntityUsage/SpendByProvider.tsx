@@ -1,20 +1,10 @@
 import { DonutChart } from "@/components/shared/charts";
+import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import {
-  Card,
-  Col,
-  Grid,
-  Switch,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  Title,
-} from "@tremor/react";
+import type { ColumnDef } from "@tanstack/react-table";
+import { Card, Col, Grid, Switch, Title } from "@tremor/react";
 import { Tooltip } from "antd";
 import React, { useState } from "react";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
@@ -34,6 +24,43 @@ interface SpendByProviderProps {
   isDateChanging: boolean;
   providerSpend: ProviderSpendData[];
 }
+
+const columns: ColumnDef<ProviderSpendData>[] = [
+  {
+    header: "Provider",
+    accessorKey: "provider",
+    cell: ({ row }) => (
+      <div className="flex items-center space-x-2">
+        {row.original.provider && <ProviderLogo provider={row.original.provider} className="size-4" />}
+        <span>{row.original.provider}</span>
+      </div>
+    ),
+  },
+  {
+    header: "Spend",
+    accessorKey: "spend",
+    meta: { numeric: true },
+    cell: ({ row }) => <MoneyCell value={row.original.spend} decimals={2} />,
+  },
+  {
+    header: "Successful",
+    accessorKey: "successful_requests",
+    meta: { numeric: true, className: "text-green-600" },
+    cell: ({ row }) => row.original.successful_requests.toLocaleString(),
+  },
+  {
+    header: "Failed",
+    accessorKey: "failed_requests",
+    meta: { numeric: true, className: "text-red-600" },
+    cell: ({ row }) => row.original.failed_requests.toLocaleString(),
+  },
+  {
+    header: "Tokens",
+    accessorKey: "tokens",
+    meta: { numeric: true },
+    cell: ({ row }) => row.original.tokens.toLocaleString(),
+  },
+];
 
 const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChanging, providerSpend }) => {
   const [includeZeroSpend, setIncludeZeroSpend] = useState(false);
@@ -94,35 +121,13 @@ const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChangi
             />
           </Col>
           <Col numColSpan={1}>
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeaderCell>Provider</TableHeaderCell>
-                  <TableHeaderCell>Spend</TableHeaderCell>
-                  <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
-                  <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
-                  <TableHeaderCell>Tokens</TableHeaderCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {filteredProviderSpend.map((provider) => (
-                  <TableRow key={provider.provider}>
-                    <TableCell>
-                      <div className="flex items-center space-x-2">
-                        {provider.provider && <ProviderLogo provider={provider.provider} className="w-4 h-4" />}
-                        <span>{provider.provider}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <MoneyCell value={provider.spend} decimals={2} />
-                    </TableCell>
-                    <TableCell className="text-green-600">{provider.successful_requests.toLocaleString()}</TableCell>
-                    <TableCell className="text-red-600">{provider.failed_requests.toLocaleString()}</TableCell>
-                    <TableCell>{provider.tokens.toLocaleString()}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <DataTable
+              columns={columns}
+              data={filteredProviderSpend}
+              getRowId={(row) => row.provider}
+              noDataMessage="No provider usage data"
+              size="compact"
+            />
           </Col>
         </Grid>
       )}

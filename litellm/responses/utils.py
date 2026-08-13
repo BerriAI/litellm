@@ -1033,13 +1033,18 @@ class ResponseAPILoggingUtils:
 
     @staticmethod
     def _transform_response_api_usage_to_chat_usage(
-        usage_input: dict | ResponseAPIUsage | None,
+        usage_input: Mapping[str, object] | ResponseAPIUsage | Usage | None,
     ) -> Usage:
         """
         Transforms ResponseAPIUsage or ImageUsage to a Usage object.
 
         Both have the same spec with input_tokens, output_tokens, and
         input_tokens_details (text_tokens, image_tokens).
+
+        Usage inputs are returned as-is so re-running this helper never drops
+        fields. Non-standard provider fields (e.g. xAI's
+        server_side_tool_usage_details) are carried onto the returned Usage so
+        provider cost calculators can read them after normalization.
         """
         if usage_input is None:
             return Usage(
@@ -1047,6 +1052,10 @@ class ResponseAPILoggingUtils:
                 completion_tokens=0,
                 total_tokens=0,
             )
+        if isinstance(usage_input, Usage):
+            return usage_input
+        if isinstance(usage_input, dict) and not ResponseAPILoggingUtils._is_response_api_usage(usage_input):
+            return Usage(**usage_input)
         response_api_usage: ResponseAPIUsage
         if isinstance(usage_input, dict):
             usage_input = dict(usage_input)  # shallow copy; avoid mutating caller
@@ -1055,13 +1064,11 @@ class ResponseAPILoggingUtils:
                 usage_input["input_tokens_details"] = usage_input["input_token_details"]
             if usage_input.get("output_tokens_details") is None and "output_token_details" in usage_input:
                 usage_input["output_tokens_details"] = usage_input["output_token_details"]
-            total_tokens = usage_input.get("total_tokens")
-            if total_tokens is None:
+            if usage_input.get("total_tokens") is None:
                 input_tokens: Final = usage_input.get("input_tokens")
                 output_tokens: Final = usage_input.get("output_tokens")
-                if input_tokens is not None and output_tokens is not None:
-                    total_tokens = input_tokens + output_tokens
-                    usage_input["total_tokens"] = total_tokens
+                if isinstance(input_tokens, int) and isinstance(output_tokens, int):
+                    usage_input["total_tokens"] = input_tokens + output_tokens
             response_api_usage = ResponseAPIUsage(**usage_input)
         else:
             response_api_usage = usage_input
@@ -1089,12 +1096,27 @@ class ResponseAPILoggingUtils:
                 audio_tokens=getattr(output_tokens_details, "audio_tokens", None),
             )
 
+        extra_usage_fields: Final = {
+            key: value
+            for key, value in (response_api_usage.model_extra or {}).items()
+            if key
+            not in (
+                "input_token_details",
+                "output_token_details",
+                "prompt_tokens",
+                "completion_tokens",
+                "total_tokens",
+                "prompt_tokens_details",
+                "completion_tokens_details",
+            )
+        }
         chat_usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
             prompt_tokens_details=prompt_tokens_details,
             completion_tokens_details=completion_tokens_details,
+            **extra_usage_fields,
         )
 
         # Preserve cost attribute if it exists on ResponseAPIUsage

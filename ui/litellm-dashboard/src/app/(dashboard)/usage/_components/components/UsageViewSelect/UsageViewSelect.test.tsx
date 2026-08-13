@@ -90,15 +90,16 @@ describe("UsageViewSelect", () => {
   });
 
   it("should render", () => {
-    render(<UsageViewSelect value="global" onChange={mockOnChange} isAdmin={false} />);
+    render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" />);
 
     expect(screen.getByText("Usage View")).toBeInTheDocument();
     expect(screen.getByText("Select the usage data you want to view")).toBeInTheDocument();
     expect(screen.getByRole("combobox")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Your Usage" })).toBeInTheDocument();
   });
 
   it("should call onChange when value changes", () => {
-    render(<UsageViewSelect value="global" onChange={mockOnChange} isAdmin={true} />);
+    render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Admin" />);
 
     const select = screen.getByRole("combobox");
     act(() => {
@@ -109,14 +110,32 @@ describe("UsageViewSelect", () => {
   });
 
   it("should show Tag Usage for non-admin users with tag usage permission", () => {
-    render(<UsageViewSelect value="global" onChange={mockOnChange} isAdmin={false} canViewTagUsage={true} />);
+    render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" canViewTagUsage={true} />);
 
     expect(screen.getByRole("option", { name: "Tag Usage" })).toBeInTheDocument();
   });
 
   it("should hide Tag Usage for non-admin users without tag usage permission", () => {
-    render(<UsageViewSelect value="global" onChange={mockOnChange} isAdmin={false} />);
+    render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" />);
 
     expect(screen.queryByRole("option", { name: "Tag Usage" })).not.toBeInTheDocument();
+  });
+
+  it.each(["Organization Usage", "Agent Usage (A2A)"])("should show %s to an admin", (optionName) => {
+    render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Admin" />);
+
+    expect(screen.getByRole("option", { name: optionName })).toBeInTheDocument();
+  });
+
+  it.each(["Organization Usage", "Agent Usage (A2A)"])("should hide %s from an internal user", (optionName) => {
+    render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" canViewTagUsage={true} />);
+
+    expect(screen.queryByRole("option", { name: optionName })).not.toBeInTheDocument();
+  });
+
+  it.each(["Team Usage", "Tag Usage"])("should keep %s available to an internal user", (optionName) => {
+    render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" canViewTagUsage={true} />);
+
+    expect(screen.getByRole("option", { name: optionName })).toBeInTheDocument();
   });
 });

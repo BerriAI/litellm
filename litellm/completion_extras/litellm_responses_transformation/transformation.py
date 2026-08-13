@@ -4,8 +4,8 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 
 import json
 import os
-from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, Union, cast
 
 from openai.types.responses.custom_tool_param import CustomToolParam
 from openai.types.responses.response_input_param import (
@@ -45,6 +45,9 @@ from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputImageParam
+    from openai.types.responses.response_text_config_param import (
+        ResponseTextConfigParam as ResponseText,
+    )
     from pydantic import BaseModel
 
     from litellm import LiteLLMLoggingObj, ModelResponse
@@ -57,6 +60,19 @@ if TYPE_CHECKING:
         ChatCompletionThinkingBlock,
         OpenAIMessageContentListBlock,
     )
+    from litellm.types.utils import Choices
+
+
+class _ReasoningSummaryText(TypedDict):
+    type: str
+    text: str
+
+
+class _BuiltReasoningItem(TypedDict):
+    type: Literal["reasoning"]
+    id: str
+    encrypted_content: str | None
+    summary: Sequence[_ReasoningSummaryText]
 
 
 def _get_reasoning_items(
@@ -72,13 +88,13 @@ def _get_reasoning_items(
 def _build_reasoning_item(
     item_id: str,
     encrypted_content: str | None,
-    summary_raw: Any,
-) -> dict[str, Any]:
+    summary_raw: Iterable[object] | None,
+) -> _BuiltReasoningItem:
     """Build a ChatCompletionReasoningItem-shaped dict from raw response data.
 
     Handles both pydantic objects (attribute access) and plain dicts.
     """
-    summary: Final[list[dict[str, Any]]] = []
+    summary: Final[list[_ReasoningSummaryText]] = []
     for s in summary_raw or []:
         if isinstance(s, dict):
             summary.append({"type": s.get("type", "summary_text"), "text": s.get("text", "")})
@@ -98,7 +114,7 @@ def _build_reasoning_item(
 
 
 class _ChatToolCallDict(ChatCompletionToolCallChunk, total=False):
-    provider_specific_fields: Mapping[str, Any]
+    provider_specific_fields: Mapping[str, object]
 
 
 def _tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _ChatToolCallDict:
@@ -142,10 +158,10 @@ def _flat_responses_tool_choice(choice_type: str, name: str) -> ToolChoiceFuncti
 
 
 def _reasoning_item_to_response_input(
-    r_item: ChatCompletionReasoningItem | dict[str, Any],
-) -> dict[str, Any]:
+    r_item: ChatCompletionReasoningItem,
+) -> dict[str, object]:
     """Convert a stored ChatCompletionReasoningItem back to a Responses API input item."""
-    r_input: Final[dict[str, Any]] = {
+    r_input: Final[dict[str, object]] = {
         "type": "reasoning",
         "id": r_item.get("id") or f"rs_{id(r_item)}",
         # summary is always required by the Responses API, even when empty
@@ -181,7 +197,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 return _flat_responses_tool_choice(choice_type, nested_name)
         return tool_choice
 
-    def _handle_raw_dict_response_item(self, item: dict[str, Any], index: int) -> tuple[Any | None, int]:
+    def _handle_raw_dict_response_item(self, item: dict[str, Any], index: int) -> tuple["Choices | None", int]:
         """
         Handle raw dict response items from Responses API (e.g., GPT-5 Codex format).
 
@@ -228,8 +244,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
     def convert_chat_completion_messages_to_responses_api(
         self, messages: list["AllMessageValues"]
-    ) -> tuple[list[Any], str | None]:
-        input_items: Final[list[Any]] = []
+    ) -> tuple[list[object], str | None]:
+        input_items: Final[list[object]] = []
         instructions: str | None = None
         custom_tool_call_ids: Final = frozenset(
             tool_call["id"]
@@ -270,7 +286,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 # Convert tool message to function call output format
                 # The Responses API expects 'output' to be a list with input_text/input_image types
                 # Using list format for consistency across text and multimodal content
-                tool_output: list[dict[str, Any]]
+                tool_output: list[dict[str, object]]
                 if content is None:
                     tool_output = []
                 elif isinstance(content, str):
@@ -308,7 +324,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     function = tool_call.get("function")
                     custom = tool_call.get("custom")
                     if function:
-                        input_tool_call: dict[str, Any] = {
+                        input_tool_call: dict[str, object] = {
                             "type": "function_call",
                             "call_id": tool_call["id"],
                         }
@@ -376,15 +392,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif key == "web_search_options":
                 self._add_web_search_tool(responses_api_request, value)
 
-    def _build_sanitized_litellm_params(self, litellm_params: dict) -> dict[str, Any]:
+    def _build_sanitized_litellm_params(self, litellm_params: dict) -> dict[str, object]:
         """Build sanitized litellm_params with merged metadata."""
         responses_optional_param_keys: Final = set(ResponsesAPIOptionalRequestParams.__annotations__.keys())
-        sanitized: Final[dict[str, Any]] = {
+        sanitized: Final[dict[str, object]] = {
             key: value for key, value in litellm_params.items() if key not in responses_optional_param_keys
         }
         legacy_metadata: Final = litellm_params.get("metadata")
         existing_litellm_metadata: Final = litellm_params.get("litellm_metadata")
-        merged_litellm_metadata: Final[dict[str, Any]] = {}
+        merged_litellm_metadata: Final[dict[str, object]] = {}
         if isinstance(legacy_metadata, dict):
             merged_litellm_metadata.update(legacy_metadata)
         if isinstance(existing_litellm_metadata, dict):
@@ -424,7 +440,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         litellm_params: dict,
         headers: dict,
         litellm_logging_obj: "LiteLLMLoggingObj",
-        client: Any | None = None,
+        client: object | None = None,
     ) -> dict:
         (
             input_items,
@@ -498,9 +514,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
     @staticmethod
     def _convert_response_output_to_choices(
-        output_items: list[Any],
-        handle_raw_dict_callback: Callable | None = None,
-    ) -> list[Any]:
+        output_items: Sequence[object],
+        handle_raw_dict_callback: Callable[..., tuple["Choices | None", int]] | None = None,
+    ) -> list["Choices"]:
         """
         Convert Responses API output items to chat completion choices.
 
@@ -529,11 +545,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         choices: Final[list[Choices]] = []
         index = 0
         reasoning_content: str | None = None
-        pending_reasoning_item: dict[str, Any] | None = None
+        pending_reasoning_item: _BuiltReasoningItem | None = None
 
         # Collect all tool calls to put them in a single choice
         # (Chat Completions API expects all tool calls in one message)
-        accumulated_tool_calls: Final[list[dict[str, Any]]] = []
+        accumulated_tool_calls: Final[list[Mapping[str, object]]] = []
         tool_call_index = 0
 
         for item in output_items:
@@ -640,7 +656,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return choices
 
     @classmethod
-    def _extract_output_from_completed_event(cls, parsed_chunk: dict[str, Any]) -> list[dict[str, Any]] | None:
+    def _extract_output_from_completed_event(cls, parsed_chunk: Mapping[str, object]) -> list[dict[str, object]] | None:
         response_payload: Final = parsed_chunk.get("response")
         if not isinstance(response_payload, dict):
             return None
@@ -650,12 +666,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return cast(list[dict[str, Any]], response_output)
 
     @classmethod
-    def _recover_output_items_from_raw_sse(cls, raw_sse: str | None) -> list[dict[str, Any]]:
+    def _recover_output_items_from_raw_sse(cls, raw_sse: str | None) -> list[dict[str, object]]:
         if not raw_sse or not isinstance(raw_sse, str):
             return []
 
-        recovered_output_items: Final[dict[int, dict[str, Any]]] = {}
-        recovered_text_only_items: Final[dict[int, dict[str, Any]]] = {}
+        recovered_output_items: Final[dict[int, dict[str, object]]] = {}
+        recovered_text_only_items: Final[dict[int, dict[str, object]]] = {}
 
         for chunk in raw_sse.splitlines():
             parsed_chunk = parse_sse_json_chunk(chunk)
@@ -690,7 +706,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # but text-only items at indices without a matching OUTPUT_ITEM_DONE
         # must still be preserved (e.g. multi-output responses where some
         # indices only emitted OUTPUT_TEXT_DONE).
-        merged_items: Final[dict[int, dict[str, Any]]] = {**recovered_text_only_items}
+        merged_items: Final[dict[int, dict[str, object]]] = {**recovered_text_only_items}
         merged_items.update(recovered_output_items)
 
         if merged_items:
@@ -699,7 +715,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return []
 
     @classmethod
-    def _recover_output_items_from_logging(cls, logging_obj: "LiteLLMLoggingObj") -> list[dict[str, Any]]:
+    def _recover_output_items_from_logging(cls, logging_obj: "LiteLLMLoggingObj") -> list[dict[str, object]]:
         model_call_details: Final = getattr(logging_obj, "model_call_details", {}) or {}
         original_response: Final = model_call_details.get("original_response")
         return cls._recover_output_items_from_raw_sse(original_response)
@@ -714,7 +730,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         messages: list["AllMessageValues"],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: object,
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> "ModelResponse":
@@ -788,7 +804,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     ) -> BaseModelResponseIterator:
         return OpenAiResponsesToChatCompletionStreamIterator(streaming_response, sync_stream, json_mode)
 
-    def _convert_content_str_to_input_text(self, content: str, role: str) -> dict[str, Any]:
+    def _convert_content_str_to_input_text(self, content: str, role: str) -> dict[str, object]:
         if role == "user" or role == "system" or role == "tool":
             return {"type": "input_text", "text": content}
         else:
@@ -825,13 +841,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     def _convert_content_to_responses_format(
         self,
         content: str
-        | list[Any]
+        | list[object]
         | Iterable[
             Union["OpenAIMessageContentListBlock", "ChatCompletionThinkingBlock", "ChatCompletionRedactedThinkingBlock"]
         ]
         | None,
         role: str,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, object]]:
         """Convert chat completion content to responses API format"""
         from litellm.types.llms.openai import ChatCompletionImageObject
 
@@ -973,7 +989,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return optional_params
 
-    def _map_reasoning_effort(self, reasoning_effort: str | dict[str, Any]) -> Reasoning | None:
+    def _map_reasoning_effort(self, reasoning_effort: str | Reasoning) -> Reasoning | None:
         # If dict is passed, convert it directly to Reasoning object
         if isinstance(reasoning_effort, dict):
             return Reasoning(**reasoning_effort)
@@ -1006,7 +1022,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     def _add_web_search_tool(
         self,
         responses_api_request: ResponsesAPIOptionalRequestParams,
-        web_search_options: Any,
+        web_search_options: object,
     ) -> None:
         """
         Add web search tool to responses API request.
@@ -1024,14 +1040,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             tools = []
             responses_api_request["tools"] = tools
 
-        web_search_tool: Final[dict[str, Any]] = {"type": "web_search"}
+        web_search_tool: Final[dict[str, object]] = {"type": "web_search"}
         if isinstance(web_search_options, dict):
             web_search_tool.update(web_search_options)
 
         # Cast to Any to match the expected union type for tools list items
         tools.append(cast(Any, web_search_tool))
 
-    def _transform_response_format_to_text_format(self, response_format: dict[str, Any] | Any) -> dict[str, Any] | None:
+    def _transform_response_format_to_text_format(self, response_format: object) -> "ResponseText | None":
         """
         Transform Chat Completion response_format parameter to Responses API text.format parameter.
 
@@ -1130,7 +1146,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
 
 class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
-    def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
+    def __init__(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], "ModelResponse", "BaseModel"],
+        sync_stream: bool,
+        json_mode: bool | None = False,
+    ):
         super().__init__(streaming_response, sync_stream, json_mode)
         self._chat_completion_id: str | None = None
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
@@ -1387,7 +1408,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             finish_reason: Final = "tool_calls" if has_function_calls else "stop"
 
             # Extract reasoning items with encrypted_content for round-tripping
-            completed_reasoning_items: list[dict[str, Any]] | None = None
+            completed_reasoning_items: list[_BuiltReasoningItem] | None = None
             for item in output_items:
                 if not isinstance(item, dict) or item.get("type") != "reasoning":
                     continue
@@ -1439,7 +1460,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             ]
         )
 
-    def chunk_parser(self, chunk: dict) -> "ModelResponseStream":
+    def chunk_parser(self, chunk: dict[str, object]) -> "ModelResponseStream":
         """
         Parse a Responses API streaming chunk and convert to OpenAI format.
 
