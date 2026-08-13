@@ -195,15 +195,16 @@ class OTELGenAISemconvMixin:
             if value:
                 self.safe_set_attribute(span=span, key=semconv_key, value=value)
 
-    def _build_inference_details_attrs(self, kwargs: dict, response_obj: dict, provider: str) -> dict[str, Any]:
+    def _build_inference_details_attrs(self, kwargs: dict, response_obj: dict, provider: str | None) -> dict[str, Any]:
         """Build the attribute payload for the inference-details event.
 
-        Always includes provider/operation; input/output messages are added
-        only when content capture is enabled and non-empty. Mixin-internal.
+        Always includes operation, and provider when the call carries one;
+        input/output messages are added only when content capture is enabled
+        and non-empty. Mixin-internal.
         """
         attrs: Final[dict[str, Any]] = {
             "event_name": _INFERENCE_DETAILS_EVENT_NAME,
-            "gen_ai.provider.name": provider,
+            **({"gen_ai.provider.name": provider} if provider else {}),
             "gen_ai.operation.name": self._gen_ai_operation_name(kwargs),
         }
         if not self._capture_in_event():
@@ -221,7 +222,7 @@ class OTELGenAISemconvMixin:
         self,
         kwargs: dict,
         response_obj: dict,
-        provider: str,
+        provider: str | None,
         otel_logger,
         parent_ctx,
     ) -> None:
