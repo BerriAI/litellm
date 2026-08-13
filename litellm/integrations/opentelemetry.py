@@ -193,6 +193,20 @@ def _resolve_metric_attribute_filter(
     )
 
 
+def _provider_label(custom_llm_provider: object) -> str | None:
+    """The provider label for one call's metrics and events, or None when the
+    call carries no provider.
+
+    Callers omit the label entirely in that case: the OTLP encoder rejects a
+    None attribute value outright, and a placeholder would mint a permanent
+    metric series that no operator can act on. Mirrors the v2 integration's
+    ``_provider_attributes``.
+    """
+    if not isinstance(custom_llm_provider, str) or not custom_llm_provider:
+        return None
+    return custom_llm_provider
+
+
 def _normalize_team_metadata_keys(value: Any) -> list[str]:
     """Coerce a team-metadata allowlist from a list or comma-separated string.
 
@@ -1488,13 +1502,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     def _record_metrics(self, kwargs, response_obj, start_time, end_time):
         duration_s: Final = (end_time - start_time).total_seconds()
         params: Final = kwargs.get("litellm_params") or {}
-        provider: Final = params.get("custom_llm_provider", "Unknown")
+        provider: Final = _provider_label(params.get("custom_llm_provider"))
 
         common_attrs = {
             "gen_ai.operation.name": (
                 self._gen_ai_operation_name(kwargs) if self._gen_ai_semconv_latest_experimental else "chat"
             ),
-            "gen_ai.system": provider,
+            **({"gen_ai.system": provider} if provider else {}),
             "gen_ai.request.model": kwargs.get("model"),
             "gen_ai.framework": "litellm",
         }
@@ -1722,7 +1736,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         otel_logger: Final = self._logger_provider.get_logger(LITELLM_LOGGER_NAME)
 
         parent_ctx: Final = span.get_span_context()
-        provider: Final = (kwargs.get("litellm_params") or {}).get("custom_llm_provider", "Unknown")
+        provider: Final = _provider_label((kwargs.get("litellm_params") or {}).get("custom_llm_provider"))
 
         if self._gen_ai_semconv_latest_experimental:
             self._emit_inference_details_event(
@@ -1739,7 +1753,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             role = msg.get("role", "user")
             attrs = {
                 "event_name": "gen_ai.content.prompt",
-                "gen_ai.system": provider,
+                **({"gen_ai.system": provider} if provider else {}),
             }
             if role == "tool" and msg.get("id"):
                 attrs["id"] = msg["id"]
@@ -1767,7 +1781,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         for idx, choice in enumerate(response_obj.get("choices", [])):
             attrs = {
                 "event_name": "gen_ai.content.completion",
-                "gen_ai.system": provider,
+                **({"gen_ai.system": provider} if provider else {}),
                 "index": idx,
                 "finish_reason": choice.get("finish_reason"),
             }

@@ -6007,3 +6007,111 @@ class TestOTELServiceTierAttributes(unittest.TestCase):
             response_obj,
         )
         self.assertEqual(attributes[self.RESPONSE_KEY], "tier-added-by-provider-later")
+
+
+class TestOpenTelemetryProviderlessCallAttributes(unittest.TestCase):
+    """A call whose litellm_params carry custom_llm_provider=None (routes like
+    /v1/messages, /v1/responses, streaming chat and the passthrough endpoints
+    all leave it unset) used to hand a None straight to the OTLP exporter,
+    which rejects it per export with 'Invalid type <class NoneType> of value
+    None' and keeps re-logging it forever because metric attribute sets are
+    cumulative. These drive the real record/emit paths and then run the actual
+    OTLP encoder over what came out, so they fail if the guard is reverted."""
+
+    HERE = os.path.dirname(__file__)
+    POLL_INTERVAL = 0.05
+    POLL_TIMEOUT = 2.0
+
+    def _providerless_kwargs(self):
+        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")) as f:
+            kwargs = json.load(f)
+        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")) as f:
+            response_obj = json.load(f)
+        kwargs["litellm_params"]["custom_llm_provider"] = None
+        return kwargs, response_obj
+
+    def _recorded_metrics(self):
+        metric_reader = InMemoryMetricReader()
+        meter_provider = MeterProvider(metric_readers=[metric_reader])
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
+        otel = OpenTelemetry(
+            config=OpenTelemetryConfig(exporter="console", enable_metrics=True),
+            tracer_provider=tracer_provider,
+            meter_provider=meter_provider,
+        )
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        kwargs, response_obj = self._providerless_kwargs()
+        start = datetime.utcnow()
+        otel._handle_success(kwargs, response_obj, start, start + timedelta(seconds=1))
+
+        deadline = time.time() + self.POLL_TIMEOUT
+        while time.time() < deadline:
+            data = metric_reader.get_metrics_data()
+            if data and getattr(data, "resource_metrics", None):
+                return data
+            time.sleep(self.POLL_INTERVAL)
+        return None
+
+    def _emitted_log_records(self, semconv_opt_in: str):
+        from opentelemetry import _logs
+        from opentelemetry._logs._internal import ProxyLoggerProvider
+
+        log_exporter = InMemoryLogExporter()
+        with (
+            patch.dict(os.environ, {"OTEL_SEMCONV_STABILITY_OPT_IN": semconv_opt_in}),
+            patch.object(_logs, "get_logger_provider", return_value=ProxyLoggerProvider()),
+            patch.object(_logs, "set_logger_provider"),
+            patch.object(OpenTelemetry, "_get_log_exporter", return_value=log_exporter),
+        ):
+            handler = OpenTelemetry(config=OpenTelemetryConfig(exporter="console", enable_events=True))
+        handler.message_logging = True
+
+        kwargs, response_obj = self._providerless_kwargs()
+        span = handler.tracer.start_span("test")
+        # The SDK drops an invalid attribute value and warns per record, so the
+        # symptom on this path is unbounded warning volume, not a lost export.
+        with self.assertNoLogs("opentelemetry.attributes", level="WARNING"):
+            handler._emit_semantic_logs(kwargs, response_obj, span)
+        span.end()
+        handler._logger_provider.force_flush(2000)
+        return log_exporter.get_finished_logs()
+
+    def _assert_every_attribute_encodes(self, attrs):
+        """The exporter logs and drops any attribute it cannot encode, so a
+        surviving None shows up as a missing key-value rather than a raise."""
+        from opentelemetry.exporter.otlp.proto.common._internal import _encode_attributes
+
+        self.assertEqual(len(_encode_attributes(attrs) or []), len(attrs))
+
+    def test_metrics_are_encodable_and_carry_no_provider_label(self):
+        data = self._recorded_metrics()
+        self.assertIsNotNone(data, "no metrics were recorded")
+        data_points = [
+            dp
+            for rm in data.resource_metrics
+            for sm in rm.scope_metrics
+            for m in sm.metrics
+            for dp in m.data.data_points
+        ]
+        self.assertTrue(data_points, "no metric data points were recorded")
+        for dp in data_points:
+            self.assertNotIn("gen_ai.system", dp.attributes)
+            self._assert_every_attribute_encodes(dict(dp.attributes))
+
+    def test_legacy_content_events_are_encodable_and_carry_no_provider_label(self):
+        logs = self._emitted_log_records("")
+        self.assertTrue(logs, "no content events were emitted")
+        for log in logs:
+            attrs = dict(log.log_record.attributes or {})
+            self.assertNotIn("gen_ai.system", attrs)
+            self._assert_every_attribute_encodes(attrs)
+
+    def test_inference_details_event_is_encodable_and_carries_no_provider_label(self):
+        logs = self._emitted_log_records("gen_ai_latest_experimental")
+        self.assertEqual(len(logs), 1)
+        attrs = dict(logs[0].log_record.attributes or {})
+        self.assertEqual(attrs["event_name"], "gen_ai.client.inference.operation.details")
+        self.assertNotIn("gen_ai.provider.name", attrs)
+        self._assert_every_attribute_encodes(attrs)
