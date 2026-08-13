@@ -2955,6 +2955,23 @@ async def test_streaming_hook_block_stream_keeps_upstream_identity():
 
 
 @pytest.mark.asyncio
+async def test_streaming_block_error_frame_message_is_a_string():
+    """AnthropicErrorDetail.message is typed str, so a structured guardrail detail is serialized."""
+    guardrail = _sse_guardrail()
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.side_effect = HTTPException(
+            status_code=400, detail={"error": "Violated guardrail policy", "guardrailIdentifier": "gid"}
+        )
+        delivered = await _drain_streaming_hook(guardrail)
+
+    frame = next(line for line in b"".join(delivered).decode().splitlines() if line.startswith("data: "))
+    message = json.loads(frame[6:])["error"]["message"]
+    assert isinstance(message, str)
+    assert json.loads(message)["error"] == "Violated guardrail policy"
+
+
+@pytest.mark.asyncio
 async def test_streaming_hook_fails_closed_when_raw_sse_cannot_be_assembled():
     """An unscannable stream must not be delivered: forwarding it silently disables the guardrail."""
     guardrail = _sse_guardrail()

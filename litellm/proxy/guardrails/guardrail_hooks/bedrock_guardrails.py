@@ -2664,9 +2664,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 )
                 if _original_usage is not None:
                     assembled_model_response.usage = _original_usage
-                if raw_sse:
-                    assembled_model_response.id = _pre_block_response.id
-                    assembled_model_response.model = _pre_block_response.model
                 output_guardrail_response = None
 
             #########################################################################

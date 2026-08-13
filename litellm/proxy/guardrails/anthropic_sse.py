@@ -102,10 +102,13 @@ def anthropic_sse_error_frames(message: str | Mapping[str, object]) -> tuple[byt
     """Anthropic error event, for a failure discovered after the response headers were flushed.
 
     Once a keepalive ping has been sent a raise cannot reach the client, so the failure has to
-    travel as a frame. A structured message is emitted as JSON rather than stringified, so the
-    guardrail's own detail stays machine readable.
+    travel as a frame. A structured detail is JSON-serialized into the string so it stays machine
+    readable without violating the string-typed contract.
     """
-    body: Final = json.dumps(message, default=str)
+    # AnthropicErrorDetail.message is a str, so a structured detail is serialized into the string
+    # rather than nested as an object
+    text: Final = message if isinstance(message, str) else json.dumps(message, default=str)
+    body: Final = json.dumps(text)
     return (
         f'event: error\ndata: {{"type": "error", "error": {{"type": "guardrail_error", '
         f'"message": {body}}}}}\n\n'.encode(),
