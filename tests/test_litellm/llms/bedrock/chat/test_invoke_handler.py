@@ -1,3 +1,4 @@
+import datetime
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock
@@ -8,6 +9,8 @@ sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.bedrock.chat.invoke_handler import (
     AWSEventStreamDecoder,
     make_call,
@@ -292,4 +295,47 @@ def test_make_sync_call_honors_explicit_stream_chunk_size():
     )
 
     response.iter_bytes.assert_called_once_with(chunk_size=2048)
+
+
+@pytest.mark.asyncio
+async def test_converse_stream_ends_on_finish_reason_chunk():
+    """The usage-only metadata event Bedrock sends after messageStop must not reach the caller as an extra
+    assistant delta following the finish_reason chunk."""
+    model = "anthropic.claude-sonnet-4-6"
+    events = (
+        {"role": "assistant"},
+        {"contentBlockIndex": 0, "delta": {"text": "Hello"}},
+        {"contentBlockIndex": 0, "delta": {"text": " world"}},
+        {"contentBlockIndex": 0},
+        {"stopReason": "end_turn"},
+        {"usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15}, "metrics": {"latencyMs": 100}},
+    )
+
+    async def bedrock_stream():
+        decoder = AWSEventStreamDecoder(model=model)
+        for event in events:
+            yield decoder._chunk_parser(chunk_data=event)
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=bedrock_stream(),
+        model=model,
+        custom_llm_provider="bedrock",
+        logging_obj=LiteLLMLoggingObj(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=datetime.datetime.now(),
+            litellm_call_id="1234",
+            function_id="1234",
+        ),
+    )
+
+    chunks = [chunk async for chunk in wrapper]
+
+    assert [choice.finish_reason for chunk in chunks for choice in chunk.choices].count("stop") == 1
+    assert chunks[-1].choices[0].finish_reason == "stop", (
+        f"stream must end on the finish_reason chunk, got trailing {chunks[-1].model_dump(exclude_none=True)}"
+    )
+    assert any(getattr(chunk, "usage", None) is not None for chunk in wrapper.chunks)
 
