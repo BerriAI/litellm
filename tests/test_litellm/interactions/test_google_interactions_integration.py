@@ -55,12 +55,12 @@ class TestGoogleInteractionsCreate:
             print(f"Usage: {response.usage}")
 
     def test_create_with_content_list(self, api_key):
-        """Test creating an interaction with a structured content list (Turn format)."""
+        """Test creating an interaction with a structured content list (Step format)."""
         response = interactions.create(
             model="gemini/gemini-2.5-flash",
             input=[
                 {
-                    "role": "user",
+                    "type": "user_input",
                     "content": [
                         {"type": "text", "text": "What is the capital of France?"}
                     ],
@@ -169,25 +169,25 @@ class TestGoogleInteractionsStreaming:
 
 
 class TestGoogleInteractionsMultiTurn:
-    """Tests for multi-turn conversations using Turn[] input."""
+    """Tests for multi-turn conversations using Step[] input."""
 
     def test_multi_turn_conversation(self, api_key):
-        """Test a multi-turn conversation per OpenAPI spec (Turn[] format)."""
+        """Test a multi-turn conversation per OpenAPI spec (Step[] format)."""
         response = interactions.create(
             model="gemini/gemini-2.5-flash",
             input=[
                 {
-                    "role": "user",
+                    "type": "user_input",
                     "content": [{"type": "text", "text": "My name is Alice."}],
                 },
                 {
-                    "role": "model",
+                    "type": "model_output",
                     "content": [
                         {"type": "text", "text": "Hello Alice! Nice to meet you."}
                     ],
                 },
                 {
-                    "role": "user",
+                    "type": "user_input",
                     "content": [{"type": "text", "text": "What is my name?"}],
                 },
             ],

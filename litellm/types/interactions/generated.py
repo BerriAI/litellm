@@ -1046,12 +1046,37 @@ class InteractionSseEvent(
 # When regenerating this file, copy these types to the end.
 # See README.md for regeneration instructions.
 
+from collections.abc import Sequence
+
 from pydantic import PrivateAttr
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 
-# Type alias for input
-InteractionInput = str | Content | list[Content] | list[Turn]
+
+class UserInputStep(BaseModel):
+    """A conversation turn contributed by the user.
+
+    Google replaced `Turn`'s `role` field with the step's own `type`, so this is the
+    successor to `Turn(role="user")`.
+    """
+
+    type: Literal["user_input"] = "user_input"
+    content: Sequence[Content] | None = Field(None, description="The content of the step.")
+
+
+class ModelOutputStep(BaseModel):
+    """A conversation turn contributed by the model, the successor to `Turn(role="model")`."""
+
+    type: Literal["model_output"] = "model_output"
+    content: Sequence[Content] | None = Field(None, description="The content of the step.")
+
+
+# The subset of the spec's `Step` union that a caller replays as conversation history.
+ConversationStep = UserInputStep | ModelOutputStep
+
+# Type alias for input. `list[Turn]` is the shape Google dropped, kept so callers
+# written against it keep working.
+InteractionInput = str | Content | list[Content] | list[ConversationStep] | list[Turn]
 
 
 class InteractionsAPIResponse(BaseLiteLLMOpenAIResponseObject):

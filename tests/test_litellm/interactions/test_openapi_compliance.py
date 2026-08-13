@@ -25,6 +25,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from openapi_core import OpenAPI
+from pydantic import TypeAdapter
+
+from litellm.types.interactions import (
+    InteractionInput,
+    ModelOutputStep,
+    UserInputStep,
+)
 
 OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
 PINNED_SPEC_PATH = Path(__file__).parent / "interactions.openapi.json"
@@ -211,6 +218,29 @@ class TestRequestCompliance:
             ), f"{step}.content does not hold Content parts"
 
         print(f"✓ Multi-turn input is a list of steps, roles: {roles_by_step}")
+
+    def test_our_input_type_accepts_the_specs_own_step_examples(self, spec_dict):
+        """Verify the input type LiteLLM publishes still accepts what the spec says to send.
+
+        Every other test here compares the spec to itself, so it stays green while our own
+        types rot. This one feeds Google's own example payloads through the type a caller
+        builds against, which is the drift that actually reaches a customer.
+        """
+        schemas = spec_dict["components"]["schemas"]
+        step_examples = [
+            example_body["value"]
+            for step in ("UserInputStep", "ModelOutputStep")
+            for example in schemas[step]["examples"]
+            for example_body in example.values()
+        ]
+        assert len(step_examples) == 2, f"spec no longer ships one example per step: {step_examples}"
+
+        parsed = TypeAdapter(InteractionInput).validate_python(step_examples)
+
+        assert [type(step) for step in parsed] == [UserInputStep, ModelOutputStep], (
+            f"our input type does not round-trip the spec's own steps, got {parsed}"
+        )
+        print("✓ Published input type accepts the spec's user_input and model_output steps")
 
 
 class TestResponseCompliance:

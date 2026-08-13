@@ -18,6 +18,7 @@ from litellm.types.interactions.generated import (
     ContentDelta,
     ContentStart,
     ContentStop,
+    ConversationStep,
     CreateAgentInteractionParams,
     CreateModelInteractionParams,
     DeepResearchAgentConfig,
@@ -53,6 +54,7 @@ from litellm.types.interactions.generated import (
     McpServerToolCallContent,
     McpServerToolResultContent,
     ModelOption,
+    ModelOutputStep,
     ResponseModality,
     StepDelta,
     StepStart,
@@ -66,6 +68,7 @@ from litellm.types.interactions.generated import (
     UrlContextCallContent,
     UrlContextResultContent,
     Usage,
+    UserInputStep,
     VideoContent,
 )
 from litellm.types.interactions.generated import (
@@ -85,6 +88,7 @@ __all__ = [
     "ContentDelta",
     "ContentStart",
     "ContentStop",
+    "ConversationStep",
     "CreateAgentInteractionParams",
     # Generated types
     "CreateModelInteractionParams",
@@ -124,6 +128,7 @@ __all__ = [
     "McpServerToolCallContent",
     "McpServerToolResultContent",
     "ModelOption",
+    "ModelOutputStep",
     "ResponseModality",
     "StepDelta",
     # New schema SSE event types (Api-Revision: 2026-05-20)
@@ -138,5 +143,6 @@ __all__ = [
     "UrlContextCallContent",
     "UrlContextResultContent",
     "Usage",
+    "UserInputStep",
     "VideoContent",
 ]

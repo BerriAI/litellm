@@ -34,7 +34,9 @@ Then add the LiteLLM-specific types at the bottom of the generated file:
 **Content Types:**
 - `Content` - Union of all content types (text, image, audio, etc.)
 - `TextContent` - Text content with `type: "text"`
-- `Turn` - A turn in multi-turn conversation with `role` and `content`
+- `UserInputStep` / `ModelOutputStep` - A turn in a multi-turn conversation, tagged by `type`
+- `ConversationStep` - Either of the two step types above
+- `Turn` - The `role` + `content` turn Google replaced with steps, kept for callers still sending it
 
 **Tool Types:**
 - `Tool` - Union of all tool types
