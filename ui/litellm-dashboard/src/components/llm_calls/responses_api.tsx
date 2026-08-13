@@ -3,6 +3,7 @@ import { MessageType } from "../chat_ui/types";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { getProxyBaseUrl } from "@/components/networking";
 import NotificationManager from "@/components/molecules/notifications_manager";
+import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
 import type { MCPEvent } from "@/components/mcp_tools/types";
 import { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import {
@@ -290,6 +291,7 @@ export async function makeOpenAIResponsesRequest(
               completionTokens: usage.output_tokens,
               promptTokens: usage.input_tokens,
               totalTokens: usage.total_tokens,
+              ...extractPromptCacheTokens(usage),
             };
 
             // Add reasoning tokens if available

@@ -1,12 +1,25 @@
 import React from "react";
-import { ArrowDownToLine, ArrowUpFromLine, Clock, DollarSign, Hash, Lightbulb, Wrench } from "lucide-react";
+import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Clock,
+  Database,
+  DatabaseBackup,
+  DollarSign,
+  Hash,
+  Lightbulb,
+  Wrench,
+} from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { PROMPT_CACHE_CREATION_TOOLTIP, PROMPT_CACHE_READ_TOOLTIP } from "@/utils/promptCacheUsage";
 
 export interface TokenUsage {
   completionTokens?: number;
   promptTokens?: number;
   totalTokens?: number;
   reasoningTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
   cost?: number;
 }
 
@@ -35,6 +48,33 @@ function MetricItem({ label, tooltip, icon, value }: MetricItemProps) {
       </TooltipTrigger>
       <TooltipContent>{tooltip}</TooltipContent>
     </Tooltip>
+  );
+}
+
+function PromptCacheChips({ usage }: { usage?: TokenUsage }) {
+  const readTokens = usage?.cacheReadTokens ?? 0;
+  const creationTokens = usage?.cacheCreationTokens ?? 0;
+
+  return (
+    <>
+      {readTokens > 0 && (
+        <MetricItem
+          label="Cache Read"
+          tooltip={PROMPT_CACHE_READ_TOOLTIP}
+          icon={<Database className="size-3" aria-hidden="true" />}
+          value={String(readTokens)}
+        />
+      )}
+
+      {creationTokens > 0 && (
+        <MetricItem
+          label="Cache Write"
+          tooltip={PROMPT_CACHE_CREATION_TOOLTIP}
+          icon={<DatabaseBackup className="size-3" aria-hidden="true" />}
+          value={String(creationTokens)}
+        />
+      )}
+    </>
   );
 }
 
@@ -69,6 +109,8 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, tot
           value={String(usage.promptTokens)}
         />
       )}
+
+      <PromptCacheChips usage={usage} />
 
       {usage?.completionTokens !== undefined && (
         <MetricItem
