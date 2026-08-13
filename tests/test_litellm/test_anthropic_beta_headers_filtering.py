@@ -426,6 +426,36 @@ class TestAnthropicBetaHeadersFiltering:
 
         assert filtered == ["fine-grained-tool-streaming-2025-05-14"]
 
+    def test_claude_code_beta_forwarded_for_anthropic(self):
+        """The claude-code-20250219 beta header must be forwarded to the Anthropic
+        provider unchanged. When it was absent from the config it was silently
+        dropped, which prevented the upstream Anthropic API from enabling Claude
+        Code's IDE tools (Bash_ide, Skill_ide, Workflow_ide). See #36683."""
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=["claude-code-20250219"],
+            provider="anthropic",
+        )
+
+        assert filtered == ["claude-code-20250219"]
+
+    def test_claude_code_beta_full_header_string_anthropic(self):
+        """Verify the full Claude Code beta header string passes through the
+        Anthropic provider with claude-code-20250219 preserved alongside the
+        other betas Claude Code typically sends. See #36683."""
+        beta_headers = [
+            "claude-code-20250219",
+            "advanced-tool-use-2025-11-20",
+            "fine-grained-tool-streaming-2025-05-14",
+        ]
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=beta_headers,
+            provider="anthropic",
+        )
+
+        assert "claude-code-20250219" in filtered
+        assert "advanced-tool-use-2025-11-20" in filtered
+        assert "fine-grained-tool-streaming-2025-05-14" in filtered
+
     def test_null_value_headers_filtered(self):
         """Test that headers with null values are always filtered out."""
         for provider in [
