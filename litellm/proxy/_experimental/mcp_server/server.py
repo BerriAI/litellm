@@ -428,6 +428,8 @@ if MCP_AVAILABLE:
         MCPServerManager,
         _caller_authorization_fans_out,
         _client_forwarded_authorization_headers,
+        _is_gateway_attribution_header,
+        _openapi_forwarded_extra_headers,
         _should_strip_caller_authorization,
         _without_authorization,
         global_mcp_server_manager,
@@ -793,6 +795,15 @@ if MCP_AVAILABLE:
 
             # Get mcp_servers from context variable
             verbose_logger.debug("MCP list_tools - Calling _list_mcp_tools")
+            from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+            request_tags: Final = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
+                llm_router=None,
+                headers={  # mutable-ok: request-tag helper accepts a mutable header mapping
+                    key.lower(): value for key, value in (raw_headers or {}).items()
+                },
+                data={},  # mutable-ok: request-tag helper mutates request metadata in place
+            )
             listing: Final = await _list_mcp_tools(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
@@ -802,6 +813,7 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 log_list_tools_to_spendlogs=True,
                 list_tools_log_source="mcp_protocol",
+                request_tags=request_tags,
             )
             verbose_logger.info("MCP list_tools - Successfully returned %s tools", len(listing.tools))
             if not listing.outcomes:
@@ -1041,12 +1053,19 @@ if MCP_AVAILABLE:
                     body_data["litellm_trace_id"] = chain_id
                     body_data["litellm_session_id"] = chain_id
 
+                tags_header: Final = next(
+                    (value for key, value in (raw_headers or {}).items() if key.lower() == "x-litellm-tags"),
+                    None,
+                )
+                tags_scope_header: Final = (
+                    ((b"x-litellm-tags", tags_header.encode("latin-1")),) if tags_header is not None else ()
+                )
                 request: Final = Request(
                     scope={
                         "type": "http",
                         "method": "POST",
                         "path": "/mcp/tools/call",
-                        "headers": [(b"content-type", b"application/json")],
+                        "headers": [(b"content-type", b"application/json"), *tags_scope_header],
                     }
                 )
                 if user_api_key_auth is not None:
@@ -1758,9 +1777,11 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
             )
 
-            for header in server.extra_headers:
-                if not isinstance(header, str):
-                    continue
+            for header in (
+                header
+                for header in server.extra_headers
+                if isinstance(header, str) and not _is_gateway_attribution_header(header)
+            ):
                 if header.lower() == "authorization" and (
                     strip_caller_authorization or withhold_forwarded_authorization
                 ):
@@ -2341,6 +2362,7 @@ if MCP_AVAILABLE:
         raw_headers: dict[str, str] | None = None,
         log_list_tools_to_spendlogs: bool = False,
         list_tools_log_source: str | None = None,
+        request_tags: list[str] | None = None,
         client_ip: str | None = None,
     ) -> AggregateToolListing:
         """
@@ -2370,6 +2392,7 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 log_list_tools_to_spendlogs=log_list_tools_to_spendlogs,
                 list_tools_log_source=list_tools_log_source,
+                request_tags=request_tags,
                 client_ip=client_ip,
             )
             verbose_logger.debug("Successfully fetched %s tools from managed MCP servers", len(listing.tools))
@@ -2845,44 +2868,29 @@ if MCP_AVAILABLE:
                 else:
                     auth_header_value = f"Bearer {mcp_auth_header}"
 
-            # Forward named client headers to OpenAPI tool upstream requests.
-            # MCPServer.extra_headers lists header names to copy from raw_headers.
-            # The strip decision is centralized in _should_strip_caller_authorization so this
-            # OpenAPI/local path agrees with the managed paths: M2M and the resolver-owned modes
-            # (token_exchange's raw subject token, authorization_code's stored token) must never
-            # have the caller's Authorization forwarded verbatim upstream.
-            forwarded_headers: dict[str, str] | None = None
-            if mcp_server and mcp_server.extra_headers and raw_headers:
-                normalized_raw: Final = {str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)}
-                skip_caller_authorization: Final = _should_strip_caller_authorization(
-                    mcp_server=mcp_server,
-                    raw_headers=raw_headers,
-                    user_api_key_auth=user_api_key_auth,
-                )
-                for header_name in mcp_server.extra_headers:
-                    if not isinstance(header_name, str):
-                        continue
-                    if skip_caller_authorization and header_name.lower() == "authorization":
-                        continue
-                    value = normalized_raw.get(header_name.lower())
-                    if value is not None:
-                        if forwarded_headers is None:
-                            forwarded_headers = {}
-                        forwarded_headers[header_name] = value
+            initial_forwarded_headers: Final = _openapi_forwarded_extra_headers(
+                mcp_server=mcp_server,
+                raw_headers=raw_headers,
+                user_api_key_auth=user_api_key_auth,
+            )
 
             resolved_auth_headers: dict[str, str] | None = None
             if mcp_server:
                 (
                     resolved_auth_headers,
-                    forwarded_headers,
+                    resolved_forwarded_headers,
                 ) = await global_mcp_server_manager.resolve_openapi_upstream_auth(
                     mcp_server=mcp_server,
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
                     mcp_auth_header=mcp_auth_header,
                     user_api_key_auth=user_api_key_auth,
-                    forwarded_headers=forwarded_headers,
+                    forwarded_headers=initial_forwarded_headers,
                 )
+            else:
+                resolved_forwarded_headers = initial_forwarded_headers
+
+            forwarded_headers: Final = resolved_forwarded_headers
 
             _auth_token: Final = _request_auth_header.set(auth_header_value)
             _extra_token: Final = _request_extra_headers.set(forwarded_headers)

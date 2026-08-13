@@ -117,6 +117,57 @@ async def test_mcp_server_tool_call_body_contains_request_data():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_headers", "expected_tags"),
+    [
+        ({"X-LiteLLM-Tags": "application:orders, service:checkout"}, ["application:orders", "service:checkout"]),
+        (None, None),
+    ],
+)
+async def test_mcp_server_tool_call_uses_canonical_request_tags_header(raw_headers, expected_tags):
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            mcp_server_tool_call,
+            set_auth_context,
+        )
+        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    set_auth_context(
+        UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+        raw_headers=raw_headers,
+    )
+    captured_tags = {}
+
+    async def mock_add_litellm_data_to_request(data, request, user_api_key_dict, proxy_config):
+        captured_tags["tags"] = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
+            llm_router=None,
+            headers=dict(request.headers),
+            data={},
+        )
+        captured_tags["headers"] = dict(request.headers)
+        return data
+
+    with patch(
+        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request",
+        mock_add_litellm_data_to_request,
+    ):
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.call_mcp_tool",
+            new=AsyncMock(return_value=CallToolResult(content=[])),
+        ):
+            with patch("litellm.proxy.proxy_server.proxy_config", MagicMock()):
+                await mcp_server_tool_call("test_tool", {"value": "test"})
+
+    assert captured_tags["tags"] == expected_tags
+    if raw_headers is None:
+        assert "x-litellm-tags" not in captured_tags["headers"]
+    else:
+        assert captured_tags["headers"]["x-litellm-tags"] == raw_headers["X-LiteLLM-Tags"]
+
+
+@pytest.mark.asyncio
 async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror():
     """The MCP session manager serializes handler exceptions as JSON-RPC errors, so a mid-session
     tool call cannot emit a raw 401 the way the REST path does. mcp_server_tool_call must turn an
@@ -193,6 +244,69 @@ def test_prepare_mcp_server_headers_case_insensitive_extra_headers():
 
     assert server_auth_header is None
     assert extra_headers == {"Authorization": "Bearer token"}
+
+
+def test_prepare_mcp_server_headers_does_not_forward_gateway_attribution_headers():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _prepare_mcp_server_headers,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    server = MCPServer(
+        server_id="server-attribution",
+        name="server",
+        transport=MCPTransport.http,
+        extra_headers=["x-request-id", "X-LiteLLM-Tags", "X-LiteLLM-End-User-Id"],
+    )
+
+    server_auth_header, extra_headers = _prepare_mcp_server_headers(
+        server=server,
+        mcp_server_auth_headers=None,
+        mcp_auth_header=None,
+        oauth2_headers=None,
+        raw_headers={
+            "x-request-id": "request-123",
+            "x-litellm-tags": "application:orders,service:checkout",
+            "x-litellm-end-user-id": "user-123@example",
+        },
+    )
+
+    assert server_auth_header is None
+    assert extra_headers == {"x-request-id": "request-123"}
+
+
+@pytest.mark.asyncio
+async def test_handle_list_tools_uses_canonical_request_tags_header():
+    try:
+        from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
+        from litellm.proxy._experimental.mcp_server.server import handle_list_tools
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    list_tools = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.get_or_extract_auth_context",
+        new=AsyncMock(
+            return_value=(
+                UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+                None,
+                ["server"],
+                None,
+                None,
+                {"X-LiteLLM-Tags": "application:orders, service:checkout"},
+                None,
+            )
+        ),
+    ):
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
+            new=list_tools,
+        ):
+            await handle_list_tools()
+
+    assert list_tools.await_args.kwargs["request_tags"] == ["application:orders", "service:checkout"]
 
 
 def test_prepare_mcp_server_headers_passthrough_strips_authorization_without_admission_header():
@@ -6571,6 +6685,75 @@ async def test_execute_mcp_tool_sets_model_in_model_call_details():
 
     assert litellm_logging_obj.model_call_details["model"] == "MCP: list_pets"
     assert litellm_logging_obj.model == "MCP: list_pets"
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_local_openapi_does_not_forward_gateway_attribution_headers():
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+        _request_extra_headers,
+    )
+
+    server = MCPServer(
+        server_id="local-openapi-server",
+        name="local_openapi",
+        server_name="local_openapi",
+        url="https://example.com",
+        transport=MCPTransport.http,
+        spec_path="/specs/openapi.yaml",
+        extra_headers=["x-request-id", "X-LiteLLM-Tags", "X-LiteLLM-End-User-Id"],
+    )
+    captured_extra_headers = None
+
+    async def capture_local_tool(*args, **kwargs):
+        nonlocal captured_extra_headers
+        captured_extra_headers = _request_extra_headers.get()
+        return []
+
+    with (
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_get_mcp_server_from_tool_name",
+            return_value=server,
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "pre_call_tool_check",
+            new=AsyncMock(return_value={}),
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "resolve_openapi_upstream_auth",
+            new=AsyncMock(side_effect=lambda **kwargs: (None, kwargs["forwarded_headers"])),
+        ),
+        patch.object(
+            mcp_module.global_mcp_tool_registry,
+            "get_tool",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_local_mcp_tool",
+            new=AsyncMock(side_effect=capture_local_tool),
+        ),
+        patch.object(
+            mcp_module.MCPRequestHandler,
+            "is_tool_allowed",
+            return_value=True,
+        ),
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="local_openapi-list_pets",
+            arguments={},
+            allowed_mcp_servers=[server],
+            start_time=datetime.now(),
+            raw_headers={
+                "x-request-id": "request-123",
+                "x-litellm-tags": "application:orders,service:checkout",
+                "x-litellm-end-user-id": "user-123",
+            },
+        )
+
+    assert captured_extra_headers == {"x-request-id": "request-123"}
 
 
 @pytest.mark.asyncio
