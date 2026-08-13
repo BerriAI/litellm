@@ -94,6 +94,17 @@ describe("provider_info_helpers", () => {
       expect(result.displayName).toBe(Providers.ZAI);
     });
 
+    it("should resolve the nvidia_riva provider value to the Nvidia Riva display name and logo", () => {
+      // The backend registers nvidia_riva and it has a docs page, but the UI
+      // registry had no entry, so it could not be picked in Add Model and the
+      // slug rendered raw with no logo.
+      const result = getProviderLogoAndName("nvidia_riva");
+      expect(result.displayName).toBe(Providers.NVIDIA_RIVA);
+      expect(provider_map.NVIDIA_RIVA).toBe("nvidia_riva");
+      expect(result.logo).toBe(providerLogoMap[Providers.NVIDIA_RIVA]);
+      expect(result.logo).toBeTruthy();
+    });
+
     it("should return provider value as display name when no mapping exists", () => {
       const unknownProvider = "unknown_provider";
       const result = getProviderLogoAndName(unknownProvider);
@@ -223,6 +234,10 @@ describe("provider_info_helpers", () => {
 
     it("should return zai/glm-4.5 placeholder for Z.AI provider", () => {
       expect(getPlaceholder(Providers.ZAI)).toBe("zai/glm-4.5");
+    });
+
+    it("should return the riva asr placeholder for NVIDIA_RIVA provider", () => {
+      expect(getPlaceholder(Providers.NVIDIA_RIVA)).toBe("nvidia_riva/nvidia/parakeet-ctc-1_1b-asr");
     });
 
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {
