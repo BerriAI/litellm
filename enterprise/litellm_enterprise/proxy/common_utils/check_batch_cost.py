@@ -244,6 +244,13 @@ class CheckBatchCost:
 
         return isinstance(error, (NotFoundError, openai.NotFoundError))
 
+    def _batch_deployment_exists(self, model_id: str) -> bool:
+        """A 404 only proves the batch is gone when it came from the batch's own
+        deployment. Once that deployment leaves the router, default fallbacks can
+        silently send the retrieve to a provider that never saw the batch, so its
+        404 must not retire the row; the staleness sweep bounds it instead."""
+        return self.llm_router.get_deployment(model_id=model_id) is not None
+
     @staticmethod
     def _record_error(
         prom_logger: Optional["PrometheusLogger"], error_type: str
@@ -746,7 +753,7 @@ class CheckBatchCost:
                 )
                 if prom_logger:
                     prom_logger.record_check_batch_cost_error("provider_retrieval_error")
-                if self._is_batch_gone_at_provider(e):
+                if self._is_batch_gone_at_provider(e) and self._batch_deployment_exists(model_id):
                     await self._retire_job(job, f"batch {batch_id} no longer exists at the provider")
                 continue
 
