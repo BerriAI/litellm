@@ -68,6 +68,7 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.router import Router
 from litellm.router_strategy.complexity_router import (
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
+    ClassificationRubric,
     ComplexityRouterConfig,
     ComplexityTier,
     classification_system_prompt,
@@ -2025,19 +2026,23 @@ def _labeled_tiers_from_query(tier_labels: str | None) -> tuple[tuple[Complexity
 async def get_auto_router_classifier_default_prompt(
     context_window_size: int = DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     tier_labels: str | None = None,
+    classification_rubric: ClassificationRubric | None = None,
 ) -> AutoRouterClassifierDefaultPromptResponse:
     """
     Get the default classifier system prompt, so the dashboard's prompt editor can prefill it.
 
     The prompt's closing line depends on whether prior conversation turns are quoted to the
-    classifier, and its tier bullets are named by the router's tier_labels, so the caller passes both
-    to get the text that router would actually send rather than a rubric it does not use.
+    classifier, its tier bullets are named by the router's tier_labels, and its calibration examples
+    come from the router's classification rubric, so the caller passes all three to get the text that router
+    would actually send rather than a rubric it does not use.
 
     Parameters:
     - context_window_size: int - The router's classifier_context_window_size. Defaults to the
       built-in default.
     - tier_labels: str | None - The router's tier_labels as a JSON object of canonical tier name to
       display name, e.g. `{"SIMPLE": "Cheap"}`. Omit or pass an empty object for the default names.
+    - classification_rubric: ClassificationRubric | None - The router's
+      classifier_llm_config.classification_rubric. Omit for the default.
     """
     if context_window_size < 0:
         raise ProxyException(
@@ -2050,9 +2055,11 @@ async def get_auto_router_classifier_default_prompt(
     labeled_tiers: Final = _labeled_tiers_from_query(tier_labels)
     return AutoRouterClassifierDefaultPromptResponse(
         system_prompt=(
-            classification_system_prompt(context_window_size)
+            classification_system_prompt(context_window_size, classification_rubric=classification_rubric)
             if labeled_tiers is None
-            else classification_system_prompt(context_window_size, labeled_tiers=labeled_tiers)
+            else classification_system_prompt(
+                context_window_size, labeled_tiers=labeled_tiers, classification_rubric=classification_rubric
+            )
         )
     )
 
