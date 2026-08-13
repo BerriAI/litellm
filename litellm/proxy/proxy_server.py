@@ -858,7 +858,7 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
             proxy_logging_obj=proxy_logging_obj,
         )
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error flushing spend logs queue on shutdown: {e}")
+        verbose_proxy_logger.exception("Error flushing spend logs queue on shutdown: %s", e)
 
 
 async def proxy_shutdown_event():
@@ -8749,13 +8749,14 @@ class ProxyStartupEvent:
         if general_settings.get("disable_spend_logs", False) is False:
             from litellm.proxy.utils import _monitor_spend_logs_queue
 
-            prisma_client.spend_logs_queue_monitor_task = asyncio.create_task(  # rebind-ok: the client owns its monitor handle
+            monitor_task: Final = asyncio.create_task(
                 _monitor_spend_logs_queue(
                     prisma_client=prisma_client,
                     db_writer_client=db_writer_client,
                     proxy_logging_obj=proxy_logging_obj,
                 )
             )
+            prisma_client.spend_logs_queue_monitor_task = monitor_task  # rebind-ok: the client owns its monitor handle
 
         ### ADD NEW MODELS ###
         store_model_in_db = get_secret_bool("STORE_MODEL_IN_DB", store_model_in_db) or store_model_in_db
