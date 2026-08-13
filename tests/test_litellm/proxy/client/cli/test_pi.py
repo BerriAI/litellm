@@ -174,6 +174,11 @@ class TestSyncModelsJson:
         assert written["providers"]["litellm"]["baseUrl"] == "http://localhost:4000/v1"
         assert written["providers"]["litellm"]["models"] == [{"id": "m-1"}]
 
+    def test_write_leaves_no_staging_file_behind(self, tmp_path):
+        path = tmp_path / "models.json"
+        assert sync_models_json(path, "http://localhost:4000", ("m-1",)) is None
+        assert [p.name for p in tmp_path.iterdir()] == ["models.json"]
+
     def test_invalid_json_is_a_value_and_file_untouched(self, tmp_path):
         path = tmp_path / "models.json"
         path.write_text("{not json")

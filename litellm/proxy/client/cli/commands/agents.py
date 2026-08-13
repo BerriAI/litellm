@@ -3,7 +3,7 @@ import shutil
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeAlias
 
 import click
 import requests
@@ -42,6 +42,8 @@ _INSTALL_DOCS: Final[dict[str, str]] = {
     "opencode": "https://opencode.ai/docs",
     "pi": "https://pi.dev",
 }
+
+_HIDDEN_AGENTS: Final = frozenset({"pi"})
 
 CODEX_PROXY_PROVIDER: Final = "litellm"
 
@@ -150,7 +152,9 @@ def prepare_pi(
     return ["--model", f"{PI_PROVIDER_NAME}/{ids[0]}"]
 
 
-_PREPARERS: Final[dict[str, Callable[[str, str, Mapping[str, str]], Sequence[str]]]] = {
+_Preparer: TypeAlias = Callable[[str, str, Mapping[str, str]], Sequence[str]]
+
+_PREPARERS: Final[dict[str, _Preparer]] = {
     "pi": prepare_pi,
 }
 
@@ -226,7 +230,7 @@ def run_agent(
     verify: Callable[[str, str], None] = verify_proxy_key,
     launcher: Callable[[str, Sequence[str], Mapping[str, str]], None] = _exec,
     reattach_terminal: Callable[[], None] | None = None,
-    preparers: Mapping[str, Callable[[str, str, Mapping[str, str]], Sequence[str]]] = MappingProxyType(_PREPARERS),
+    preparers: Mapping[str, _Preparer] = MappingProxyType(_PREPARERS),
 ) -> None:
     """Validate, wire the environment, and hand off to the agent.
 
@@ -311,6 +315,7 @@ def _make_agent_command(binary: str, display_name: str) -> click.Command:
         name=binary,
         context_settings={"ignore_unknown_options": True},
         short_help=f"Run {display_name} through your LiteLLM proxy",
+        hidden=binary in _HIDDEN_AGENTS,
     )
     @click.option("--skip-verify", is_flag=True, default=False, help=_SKIP_VERIFY_HELP)
     @click.argument("args", nargs=-1, type=click.UNPROCESSED)
