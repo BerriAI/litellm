@@ -2,7 +2,7 @@
  * Helper utilities for Claude Code Marketplace
  */
 
-import { PluginSource, MarketplacePluginEntry } from "./types";
+import { PluginSource, MarketplacePluginEntry, Plugin, SkillApprovalStatus } from "./types";
 
 export interface SkillSourcePreview {
   parsed: PluginSource;
@@ -438,3 +438,28 @@ export const formatKeywords = (keywords?: string[]): string => {
 
   return keywords.join(", ");
 };
+
+export interface SkillApprovalDisplay {
+  label: string;
+  tone: "success" | "warning" | "error";
+}
+
+export const getApprovalStatusDisplay = (status?: SkillApprovalStatus): SkillApprovalDisplay => {
+  switch (status) {
+    case "pending_review":
+      return { label: "Pending Review", tone: "warning" };
+    case "rejected":
+      return { label: "Rejected", tone: "error" };
+    default:
+      return { label: "Active", tone: "success" };
+  }
+};
+
+export const isAwaitingReview = (plugin: Pick<Plugin, "approval_status">): boolean =>
+  plugin.approval_status === "pending_review";
+
+export const countAwaitingReview = (plugins: Pick<Plugin, "approval_status">[]): number =>
+  plugins.filter(isAwaitingReview).length;
+
+export const isApprovedSkill = (plugin: Pick<Plugin, "approval_status">): boolean =>
+  plugin.approval_status === undefined || plugin.approval_status === "active";
