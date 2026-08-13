@@ -6684,7 +6684,7 @@ def embedding(
                 api_base
                 or litellm.api_base
                 or get_secret_str("NEBIUS_API_BASE")
-                or "https://api.tokenfactory.nebius.com/v1"
+                or litellm.NebiusConfig.API_BASE_URL
             )
 
             response = openai_chat_completions.embedding(
