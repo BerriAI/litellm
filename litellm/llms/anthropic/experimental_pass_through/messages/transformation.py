@@ -68,8 +68,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "speed",
             "output_config",
             "reasoning_effort",
-            # TODO: Add Anthropic `metadata` support
-            # "metadata",
+            
+            "metadata",
         ]
 
     def _remove_scope_from_cache_control(self, anthropic_messages_request: dict) -> None:
