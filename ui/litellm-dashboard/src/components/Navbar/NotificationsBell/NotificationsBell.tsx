@@ -31,11 +31,9 @@ export const NotificationsBell: React.FC = () => {
         Route every request to the cheapest model that can handle it, no prompt changes needed.
       </Typography.Paragraph>
       <div className="flex flex-wrap items-center gap-2">
-        <a href={AUTO_ROUTER_DOCS_URL} target="_blank" rel="noopener noreferrer">
-          <Button type="primary" size="small">
-            Read the docs
-          </Button>
-        </a>
+        <Button type="primary" size="small" href={AUTO_ROUTER_DOCS_URL} target="_blank" rel="noopener noreferrer">
+          Read the docs
+        </Button>
         {hasUnread ? (
           <Button type="link" size="small" className="px-1!" onClick={markDismissed}>
             Mark as read
