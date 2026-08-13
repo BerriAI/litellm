@@ -1,10 +1,22 @@
 import type { DateRangePickerValue } from "@tremor/react";
 import { Button, Text } from "@tremor/react";
-import { Select } from "antd";
+import { Select, type SelectProps } from "antd";
 import React, { useState } from "react";
 import EntityUsageExportModal from "./EntityUsageExportModal";
 import type { EntitySpendData, EntityType } from "./types";
 import type { Team } from "@/components/key_team_helpers/key_list";
+
+export type UsageFilterSelectProps = Pick<
+  SelectProps<string>,
+  | "filterOption"
+  | "loading"
+  | "notFoundContent"
+  | "onPopupScroll"
+  | "onSearch"
+  | "popupRender"
+  | "searchValue"
+  | "showSearch"
+>;
 
 interface UsageExportHeaderProps {
   dateValue: DateRangePickerValue;
@@ -18,6 +30,7 @@ interface UsageExportHeaderProps {
   onFiltersChange?: (filters: string[]) => void;
   filterOptions?: Array<{ label: string; value: string }>;
   filterMode?: "multiple" | "single";
+  filterSelectProps?: UsageFilterSelectProps;
   customTitle?: string;
   compactLayout?: boolean;
   teams?: Team[];
@@ -34,16 +47,16 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   onFiltersChange,
   filterOptions = [],
   filterMode = "multiple",
+  filterSelectProps,
   customTitle,
   compactLayout = false,
   teams = [],
 }) => {
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const hasFilters = showFilters && (filterOptions.length > 0 || filterSelectProps?.showSearch === true);
 
   // Determine grid layout based on what's visible
   const getGridCols = () => {
-    const hasFilters = showFilters && filterOptions.length > 0;
-
     if (hasFilters) return "grid-cols-[1fr_auto]";
     return "grid-cols-[auto]";
   };
@@ -57,10 +70,11 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
          * vertical drift when the right column has a label above the input.
          */}
         <div className={`grid ${getGridCols()} items-end gap-4`}>
-          {showFilters && filterOptions.length > 0 && (
+          {hasFilters && (
             <div>
               {filterLabel && <Text className="mb-2">{filterLabel}</Text>}
               <Select
+                {...filterSelectProps}
                 mode={filterMode === "single" ? undefined : "multiple"}
                 style={{ width: "100%" }}
                 placeholder={filterPlaceholder}
