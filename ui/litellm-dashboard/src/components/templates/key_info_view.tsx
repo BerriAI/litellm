@@ -13,6 +13,8 @@ import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } 
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import RouterSettingsSummary from "../common_components/RouterSettingsSummary";
+import { hasRouterSettings } from "../common_components/routerSettingsPayload";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
@@ -444,6 +446,8 @@ export default function KeyInfoView({
     );
   };
 
+  const lastConfiguredAt = currentKeyData.settings_updated_at || currentKeyData.created_at;
+
   const parentTeam = currentKeyData.team_id ? teamsData?.find((team) => team.team_id === currentKeyData.team_id) : null;
 
   const budgetDisplay =
@@ -468,7 +472,7 @@ export default function KeyInfoView({
             currentKeyData.created_by ||
             "",
           createdAt: currentKeyData.created_at ? formatTimestamp(currentKeyData.created_at) : "",
-          lastUpdated: currentKeyData.updated_at ? formatTimestamp(currentKeyData.updated_at) : "",
+          lastUpdated: lastConfiguredAt ? formatTimestamp(lastConfiguredAt) : "",
           lastActive: currentKeyData.last_active ? formatTimestamp(currentKeyData.last_active) : "Never",
           expires: currentKeyData.expires ? formatTimestamp(currentKeyData.expires) : "Never",
         }}
@@ -780,6 +784,13 @@ export default function KeyInfoView({
                     <Text>{currentKeyData.expires ? formatTimestamp(currentKeyData.expires) : "Never"}</Text>
                   </div>
 
+                  {Boolean(currentKeyData.metadata?.enable_prompt_caching) && (
+                    <div>
+                      <Text className="font-medium">Prompt Caching</Text>
+                      <Text>Enabled (auto-injects cache_control markers on Anthropic and Bedrock Claude requests)</Text>
+                    </div>
+                  )}
+
                   <AutoRotationView
                     autoRotate={currentKeyData.auto_rotate}
                     rotationInterval={currentKeyData.rotation_interval}
@@ -824,6 +835,15 @@ export default function KeyInfoView({
                             {fallbacks.join(", ")}
                           </div>
                         ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {hasRouterSettings(currentKeyData.router_settings) && (
+                    <div>
+                      <Text className="font-medium">Router Settings</Text>
+                      <div className="mt-1">
+                        <RouterSettingsSummary routerSettings={currentKeyData.router_settings} />
                       </div>
                     </div>
                   )}
@@ -937,6 +957,18 @@ export default function KeyInfoView({
                       Object.keys(currentKeyData.metadata.tag_rpm_limit).length > 0
                         ? JSON.stringify(currentKeyData.metadata.tag_rpm_limit)
                         : "Unlimited"}
+                    </Text>
+                    <Text>
+                      Estimated Output Tokens:{" "}
+                      {currentKeyData.metadata?.default_estimated_output_tokens != null
+                        ? String(currentKeyData.metadata.default_estimated_output_tokens)
+                        : "Default"}
+                    </Text>
+                    <Text>
+                      Estimated Output Tokens Per Model:{" "}
+                      {currentKeyData.metadata?.default_estimated_output_tokens_per_model
+                        ? JSON.stringify(currentKeyData.metadata.default_estimated_output_tokens_per_model)
+                        : "Default"}
                     </Text>
                   </div>
 

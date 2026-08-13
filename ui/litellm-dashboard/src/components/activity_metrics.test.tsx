@@ -48,11 +48,14 @@ vi.mock("antd", () => {
   };
 });
 
-vi.mock("@/utils/dataUtils", () => ({
-  formatNumberWithCommas: (value: number, decimals?: number) => {
-    return value.toFixed(decimals || 0);
-  },
-}));
+vi.mock("@/utils/dataUtils", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/utils/dataUtils")>();
+
+  return {
+    ...actual,
+    formatNumberWithCommas: (value: number, decimals?: number) => value.toFixed(decimals || 0),
+  };
+});
 
 vi.mock("@/utils/teamUtils", () => ({
   resolveTeamAliasFromTeamID: (teamID: string, teams: any[]) => {

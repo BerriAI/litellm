@@ -133,6 +133,50 @@ def test_get_key_models_passes_include_model_access_groups():
     assert "model2" in result
 
 
+def test_get_key_models_keeps_literal_model_colliding_with_group_name():
+    """A name that is BOTH a deployed model and an access group grants both at
+    runtime (_check_model_access_helper unions them), so the listing must keep
+    the literal model alongside the group members instead of dropping it."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.model_checks import get_key_models
+
+    user_api_key_dict = UserAPIKeyAuth(models=["beta-models"], api_key="test-key")
+
+    result = get_key_models(
+        user_api_key_dict=user_api_key_dict,
+        proxy_model_list=["beta-models", "member-a", "unrelated"],
+        model_access_groups={"beta-models": ["member-a"]},
+        include_model_access_groups=False,
+    )
+    assert sorted(result) == ["beta-models", "member-a"]
+
+
+def test_get_team_models_keeps_literal_model_colliding_with_group_name():
+    """Team flavor of the collision case: literal deployment survives group expansion."""
+    from litellm.proxy.auth.model_checks import get_team_models
+
+    result = get_team_models(
+        team_models=["beta-models"],
+        proxy_model_list=["beta-models", "member-a", "unrelated"],
+        model_access_groups={"beta-models": ["member-a"]},
+        include_model_access_groups=False,
+    )
+    assert sorted(result) == ["beta-models", "member-a"]
+
+
+def test_get_team_models_drops_group_name_that_is_not_a_deployed_model():
+    """No collision: a pure access-group name is still replaced by its members."""
+    from litellm.proxy.auth.model_checks import get_team_models
+
+    result = get_team_models(
+        team_models=["beta-models"],
+        proxy_model_list=["member-a", "unrelated"],
+        model_access_groups={"beta-models": ["member-a"]},
+        include_model_access_groups=False,
+    )
+    assert result == ["member-a"]
+
+
 def test_get_key_models_does_not_mutate_input():
     """
     get_key_models must not mutate user_api_key_dict.models in-place.
