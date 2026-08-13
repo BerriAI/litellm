@@ -806,15 +806,13 @@ def normalize_email(email: str | None) -> str | None:
     return email.lower() if isinstance(email, str) else email
 
 
-# Role hierarchy (highest to lowest privilege). Shared by every code path that has
-# to collapse several candidate roles down to the single role LiteLLM stores on a
-# user, so group-based and app-role-based logins resolve the same way.
-LITELLM_USER_ROLE_HIERARCHY: Final = [
+# Ordered highest to lowest privilege
+LITELLM_USER_ROLE_HIERARCHY: Final = (
     LitellmUserRoles.PROXY_ADMIN,
     LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
     LitellmUserRoles.INTERNAL_USER,
     LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-]
+)
 
 
 def determine_role_from_groups(
@@ -4194,52 +4192,24 @@ class MicrosoftSSOHandler:
 
     @staticmethod
     def get_user_role_from_app_roles(
-        app_roles: list[str] | None,
+        app_roles: Sequence[str] | None,
     ) -> LitellmUserRoles | None:
         """
-        Pick the LiteLLM role for a user from the Entra app roles on their id_token.
+        Resolve the one role LiteLLM stores for a user from their Entra app roles.
 
-        A user assigned several app roles (directly, or by being a member of more
-        than one assigned group) arrives here with every role in the `roles` claim,
-        in an order Entra does not guarantee. LiteLLM stores a single role per user,
-        so these have to be collapsed to one: resolve each claim value against
-        LitellmUserRoles and keep the highest privilege match, so the result does
-        not depend on claim ordering. Unrecognised values are ignored.
-
-        Args:
-            app_roles: App role values from the id_token's `roles`/`app_roles` claim
-
-        Returns:
-            The highest privilege role present, or None if the claim held no
-            recognised role (callers then fall back to the user's stored role or
-            the configured default).
+        Entra does not guarantee `roles` claim ordering, so a user holding several app
+        roles resolves to the highest privilege one rather than whichever the claim
+        listed first. Roles the hierarchy does not rank (org_admin, team, customer)
+        resolve by name to stay deterministic
         """
-        if not app_roles:
-            return None
-
-        resolved: Final = {
-            role for role in (get_litellm_user_role(role_str) for role_str in app_roles) if role is not None
-        }
-        if not resolved:
-            verbose_proxy_logger.debug("No valid LitellmUserRoles found in app_roles: %s", app_roles)
-            return None
-
-        for role in LITELLM_USER_ROLE_HIERARCHY:
-            if role in resolved:
-                verbose_proxy_logger.debug(
-                    "Selected highest privilege LitellmUserRoles '%s' from app_roles: %s", role.value, app_roles
-                )
-                return role
-
-        # Every resolved role is a valid LitellmUserRoles that the hierarchy above
-        # does not rank (org_admin, team, customer). There is no privilege ordering
-        # defined for those, so pick deterministically instead of depending on the
-        # order Entra happened to emit.
-        fallback: Final = min(resolved, key=lambda role: role.value)
-        verbose_proxy_logger.debug(
-            "app_roles %s resolved to non-hierarchy role(s); using '%s'", app_roles, fallback.value
+        resolved: Final = frozenset(
+            role for role in (get_litellm_user_role(role_str) for role_str in app_roles or ()) if role is not None
         )
-        return fallback
+        if not resolved:
+            return None
+
+        ranked: Final = next((role for role in LITELLM_USER_ROLE_HIERARCHY if role in resolved), None)
+        return ranked if ranked is not None else min(resolved, key=lambda role: role.value)
 
     @staticmethod
     def get_app_roles_from_id_token(id_token: str | None) -> list[str]:
