@@ -1213,9 +1213,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             ctx = None
 
         # Decide whether to create a primary span
-        # Always create if no parent span exists (backward compatibility)
+        # Always create if no parent span exists (backward compatibility), or if the
+        # parent already ended, since writes to it would be dropped by the SDK
         # OR if USE_OTEL_LITELLM_REQUEST_SPAN is explicitly enabled
-        should_create_primary_span: Final = parent_span is None or get_secret_bool("USE_OTEL_LITELLM_REQUEST_SPAN")
+        should_create_primary_span: Final = (
+            parent_span is None or not is_recording(parent_span) or get_secret_bool("USE_OTEL_LITELLM_REQUEST_SPAN")
+        )
 
         if should_create_primary_span:
             # Create a new litellm_request span
@@ -1231,9 +1234,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             from opentelemetry.trace import Status, StatusCode
 
             span = None
-            if is_recording(parent_span):
-                parent_span.set_status(Status(StatusCode.OK))
-                self.set_attributes(parent_span, kwargs, response_obj)
+            parent_span.set_status(Status(StatusCode.OK))
+            self.set_attributes(parent_span, kwargs, response_obj)
             # Raw-request as direct child of parent_span
             self._maybe_log_raw_request(kwargs, response_obj, start_time, end_time, parent_span)
 

@@ -6047,9 +6047,15 @@ class TestEndedParentSpanNotWritten(unittest.TestCase):
         finally:
             otel_context.detach(token)
 
-        exported_server_spans = [s for s in span_exporter.get_finished_spans() if s.name == "POST /chat"]
-        self.assertEqual(len(exported_server_spans), 1)
-        self.assertNotIn("gen_ai.request.model", exported_server_spans[0].attributes or {})
+        exported = span_exporter.get_finished_spans()
+        server_spans = [s for s in exported if s.name == "POST /chat"]
+        self.assertEqual(len(server_spans), 1)
+        self.assertNotIn("gen_ai.request.model", server_spans[0].attributes or {})
+
+        litellm_spans = [s for s in exported if s.name == "litellm_request"]
+        self.assertEqual(len(litellm_spans), 1, "attributes must land on a fresh child span, not be dropped")
+        self.assertIn("gen_ai.request.model", litellm_spans[0].attributes or {})
+        self.assertEqual(litellm_spans[0].parent.span_id, server_spans[0].context.span_id)
 
     def test_safe_set_attribute_skips_ended_span(self):
         tracer_provider = TracerProvider()
