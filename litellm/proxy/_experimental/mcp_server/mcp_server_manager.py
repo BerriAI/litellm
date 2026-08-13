@@ -1919,7 +1919,7 @@ class MCPServerManager:
                     )
 
                     # Build input schema using imported function
-                    input_schema = build_input_schema(resolved_operation)
+                    input_schema = build_input_schema(resolved_operation, components)
 
                     # Create tool function with headers using imported function
                     tool_func = create_tool_function(path, method, resolved_operation, base_url, headers=headers)
