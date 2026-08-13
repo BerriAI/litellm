@@ -3794,22 +3794,7 @@
       "count": 1
     }
   },
-  "src/components/view_logs/LogDetailsDrawer/CollapsibleMessage.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/view_logs/LogDetailsDrawer/DrawerHeader.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/HistoryTree.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/JsonViewer.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -3833,37 +3818,12 @@
       "count": 2
     }
   },
-  "src/components/view_logs/LogDetailsDrawer/OutputCard.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/view_logs/LogDetailsDrawer/RealtimePrettyView.test.tsx": {
     "unused-imports/no-unused-imports": {
       "count": 2
     }
   },
   "src/components/view_logs/LogDetailsDrawer/RealtimePrettyView.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/SimpleMessageBlock.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/SimpleToolCallBlock.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/TokenFlow.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/TruncatedValue.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
