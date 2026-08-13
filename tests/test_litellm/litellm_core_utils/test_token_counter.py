@@ -1280,3 +1280,50 @@ def test_anthropic_image_block_nested_in_tool_result():
         use_default_image_token_count=True,
     )
     assert tokens > 0
+
+
+def test_anthropic_image_block_with_empty_base64_data():
+    """
+    A base64 source carrying no bytes must still price as an image rather than
+    raise: the block is well-formed enough to count, and an empty `data` only
+    means there is nothing to measure the dimensions from.
+    """
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    tokens = _count_content_list(
+        count_function=len,
+        content_list=[
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": ""}}
+        ],
+        use_default_image_token_count=False,
+        default_token_count=None,
+    )
+    assert tokens > 0
+
+
+def test_anthropic_image_block_without_source_raises():
+    """
+    An `image` block with no `source` is malformed, and must fail the same way
+    the OpenAI `image_url` block with no `url` does - a ValueError the caller
+    can turn into a 400 - instead of being silently counted as a valid image.
+    """
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    with pytest.raises(ValueError):
+        _count_content_list(
+            count_function=len,
+            content_list=[{"type": "image"}],
+            use_default_image_token_count=False,
+            default_token_count=None,
+        )
+
+    # ... and `default_token_count`, the caller's opt-out from raising, still wins.
+    assert (
+        _count_content_list(
+            count_function=len,
+            content_list=[{"type": "image"}],
+            use_default_image_token_count=False,
+            default_token_count=7,
+        )
+        == 7
+    )
