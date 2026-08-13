@@ -96,6 +96,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     response_in_flight_token_count,
 )
 from litellm.router_utils.auto_router_model_naming import (
+    AUTO_ROUTER_MODEL_PREFIX,
     classify_strategy_router_model,
 )
 from litellm.router_utils.batch_utils import (
@@ -317,6 +318,8 @@ def model_info_is_active_for_environment(model_info: Mapping[str, object] | None
 
 
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
+
+_ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset({"model", "api_base", "api_key", "api_version"})
 
 
 def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream]) -> bool:
@@ -11377,7 +11380,9 @@ class Router:
         that share a `model_name` by matching the request's tags against each
         registered strategy's tags before falling back to the first registered.
         Returns the tagged registry entry so the caller can tell whether the
-        request's tags were what selected it.
+        request's tags were what selected it, and can locate the marker
+        deployment the strategy was registered from via its (model_name, tags)
+        pair.
 
         With tag filtering enabled, strategies that all carry real tags matching
         none of the request's do not capture it when the name also has plain
@@ -11471,24 +11476,46 @@ class Router:
         )
 
         # `model` (the alias, e.g. "smart-router") is never the deployment actually
-        # called - apply the alias's own litellm_params (besides `model` itself,
-        # which is just the alias marker) to the request, since the tier/route
-        # deployment the hook selected won't have them. Router-only fields
-        # (tpm, rpm, weight, complexity_router_config, ...) are excluded from the
-        # actual outbound LLM call downstream by litellm.types.utils.all_litellm_params,
+        # called - apply the router marker's own litellm_params to the request,
+        # since the tier/route deployment the hook selected won't have them. The
+        # marker entry is looked up by its `auto_router/` model prefix and the
+        # selected strategy's tags, never by list position: plain deployments may
+        # share the alias `model_name` and must not leak their params (`api_base`,
+        # `api_key`, ...) onto the routed call. Router-only fields (tpm, rpm,
+        # weight, complexity_router_config, ...) are excluded from the actual
+        # outbound LLM call downstream by litellm.types.utils.all_litellm_params,
         # not here. Custom pricing fields ARE call params, so they must be
         # excluded here: they price the alias, not the deployment the hook
         # selected, and forwarding them re-registers the routed deployment at
         # the alias's price (an explicit 0 makes every alias request bill $0).
         if pre_routing_hook_response is not None:
-            alias_index: Final = self.model_name_to_deployment_indices.get(model, [])
-            if alias_index:
-                alias_litellm_params: Final = self.model_list[alias_index[0]].get("litellm_params", {})
-                for key, value in alias_litellm_params.items():
-                    if key != "model" and key not in CustomPricingLiteLLMParams.model_fields and value is not None:
-                        request_kwargs.setdefault(key, value)
+            for key, value in self._forwardable_alias_marker_params(model=model, strategy_tags=selected_strategy.tags):
+                request_kwargs.setdefault(key, value)
 
         return pre_routing_hook_response
+
+    def _forwardable_alias_marker_params(
+        self, model: str, strategy_tags: tuple[str, ...]
+    ) -> tuple[tuple[str, object], ...]:
+        marker_params: Final = tuple(
+            litellm_params
+            for idx in self.model_name_to_deployment_indices.get(model, ())
+            if isinstance(litellm_params := self.model_list[idx].get("litellm_params", {}), dict)
+            and str(litellm_params.get("model", "")).startswith(AUTO_ROUTER_MODEL_PREFIX)
+        )
+        tag_matched: Final = tuple(
+            params for params in marker_params if tuple(params.get("tags") or ()) == strategy_tags
+        )
+        selected: Final = tag_matched[0] if tag_matched else (marker_params[0] if marker_params else None)
+        if selected is None:
+            return ()
+        return tuple(
+            (key, value)
+            for key, value in selected.items()
+            if key not in _ALIAS_PARAMS_NEVER_FORWARDED
+            and key not in CustomPricingLiteLLMParams.model_fields
+            and value is not None
+        )
 
     def _consumed_request_tags_stamp(
         self,
