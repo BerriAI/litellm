@@ -14,6 +14,7 @@ from typing import Any, Final, cast
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
 from fastapi.responses import StreamingResponse
+from google.auth.exceptions import GoogleAuthError, TransportError
 from starlette.websockets import WebSocketState
 
 import litellm
@@ -1616,7 +1617,9 @@ async def _prepare_vertex_auth_headers(
                 custom_llm_provider="vertex_ai_beta",
                 api_base="",
             )
-        except Exception as e:
+        except TransportError:
+            raise
+        except (GoogleAuthError, ValueError) as e:
             raise ProxyException(
                 message=(
                     f"Failed to get a Google access token for project={vertex_project} + location={vertex_location}: {e}. "

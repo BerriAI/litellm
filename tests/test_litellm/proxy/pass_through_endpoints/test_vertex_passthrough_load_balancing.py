@@ -1,12 +1,11 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from google.auth.exceptions import DefaultCredentialsError
+from google.auth.exceptions import DefaultCredentialsError, TransportError
 
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _base_vertex_proxy_route,
 )
-from litellm.types.router import DeploymentTypedDict
 
 
 @pytest.mark.asyncio
@@ -394,6 +393,46 @@ async def test_vertex_passthrough_credential_failure_raises_auth_error():
     assert "us-central1" in exc_info.value.message
     assert "vertex_credentials" in exc_info.value.message
     assert "Your default credentials were not found" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_vertex_passthrough_transport_failure_is_not_reported_as_auth_error():
+    """
+    Reaching Google's token endpoint can fail for reasons the operator cannot fix with
+    credentials, so those must not be relabelled as authentication errors.
+    """
+    from starlette.datastructures import Headers
+
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _prepare_vertex_auth_headers,
+    )
+
+    mock_request = MagicMock()
+    mock_request.headers = Headers({"authorization": "Bearer sk-litellm-key"})
+    mock_request.state._cached_headers = None
+
+    mock_vertex_credentials = MagicMock()
+    mock_vertex_credentials.vertex_project = "test-project"
+    mock_vertex_credentials.vertex_location = "us-central1"
+    mock_vertex_credentials.vertex_credentials = None
+
+    with patch.object(
+        VertexBase,
+        "_ensure_access_token_async",
+        new_callable=AsyncMock,
+        side_effect=TransportError("connection reset by peer"),
+    ):
+        with pytest.raises(TransportError):
+            await _prepare_vertex_auth_headers(
+                request=mock_request,
+                vertex_credentials=mock_vertex_credentials,
+                router_credentials=None,
+                vertex_project="test-project",
+                vertex_location="us-central1",
+                base_target_url="https://us-central1-aiplatform.googleapis.com",
+                get_vertex_pass_through_handler=MagicMock(),
+            )
 
 
 @pytest.mark.asyncio
