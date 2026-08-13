@@ -57,6 +57,7 @@ from litellm.types.llms.openai import (
     OpenAIMessageContentListBlock,
 )
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     ChatCompletionMessageToolCall,
     CompletionTokensDetailsWrapper,
     Function,
@@ -1770,6 +1771,24 @@ class AmazonConverseConfig(BaseConfig):
                 thinking_blocks_list.append(_redacted_block)
         return thinking_blocks_list
 
+    @staticmethod
+    def _parse_cache_details(usage: ConverseTokenUsageBlock) -> "CacheCreationTokenDetails | None":
+        """
+        Split Converse's aggregate cacheWriteInputTokens into the 5m/1h TTL
+        breakdown from `cacheDetails`, so cost calc can bill each tier
+        correctly instead of defaulting the whole write to the 5m rate.
+        https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CacheDetail.html
+        """
+        cache_details = usage.get("cacheDetails")
+        if not cache_details:
+            return None
+        tokens_5m = sum(d["inputTokens"] for d in cache_details if d.get("ttl") == "5m")
+        tokens_1h = sum(d["inputTokens"] for d in cache_details if d.get("ttl") == "1h")
+        return CacheCreationTokenDetails(
+            ephemeral_5m_input_tokens=tokens_5m,
+            ephemeral_1h_input_tokens=tokens_1h,
+        )
+
     def _transform_usage(
         self,
         usage: ConverseTokenUsageBlock,
@@ -1792,6 +1811,7 @@ class AmazonConverseConfig(BaseConfig):
         prompt_tokens_details: Final = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
             cache_creation_tokens=cache_creation_input_tokens,
+            cache_creation_token_details=self._parse_cache_details(usage),
             text_tokens=raw_input_tokens,
         )
         reasoning_tokens = token_counter(text=reasoning_content, count_response_tokens=True) if reasoning_content else 0

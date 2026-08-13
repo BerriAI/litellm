@@ -51,6 +51,49 @@ def test_transform_usage():
     assert openai_usage.completion_tokens_details.text_tokens == usage["outputTokens"]
 
 
+def test_transform_usage_with_cache_details():
+    """cacheDetails should split cacheWriteInputTokens into the 5m/1h TTL breakdown
+    so cost calc can bill the 1h portion at its own (higher) rate instead of
+    defaulting the whole write to the 5m rate. See issue #36760."""
+    usage = ConverseTokenUsageBlock(
+        **{
+            "inputTokens": 76,
+            "outputTokens": 259,
+            "totalTokens": 335,
+            "cacheWriteInputTokens": 362,
+            "cacheDetails": [
+                {"inputTokens": 74, "ttl": "1h"},
+                {"inputTokens": 288, "ttl": "5m"},
+            ],
+        }
+    )
+    config = AmazonConverseConfig()
+    openai_usage = config._transform_usage(usage)
+    details = openai_usage.prompt_tokens_details.cache_creation_token_details
+    assert details is not None
+    assert details.ephemeral_1h_input_tokens == 74
+    assert details.ephemeral_5m_input_tokens == 288
+
+
+def test_transform_usage_without_cache_details_stays_none():
+    """No cacheDetails in the response (older models/regions) should leave
+    cache_creation_token_details unset, same as before this field existed."""
+    usage = ConverseTokenUsageBlock(
+        **{
+            "inputTokens": 3,
+            "outputTokens": 401,
+            "totalTokens": 2193,
+            "cacheWriteInputTokens": 1789,
+        }
+    )
+    config = AmazonConverseConfig()
+    openai_usage = config._transform_usage(usage)
+    assert (
+        getattr(openai_usage.prompt_tokens_details, "cache_creation_token_details", None)
+        is None
+    )
+
+
 def test_transform_usage_with_reasoning_content():
     """Test that completion_tokens_details correctly tracks reasoning vs text tokens."""
     usage = ConverseTokenUsageBlock(
