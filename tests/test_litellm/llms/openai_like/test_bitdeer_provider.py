@@ -17,41 +17,41 @@ class TestBitdeerProviderConfig:
         """Test that bitdeer is in the provider list"""
         from litellm import LlmProviders
 
-        assert hasattr(LlmProviders, "BITDEER")
-        assert LlmProviders.BITDEER.value == "bitdeer"
-        assert "bitdeer" in litellm.provider_list
+        assert hasattr(LlmProviders, "BITDEER_AI")
+        assert LlmProviders.BITDEER_AI.value == "bitdeer-ai"
+        assert "bitdeer-ai" in litellm.provider_list
 
     def test_bitdeer_json_config_exists(self):
         """Test that bitdeer is configured in providers.json"""
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
-        assert JSONProviderRegistry.exists("bitdeer")
+        assert JSONProviderRegistry.exists("bitdeer-ai")
 
-        bitdeer = JSONProviderRegistry.get("bitdeer")
-        assert bitdeer is not None
-        assert bitdeer.base_url == "https://api-inference.bitdeer.ai/v1"
-        assert bitdeer.api_key_env == "BITDEER_API_KEY"
-        assert bitdeer.param_mappings.get("max_completion_tokens") == "max_tokens"
+        bitdeer_ai = JSONProviderRegistry.get("bitdeer-ai")
+        assert bitdeer_ai is not None
+        assert bitdeer_ai.base_url == "https://api-inference.bitdeer.ai/v1"
+        assert bitdeer_ai.api_key_env == "BITDEER_API_KEY"
+        assert bitdeer_ai.param_mappings.get("max_completion_tokens") == "max_tokens"
 
     def test_bitdeer_in_openai_compatible_providers(self):
         """Test that bitdeer is in the openai_compatible_providers list"""
         from litellm.constants import openai_compatible_providers
 
-        assert "bitdeer" in openai_compatible_providers
+        assert "bitdeer-ai" in openai_compatible_providers
 
     def test_bitdeer_provider_resolution(self):
         """Test that provider resolution finds bitdeer and returns the default base URL"""
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="bitdeer/moonshotai/Kimi-K3",
+            model="bitdeer-ai/moonshotai/Kimi-K3",
             custom_llm_provider=None,
             api_base=None,
             api_key=None,
         )
 
         assert model == "moonshotai/Kimi-K3"
-        assert provider == "bitdeer"
+        assert provider == "bitdeer-ai"
         assert api_base == "https://api-inference.bitdeer.ai/v1"
 
     def test_bitdeer_api_base_override(self):
@@ -59,13 +59,13 @@ class TestBitdeerProviderConfig:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="bitdeer/moonshotai/Kimi-K3",
+            model="bitdeer-ai/moonshotai/Kimi-K3",
             custom_llm_provider=None,
             api_base="https://custom.bitdeer.ai/v1",
             api_key="sk-test",
         )
 
-        assert provider == "bitdeer"
+        assert provider == "bitdeer-ai"
         assert api_base == "https://custom.bitdeer.ai/v1"
         assert api_key == "sk-test"
 
@@ -79,7 +79,7 @@ class TestBitdeerProviderConfig:
             api_base="https://api-inference.bitdeer.ai/v1",
             api_key=None,
         )
-        assert provider == "bitdeer"
+        assert provider == "bitdeer-ai"
         assert api_base == "https://api-inference.bitdeer.ai/v1"
 
     def test_bitdeer_router_config(self):
@@ -89,9 +89,9 @@ class TestBitdeerProviderConfig:
         router = Router(
             model_list=[
                 {
-                    "model_name": "bitdeer-kimi-k3",
+                    "model_name": "bitdeer-ai-kimi-k3",
                     "litellm_params": {
-                        "model": "bitdeer/moonshotai/Kimi-K3",
+                        "model": "bitdeer-ai/moonshotai/Kimi-K3",
                         "api_key": "test-key",
                     },
                 }
@@ -99,7 +99,7 @@ class TestBitdeerProviderConfig:
         )
 
         assert len(router.model_list) == 1
-        assert router.model_list[0]["model_name"] == "bitdeer-kimi-k3"
+        assert router.model_list[0]["model_name"] == "bitdeer-ai-kimi-k3"
 
     def test_bitdeer_model_cost_map(self):
         """Test that bitdeer model pricing is registered correctly"""
@@ -109,15 +109,12 @@ class TestBitdeerProviderConfig:
             model_cost = json.load(f)
 
         expected_models = {
-            "bitdeer/moonshotai/Kimi-K3": (3e-06, 1.5e-05),
-            "bitdeer/zai-org/GLM-5.2": (1.4e-06, 4.4e-06),
-            "bitdeer/moonshotai/Kimi-K2.6": (9.5e-07, 4e-06),
-            "bitdeer/Qwen/Qwen3.5-397B-A17B": (6e-07, 3.55e-06),
-            "bitdeer/deepseek-ai/DeepSeek-V4-Pro": (1.168e-06, 2.336e-06),
-            "bitdeer/deepseek-ai/DeepSeek-V4-Flash": (4e-08, 8e-08),
+            "bitdeer-ai/moonshotai/Kimi-K3": (3e-06, 1.5e-05),
+            "bitdeer-ai/zai-org/GLM-5.2": (1.4e-06, 4.4e-06),
+            "bitdeer-ai/deepseek-ai/DeepSeek-V4-Flash": (4e-08, 8e-08),
         }
         for model, (input_cost, output_cost) in expected_models.items():
             assert model in model_cost
-            assert model_cost[model]["litellm_provider"] == "bitdeer"
+            assert model_cost[model]["litellm_provider"] == "bitdeer-ai"
             assert model_cost[model]["input_cost_per_token"] == input_cost
             assert model_cost[model]["output_cost_per_token"] == output_cost

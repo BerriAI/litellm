@@ -326,7 +326,7 @@ def get_llm_provider(
                         custom_llm_provider = "chutes"
                         dynamic_api_key = get_secret_str("CHUTES_API_KEY")
                     elif endpoint == "https://api-inference.bitdeer.ai/v1":
-                        custom_llm_provider = "bitdeer"
+                        custom_llm_provider = "bitdeer-ai"
                         dynamic_api_key = get_secret_str("BITDEER_API_KEY")
                     elif endpoint == "https://api.v0.dev/v1":
                         custom_llm_provider = "v0"

@@ -3710,7 +3710,7 @@ class LlmProviders(str, Enum):
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
-    BITDEER = "bitdeer"
+    BITDEER_AI = "bitdeer-ai"
     PINSTRIPES = "pinstripes"
     DARKBLOOM = "darkbloom"
     META = "meta"

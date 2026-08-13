@@ -184,7 +184,7 @@
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
   },
-  "bitdeer": {
+  "bitdeer-ai": {
     "base_url": "https://api-inference.bitdeer.ai/v1",
     "api_key_env": "BITDEER_API_KEY",
     "param_mappings": {
