@@ -370,7 +370,6 @@ if MCP_AVAILABLE:
         return await global_mcp_server_manager.build_mcp_server_from_table(
             draft,
             credentials_are_encrypted=True,
-            persist_discovered_endpoints=False,
         )
 
     def _redact_mcp_credentials(

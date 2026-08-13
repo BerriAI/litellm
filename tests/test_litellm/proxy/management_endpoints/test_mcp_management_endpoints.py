@@ -7,7 +7,7 @@ from datetime import datetime
 
 from types import SimpleNamespace
 from typing import List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -1658,6 +1658,40 @@ class TestTemporaryMCPSessionEndpoints:
         updated = self._inherit_with({"upstream_resource": "api://typed"}, upstream_resource="api://stored")
 
         assert updated.credentials["upstream_resource"] == "api://typed"
+
+    @pytest.mark.asyncio
+    async def test_draft_lookup_uses_current_manager_contract(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _get_draft_mcp_server_as_mcp_server,
+            global_mcp_server_manager,
+        )
+
+        draft = generate_mock_mcp_server_db_record(server_id="draft-server")
+        server = generate_mock_mcp_server_config_record(server_id="draft-server")
+        manager = create_autospec(type(global_mcp_server_manager), instance=True)
+        manager.build_mcp_server_from_table.return_value = server
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_draft_mcp_server",
+                AsyncMock(return_value=draft),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                manager,
+            ),
+        ):
+            result = await _get_draft_mcp_server_as_mcp_server("draft-server")
+
+        assert result is server
+        manager.build_mcp_server_from_table.assert_awaited_once_with(
+            draft,
+            credentials_are_encrypted=True,
+        )
 
     @pytest.mark.asyncio
     async def test_get_cached_temporary_mcp_server_or_404(self):
