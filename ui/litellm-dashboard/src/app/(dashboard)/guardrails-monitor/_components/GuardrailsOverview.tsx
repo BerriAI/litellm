@@ -1,8 +1,9 @@
 import { DownloadOutlined, RiseOutlined, SafetyOutlined, SettingOutlined, WarningOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Card, Col, Row, Spin, Table, Typography } from "antd";
-import type { ColumnsType } from "antd/es/table";
+import type { ColumnDef, OnChangeFn, SortingState } from "@tanstack/react-table";
+import { Button, Col, Row, Spin, Typography } from "antd";
 import React, { useMemo, useState } from "react";
+import { DataTable, DataTableSortHeader } from "@/components/shared/DataTable";
 import { getGuardrailsUsageOverview } from "@/components/networking";
 import { type PerformanceRow } from "@/components/GuardrailsMonitor/mockData";
 import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
@@ -82,99 +83,112 @@ export function GuardrailsOverview({
   const isLoading = guardrailsLoading;
   const error = guardrailsError;
 
-  const columns: ColumnsType<PerformanceRow> = [
+  const columns: ColumnDef<PerformanceRow>[] = [
     {
-      title: "Guardrail",
-      dataIndex: "name",
-      key: "name",
-      render: (name: string, row) => (
+      header: "Guardrail",
+      accessorKey: "name",
+      enableSorting: false,
+      cell: ({ row }) => (
         <button
           type="button"
           className="text-sm font-medium text-gray-900 hover:text-indigo-600 text-left"
-          onClick={() => onSelectGuardrail(row.id)}
+          onClick={() => onSelectGuardrail(row.original.id)}
         >
-          {name}
+          {row.original.name}
         </button>
       ),
     },
     {
-      title: "Provider",
-      dataIndex: "provider",
-      key: "provider",
-      render: (provider: string) => (
+      header: "Provider",
+      accessorKey: "provider",
+      enableSorting: false,
+      cell: ({ row }) => (
         <span
           className={`inline-flex items-center px-2 py-0.5 text-xs font-medium rounded border ${
-            providerColors[provider] ?? providerColors.Custom
+            providerColors[row.original.provider] ?? providerColors.Custom
           }`}
         >
-          {provider}
+          {row.original.provider}
         </span>
       ),
     },
     {
-      title: "Requests",
-      dataIndex: "requestsEvaluated",
-      key: "requestsEvaluated",
-      align: "right",
-      sorter: true,
-      sortOrder: sortBy === "requestsEvaluated" ? (sortDir === "desc" ? "descend" : "ascend") : null,
-      render: (v: number) => v.toLocaleString(),
+      header: ({ column }) => <DataTableSortHeader column={column} title="Requests" />,
+      accessorKey: "requestsEvaluated",
+      meta: { numeric: true },
+      sortDescFirst: false,
+      cell: ({ row }) => row.original.requestsEvaluated.toLocaleString(),
     },
     {
-      title: "Fail Rate",
-      dataIndex: "failRate",
-      key: "failRate",
-      align: "right",
-      sorter: true,
-      sortOrder: sortBy === "failRate" ? (sortDir === "desc" ? "descend" : "ascend") : null,
-      render: (v: number, row) => (
-        <span className={v > 15 ? "text-red-600" : v > 5 ? "text-amber-600" : "text-green-600"}>
-          {v}%{row.trend === "up" && <span className="ml-1 text-xs text-red-400">↑</span>}
-          {row.trend === "down" && <span className="ml-1 text-xs text-green-400">↓</span>}
-        </span>
-      ),
-    },
-    {
-      title: "Avg. latency added",
-      dataIndex: "avgLatency",
-      key: "avgLatency",
-      align: "right",
-      sorter: true,
-      sortOrder: sortBy === "avgLatency" ? (sortDir === "desc" ? "descend" : "ascend") : null,
-      render: (v?: number) => (
+      header: ({ column }) => <DataTableSortHeader column={column} title="Fail Rate" />,
+      accessorKey: "failRate",
+      meta: { numeric: true },
+      sortDescFirst: false,
+      cell: ({ row }) => (
         <span
           className={
-            v == null ? "text-gray-400" : v > 150 ? "text-red-600" : v > 50 ? "text-amber-600" : "text-green-600"
+            row.original.failRate > 15
+              ? "text-red-600"
+              : row.original.failRate > 5
+                ? "text-amber-600"
+                : "text-green-600"
           }
         >
-          {v != null ? `${v}ms` : "—"}
+          {row.original.failRate}%{row.original.trend === "up" && <span className="ml-1 text-xs text-red-400">↑</span>}
+          {row.original.trend === "down" && <span className="ml-1 text-xs text-green-400">↓</span>}
         </span>
       ),
     },
     {
-      title: "Status",
-      dataIndex: "status",
-      key: "status",
-      align: "center",
-      render: (status: string) => (
+      header: ({ column }) => <DataTableSortHeader column={column} title="Avg. latency added" />,
+      accessorKey: "avgLatency",
+      meta: { numeric: true },
+      sortDescFirst: false,
+      cell: ({ row }) => (
+        <span
+          className={
+            row.original.avgLatency == null
+              ? "text-gray-400"
+              : row.original.avgLatency > 150
+                ? "text-red-600"
+                : row.original.avgLatency > 50
+                  ? "text-amber-600"
+                  : "text-green-600"
+          }
+        >
+          {row.original.avgLatency != null ? `${row.original.avgLatency}ms` : "—"}
+        </span>
+      ),
+    },
+    {
+      header: "Status",
+      accessorKey: "status",
+      enableSorting: false,
+      cell: ({ row }) => (
         <span className="inline-flex items-center gap-1.5">
           <span
             className={`w-2 h-2 rounded-full ${
-              status === "healthy" ? "bg-green-500" : status === "warning" ? "bg-amber-500" : "bg-red-500"
+              row.original.status === "healthy"
+                ? "bg-green-500"
+                : row.original.status === "warning"
+                  ? "bg-amber-500"
+                  : "bg-red-500"
             }`}
           />
-          <span className="text-xs text-gray-600 capitalize">{status}</span>
+          <span className="text-xs text-gray-600 capitalize">{row.original.status}</span>
         </span>
       ),
     },
   ];
 
   const sortableKeys: SortKey[] = ["failRate", "requestsEvaluated", "avgLatency"];
-  const handleTableChange = (_pagination: unknown, _filters: unknown, sorter: unknown) => {
-    const s = sorter as { field?: keyof PerformanceRow; order?: string };
-    if (s?.field && sortableKeys.includes(s.field as SortKey)) {
-      setSortBy(s.field as SortKey);
-      setSortDir(s.order === "ascend" ? "asc" : "desc");
+  const sorting = useMemo<SortingState>(() => [{ id: sortBy, desc: sortDir === "desc" }], [sortBy, sortDir]);
+  const handleSortingChange: OnChangeFn<SortingState> = (updater) => {
+    const nextSorting = typeof updater === "function" ? updater(sorting) : updater;
+    const primarySort = nextSorting[0];
+    if (primarySort && sortableKeys.includes(primarySort.id as SortKey)) {
+      setSortBy(primarySort.id as SortKey);
+      setSortDir(primarySort.desc ? "desc" : "asc");
     }
   };
 
@@ -233,43 +247,48 @@ export function GuardrailsOverview({
         <ScoreChart data={chartData} />
       </div>
 
-      <Card className="border border-gray-200 rounded-lg bg-white" styles={{ body: { padding: 0 } }}>
+      <div>
         {(isLoading || error) && (
-          <div className="px-6 py-4 border-b border-gray-200 flex items-center gap-2">
+          <div className="mb-2 flex items-center gap-2">
             {isLoading && <Spin size="small" />}
             {error && <span className="text-sm text-red-600">Failed to load data. Try again.</span>}
           </div>
         )}
-        <div className="px-6 py-4 border-b border-gray-200 flex items-start justify-between gap-4">
-          <div>
-            <Typography.Title level={5} className="mb-0! text-gray-900">
-              Guardrail Performance
-            </Typography.Title>
-            <p className="text-xs text-gray-500 mt-0.5">Click a guardrail to view details, logs, and configuration</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              type="default"
-              icon={<SettingOutlined />}
-              onClick={() => setEvaluationModalOpen(true)}
-              title="Evaluation settings"
-            />
-          </div>
-        </div>
-        <Table
+        <DataTable
           columns={columns}
-          dataSource={sorted}
-          rowKey="id"
-          pagination={false}
-          loading={isLoading}
-          onChange={handleTableChange}
-          locale={activeData.length === 0 && !isLoading ? { emptyText: "No data for this period" } : undefined}
-          onRow={(row) => ({
-            onClick: () => onSelectGuardrail(row.id),
-            style: { cursor: "pointer" },
-          })}
+          data={sorted}
+          getRowId={(row) => row.id}
+          isLoading={isLoading}
+          noDataMessage="No data for this period"
+          onRowClick={(row) => onSelectGuardrail(row.id)}
+          rowClassName={() => "cursor-pointer"}
+          sortingMode="server"
+          sorting={sorting}
+          onSortingChange={handleSortingChange}
+          enableSortingRemoval={false}
+          size="compact"
+          toolbar={() => (
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <Typography.Title level={5} className="mb-0! text-gray-900">
+                  Guardrail Performance
+                </Typography.Title>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Click a guardrail to view details, logs, and configuration
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="default"
+                  icon={<SettingOutlined />}
+                  onClick={() => setEvaluationModalOpen(true)}
+                  title="Evaluation settings"
+                />
+              </div>
+            </div>
+          )}
         />
-      </Card>
+      </div>
 
       <EvaluationSettingsModal
         open={evaluationModalOpen}
