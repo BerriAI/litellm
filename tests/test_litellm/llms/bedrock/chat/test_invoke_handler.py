@@ -4,10 +4,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
+from litellm.litellm_core_utils.model_response_utils import is_model_response_stream_empty
 from litellm.llms.bedrock.chat.invoke_handler import (
     AWSEventStreamDecoder,
     make_call,
@@ -203,9 +202,26 @@ def test_bedrock_converse_streaming_consistent_id():
     expected_id = f"chatcmpl-{native_conversation_id}"
 
     for response in parsed_responses:
-        assert (
-            response.id == expected_id
-        ), "All chunk IDs must match the one captured from the messageStart event"
+        assert response.id == expected_id, "All chunk IDs must match the one captured from the messageStart event"
+
+
+def test_converse_metadata_chunk_is_empty_after_usage_is_stripped():
+    decoder = AWSEventStreamDecoder(model="test")
+
+    content_chunk = decoder.converse_chunk_parser({"delta": {"text": "Hello"}})
+    assert content_chunk.choices[0].delta.role == "assistant"
+
+    metadata_chunk = decoder.converse_chunk_parser(
+        {
+            "usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
+            "metrics": {"latencyMs": 100},
+        }
+    )
+    assert metadata_chunk.usage is not None
+    assert metadata_chunk.choices[0].delta.role is None
+
+    stripped_chunk = metadata_chunk.model_copy(update={"usage": None})
+    assert is_model_response_stream_empty(stripped_chunk)
 
 
 @pytest.mark.asyncio
@@ -292,4 +308,3 @@ def test_make_sync_call_honors_explicit_stream_chunk_size():
     )
 
     response.iter_bytes.assert_called_once_with(chunk_size=2048)
-

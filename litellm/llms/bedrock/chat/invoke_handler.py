@@ -565,6 +565,9 @@ class AWSEventStreamDecoder:
             if "trace" in chunk_data:
                 trace: Final = chunk_data.get("trace")
                 model_response_provider_specific_fields["trace"] = trace
+            is_content_event: Final = any(
+                key in chunk_data for key in ("role", "start", "delta", "contentBlockIndex", "stopReason")
+            )
             response: Final = ModelResponseStream(
                 choices=[
                     StreamingChoices(
@@ -572,7 +575,7 @@ class AWSEventStreamDecoder:
                         index=0,  # Always 0 - Bedrock never returns multiple choices
                         delta=Delta(
                             content=text,
-                            role="assistant",
+                            role="assistant" if is_content_event else None,
                             tool_calls=[tool_use] if tool_use else None,
                             provider_specific_fields=(provider_specific_fields if provider_specific_fields else None),
                             thinking_blocks=thinking_blocks,
