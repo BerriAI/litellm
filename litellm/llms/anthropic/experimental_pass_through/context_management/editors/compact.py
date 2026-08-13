@@ -158,11 +158,11 @@ async def _check_summary_model_access(
         return True
 
     key_models: Final = list(getattr(user_api_key_auth, "models", None) or [])
-    team_id: Final = user_api_key_auth.team_id
+    team_id: Final = getattr(user_api_key_auth, "team_id", None)
     team_model_aliases: Final = getattr(user_api_key_auth, "team_model_aliases", None)
     team_models: Final = list(getattr(user_api_key_auth, "team_models", None) or [])
-    user_id: Final = user_api_key_auth.user_id
-    project_id: Final = user_api_key_auth.project_id
+    user_id: Final = getattr(user_api_key_auth, "user_id", None)
+    project_id: Final = getattr(user_api_key_auth, "project_id", None)
 
     checks: Final[tuple[tuple[Literal["key", "team"], list[str]], ...]] = (
         ("key", key_models),
@@ -348,7 +348,7 @@ async def _check_summary_model_budget(
             return False
 
     end_user_model_max_budget: Final = getattr(user_api_key_auth, "end_user_model_max_budget", None)
-    end_user_id: Final = user_api_key_auth.end_user_id
+    end_user_id: Final = getattr(user_api_key_auth, "end_user_id", None)
     if isinstance(end_user_model_max_budget, dict) and end_user_model_max_budget and end_user_id is not None:
         try:
             await model_max_budget_limiter.is_end_user_within_model_budget(
