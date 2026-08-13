@@ -20,10 +20,18 @@ Design notes (intentional divergences from the framework defaults):
     directly for ``logging_only`` mode - it does NOT bridge to
     ``apply_guardrail``. Our override runs the scan non-blockingly and
     swallows every exception.
+  * When ``send_meta`` is enabled the scan payload carries a ``meta``
+    object identifying the calling virtual key. It is correlation data
+    for XecGuard's SIEM export only and never affects the verdict; the
+    backend's flat-scalar contract for it is enforced client-side so a
+    malformed key metadata entry cannot fail an otherwise valid scan.
 """
 
 import asyncio
+import json
 import os
+import re
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
@@ -39,6 +47,10 @@ from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
+)
+from litellm.proxy._types import (
+    LiteLLM_ManagementEndpoint_MetadataFields,
+    LiteLLM_ManagementEndpoint_MetadataFields_Premium,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -76,6 +88,70 @@ _DEFAULT_POLICIES: Final = [
     "Default_Policy_GeneralPromptAttackProtection",
 ]
 
+# ``meta`` contract of POST /xecguard/v1/scan: an optional object carrying caller
+# context that takes no part in detection. XecGuard flattens it into the SIEM
+# event (``virtualkey`` -> ``ctx_virtualkey``, ``data.X`` -> ``ctx_X``), and SIEM
+# index fields only accept flat scalars - anything else is rejected with 400. So
+# every value is coerced or dropped here rather than risking a scan failure.
+_METADATA_KEY_METADATA_FIELD: Final = "user_api_key_metadata"
+_META_NAME_PATTERN: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_.\-]{0,63}$")
+_META_CONTROL_CHARS: Final = re.compile(r"[\x00-\x1f\x7f]")
+_META_MAX_DATA_FIELDS: Final = 32
+_META_MAX_VALUE_CHARS: Final = 512
+_META_MAX_SERIALIZED_BYTES: Final = 4096
+# Never forwarded, and ``meta_data_fields`` cannot opt them back in: these slots
+# hold credentials, so there is no configuration under which shipping them to an
+# external SIEM is right.
+_META_EXCLUDED_DATA_FIELDS: Final = frozenset({"logging", "callback_settings", "secret_manager_settings"})
+
+# The proxy stores its own per-key control settings inside key metadata - rate
+# limits, budget knobs, enforced params, ``disable_global_guardrails``. They sit
+# in the same dict as the admin's own fields but they are proxy configuration,
+# not caller identity: noise in a SIEM, they eat the 32-field / 4096-byte budget,
+# and a couple of them describe the key's security posture. Skipped by default,
+# but an admin who explicitly names one in ``meta_data_fields`` gets it - unlike
+# the credential slots above, forwarding these is a judgement call, not a bug.
+#
+# Taken from the proxy's own lists rather than copied, so a field litellm adds
+# later is covered without an edit here.
+_META_CONTROL_DATA_FIELDS: Final = (
+    frozenset(LiteLLM_ManagementEndpoint_MetadataFields) | frozenset(LiteLLM_ManagementEndpoint_MetadataFields_Premium)
+) - _META_EXCLUDED_DATA_FIELDS
+
+# Two shapes for ``meta.virtualkey``. "string" is the identity as a bare string,
+# which is all the currently deployed backend accepts. "object" carries the alias
+# and the key id side by side, so a SIEM event is attributable even when the alias
+# is absent, renamed, or reused - it needs a backend that validates the object
+# form, hence the switch rather than a straight cutover.
+_META_IDENTITY_FORMATS: Final = ("string", "object")
+_DEFAULT_META_IDENTITY_FORMAT: Final = "string"
+
+# Virtual-key attributes the proxy injects alongside every request, forwarded as
+# ``meta.data`` so a SIEM event can be attributed without a lookup back into the
+# proxy database. Ordered: identity first, then tenancy, then commercials, so the
+# fields that survive the 32-field / 4096-byte caps are the ones worth keeping.
+#
+# This set deliberately includes PII (``user_email``) and commercial figures
+# (``spend``, ``max_budget``). Both leave the proxy only when ``send_meta`` is
+# explicitly enabled, and ``meta_data_fields`` narrows the set for deployments
+# that must not egress them.
+_META_AUTO_DATA_FIELDS: Final[tuple[tuple[str, str], ...]] = (
+    ("key_id", "user_api_key_hash"),
+    ("key_alias", "user_api_key_alias"),
+    ("team_id", "user_api_key_team_id"),
+    ("team_alias", "user_api_key_team_alias"),
+    ("user_id", "user_api_key_user_id"),
+    ("user_email", "user_api_key_user_email"),
+    ("org_id", "user_api_key_org_id"),
+    ("org_alias", "user_api_key_org_alias"),
+    ("project_id", "user_api_key_project_id"),
+    ("project_alias", "user_api_key_project_alias"),
+    ("end_user_id", "user_api_key_end_user_id"),
+    ("spend", "user_api_key_spend"),
+    ("max_budget", "user_api_key_max_budget"),
+    ("request_route", "user_api_key_request_route"),
+)
+
 
 class XecGuardMissingCredentials(Exception):
     pass
@@ -88,6 +164,11 @@ class XecGuardGuardrail(CustomGuardrail):
         api_base: str | None = None,
         xecguard_model: str | None = None,
         policy_names: list[str] | None = None,
+        apply_to_aliases: Sequence[str] | None = None,
+        except_aliases: Sequence[str] | None = None,
+        send_meta: bool | None = None,
+        meta_data_fields: Sequence[str] | None = None,
+        meta_identity_format: str | None = None,
         block_on_error: bool | None = None,
         grounding_strictness: str | None = None,
         **kwargs: Any,
@@ -105,6 +186,40 @@ class XecGuardGuardrail(CustomGuardrail):
 
         self.xecguard_model = xecguard_model or _DEFAULT_MODEL
         self.policy_names = policy_names
+        # Guardrail-side key targeting (free, OSS). Normalized to lists.
+        self.apply_to_aliases = apply_to_aliases or ()
+        self.except_aliases = except_aliases or ()
+
+        # Caller context forwarded as the scan payload's ``meta``. Opt-in: turning
+        # it on sends the calling key's alias and its admin-set metadata to
+        # XecGuard, which is a data-egress change no upgrade should make silently.
+        if send_meta is None:
+            self.send_meta = os.environ.get("XECGUARD_SEND_META", "false").lower() in (
+                "true",
+                "1",
+                "yes",
+            )
+        else:
+            self.send_meta = send_meta
+        self.meta_data_fields = tuple(meta_data_fields) if meta_data_fields else ()
+
+        # Wire shape of ``meta.virtualkey``. Defaults to the string form: a backend
+        # that only accepts strings answers the object form with 400, and with
+        # ``block_on_error`` on (the default) that turns every request into a block.
+        # An unknown value falls back rather than raising - a typo in the UI should
+        # not take the gateway down.
+        requested_format = (
+            (meta_identity_format or os.environ.get("XECGUARD_META_IDENTITY_FORMAT") or "").strip().lower()
+        )
+        if requested_format and requested_format not in _META_IDENTITY_FORMATS:
+            verbose_proxy_logger.warning(
+                "XecGuard: unknown meta_identity_format %r - falling back to %r (valid: %s)",
+                requested_format,
+                _DEFAULT_META_IDENTITY_FORMAT,
+                ", ".join(_META_IDENTITY_FORMATS),
+            )
+            requested_format = ""
+        self.meta_identity_format = requested_format or _DEFAULT_META_IDENTITY_FORMAT
 
         if block_on_error is None:
             env: Final = os.environ.get("XECGUARD_BLOCK_ON_ERROR", "true")
@@ -143,6 +258,92 @@ class XecGuardGuardrail(CustomGuardrail):
             GuardrailEventHooks.logging_only,
         ]
 
+    @staticmethod
+    def _calling_key_identity(
+        request_data: Mapping[str, Any] | None,
+    ) -> tuple[str | None, str | None]:
+        """Return (key_alias, key_hash) of the calling virtual key from the
+        proxy-injected request metadata. Both may be None (e.g. master key)."""
+        alias: str | None = None
+        key_hash: str | None = None
+        if isinstance(request_data, dict):
+            for meta_key in ("metadata", "litellm_metadata"):
+                md = request_data.get(meta_key)
+                if isinstance(md, dict):
+                    alias = alias or md.get("user_api_key_alias")
+                    key_hash = key_hash or md.get("user_api_key_hash")
+        return alias, key_hash
+
+    def _key_is_targeted(self, request_data: Mapping[str, Any] | None) -> bool:
+        """Guardrail-side key targeting. With no allow/block list configured,
+        every key is scanned. Otherwise the calling key is matched by alias
+        (preferred) or hashed token:
+          * blocklist (except_aliases): listed keys are NOT scanned;
+          * allowlist (apply_to_aliases): only listed keys are scanned.
+        When both are set, a key is scanned iff it is in the allowlist AND not
+        in the blocklist.
+        """
+        allowlist: Final = self.apply_to_aliases or ()
+        blocklist: Final = self.except_aliases or ()
+        if not allowlist and not blocklist:
+            return True
+
+        alias, key_hash = self._calling_key_identity(request_data)
+        identifiers: Final = tuple(ident for ident in (alias, key_hash) if ident)
+
+        # Deny wins, and it is checked first so that precedence stays visible
+        # rather than folded into the allowlist expression below.
+        if blocklist and any(ident in blocklist for ident in identifiers):
+            return False
+        if not allowlist:
+            return True
+        return any(ident in allowlist for ident in identifiers)
+
+    # Metadata fields the proxy injects to identify the calling virtual key.
+    _KEY_IDENTITY_FIELDS = ("user_api_key_alias", "user_api_key_hash")
+
+    @classmethod
+    def _key_context(cls, data: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+        """Return a mapping ``_calling_key_identity`` can read the key fields from.
+
+        That reader looks for top-level ``metadata`` / ``litellm_metadata``. On the
+        pre/during/post_call paths the proxy already puts the injected key fields
+        there, so ``data`` is handed back untouched -- reshaping to a single key would
+        drop the other location it also reads. Only the logging path needs help: there
+        ``data`` is ``model_call_details``, which carries the same fields one level
+        down under ``litellm_params``.
+        """
+        if not isinstance(data, dict):
+            return data
+        for meta_key in ("metadata", "litellm_metadata"):
+            md = data.get(meta_key)
+            if isinstance(md, dict) and any(field in md for field in cls._KEY_IDENTITY_FIELDS):
+                return data
+        nested = data.get("litellm_params")
+        if isinstance(nested, dict):
+            for meta_key in ("metadata", "litellm_metadata"):
+                md = nested.get(meta_key)
+                if isinstance(md, dict):
+                    return {meta_key: md}  # mutable-ok: lifts nested metadata to the readers' shape
+        return data
+
+    def should_run_guardrail(self, data: Mapping[str, object], event_type: GuardrailEventHooks) -> bool:
+        """Gate on the calling virtual key in addition to the native checks.
+
+        Deciding here rather than inside ``apply_guardrail`` is what makes LiteLLM
+        record the guardrail as not having run for a key this guardrail does not
+        cover, instead of logging a "success"/"allow" entry for a request it never
+        evaluated. ``super()`` is consulted first so the native decisions -- global
+        opt-outs, event-hook matching, tag-based modes -- keep precedence.
+
+        The gates are still enforced inside ``apply_guardrail`` and
+        ``async_logging_hook`` as well: ``POST /guardrails/apply_guardrail`` invokes
+        ``apply_guardrail`` directly and never reaches this method.
+        """
+        if not super().should_run_guardrail(data, event_type):
+            return False
+        return self._key_is_targeted(self._key_context(data))
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -151,6 +352,13 @@ class XecGuardGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
+        # Guardrail-side key targeting (allowlist / blocklist by key alias):
+        # skip scanning entirely for keys this guardrail does not cover.
+        # should_run_guardrail already gates the proxy's own dispatch paths; this
+        # also covers POST /guardrails/apply_guardrail, which calls straight in.
+        if not self._key_is_targeted(self._key_context(request_data)):
+            return inputs
+
         messages: Final = self._build_full_history(
             request_data=request_data,
             inputs=inputs,
@@ -160,7 +368,11 @@ class XecGuardGuardrail(CustomGuardrail):
             return inputs
 
         scan_type: Final = "input" if input_type == "request" else "response"
-        scan_result: Final = await self._call_scan(messages=messages, scan_type=scan_type)
+        scan_result: Final = await self._call_scan(
+            messages=messages,
+            scan_type=scan_type,
+            request_data=request_data,
+        )
         if scan_result is None:
             return inputs
 
@@ -214,6 +426,12 @@ class XecGuardGuardrail(CustomGuardrail):
         ):
             return kwargs, result
 
+        # Same key targeting as apply_guardrail. logging_only reaches the guardrail
+        # through this hook rather than apply_guardrail, so the gate is repeated here;
+        # without it an excluded key's content would still be sent to XecGuard.
+        if not self._key_is_targeted(self._key_context(kwargs)):
+            return kwargs, result
+
         start_time: Final = datetime.now()
         try:
             assistant_text: Final = self._extract_assistant_text_from_response(result)
@@ -240,6 +458,7 @@ class XecGuardGuardrail(CustomGuardrail):
             scan_result: Final = await self._call_scan(
                 messages=messages,
                 scan_type=scan_type,
+                request_data=request_data,
                 suppress_errors=True,
             )
             if scan_result is None:
@@ -301,6 +520,200 @@ class XecGuardGuardrail(CustomGuardrail):
         return kwargs, result
 
     # ------------------------------------------------------------------
+    # Caller context (scan payload ``meta``) - SIEM correlation only
+    # ------------------------------------------------------------------
+
+    def _build_scan_meta(self, context: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+        """Assemble the scan payload's ``meta`` object, or None to omit it.
+
+        ``virtualkey`` is the identity this guardrail filtered on and ``data`` is
+        the calling key's proxy-injected attributes plus its own metadata as set on
+        the Virtual Keys page. Neither participates in detection - XecGuard forwards
+        them to the SIEM so a scan can be traced back to the virtual key that caused
+        it.
+
+        ``meta`` is optional in the contract, so anything that cannot be made to
+        satisfy it is left out instead of turning a scan into a 400.
+        """
+        if not self.send_meta:
+            return None
+
+        virtualkey: str | Mapping[str, str] | None
+        if self.meta_identity_format == "object":
+            virtualkey = self._scan_meta_virtualkey_object(context)
+        else:
+            virtualkey = self._scan_meta_virtualkey(context)
+        if not virtualkey:
+            verbose_proxy_logger.debug(
+                "XecGuard: omitting scan meta - the calling key has no alias or hash matching the "
+                "backend's virtualkey pattern (give the key a key_alias to enable SIEM correlation)"
+            )
+            return None
+
+        meta: dict[str, Any] = {"virtualkey": virtualkey}  # mutable-ok: the JSON object being assembled
+        data = self._build_scan_meta_data(context, virtualkey=virtualkey)
+        if data:
+            meta["data"] = data
+        return meta
+
+    def _scan_meta_virtualkey(self, context: Mapping[str, Any] | None) -> str | None:
+        """The key identity to report, or None when there is no usable one.
+
+        Alias first: that is what an operator types into ``apply_to_aliases`` /
+        ``except_aliases``, so the value in the SIEM matches the value in the
+        guardrail config. The hashed token is the fallback for keys created
+        without an alias; a master-key call has neither. Note that the token
+        hash only satisfies the backend's pattern when it happens to start with
+        a hex letter - aliasless keys are not reliably correlatable.
+        """
+        for candidate in self._calling_key_identity(context):
+            if isinstance(candidate, str) and _META_NAME_PATTERN.match(candidate):
+                return candidate
+        return None
+
+    def _scan_meta_virtualkey_object(self, context: Mapping[str, Any] | None) -> Mapping[str, str] | None:
+        """The object form of ``virtualkey``: ``{"alias": ..., "key_id": ...}``.
+
+        Either member may be absent - a key created without an alias has only an
+        id, and a master-key call has neither (in which case ``meta`` is omitted).
+        Unlike the string form this does not require the alias to satisfy the
+        backend's identifier pattern: the pattern exists because a bare string
+        becomes a SIEM field *value* directly, whereas here each member is
+        sanitized the same way ``meta.data`` values are. That makes keys whose
+        alias contains spaces or CJK correlatable, which the string form cannot do.
+        """
+        alias, key_hash = self._calling_key_identity(context)
+        obj: dict[str, str] = {}  # mutable-ok: the JSON object being assembled
+        for name, raw in (("alias", alias), ("key_id", key_hash)):
+            value = self._coerce_meta_value(raw)
+            if value is not None:
+                obj[name] = value
+        return obj or None
+
+    @staticmethod
+    def _calling_key_metadata(context: Mapping[str, Any] | None) -> Mapping[object, Any]:
+        """The calling virtual key's own metadata, as injected by the proxy.
+
+        This is the JSON an admin typed into the key's Metadata box on the
+        Virtual Keys page (minus the callback-credential slots, which the proxy
+        strips before injecting). Team metadata is deliberately not merged in:
+        ``meta.data`` is meant to describe the key that made the call.
+
+        The key type is ``object``, not ``str``: nothing between the database and
+        here validates it, and the caller drops a non-str key rather than letting
+        it reach ``re.match`` and raise. Narrowing this to ``str`` would make that
+        guard look redundant to a type checker and invite its removal.
+        """
+        if not isinstance(context, dict):
+            return {}  # mutable-ok: "this key has no metadata"; the caller only reads it
+        for meta_key in ("metadata", "litellm_metadata"):
+            md = context.get(meta_key)
+            if isinstance(md, dict):
+                key_metadata = md.get(_METADATA_KEY_METADATA_FIELD)
+                if isinstance(key_metadata, dict):
+                    return key_metadata
+        return {}  # mutable-ok: same empty result, no metadata field was injected
+
+    @classmethod
+    def _auto_meta_data_items(cls, context: Mapping[str, Any] | None) -> tuple[tuple[str, Any], ...]:
+        """The proxy-injected virtual-key attributes, in ``_META_AUTO_DATA_FIELDS``
+        order regardless of how the proxy ordered its metadata dict.
+
+        Absent and null fields are skipped, so a key with no team contributes no
+        ``team_id`` rather than an empty one - a SIEM query for "scans with no
+        team" then means it, instead of matching every key.
+        """
+        injected: dict[str, Any] = {}  # mutable-ok: accumulator keyed by meta.data name
+        if isinstance(context, dict):
+            for meta_key in ("metadata", "litellm_metadata"):
+                md = context.get(meta_key)
+                if not isinstance(md, dict):
+                    continue
+                for name, source_field in _META_AUTO_DATA_FIELDS:
+                    if name not in injected and md.get(source_field) is not None:
+                        injected[name] = md[source_field]
+        return tuple((name, injected[name]) for name, _ in _META_AUTO_DATA_FIELDS if name in injected)
+
+    def _build_scan_meta_data(
+        self, context: Mapping[str, Any] | None, virtualkey: str | Mapping[str, str]
+    ) -> Mapping[str, str]:
+        """Coerce the calling key's attributes and metadata into ``meta.data``.
+
+        Two sources, in this order: the attributes the proxy injects about the
+        calling key (identity, tenancy, budget), then the free-form metadata an
+        admin typed into the key's Metadata box. Proxy-injected attributes go
+        first and win a name collision, so an admin cannot shadow ``key_id`` with
+        a field of their own and mislead an investigation.
+
+        Fields are kept while they satisfy the contract: a name matching the
+        backend's pattern, a flat scalar value, at most 32 fields, and a
+        serialized ``meta`` within the 4096-byte cap. Oversize fields are skipped
+        rather than ending the scan, so a later small field still gets through.
+        Dropped names are logged without their values - both sources can hold
+        sensitive strings.
+        """
+        source = self._calling_key_metadata(context)
+        data: dict[str, str] = {}  # mutable-ok: accumulator, re-measured as it grows
+        # Re-measured against the real payload shape each time, so the cap holds
+        # regardless of how long the virtualkey and the field names are.
+        probe: dict[str, Any] = {"virtualkey": virtualkey, "data": data}  # mutable-ok: views `data`
+        dropped: list[str] = []  # mutable-ok: skipped field names, for one debug line
+
+        for name, raw_value in (*self._auto_meta_data_items(context), *source.items()):
+            if self.meta_data_fields:
+                if name not in self.meta_data_fields:
+                    continue
+            elif name in _META_CONTROL_DATA_FIELDS:
+                # proxy config rather than caller identity - opt in by name
+                continue
+            if name in _META_EXCLUDED_DATA_FIELDS:
+                continue
+            if name in data:  # a proxy-injected attribute already claimed this name
+                dropped.append(str(name))
+                continue
+            if not isinstance(name, str) or not _META_NAME_PATTERN.match(name):
+                dropped.append(str(name))
+                continue
+            if len(data) >= _META_MAX_DATA_FIELDS:
+                dropped.append(name)
+                continue
+            value = self._coerce_meta_value(raw_value)
+            if value is None:
+                dropped.append(name)
+                continue
+            data[name] = value
+            if len(json.dumps(probe, ensure_ascii=False).encode("utf-8")) > _META_MAX_SERIALIZED_BYTES:
+                del data[name]
+                dropped.append(name)
+
+        if dropped:
+            verbose_proxy_logger.debug(
+                "XecGuard: scan meta.data dropped %d field(s) (names only): %s",
+                len(dropped),
+                dropped,
+            )
+        return data
+
+    @staticmethod
+    def _coerce_meta_value(value: object) -> str | None:
+        """Coerce one key-metadata value to the contract, or None to drop it.
+
+        Scalars are stringified so an admin writing ``{"tier": 3}`` still gets a
+        usable ``ctx_tier``. Nested objects and lists have no flat representation
+        a SIEM index field can hold, so they are dropped.
+        """
+        if isinstance(value, bool):
+            text = "true" if value else "false"
+        elif isinstance(value, str):
+            text = value
+        elif isinstance(value, (int, float)):
+            text = str(value)
+        else:
+            return None
+        text = _META_CONTROL_CHARS.sub("", text)[:_META_MAX_VALUE_CHARS]
+        return text or None
+
+    # ------------------------------------------------------------------
     # HTTP helpers
     # ------------------------------------------------------------------
 
@@ -308,6 +721,7 @@ class XecGuardGuardrail(CustomGuardrail):
         self,
         messages: list[dict],
         scan_type: str,
+        request_data: Mapping[str, Any] | None = None,
         suppress_errors: bool = False,
     ) -> dict | None:
         payload: Final[dict[str, Any]] = {
@@ -316,6 +730,9 @@ class XecGuardGuardrail(CustomGuardrail):
             "messages": messages,
             "policy_names": (self.policy_names if self.policy_names else _DEFAULT_POLICIES),
         }
+        meta = self._build_scan_meta(self._key_context(request_data))
+        if meta is not None:
+            payload["meta"] = meta
         return await self._post(
             path=_SCAN_ENDPOINT,
             payload=payload,

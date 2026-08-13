@@ -19,6 +19,11 @@ def initialize_guardrail(
         api_key=litellm_params.api_key,
         xecguard_model=litellm_params.xecguard_model,
         policy_names=litellm_params.policy_names,
+        apply_to_aliases=litellm_params.apply_to_aliases,
+        except_aliases=litellm_params.except_aliases,
+        send_meta=litellm_params.send_meta,
+        meta_data_fields=litellm_params.meta_data_fields,
+        meta_identity_format=litellm_params.meta_identity_format,
         block_on_error=litellm_params.block_on_error,
         grounding_strictness=litellm_params.grounding_strictness,
         guardrail_name=guardrail.get(
