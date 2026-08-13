@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -53,10 +53,10 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
         - response_format -> output_format (jpeg or png)
         - size -> aspect_ratio (21:9, 16:9, 4:3, 3:2, 1:1, 2:3, 3:4, 9:16, 9:21)
         """
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
 
         # Map OpenAI params to Flux Pro v1.1-ultra params
-        param_mapping = {
+        param_mapping: Final = {
             "n": "num_images",
             "response_format": "output_format",
             "size": "aspect_ratio",
@@ -98,7 +98,7 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
         Default: "16:9"
         """
         # Map common OpenAI sizes to Flux aspect ratios
-        size_to_aspect_ratio = {
+        size_to_aspect_ratio: Final = {
             "1024x1024": "1:1",
             "512x512": "1:1",
             "1792x1024": "16:9",
@@ -118,11 +118,11 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
         if "x" in size:
             try:
                 width_str, height_str = size.split("x")
-                width = int(width_str)
-                height = int(height_str)
+                width: Final = int(width_str)
+                height: Final = int(height_str)
 
                 # Calculate aspect ratio and find closest match
-                ratio = width / height
+                ratio: Final = width / height
 
                 # Map to closest supported aspect ratio
                 if 0.95 <= ratio <= 1.05:  # Close to 1:1
@@ -176,7 +176,7 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
         - image_prompt_strength: Strength of image prompt 0-1 (default: 0.1)
         - enhance_prompt: Enhance prompt for better results (default: false)
         """
-        flux_pro_request_body = {
+        flux_pro_request_body: Final = {
             "prompt": prompt,
             **optional_params,
         }
@@ -216,7 +216,7 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
         }
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -228,7 +228,7 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
             model_response.data = []
 
         # Handle Flux Pro v1.1-ultra response format
-        images = response_data.get("images", [])
+        images: Final = response_data.get("images", [])
         if isinstance(images, list):
             for image_data in images:
                 if isinstance(image_data, dict):

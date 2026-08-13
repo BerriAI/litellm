@@ -3,10 +3,7 @@ Handler for transforming interactions API requests to litellm.responses requests
 """
 
 from collections.abc import AsyncIterator, Coroutine, Iterator
-from typing import (
-    Any,
-    cast,
-)
+from typing import Any, Final, cast
 
 import litellm
 from litellm.interactions.litellm_responses_transformation.streaming_iterator import (
@@ -79,7 +76,7 @@ class LiteLLMResponsesInteractionsHandler:
         # Call litellm.responses()
         # Note: litellm.responses() returns Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]
         # but the type checker may see it as a coroutine in some contexts
-        responses_response = litellm.responses(
+        responses_response: Final = litellm.responses(
             **responses_request,
         )
 
@@ -96,7 +93,7 @@ class LiteLLMResponsesInteractionsHandler:
 
         # At this point, responses_response must be ResponsesAPIResponse (not streaming)
         # Cast to satisfy type checker since we've already checked it's not a streaming iterator
-        responses_api_response = cast(ResponsesAPIResponse, responses_response)
+        responses_api_response: Final = cast(ResponsesAPIResponse, responses_response)
 
         # Transform responses response to interactions response
         return LiteLLMResponsesInteractionsConfig.transform_responses_response_to_interactions_response(
@@ -115,7 +112,7 @@ class LiteLLMResponsesInteractionsHandler:
         """Async handler for interactions API requests."""
         # Call litellm.aresponses()
         # Note: litellm.aresponses() returns Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]
-        responses_response = await litellm.aresponses(
+        responses_response: Final = await litellm.aresponses(
             **responses_request,
         )
 
@@ -132,7 +129,7 @@ class LiteLLMResponsesInteractionsHandler:
 
         # At this point, responses_response must be ResponsesAPIResponse (not streaming)
         # Cast to satisfy type checker since we've already checked it's not a streaming iterator
-        responses_api_response = cast(ResponsesAPIResponse, responses_response)
+        responses_api_response: Final = cast(ResponsesAPIResponse, responses_response)
 
         # Transform responses response to interactions response
         return LiteLLMResponsesInteractionsConfig.transform_responses_response_to_interactions_response(

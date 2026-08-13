@@ -16,7 +16,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple
 
 import httpx
 
@@ -46,22 +46,22 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
-BLOCKED_BY_OVALIX_FALLBACK_MESSAGE = "This message was blocked by Ovalix"
-BLOCKED_ACTION_TYPE = "block"
-_MODIFY_ACTION_TYPES = ("anonymize", "sanitize")
-_APPLICATION_NOT_FOUND_STATUS = 404
-_ROUTING_CACHE_TTL_SECONDS = 3600
-_ROUTING_CACHE_NEGATIVE_TTL_SECONDS = 300
-_ROUTING_CACHE_MAX_SIZE = 1000
-_DEFAULT_FILE_SIZE_LIMIT = 64 * 1024 * 1024
-_NO_METADATA: Mapping[str, Any] = MappingProxyType({})
-_FILE_BLOCK_ESCALATION_REASON = (
+BLOCKED_BY_OVALIX_FALLBACK_MESSAGE: Final = "This message was blocked by Ovalix"
+BLOCKED_ACTION_TYPE: Final = "block"
+_MODIFY_ACTION_TYPES: Final = ("anonymize", "sanitize")
+_APPLICATION_NOT_FOUND_STATUS: Final = 404
+_ROUTING_CACHE_TTL_SECONDS: Final = 3600
+_ROUTING_CACHE_NEGATIVE_TTL_SECONDS: Final = 300
+_ROUTING_CACHE_MAX_SIZE: Final = 1000
+_DEFAULT_FILE_SIZE_LIMIT: Final = 64 * 1024 * 1024
+_NO_METADATA: Final[Mapping[str, Any]] = MappingProxyType({})
+_FILE_BLOCK_ESCALATION_REASON: Final = (
     "This message was blocked by Ovalix because file content anonymization isn't possible via LiteLLM"
 )
-_TOOL_BLOCK_ESCALATION_REASON = (
+_TOOL_BLOCK_ESCALATION_REASON: Final = (
     "This message was blocked by Ovalix because tool call anonymization isn't possible via LiteLLM"
 )
-_TOOL_RESULT_BLOCK_ESCALATION_REASON = (
+_TOOL_RESULT_BLOCK_ESCALATION_REASON: Final = (
     "This message was blocked by Ovalix because tool result anonymization isn't possible via LiteLLM"
 )
 
@@ -167,15 +167,15 @@ class OvalixGuardrail(CustomGuardrail):
         self._pre_checkpoint_id = pre_checkpoint_id or os.environ.get("OVALIX_PRE_CHECKPOINT_ID")
         self._post_checkpoint_id = post_checkpoint_id or os.environ.get("OVALIX_POST_CHECKPOINT_ID")
         self._file_checkpoint_id = file_checkpoint_id or os.environ.get("OVALIX_FILE_CHECKPOINT_ID")
-        env_enable_routing_cache = os.environ.get("OVALIX_ENABLE_ROUTING_CACHE")
-        resolved_enable_routing_cache = (
+        env_enable_routing_cache: Final = os.environ.get("OVALIX_ENABLE_ROUTING_CACHE")
+        resolved_enable_routing_cache: Final = (
             enable_routing_cache if enable_routing_cache is not None else env_enable_routing_cache
         )
         self._enable_routing_cache = (
             True if resolved_enable_routing_cache is None else _coerce_bool(resolved_enable_routing_cache)
         )
-        env_fail_if_no_application = os.environ.get("OVALIX_FAIL_IF_NO_APPLICATION")
-        resolved_fail_if_no_application = (
+        env_fail_if_no_application: Final = os.environ.get("OVALIX_FAIL_IF_NO_APPLICATION")
+        resolved_fail_if_no_application: Final = (
             fail_if_no_application if fail_if_no_application is not None else env_fail_if_no_application
         )
         self._fail_if_no_application = (
@@ -184,10 +184,9 @@ class OvalixGuardrail(CustomGuardrail):
         self._routing_cache: OrderedDict[str, tuple[float, ResolvedRouting | None]] = OrderedDict()
         self._app_name_regex: re.Pattern[str] | None = None
 
-        if "supported_event_hooks" not in kwargs:
-            kwargs["supported_event_hooks"] = []
+        supported_event_hooks: Final[list[GuardrailEventHooks]] = list(kwargs.get("supported_event_hooks") or ())
 
-        self._validate_config(kwargs["supported_event_hooks"])
+        self._validate_config(supported_event_hooks)
 
         self._tracker_headers = dict(
             httpx.Headers(
@@ -204,7 +203,7 @@ class OvalixGuardrail(CustomGuardrail):
 
         self._async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
-        super().__init__(**kwargs)
+        super().__init__(**{**kwargs, "supported_event_hooks": supported_event_hooks})
         verbose_proxy_logger.debug(
             "Ovalix Guardrail initialized: tracker=%s, application_id=%s, pre_checkpoint_id=%s, post_checkpoint_id=%s",
             self._tracker_api_base,
@@ -215,7 +214,7 @@ class OvalixGuardrail(CustomGuardrail):
 
     def _validate_config(self, supported_event_hooks: list[GuardrailEventHooks]) -> None:
         """Ensure required Tracker secrets are set; register the pre/post hooks this config can serve (both in discovery mode; only configured-checkpoint directions in static mode)."""
-        errors = tuple(
+        errors: Final = tuple(
             message
             for present, message in (
                 (not self._tracker_api_base, "Tracker API base, set OVALIX_TRACKER_API_BASE or pass tracker_api_base"),
@@ -231,8 +230,8 @@ class OvalixGuardrail(CustomGuardrail):
         if errors:
             raise OvalixGuardrailMissingSecrets("Missing Ovalix guardrail configuration errors: " + ". ".join(errors))
 
-        supports_pre = not self._application_id or bool(self._pre_checkpoint_id)
-        supports_post = not self._application_id or bool(self._post_checkpoint_id)
+        supports_pre: Final = not self._application_id or bool(self._pre_checkpoint_id)
+        supports_post: Final = not self._application_id or bool(self._post_checkpoint_id)
         if supports_pre and GuardrailEventHooks.pre_call not in supported_event_hooks:
             supported_event_hooks.append(GuardrailEventHooks.pre_call)
         if supports_post and GuardrailEventHooks.post_call not in supported_event_hooks:
@@ -240,7 +239,7 @@ class OvalixGuardrail(CustomGuardrail):
 
     def _get_actor(self, data: Mapping[str, Any]) -> str:
         """Return a stable actor identifier from request metadata (e.g. user email or id)."""
-        metadata = data.get("metadata") or data.get("litellm_metadata") or _NO_METADATA
+        metadata: Final = data.get("metadata") or data.get("litellm_metadata") or _NO_METADATA
         if metadata.get("user_api_key_user_email"):
             return metadata["user_api_key_user_email"]
         if metadata.get("user_api_key_user_id"):
@@ -253,8 +252,8 @@ class OvalixGuardrail(CustomGuardrail):
         # string (email, user id, or empty) into a compact, fixed-length, consistent
         # key. It is not a privacy/security measure and the actor value is not sensitive,
         # so a plain SHA-256 (truncated) is sufficient; no salting/KDF is needed here.
-        actor_id = self._get_actor(data).encode()
-        normalized_actor_id = hashlib.sha256(actor_id).hexdigest()[:8]
+        actor_id: Final = self._get_actor(data).encode()
+        normalized_actor_id: Final = hashlib.sha256(actor_id).hexdigest()[:8]
         return normalized_actor_id
 
     def _get_session_id(self, data: Mapping[str, Any]) -> str:
@@ -280,13 +279,13 @@ class OvalixGuardrail(CustomGuardrail):
         if not target.application_name and (not target.application_id or not checkpoint_id):
             raise ValueError("Ovalix: application_id or checkpoint_id not resolved")
 
-        route = "file_checkpoint" if data_type == "FILE" else "checkpoint"
-        routing = (
+        route: Final = "file_checkpoint" if data_type == "FILE" else "checkpoint"
+        routing: Final = (
             {"application_name": target.application_name, "input_type": target.input_type}
             if target.application_name
             else {"application_id": target.application_id, "checkpoint_id": checkpoint_id}
         )
-        payload = {
+        payload: Final = {
             "actor": actor,
             "session_id": session_id,
             "data_type": data_type,
@@ -294,7 +293,7 @@ class OvalixGuardrail(CustomGuardrail):
             "tool": "LiteLLM",
             **routing,
         }
-        response = await self._async_handler.post(
+        response: Final = await self._async_handler.post(
             f"{self._tracker_api_base}/tracking/beta/{route}", headers=self._tracker_headers, json=payload
         )
         response.raise_for_status()
@@ -314,12 +313,12 @@ class OvalixGuardrail(CustomGuardrail):
         escalation_reason: str,
     ) -> str | None:
         try:
-            resp = await self._call_checkpoint(data_type, data, checkpoint_id, actor, session_id, target)
+            resp: Final = await self._call_checkpoint(data_type, data, checkpoint_id, actor, session_id, target)
         except Exception as e:
             verbose_proxy_logger.exception("Ovalix checkpoint call failed: %s", e)
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name,
-                message=f"Ovalix guardrail error: {e!s}",
+                message=f"Ovalix guardrail error: {e}",
                 should_wrap_with_default_message=False,
             ) from e
         action, corrected = self._verdict(resp)
@@ -371,20 +370,20 @@ class OvalixGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Any | None = None,
     ) -> GenericGuardrailAPIInputs:
-        routing = await self._resolve_routing(request_data)
+        routing: Final = await self._resolve_routing(request_data)
         if routing is None:
             return inputs
-        actor = self._get_actor(request_data)
-        session_id = self._get_session_id_for_application(request_data, routing.application_id)
-        is_response = input_type == "response"
-        target = CheckpointTarget(
+        actor: Final = self._get_actor(request_data)
+        session_id: Final = self._get_session_id_for_application(request_data, routing.application_id)
+        is_response: Final = input_type == "response"
+        target: Final = CheckpointTarget(
             application_id=routing.application_id,
             input_type=input_type,
             application_name=await self._checkpoint_routing_name(request_data),
         )
 
-        prompt_checkpoint = routing.checkpoint_id_post if is_response else routing.checkpoint_id_pre
-        file_checkpoint = (
+        prompt_checkpoint: Final = routing.checkpoint_id_post if is_response else routing.checkpoint_id_pre
+        file_checkpoint: Final = (
             routing.checkpoint_id_post_file if is_response else routing.checkpoint_id_pre_file
         ) or prompt_checkpoint
         if not routing.has_any_checkpoint:
@@ -401,13 +400,13 @@ class OvalixGuardrail(CustomGuardrail):
             )
             return inputs
 
-        structured_messages = inputs.get("structured_messages") or ()
-        file_parts = (
+        structured_messages: Final = inputs.get("structured_messages") or ()
+        file_parts: Final = (
             extract_file_parts_from_images(inputs.get("images"), size_limit=_DEFAULT_FILE_SIZE_LIMIT)
             if is_response
             else extract_file_parts_from_messages(structured_messages, size_limit=_DEFAULT_FILE_SIZE_LIMIT)
         )
-        file_block = await self._check_files_for_block(file_parts, file_checkpoint, actor, session_id, target)
+        file_block: Final = await self._check_files_for_block(file_parts, file_checkpoint, actor, session_id, target)
         if file_block is not None:
             self._block_current_message(file_block)
 
@@ -419,10 +418,10 @@ class OvalixGuardrail(CustomGuardrail):
             )
             return inputs
 
-        tool_call_items = tuple(
+        tool_call_items: Final = tuple(
             ("TOOL", td) for td in (tool_call_to_tool_data(tc) for tc in (inputs.get("tool_calls") or ())) if td
         )
-        tool_block = await self._check_items_block_only(
+        tool_block: Final = await self._check_items_block_only(
             tool_call_items,
             prompt_checkpoint,
             actor,
@@ -433,9 +432,9 @@ class OvalixGuardrail(CustomGuardrail):
         if tool_block is not None:
             self._block_current_message(tool_block)
 
-        tool_results = extract_tool_results(structured_messages)
-        tool_result_items = tuple(("TOOL", make_tool_data(name, content)) for name, content, _ in tool_results)
-        tool_result_block = await self._check_items_block_only(
+        tool_results: Final = extract_tool_results(structured_messages)
+        tool_result_items: Final = tuple(("TOOL", make_tool_data(name, content)) for name, content, _ in tool_results)
+        tool_result_block: Final = await self._check_items_block_only(
             tool_result_items,
             prompt_checkpoint,
             actor,
@@ -446,10 +445,10 @@ class OvalixGuardrail(CustomGuardrail):
         if tool_result_block is not None:
             self._block_current_message(tool_result_block)
 
-        texts = inputs.get("texts") or ()
-        if not texts or not isinstance(texts, list):
+        texts: Final = inputs.get("texts") or ()
+        if not texts:
             return inputs
-        output_texts = await self._check_texts(
+        output_texts: Final = await self._check_texts(
             texts,
             prompt_checkpoint,
             actor,
@@ -462,9 +461,9 @@ class OvalixGuardrail(CustomGuardrail):
         return {**inputs, "texts": output_texts}
 
     async def _file_part_to_data(self, part: FilePart) -> Mapping[str, Any]:
-        extension = mimetypes.guess_extension(part.mime_hint) if part.mime_hint else None
-        name = part.name or (f"file{extension}" if extension else "file")
-        content = (
+        extension: Final = mimetypes.guess_extension(part.mime_hint) if part.mime_hint else None
+        name: Final = part.name or (f"file{extension}" if extension else "file")
+        content: Final = (
             await asyncio.get_event_loop().run_in_executor(None, _encode_file_wire_format, part.data)
             if part.data
             else None
@@ -480,9 +479,9 @@ class OvalixGuardrail(CustomGuardrail):
         target: CheckpointTarget,
         skip_indices: frozenset[int],
     ) -> list[str] | None:
-        output = list(texts)
-        changed = False
-        count = len(texts)
+        original: Final = tuple(texts)
+        output: Final = list(texts)
+        count: Final = len(texts)
         for reversed_index in range(count):
             original_index = count - 1 - reversed_index
             if original_index in skip_indices:
@@ -497,7 +496,7 @@ class OvalixGuardrail(CustomGuardrail):
                 verbose_proxy_logger.exception("Ovalix checkpoint call failed: %s", e)
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
-                    message=f"Ovalix guardrail error: {e!s}",
+                    message=f"Ovalix guardrail error: {e}",
                     should_wrap_with_default_message=False,
                 ) from e
             action, corrected = self._verdict(resp)
@@ -505,18 +504,15 @@ class OvalixGuardrail(CustomGuardrail):
                 block_message = corrected or BLOCKED_BY_OVALIX_FALLBACK_MESSAGE
                 if is_newest:
                     self._block_current_message(block_message)
-                if output[original_index] != block_message:
-                    changed = True
                 output[original_index] = block_message
                 continue
             if action in _MODIFY_ACTION_TYPES and corrected is not None and corrected != content:
-                changed = True
                 output[original_index] = corrected
-        return output if changed else None
+        return output if tuple(output) != original else None
 
     def _get_session_id_for_application(self, data: Mapping[str, Any], application_id: str | None) -> str:
-        actor_hash = self._get_tracker_actor_id(data)
-        today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        actor_hash: Final = self._get_tracker_actor_id(data)
+        today: Final = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         return f"{actor_hash}_{today}_{application_id}"
 
     def _block_current_message(self, blocking_message: str) -> None:
@@ -529,48 +525,48 @@ class OvalixGuardrail(CustomGuardrail):
 
     def _get_trackers_corrected_message(self, resp: Mapping[str, Any]) -> str | None:
         """Extract corrected/blocking message content from Tracker checkpoint response."""
-        modified = resp.get("modified_data")
+        modified: Final = resp.get("modified_data")
         if isinstance(modified, dict) and "content" in modified:
             return modified["content"]
         return None
 
     def _get_key_alias(self, request_data: Mapping[str, Any]) -> str | None:
-        litellm_metadata = request_data.get("litellm_metadata") or _NO_METADATA
-        metadata = request_data.get("metadata") or _NO_METADATA
+        litellm_metadata: Final = request_data.get("litellm_metadata") or _NO_METADATA
+        metadata: Final = request_data.get("metadata") or _NO_METADATA
 
         def _merged(key: str) -> object:
             return litellm_metadata.get(key) if key in litellm_metadata else metadata.get(key)
 
-        alias = _merged("user_api_key_alias") or _merged("user_api_key_key_alias")
+        alias: Final = _merged("user_api_key_alias") or _merged("user_api_key_key_alias")
         return alias if isinstance(alias, str) else None
 
     async def _get_app_name_regex(self) -> re.Pattern[str]:
         if self._app_name_regex is not None:
             return self._app_name_regex
-        url = f"{self._tracker_api_base}/tracking/beta/app_name_regex"
+        url: Final = f"{self._tracker_api_base}/tracking/beta/app_name_regex"
         try:
-            response = await self._async_handler.get(url, headers=self._tracker_headers)
+            response: Final = await self._async_handler.get(url, headers=self._tracker_headers)
             response.raise_for_status()
-            compiled = re.compile(response.json()["regex"])
+            compiled: Final = re.compile(response.json()["regex"])
         except Exception as e:
             verbose_proxy_logger.exception("Ovalix app-name regex fetch failed: %s", e)
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name,
-                message=f"Ovalix guardrail error: app-name regex fetch failed: {e!s}",
+                message=f"Ovalix guardrail error: app-name regex fetch failed: {e}",
                 should_wrap_with_default_message=False,
             ) from e
         self._app_name_regex = compiled
         return compiled
 
     def _extract_application_name(self, alias: str, regex: re.Pattern[str]) -> str | None:
-        match = regex.search(alias)
+        match: Final = regex.search(alias)
         if not match:
             return None
-        name = (match.group(1) if match.groups() else match.group(0)).strip()
+        name: Final = (match.group(1) if match.groups() else match.group(0)).strip()
         return name or None
 
     def _routing_cache_get(self, name: str) -> tuple[bool, ResolvedRouting | None]:
-        entry = self._routing_cache.get(name)
+        entry: Final = self._routing_cache.get(name)
         if entry is None:
             return False, None
         expires_at, routing = entry
@@ -581,7 +577,7 @@ class OvalixGuardrail(CustomGuardrail):
         return True, routing
 
     def _routing_cache_put(self, name: str, routing: ResolvedRouting | None) -> None:
-        ttl = _ROUTING_CACHE_TTL_SECONDS if routing is not None else _ROUTING_CACHE_NEGATIVE_TTL_SECONDS
+        ttl: Final = _ROUTING_CACHE_TTL_SECONDS if routing is not None else _ROUTING_CACHE_NEGATIVE_TTL_SECONDS
         self._routing_cache[name] = (time.monotonic() + ttl, routing)
         self._routing_cache.move_to_end(name)
         while len(self._routing_cache) > _ROUTING_CACHE_MAX_SIZE:
@@ -602,7 +598,7 @@ class OvalixGuardrail(CustomGuardrail):
         verbose_proxy_logger.exception("Ovalix routing resolution failed: %s", error)
         return GuardrailRaisedException(
             guardrail_name=self.guardrail_name,
-            message=f"Ovalix guardrail error: routing resolution failed: {error!s}",
+            message=f"Ovalix guardrail error: routing resolution failed: {error}",
             should_wrap_with_default_message=False,
         )
 
@@ -614,7 +610,7 @@ class OvalixGuardrail(CustomGuardrail):
         """
         if self._application_id:
             return None
-        alias = self._get_key_alias(request_data)
+        alias: Final = self._get_key_alias(request_data)
         if not alias:
             return None
         return self._extract_application_name(alias, await self._get_app_name_regex())
@@ -628,18 +624,18 @@ class OvalixGuardrail(CustomGuardrail):
                 self._file_checkpoint_id,
                 self._file_checkpoint_id,
             )
-        alias = self._get_key_alias(request_data)
+        alias: Final = self._get_key_alias(request_data)
         if not alias:
             return self._no_application("no application_id configured and no user_api_key_alias to resolve by")
-        regex = await self._get_app_name_regex()
-        name = self._extract_application_name(alias, regex)
+        regex: Final = await self._get_app_name_regex()
+        name: Final = self._extract_application_name(alias, regex)
         if not name:
             return self._no_application("could not extract an application name from the api key alias")
         if self._enable_routing_cache:
             hit, cached = self._routing_cache_get(name)
             if hit:
                 return cached if cached is not None else self._no_application(f"application '{name}' was not found")
-        routing = await self._resolve_via_tracker(name)
+        routing: Final = await self._resolve_via_tracker(name)
         if self._enable_routing_cache:
             self._routing_cache_put(name, routing)
         if routing is None:
@@ -647,13 +643,13 @@ class OvalixGuardrail(CustomGuardrail):
         return routing
 
     async def _resolve_via_tracker(self, application_name: str) -> ResolvedRouting | None:
-        url = f"{self._tracker_api_base}/tracking/beta/resolve_application"
+        url: Final = f"{self._tracker_api_base}/tracking/beta/resolve_application"
         try:
-            response = await self._async_handler.post(
+            response: Final = await self._async_handler.post(
                 url, headers=self._tracker_headers, json={"application_name": application_name}
             )
             response.raise_for_status()
-            body = response.json()
+            body: Final = response.json()
             return ResolvedRouting(
                 application_id=str(body["application_id"]),
                 checkpoint_id_pre=body.get("checkpoint_id_pre"),

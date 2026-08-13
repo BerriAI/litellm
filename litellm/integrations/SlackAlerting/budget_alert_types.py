@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Literal
+from typing import Final, Literal
 
 from litellm.proxy._types import CallInfo, Litellm_EntityType
 
@@ -97,7 +97,7 @@ def get_budget_alert_type(
 ) -> BaseBudgetAlertType:
     """Factory function to get the appropriate budget alert type class"""
 
-    alert_types = {
+    alert_types: Final = {
         "proxy_budget": ProxyBudgetAlert(),
         "soft_budget": SoftBudgetAlert(),
         "user_budget": UserBudgetAlert(),

@@ -4,7 +4,7 @@ import asyncio
 import contextvars
 from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Union
+from typing import Any, Final
 
 import httpx
 
@@ -28,7 +28,7 @@ from litellm.vector_store_files.utils import VectorStoreFileRequestUtils
 
 base_llm_http_handler = BaseLLMHTTPHandler()
 
-VectorStoreFileAttributeValue = Union[str, int, float, bool]
+VectorStoreFileAttributeValue = str | int | float | bool
 VectorStoreFileAttributes = dict[str, VectorStoreFileAttributeValue]
 
 
@@ -44,7 +44,7 @@ def _prepare_registry_credentials(
     if litellm.vector_store_registry is None:
         return
     try:
-        registry_credentials = litellm.vector_store_registry.get_credentials_for_vector_store(vector_store_id)
+        registry_credentials: Final = litellm.vector_store_registry.get_credentials_for_vector_store(vector_store_id)
         if registry_credentials:
             kwargs.update(registry_credentials)
     except Exception:
@@ -65,12 +65,12 @@ async def acreate(
     custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreFileObject:
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["acreate"] = True
 
-        func = partial(
+        func: Final = partial(
             create,
             vector_store_id=vector_store_id,
             file_id=file_id,
@@ -84,9 +84,9 @@ async def acreate(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -117,19 +117,19 @@ def create(
     custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreFileObject | Coroutine[Any, Any, VectorStoreFileObject]:
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: str | None = kwargs.get("litellm_call_id")
-        _is_async = kwargs.pop("acreate", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        _is_async: Final = kwargs.pop("acreate", False) is True
 
         custom_llm_provider = _ensure_provider(custom_llm_provider)
 
         _prepare_registry_credentials(vector_store_id=vector_store_id, kwargs=kwargs)
 
-        litellm_params = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
+        litellm_params: Final = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
 
-        provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
+        provider_config: Final = ProviderConfigManager.get_provider_vector_store_files_config(
             provider=LlmProviders(custom_llm_provider)
         )
         if provider_config is None:
@@ -154,7 +154,7 @@ def create(
             custom_llm_provider=custom_llm_provider,
         )
 
-        response = base_llm_http_handler.vector_store_file_create_handler(
+        response: Final = base_llm_http_handler.vector_store_file_create_handler(
             vector_store_id=vector_store_id,
             create_request=create_request,
             vector_store_files_provider_config=provider_config,
@@ -193,12 +193,12 @@ async def alist(
     custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreFileListResponse:
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["alist"] = True
 
-        func = partial(
+        func: Final = partial(
             list,
             vector_store_id=vector_store_id,
             after=after,
@@ -213,9 +213,9 @@ async def alist(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
@@ -246,19 +246,19 @@ def list(
     custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreFileListResponse | Coroutine[Any, Any, VectorStoreFileListResponse]:
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: str | None = kwargs.get("litellm_call_id")
-        _is_async = kwargs.pop("alist", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        _is_async: Final = kwargs.pop("alist", False) is True
 
         custom_llm_provider = _ensure_provider(custom_llm_provider)
 
         _prepare_registry_credentials(vector_store_id=vector_store_id, kwargs=kwargs)
 
-        litellm_params = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
+        litellm_params: Final = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
 
-        provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
+        provider_config: Final = ProviderConfigManager.get_provider_vector_store_files_config(
             provider=LlmProviders(custom_llm_provider)
         )
         if provider_config is None:
@@ -279,7 +279,7 @@ def list(
             custom_llm_provider=custom_llm_provider,
         )
 
-        response = base_llm_http_handler.vector_store_file_list_handler(
+        response: Final = base_llm_http_handler.vector_store_file_list_handler(
             vector_store_id=vector_store_id,
             query_params=list_query,
             vector_store_files_provider_config=provider_config,
@@ -313,12 +313,12 @@ async def aretrieve(
     custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreFileObject:
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["aretrieve"] = True
 
-        func = partial(
+        func: Final = partial(
             retrieve,
             vector_store_id=vector_store_id,
             file_id=file_id,
@@ -328,9 +328,9 @@ async def aretrieve(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
@@ -356,19 +356,19 @@ def retrieve(
     custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreFileObject | Coroutine[Any, Any, VectorStoreFileObject]:
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: str | None = kwargs.get("litellm_call_id")
-        _is_async = kwargs.pop("aretrieve", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        _is_async: Final = kwargs.pop("aretrieve", False) is True
 
         custom_llm_provider = _ensure_provider(custom_llm_provider)
 
         _prepare_registry_credentials(vector_store_id=vector_store_id, kwargs=kwargs)
 
-        litellm_params = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
+        litellm_params: Final = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
 
-        provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
+        provider_config: Final = ProviderConfigManager.get_provider_vector_store_files_config(
             provider=LlmProviders(custom_llm_provider)
         )
         if provider_config is None:
@@ -389,7 +389,7 @@ def retrieve(
             custom_llm_provider=custom_llm_provider,
         )
 
-        response = base_llm_http_handler.vector_store_file_retrieve_handler(
+        response: Final = base_llm_http_handler.vector_store_file_retrieve_handler(
             vector_store_id=vector_store_id,
             file_id=file_id,
             vector_store_files_provider_config=provider_config,
@@ -422,12 +422,12 @@ async def aretrieve_content(
     custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreFileContentResponse:
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["aretrieve_content"] = True
 
-        func = partial(
+        func: Final = partial(
             retrieve_content,
             vector_store_id=vector_store_id,
             file_id=file_id,
@@ -436,9 +436,9 @@ async def aretrieve_content(
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
@@ -464,19 +464,19 @@ def retrieve_content(
     custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreFileContentResponse | Coroutine[Any, Any, VectorStoreFileContentResponse]:
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: str | None = kwargs.get("litellm_call_id")
-        _is_async = kwargs.pop("aretrieve_content", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        _is_async: Final = kwargs.pop("aretrieve_content", False) is True
 
         custom_llm_provider = _ensure_provider(custom_llm_provider)
 
         _prepare_registry_credentials(vector_store_id=vector_store_id, kwargs=kwargs)
 
-        litellm_params = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
+        litellm_params: Final = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
 
-        provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
+        provider_config: Final = ProviderConfigManager.get_provider_vector_store_files_config(
             provider=LlmProviders(custom_llm_provider)
         )
         if provider_config is None:
@@ -497,7 +497,7 @@ def retrieve_content(
             custom_llm_provider=custom_llm_provider,
         )
 
-        response = base_llm_http_handler.vector_store_file_content_handler(
+        response: Final = base_llm_http_handler.vector_store_file_content_handler(
             vector_store_id=vector_store_id,
             file_id=file_id,
             vector_store_files_provider_config=provider_config,
@@ -532,12 +532,12 @@ async def aupdate(
     custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreFileObject:
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["aupdate"] = True
 
-        func = partial(
+        func: Final = partial(
             update,
             vector_store_id=vector_store_id,
             file_id=file_id,
@@ -548,9 +548,9 @@ async def aupdate(
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
@@ -578,19 +578,19 @@ def update(
     custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreFileObject | Coroutine[Any, Any, VectorStoreFileObject]:
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: str | None = kwargs.get("litellm_call_id")
-        _is_async = kwargs.pop("aupdate", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        _is_async: Final = kwargs.pop("aupdate", False) is True
 
         custom_llm_provider = _ensure_provider(custom_llm_provider)
 
         _prepare_registry_credentials(vector_store_id=vector_store_id, kwargs=kwargs)
 
-        litellm_params = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
+        litellm_params: Final = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
 
-        provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
+        provider_config: Final = ProviderConfigManager.get_provider_vector_store_files_config(
             provider=LlmProviders(custom_llm_provider)
         )
         if provider_config is None:
@@ -616,7 +616,7 @@ def update(
             custom_llm_provider=custom_llm_provider,
         )
 
-        response = base_llm_http_handler.vector_store_file_update_handler(
+        response: Final = base_llm_http_handler.vector_store_file_update_handler(
             vector_store_id=vector_store_id,
             file_id=file_id,
             update_request=update_request,
@@ -651,12 +651,12 @@ async def adelete(
     custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreFileDeleteResponse:
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["adelete"] = True
 
-        func = partial(
+        func: Final = partial(
             delete,
             vector_store_id=vector_store_id,
             file_id=file_id,
@@ -665,9 +665,9 @@ async def adelete(
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
@@ -693,19 +693,19 @@ def delete(
     custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreFileDeleteResponse | Coroutine[Any, Any, VectorStoreFileDeleteResponse]:
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: str | None = kwargs.get("litellm_call_id")
-        _is_async = kwargs.pop("adelete", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        _is_async: Final = kwargs.pop("adelete", False) is True
 
         custom_llm_provider = _ensure_provider(custom_llm_provider)
 
         _prepare_registry_credentials(vector_store_id=vector_store_id, kwargs=kwargs)
 
-        litellm_params = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
+        litellm_params: Final = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
 
-        provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
+        provider_config: Final = ProviderConfigManager.get_provider_vector_store_files_config(
             provider=LlmProviders(custom_llm_provider)
         )
         if provider_config is None:
@@ -726,7 +726,7 @@ def delete(
             custom_llm_provider=custom_llm_provider,
         )
 
-        response = base_llm_http_handler.vector_store_file_delete_handler(
+        response: Final = base_llm_http_handler.vector_store_file_delete_handler(
             vector_store_id=vector_store_id,
             file_id=file_id,
             vector_store_files_provider_config=provider_config,

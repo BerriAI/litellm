@@ -1,6 +1,6 @@
 """Ovalix guardrail hook: registration and initialization for the proxy."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -14,16 +14,16 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     """Create and register an Ovalix guardrail callback from proxy config."""
     import litellm
 
-    tracker_api_base = getattr(litellm_params, "tracker_api_base", None)
-    tracker_api_key = getattr(litellm_params, "tracker_api_key", None)
-    application_id = getattr(litellm_params, "application_id", None)
-    pre_checkpoint_id = getattr(litellm_params, "pre_checkpoint_id", None)
-    post_checkpoint_id = getattr(litellm_params, "post_checkpoint_id", None)
-    file_checkpoint_id = getattr(litellm_params, "file_checkpoint_id", None)
-    enable_routing_cache = getattr(litellm_params, "enable_routing_cache", None)
-    fail_if_no_application = getattr(litellm_params, "fail_if_no_application", None)
+    tracker_api_base: Final = getattr(litellm_params, "tracker_api_base", None)
+    tracker_api_key: Final = getattr(litellm_params, "tracker_api_key", None)
+    application_id: Final = getattr(litellm_params, "application_id", None)
+    pre_checkpoint_id: Final = getattr(litellm_params, "pre_checkpoint_id", None)
+    post_checkpoint_id: Final = getattr(litellm_params, "post_checkpoint_id", None)
+    file_checkpoint_id: Final = getattr(litellm_params, "file_checkpoint_id", None)
+    enable_routing_cache: Final = getattr(litellm_params, "enable_routing_cache", None)
+    fail_if_no_application: Final = getattr(litellm_params, "fail_if_no_application", None)
 
-    _ovalix_callback = OvalixGuardrail(
+    _ovalix_callback: Final = OvalixGuardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),
         tracker_api_base=tracker_api_base,
         tracker_api_key=tracker_api_key,
@@ -42,11 +42,11 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
 
 
 # Registry of guardrail name -> initializer for proxy config loading.
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.OVALIX.value: initialize_guardrail,
 }
 
 # Registry of guardrail name -> guardrail class (e.g. for apply_guardrail API).
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.OVALIX.value: OvalixGuardrail,
 }

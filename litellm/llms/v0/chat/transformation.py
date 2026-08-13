@@ -2,6 +2,8 @@
 Translate from OpenAI's `/v1/chat/completions` to v0's `/v1/chat/completions`
 """
 
+from typing import Final
+
 from litellm.secret_managers.main import get_secret_str
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
@@ -22,8 +24,8 @@ class V0ChatConfig(OpenAILikeChatConfig):
         # v0 is openai compatible, we just need to set the api_base
         api_base = (
             api_base or get_secret_str("V0_API_BASE") or "https://api.v0.dev/v1"  # Default v0 API base URL
-        )  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("V0_API_KEY")
+        )
+        dynamic_api_key: Final = api_key or get_secret_str("V0_API_KEY")
         return api_base, dynamic_api_key
 
     def get_supported_openai_params(self, model: str) -> list:

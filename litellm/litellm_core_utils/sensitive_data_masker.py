@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Final
 
 from pydantic import BaseModel
 
@@ -44,13 +44,13 @@ class SensitiveDataMasker:
         self.mask_short_values = mask_short_values
 
     def _mask_value(self, value: str) -> str:
-        value_str = str(value)
+        value_str: Final = str(value)
         if not value_str:
             return value
         if len(value_str) <= (self.visible_prefix + self.visible_suffix):
             return self.mask_char * len(value_str) if self.mask_short_values else value_str
 
-        masked_length = len(value_str) - (self.visible_prefix + self.visible_suffix)
+        masked_length: Final = len(value_str) - (self.visible_prefix + self.visible_suffix)
 
         # Handle the case where visible_suffix is 0 to avoid showing the entire string
         if self.visible_suffix == 0:
@@ -65,11 +65,11 @@ class SensitiveDataMasker:
         if excluded_keys and key in excluded_keys:
             return False
 
-        key_lower = str(key).lower()
+        key_lower: Final = str(key).lower()
         # Split on underscores/hyphens and check if any segment matches the pattern
         # This avoids false positives like "max_tokens" matching "token"
         # but still catches "api_key", "access_token", etc.
-        key_segments = key_lower.replace("-", "_").split("_")
+        key_segments: Final = key_lower.replace("-", "_").split("_")
 
         # If any segment matches a non-sensitive override, the key is not sensitive.
         # For example, "input_cost_per_token" contains "token" but also "cost",
@@ -77,7 +77,7 @@ class SensitiveDataMasker:
         if any(override in key_segments for override in self.non_sensitive_overrides):
             return False
 
-        result = any(pattern in key_segments for pattern in self.sensitive_patterns)
+        result: Final = any(pattern in key_segments for pattern in self.sensitive_patterns)
         return result
 
     def _mask_sequence(
@@ -88,7 +88,7 @@ class SensitiveDataMasker:
         excluded_keys: set[str] | None,
         key_is_sensitive: bool,
     ) -> list[Any]:
-        masked_items: list[Any] = []
+        masked_items: Final[list[Any]] = []
         if depth >= max_depth:
             return values
 
@@ -113,7 +113,7 @@ class SensitiveDataMasker:
         if depth >= max_depth:
             return data
 
-        masked_data: dict[str, Any] = {}
+        masked_data: Final[dict[str, Any]] = {}
         for k, v in data.items():
             try:
                 key_is_sensitive = self.is_sensitive_key(k, excluded_keys)
@@ -147,8 +147,8 @@ class SensitiveDataMasker:
         return data
 
 
-_default_masker = SensitiveDataMasker()
-_error_masker = SensitiveDataMasker(visible_prefix=4, visible_suffix=0)
+_default_masker: Final = SensitiveDataMasker()
+_error_masker: Final = SensitiveDataMasker(visible_prefix=4, visible_suffix=0)
 
 
 def mask_sensitive_structure(data: object) -> object:
@@ -200,9 +200,9 @@ def mask_sensitive_keys(data: dict[str, Any], sensitive_fields: set[str]) -> dic
     range and are replaced with a fixed-length all-mask string, so a short
     credential is never returned verbatim.
     """
-    masked: dict[str, Any] = {}
-    mask_char = _default_masker.mask_char
-    min_visible = _default_masker.visible_prefix + _default_masker.visible_suffix
+    masked: Final[dict[str, Any]] = {}
+    mask_char: Final = _default_masker.mask_char
+    min_visible: Final = _default_masker.visible_prefix + _default_masker.visible_suffix
     for key, value in data.items():
         if value is not None and key in sensitive_fields and isinstance(value, str):
             if len(value) < min_visible:

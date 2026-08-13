@@ -1,13 +1,6 @@
 from collections.abc import Awaitable
 from json import JSONDecodeError
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Literal,
-    Optional,
-    Protocol,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
 
 import httpx
 
@@ -35,14 +28,14 @@ if TYPE_CHECKING:
     )
 
 
-_ANALYZE_ENDPOINT = "/v1/guard/analyze"
-_DEFAULT_VIGIL_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
-_BLOCK_REASON_MAX_CHARS = 500
-_METADATA_STRING_MAX_CHARS = 500
-_METADATA_ARRAY_MAX_ITEMS = 10
-_VALID_DECISIONS = ("ALLOWED", "SANITIZED", "BLOCKED")
-_TRANSIENT_STATUS_CODES = frozenset({429, 502, 503, 504})
-_METADATA_ALLOWLIST = (
+_ANALYZE_ENDPOINT: Final = "/v1/guard/analyze"
+_DEFAULT_VIGIL_TIMEOUT: Final = httpx.Timeout(10.0, connect=5.0)
+_BLOCK_REASON_MAX_CHARS: Final = 500
+_METADATA_STRING_MAX_CHARS: Final = 500
+_METADATA_ARRAY_MAX_ITEMS: Final = 10
+_VALID_DECISIONS: Final = ("ALLOWED", "SANITIZED", "BLOCKED")
+_TRANSIENT_STATUS_CODES: Final = frozenset({429, 502, 503, 504})
+_METADATA_ALLOWLIST: Final = (
     "model",
     "model_group",
     "provider",
@@ -85,7 +78,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         async_handler: _AsyncPostHandler | None = None,
         **kwargs: Any,
     ) -> None:
-        resolved_base = api_base or get_secret_str("VIGIL_GUARD_URL")
+        resolved_base: Final = api_base or get_secret_str("VIGIL_GUARD_URL")
         if not resolved_base:
             raise VigilGuardMissingConfig(
                 "Vigil Guard api_base is required. Set api_base in the guardrail "
@@ -93,7 +86,7 @@ class VigilGuardGuardrail(CustomGuardrail):
             )
         self.api_base = resolved_base.rstrip("/")
 
-        resolved_key = api_key or get_secret_str("VIGIL_GUARD_API_KEY")
+        resolved_key: Final = api_key or get_secret_str("VIGIL_GUARD_API_KEY")
         if not resolved_key:
             raise VigilGuardMissingConfig(
                 "Vigil Guard api_key is required. Set api_key in the guardrail "
@@ -101,7 +94,7 @@ class VigilGuardGuardrail(CustomGuardrail):
             )
         self.api_key = resolved_key
 
-        fallback = (unreachable_fallback or "fail_closed").lower()
+        fallback: Final = (unreachable_fallback or "fail_closed").lower()
         self.unreachable_fallback: _FallbackMode = "fail_open" if fallback == "fail_open" else "fail_closed"
 
         self.timeout: httpx.Timeout = (
@@ -139,16 +132,16 @@ class VigilGuardGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        texts = inputs.get("texts") or []
-        has_text = any(isinstance(text, str) and text.strip() for text in texts)
-        tool_call_args = self._tool_call_arguments(inputs.get("tool_calls")) if input_type == "response" else []
+        texts: Final = inputs.get("texts") or []
+        has_text: Final = any(isinstance(text, str) and text.strip() for text in texts)
+        tool_call_args: Final = self._tool_call_arguments(inputs.get("tool_calls")) if input_type == "response" else []
         if not has_text and not tool_call_args:
             return inputs
 
-        source = "user_input" if input_type == "request" else "model_output"
-        metadata = self._collect_metadata(request_data, logging_obj)
+        source: Final = "user_input" if input_type == "request" else "model_output"
+        metadata: Final = self._collect_metadata(request_data, logging_obj)
 
-        result_texts: list[str] = []
+        result_texts: Final[list[str]] = []
         for index, text in enumerate(texts):
             if not isinstance(text, str) or not text.strip():
                 result_texts.append(text)
@@ -285,11 +278,11 @@ class VigilGuardGuardrail(CustomGuardrail):
         # logs "allow" rather than "mask". When a text or a tool-call argument was
         # changed (sanitized), return only the remap-relevant keys and drop
         # structured_messages so a stale, unsanitized payload cannot reach the model.
-        texts_changed = final_texts != (inputs.get("texts") or [])
-        tool_calls_changed = final_tool_calls != inputs.get("tool_calls")
+        texts_changed: Final = final_texts != (inputs.get("texts") or [])
+        tool_calls_changed: Final = final_tool_calls != inputs.get("tool_calls")
         if not texts_changed and not tool_calls_changed:
             return cast(GenericGuardrailAPIInputs, dict(inputs))
-        guardrailed: GenericGuardrailAPIInputs = {"texts": final_texts}
+        guardrailed: Final[GenericGuardrailAPIInputs] = {"texts": final_texts}
         if "images" in inputs:
             guardrailed["images"] = inputs["images"]
         if "tools" in inputs:
@@ -300,7 +293,7 @@ class VigilGuardGuardrail(CustomGuardrail):
 
     @staticmethod
     def _tool_call_arguments(tool_calls: Any) -> list[tuple[int, str]]:
-        pairs: list[tuple[int, str]] = []
+        pairs: Final[list[tuple[int, str]]] = []
         if isinstance(tool_calls, list):
             for index, tool_call in enumerate(tool_calls):
                 function = tool_call.get("function") if isinstance(tool_call, dict) else None
@@ -311,27 +304,27 @@ class VigilGuardGuardrail(CustomGuardrail):
 
     @staticmethod
     def _set_tool_call_arguments(tool_calls: Any, index: int, arguments: str) -> list[Any]:
-        updated = list(tool_calls)
-        tool_call = dict(updated[index])
-        function = dict(tool_call.get("function") or {})
+        updated: Final = list(tool_calls)
+        tool_call: Final = dict(updated[index])
+        function: Final = dict(tool_call.get("function") or {})
         function["arguments"] = arguments
         tool_call["function"] = function
         updated[index] = tool_call
         return updated
 
     async def _analyze(self, text: str, source: str, metadata: dict[str, Any]) -> dict[str, Any]:
-        payload = {
+        payload: Final = {
             "text": text,
             "source": source,
             "mode": "full",
             "metadata": metadata,
         }
-        endpoint = f"{self.api_base}{_ANALYZE_ENDPOINT}"
-        headers = {
+        endpoint: Final = f"{self.api_base}{_ANALYZE_ENDPOINT}"
+        headers: Final = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        response = await self._post_with_retry(endpoint, headers, payload)
+        response: Final = await self._post_with_retry(endpoint, headers, payload)
         return response.json()
 
     async def _post_with_retry(self, endpoint: str, headers: dict[str, str], payload: dict[str, Any]) -> httpx.Response:
@@ -376,9 +369,9 @@ class VigilGuardGuardrail(CustomGuardrail):
             value = analysis.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()[:_BLOCK_REASON_MAX_CHARS]
-        categories = analysis.get("categories")
+        categories: Final = analysis.get("categories")
         if isinstance(categories, list):
-            names = [c for c in categories if isinstance(c, str) and c.strip()]
+            names: Final = [c for c in categories if isinstance(c, str) and c.strip()]
             if names:
                 return ", ".join(names)[:_BLOCK_REASON_MAX_CHARS]
         return "Blocked by policy"
@@ -392,7 +385,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         return original
 
     def _collect_metadata(self, request_data: dict, logging_obj: Optional["LiteLLMLoggingObj"]) -> dict[str, Any]:
-        sources: list[dict] = []
+        sources: Final[list[dict]] = []
         if isinstance(request_data, dict):
             sources.append(request_data)
             for nested_key in ("metadata", "litellm_metadata"):
@@ -400,7 +393,7 @@ class VigilGuardGuardrail(CustomGuardrail):
                 if isinstance(nested, dict):
                     sources.append(nested)
 
-        collected: dict[str, Any] = {}
+        collected: Final[dict[str, Any]] = {}
         for field in _METADATA_ALLOWLIST:
             for source in sources:
                 if field in source and source[field] is not None:
@@ -409,7 +402,7 @@ class VigilGuardGuardrail(CustomGuardrail):
                         collected[field] = clamped
                         break
 
-        call_id = self._extract_call_id(request_data, logging_obj)
+        call_id: Final = self._extract_call_id(request_data, logging_obj)
         if call_id:
             collected["litellm_call_id"] = call_id
 
@@ -424,7 +417,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         if isinstance(value, (int, float)):
             return value
         if isinstance(value, list):
-            clamped: list[Any] = []
+            clamped: Final[list[Any]] = []
             for item in value[:_METADATA_ARRAY_MAX_ITEMS]:
                 if isinstance(item, bool):
                     continue
@@ -445,9 +438,9 @@ class VigilGuardGuardrail(CustomGuardrail):
             call_id = request_data.get("litellm_call_id")
             if isinstance(call_id, str) and call_id:
                 return call_id
-            metadata = request_data.get("metadata")
+            metadata: Final = request_data.get("metadata")
             if isinstance(metadata, dict):
-                nested = metadata.get("litellm_call_id")
+                nested: Final = metadata.get("litellm_call_id")
                 if isinstance(nested, str) and nested:
                     return nested
         return None

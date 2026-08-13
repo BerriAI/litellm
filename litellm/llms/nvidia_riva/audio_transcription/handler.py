@@ -26,7 +26,7 @@ without the optional STT extras installed.
 
 import asyncio
 import inspect
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.litellm_core_utils.audio_utils.utils import (
     get_audio_file_name,
@@ -55,8 +55,8 @@ if TYPE_CHECKING:
 # Stream audio to Riva in ~50 ms slices (1600 samples at 16 kHz). Matches
 # NVIDIA's recommended chunk size for streaming ASR — small enough for
 # responsive endpointing, large enough to keep per-RPC overhead low.
-_DEFAULT_CHUNK_SAMPLES = 1600
-_DEFAULT_CHUNK_BYTES = _DEFAULT_CHUNK_SAMPLES * 2  # int16 = 2 bytes/sample
+_DEFAULT_CHUNK_SAMPLES: Final = 1600
+_DEFAULT_CHUNK_BYTES: Final = _DEFAULT_CHUNK_SAMPLES * 2  # int16 = 2 bytes/sample
 
 
 _RIVA_INSTALL_HINT = "NVIDIA Riva client is not installed. Install with `pip install 'litellm[stt-nvidia-riva]'`."
@@ -165,10 +165,10 @@ class NvidiaRivaAudioTranscription:
                 ),
             )
 
-        processed = process_audio_file(audio_file)
-        resampled = resample_to_riva_pcm(processed.file_content)
+        processed: Final = process_audio_file(audio_file)
+        resampled: Final = resample_to_riva_pcm(processed.file_content)
 
-        request_payload = provider_config.transform_audio_transcription_request(
+        request_payload: Final = provider_config.transform_audio_transcription_request(
             model=model,
             audio_file=audio_file,
             optional_params=optional_params,
@@ -184,25 +184,25 @@ class NvidiaRivaAudioTranscription:
                 message="NvidiaRivaAudioTranscriptionConfig produced an unexpected request payload type.",
             )
 
-        recognition_config_dict: dict[str, Any] = request_payload["recognition_config"]
+        recognition_config_dict: Final[dict[str, Any]] = request_payload["recognition_config"]
         # The wire format is fixed by our resampler; override anything stale
         # the caller passed in so the gRPC config matches the bytes we send.
         recognition_config_dict["sample_rate_hertz"] = RIVA_TARGET_SAMPLE_RATE_HZ
         recognition_config_dict["audio_channel_count"] = RIVA_TARGET_NUM_CHANNELS
         recognition_config_dict["encoding"] = "LINEAR_PCM"
 
-        response_format = request_payload.get("response_format") or "json"
-        timestamp_granularities = request_payload.get("timestamp_granularities")
+        response_format: Final = request_payload.get("response_format") or "json"
+        timestamp_granularities: Final = request_payload.get("timestamp_granularities")
 
         riva_module, riva_asr_module = _import_riva()
-        auth_obj = self._construct_auth(
+        auth_obj: Final = self._construct_auth(
             riva_module=riva_module,
             api_base=api_base,
             api_key=api_key,
             optional_params=optional_params,
         )
 
-        recognition_config = self._build_recognition_config_proto(
+        recognition_config: Final = self._build_recognition_config_proto(
             riva_asr_module=riva_asr_module,
             recognition_config_dict=recognition_config_dict,
         )
@@ -223,9 +223,9 @@ class NvidiaRivaAudioTranscription:
         )
 
         try:
-            asr_service = riva_module.ASRService(auth_obj)
-            audio_chunks = self._iter_audio_chunks(resampled.pcm_bytes)
-            stream_kwargs: dict[str, Any] = {
+            asr_service: Final = riva_module.ASRService(auth_obj)
+            audio_chunks: Final = self._iter_audio_chunks(resampled.pcm_bytes)
+            stream_kwargs: Final[dict[str, Any]] = {
                 "audio_chunks": audio_chunks,
                 "streaming_config": streaming_config,
             }
@@ -234,21 +234,21 @@ class NvidiaRivaAudioTranscription:
             # ``timeout`` kwarg, so pass it only when supported.
             if timeout is not None and self._supports_timeout_kwarg(asr_service.streaming_response_generator):
                 stream_kwargs["timeout"] = float(timeout)
-            stream = asr_service.streaming_response_generator(**stream_kwargs)
-            final_results = self._collect_final_results(stream)
+            stream: Final = asr_service.streaming_response_generator(**stream_kwargs)
+            final_results: Final = self._collect_final_results(stream)
         except NvidiaRivaException:
             raise
         except Exception as e:
             raise grpc_error_to_litellm_exception(e) from e
 
-        transcription = NvidiaRivaAudioTranscriptionConfig.build_transcription_response(
+        transcription: Final = NvidiaRivaAudioTranscriptionConfig.build_transcription_response(
             final_results=final_results,
             response_format=response_format,
             duration_seconds=resampled.duration_seconds,
             timestamp_granularities=timestamp_granularities,
         )
 
-        stringified_response = dict(transcription)
+        stringified_response: Final = dict(transcription)
 
         logging_obj.post_call(
             input=get_audio_file_name(audio_file),
@@ -257,13 +257,13 @@ class NvidiaRivaAudioTranscription:
             original_response=stringified_response,
         )
 
-        hidden_params = {
+        hidden_params: Final = {
             "model": model,
             "custom_llm_provider": "nvidia_riva",
             "audio_transcription_duration": resampled.duration_seconds,
         }
 
-        final_response: TranscriptionResponse = convert_to_model_response_object(  # type: ignore
+        final_response: Final[TranscriptionResponse] = convert_to_model_response_object(
             response_object=stringified_response,
             model_response_object=model_response,
             hidden_params=hidden_params,
@@ -289,11 +289,11 @@ class NvidiaRivaAudioTranscription:
           honor an explicit override — self-hosted Riva behind an ingress
           with TLS termination is a real deployment topology.
         """
-        nvcf_function_id = optional_params.get("nvcf_function_id")
-        use_ssl_override = optional_params.get("use_ssl")
-        use_ssl = bool(use_ssl_override) if use_ssl_override is not None else bool(nvcf_function_id)
+        nvcf_function_id: Final = optional_params.get("nvcf_function_id")
+        use_ssl_override: Final = optional_params.get("use_ssl")
+        use_ssl: Final = bool(use_ssl_override) if use_ssl_override is not None else bool(nvcf_function_id)
 
-        metadata: list[tuple[str, str]] = []
+        metadata: Final[list[tuple[str, str]]] = []
         if nvcf_function_id:
             metadata.append(("function-id", str(nvcf_function_id)))
         if api_key:
@@ -306,14 +306,14 @@ class NvidiaRivaAudioTranscription:
             return riva_module.Auth(None, use_ssl, api_base, metadata)
 
     def _build_recognition_config_proto(self, riva_asr_module: Any, recognition_config_dict: dict[str, Any]):
-        encoding_name = (recognition_config_dict.get("encoding") or "LINEAR_PCM").upper()
-        encoding_enum = getattr(
+        encoding_name: Final = (recognition_config_dict.get("encoding") or "LINEAR_PCM").upper()
+        encoding_enum: Final = getattr(
             riva_asr_module.AudioEncoding,
             encoding_name,
             riva_asr_module.AudioEncoding.LINEAR_PCM,
         )
 
-        config = riva_asr_module.RecognitionConfig(
+        config: Final = riva_asr_module.RecognitionConfig(
             encoding=encoding_enum,
             sample_rate_hertz=int(recognition_config_dict["sample_rate_hertz"]),
             language_code=recognition_config_dict["language_code"],
@@ -326,10 +326,10 @@ class NvidiaRivaAudioTranscription:
             profanity_filter=bool(recognition_config_dict.get("profanity_filter", False)),
         )
 
-        endpointing = recognition_config_dict.get("endpointing_config")
+        endpointing: Final = recognition_config_dict.get("endpointing_config")
         if isinstance(endpointing, dict) and endpointing:
             try:
-                ep = riva_asr_module.EndpointingConfig(**endpointing)
+                ep: Final = riva_asr_module.EndpointingConfig(**endpointing)
                 config.endpointing_config.CopyFrom(ep)
             except Exception:
                 # If the user supplied an unknown EndpointingConfig field
@@ -342,10 +342,10 @@ class NvidiaRivaAudioTranscription:
     @staticmethod
     def _supports_timeout_kwarg(callable_obj: Any) -> bool:
         try:
-            sig = inspect.signature(callable_obj)
+            sig: Final = inspect.signature(callable_obj)
         except (TypeError, ValueError):
             return False
-        params = sig.parameters
+        params: Final = sig.parameters
         if "timeout" in params:
             return True
         return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
@@ -366,7 +366,7 @@ class NvidiaRivaAudioTranscription:
         ``id`` blocks with no ``results`` are streaming heartbeats and must
         be skipped.
         """
-        final_results: list[dict[str, Any]] = []
+        final_results: Final[list[dict[str, Any]]] = []
         for response in stream:
             results = getattr(response, "results", None) or []
             for result in results:
@@ -399,14 +399,14 @@ def _import_riva():
     module separately when the SDK packaging changes between versions.
     """
     try:
-        import riva.client as riva_client  # type: ignore
+        import riva.client as riva_client
     except ImportError as e:
         raise NvidiaRivaException(status_code=500, message=_RIVA_INSTALL_HINT) from e
 
     riva_asr_module = riva_client
     if not hasattr(riva_asr_module, "RecognitionConfig"):
         try:
-            from riva.client.proto import riva_asr_pb2  # type: ignore
+            from riva.client.proto import riva_asr_pb2
 
             riva_asr_module = riva_asr_pb2
         except ImportError as e:

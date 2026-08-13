@@ -121,13 +121,6 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
   };
 
   // Expose filter values and reset function
-  const filterValues = {
-    searchTerm,
-    selectedProvider,
-    selectedMode,
-    selectedFeature,
-    resetFilters,
-  };
 
   const filtersContent = (
     <div className="flex flex-wrap gap-4 items-center">

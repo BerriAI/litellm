@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -120,7 +120,7 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
         eg. if user passes `diarize=True`, we need to pass `diarize` to the provider
         but `diarize` is not an OpenAI parameter, so we need to handle it here
         """
-        provider_specific_params = {}
+        provider_specific_params: Final = {}
         for key, value in optional_params.items():
             # Skip None values
             if value is None:
@@ -154,7 +154,7 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
             True if the parameter should be excluded
         """
         # Parameters that are handled elsewhere or not relevant to Deepgram API
-        excluded_params = {
+        excluded_params: Final = {
             "model",  # Already in the URL path
             "OPENAI_TRANSCRIPTION_PARAMS",  # Internal litellm parameter
         }

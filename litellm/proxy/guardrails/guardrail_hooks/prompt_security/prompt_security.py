@@ -1,7 +1,7 @@
 import asyncio
 import base64
 import os
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
 from fastapi import HTTPException
 
@@ -55,13 +55,13 @@ class PromptSecurityGuardrail(CustomGuardrail):
         # Default: False (Filter out tool/function messages)
         # True: Transform to "other" role and send to API
         if check_tool_results is None:
-            check_tool_results_env = os.environ.get("PROMPT_SECURITY_CHECK_TOOL_RESULTS", "false").lower()
+            check_tool_results_env: Final = os.environ.get("PROMPT_SECURITY_CHECK_TOOL_RESULTS", "false").lower()
             self.check_tool_results = check_tool_results_env in ("true", "1", "yes")
         else:
             self.check_tool_results = check_tool_results
 
         if not self.api_key or not self.api_base:
-            msg = (
+            msg: Final = (
                 "Couldn't get Prompt Security api base or key, "
                 "either set the `PROMPT_SECURITY_API_BASE` and `PROMPT_SECURITY_API_KEY` in the environment "
                 "or pass them as parameters to the guardrail in the config file"
@@ -73,6 +73,9 @@ class PromptSecurityGuardrail(CustomGuardrail):
         self.poll_interval = 2  # Seconds between polling attempts
 
         super().__init__(**kwargs)
+
+    def supports_scan_only_tool_results(self) -> bool:
+        return self.check_tool_results
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -112,12 +115,12 @@ class PromptSecurityGuardrail(CustomGuardrail):
         Raises:
             HTTPException: If content is blocked by Prompt Security
         """
-        texts = inputs.get("texts", [])
-        images = inputs.get("images", [])
-        structured_messages = inputs.get("structured_messages", [])
+        texts: Final = inputs.get("texts", [])
+        images: Final = inputs.get("images", [])
+        structured_messages: Final = inputs.get("structured_messages", [])
 
         # Resolve user API key alias from request metadata
-        user_api_key_alias = self._resolve_key_alias_from_request_data(request_data)
+        user_api_key_alias: Final = self._resolve_key_alias_from_request_data(request_data)
 
         verbose_proxy_logger.debug(
             "Prompt Security Guardrail: apply_guardrail called with input_type=%s, "
@@ -169,15 +172,15 @@ class PromptSecurityGuardrail(CustomGuardrail):
             await self._process_standalone_images(images, user_api_key_alias)
 
         # Filter messages by role for the API call
-        filtered_messages = self.filter_messages_by_role(messages)
+        filtered_messages: Final = self.filter_messages_by_role(messages)
 
         if not filtered_messages:
             verbose_proxy_logger.debug("Prompt Security Guardrail: No messages to check after filtering")
             return inputs
 
         # Call Prompt Security API
-        headers = self._build_headers(user_api_key_alias)
-        payload = {
+        headers: Final = self._build_headers(user_api_key_alias)
+        payload: Final = {
             "messages": filtered_messages,
             "user": user_api_key_alias or self.user,
             "system_prompt": self.system_prompt,
@@ -190,13 +193,13 @@ class PromptSecurityGuardrail(CustomGuardrail):
             payload={"messages_count": len(filtered_messages)},
         )
 
-        response = await self.async_handler.post(
+        response: Final = await self.async_handler.post(
             f"{self.api_base}/api/protect",
             headers=headers,
             json=payload,
         )
         response.raise_for_status()
-        res = response.json()
+        res: Final = response.json()
 
         self._log_api_response(
             url=f"{self.api_base}/api/protect",
@@ -204,12 +207,12 @@ class PromptSecurityGuardrail(CustomGuardrail):
             payload={"result": res.get("result")},
         )
 
-        result = res.get("result", {}).get("prompt", {})
+        result: Final = res.get("result", {}).get("prompt", {})
         if result is None:
             return inputs
 
-        action = result.get("action")
-        violations = result.get("violations", [])
+        action: Final = result.get("action")
+        violations: Final = result.get("violations", [])
 
         if action == "block":
             raise HTTPException(
@@ -218,8 +221,8 @@ class PromptSecurityGuardrail(CustomGuardrail):
             )
         elif action == "modify":
             # Extract modified texts from modified_messages
-            modified_messages = result.get("modified_messages", [])
-            modified_texts = self._extract_texts_from_messages(modified_messages)
+            modified_messages: Final = result.get("modified_messages", [])
+            modified_texts: Final = self._extract_texts_from_messages(modified_messages)
             if modified_texts:
                 inputs["texts"] = modified_texts
 
@@ -236,10 +239,10 @@ class PromptSecurityGuardrail(CustomGuardrail):
             return inputs
 
         # Combine all texts for response checking
-        combined_text = "\n".join(texts)
+        combined_text: Final = "\n".join(texts)
 
-        headers = self._build_headers(user_api_key_alias)
-        payload = {
+        headers: Final = self._build_headers(user_api_key_alias)
+        payload: Final = {
             "response": combined_text,
             "user": user_api_key_alias or self.user,
             "system_prompt": self.system_prompt,
@@ -252,13 +255,13 @@ class PromptSecurityGuardrail(CustomGuardrail):
             payload={"response_length": len(combined_text)},
         )
 
-        response = await self.async_handler.post(
+        response: Final = await self.async_handler.post(
             f"{self.api_base}/api/protect",
             headers=headers,
             json=payload,
         )
         response.raise_for_status()
-        res = response.json()
+        res: Final = response.json()
 
         self._log_api_response(
             url=f"{self.api_base}/api/protect",
@@ -266,12 +269,12 @@ class PromptSecurityGuardrail(CustomGuardrail):
             payload={"result": res.get("result")},
         )
 
-        result = res.get("result", {}).get("response", {})
+        result: Final = res.get("result", {}).get("response", {})
         if result is None:
             return inputs
 
-        action = result.get("action")
-        violations = result.get("violations", [])
+        action: Final = result.get("action")
+        violations: Final = result.get("violations", [])
 
         if action == "block":
             raise HTTPException(
@@ -279,7 +282,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 detail="Blocked by Prompt Security, Violations: " + ", ".join(violations),
             )
         elif action == "modify":
-            modified_text = result.get("modified_text")
+            modified_text: Final = result.get("modified_text")
             if modified_text is not None:
                 # If we combined multiple texts, return the modified version as single text
                 # The framework will handle distributing it back
@@ -289,7 +292,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
     def _extract_texts_from_messages(self, messages: list) -> list[str]:
         """Extract text content from messages."""
-        texts = []
+        texts: Final = []
         for message in messages:
             content = message.get("content")
             if isinstance(content, str):
@@ -326,20 +329,20 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 except HTTPException:
                     raise
                 except Exception as e:
-                    verbose_proxy_logger.error(f"Error processing image: {e!s}")
+                    verbose_proxy_logger.error("Error processing image: %s", e)
 
     @staticmethod
     def _resolve_key_alias_from_request_data(request_data: dict) -> str | None:
         """Resolve user API key alias from request_data metadata."""
         # Check litellm_metadata first (set by guardrail framework)
-        litellm_metadata = request_data.get("litellm_metadata", {})
+        litellm_metadata: Final = request_data.get("litellm_metadata", {})
         if litellm_metadata:
             alias = litellm_metadata.get("user_api_key_alias")
             if alias:
                 return alias
 
         # Then check regular metadata
-        metadata = request_data.get("metadata", {})
+        metadata: Final = request_data.get("metadata", {})
         if metadata:
             alias = metadata.get("user_api_key_alias")
             if alias:
@@ -357,7 +360,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         Sanitize file content using Prompt Security API.
         Returns: dict with keys 'action', 'content', 'metadata'
         """
-        headers = {"APP-ID": self.api_key}
+        headers: Final = {"APP-ID": self.api_key}
         if user_api_key_alias:
             headers["X-LiteLLM-Key-Alias"] = user_api_key_alias
 
@@ -369,15 +372,15 @@ class PromptSecurityGuardrail(CustomGuardrail):
         )
 
         # Step 1: Upload file for sanitization
-        files = {"file": (filename, file_data)}
-        upload_response = await self.async_handler.post(
+        files: Final = {"file": (filename, file_data)}
+        upload_response: Final = await self.async_handler.post(
             f"{self.api_base}/api/sanitizeFile",
             headers=headers,
             files=files,
         )
         upload_response.raise_for_status()
-        upload_result = upload_response.json()
-        job_id = upload_result.get("jobId")
+        upload_result: Final = upload_response.json()
+        job_id: Final = upload_result.get("jobId")
 
         self._log_api_response(
             url=f"{self.api_base}/api/sanitizeFile",
@@ -441,36 +444,36 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
     async def _process_image_url_item(self, item: dict, user_api_key_alias: str | None) -> dict:
         """Process and sanitize image_url items."""
-        image_url_data = item.get("image_url", {})
-        url = image_url_data.get("url", "") if isinstance(image_url_data, dict) else image_url_data
+        image_url_data: Final = item.get("image_url", {})
+        url: Final = image_url_data.get("url", "") if isinstance(image_url_data, dict) else image_url_data
 
         if not url.startswith("data:"):
             return item
 
         try:
             header, encoded = url.split(",", 1)
-            file_data = base64.b64decode(encoded)
-            mime_type = header.split(";")[0].split(":")[1]
-            extension = mime_type.split("/")[-1]
-            filename = f"image.{extension}"
+            file_data: Final = base64.b64decode(encoded)
+            mime_type: Final = header.split(";")[0].split(":")[1]
+            extension: Final = mime_type.split("/")[-1]
+            filename: Final = f"image.{extension}"
 
-            sanitization_result = await self.sanitize_file_content(
+            sanitization_result: Final = await self.sanitize_file_content(
                 file_data, filename, user_api_key_alias=user_api_key_alias
             )
-            action = sanitization_result.get("action")
+            action: Final = sanitization_result.get("action")
 
             if action == "block":
-                violations = sanitization_result.get("violations", [])
+                violations: Final = sanitization_result.get("violations", [])
                 raise HTTPException(
                     status_code=400,
                     detail=f"File blocked by Prompt Security. Violations: {', '.join(violations)}",
                 )
 
             if action == "modify":
-                sanitized_content = sanitization_result.get("content", "")
+                sanitized_content: Final = sanitization_result.get("content", "")
                 if sanitized_content:
-                    sanitized_encoded = base64.b64encode(sanitized_content.encode()).decode()
-                    sanitized_url = f"{header},{sanitized_encoded}"
+                    sanitized_encoded: Final = base64.b64encode(sanitized_content.encode()).decode()
+                    sanitized_url: Final = f"{header},{sanitized_encoded}"
                     if isinstance(image_url_data, dict):
                         image_url_data["url"] = sanitized_url
                     else:
@@ -481,12 +484,12 @@ class PromptSecurityGuardrail(CustomGuardrail):
         except HTTPException:
             raise
         except Exception as e:
-            verbose_proxy_logger.error(f"Error sanitizing image file: {e!s}")
-            raise HTTPException(status_code=500, detail=f"File sanitization failed: {e!s}")
+            verbose_proxy_logger.error("Error sanitizing image file: %s", e)
+            raise HTTPException(status_code=500, detail=f"File sanitization failed: {e}")
 
     async def _process_document_item(self, item: dict, user_api_key_alias: str | None) -> dict:
         """Process and sanitize document/file items."""
-        doc_data = item.get("document") or item.get("file") or item
+        doc_data: Final = item.get("document") or item.get("file") or item
 
         if isinstance(doc_data, dict):
             url = doc_data.get("url", "")
@@ -517,32 +520,32 @@ class PromptSecurityGuardrail(CustomGuardrail):
             elif "excel" in mime_type or "xlsx" in mime_type:
                 filename = "document.xlsx"
             else:
-                extension = mime_type.split("/")[-1]
+                extension: Final = mime_type.split("/")[-1]
                 filename = f"document.{extension}"
 
-            verbose_proxy_logger.info(f"Sanitizing document: {filename}")
+            verbose_proxy_logger.info("Sanitizing document: %s", filename)
 
-            sanitization_result = await self.sanitize_file_content(
+            sanitization_result: Final = await self.sanitize_file_content(
                 file_data, filename, user_api_key_alias=user_api_key_alias
             )
-            action = sanitization_result.get("action")
+            action: Final = sanitization_result.get("action")
 
             if action == "block":
-                violations = sanitization_result.get("violations", [])
+                violations: Final = sanitization_result.get("violations", [])
                 raise HTTPException(
                     status_code=400,
                     detail=f"Document blocked by Prompt Security. Violations: {', '.join(violations)}",
                 )
 
             if action == "modify":
-                sanitized_content = sanitization_result.get("content", "")
+                sanitized_content: Final = sanitization_result.get("content", "")
                 if sanitized_content:
-                    sanitized_encoded = base64.b64encode(
+                    sanitized_encoded: Final = base64.b64encode(
                         sanitized_content if isinstance(sanitized_content, bytes) else sanitized_content.encode()
                     ).decode()
 
                     if url.startswith("data:") and header:
-                        sanitized_url = f"{header},{sanitized_encoded}"
+                        sanitized_url: Final = f"{header},{sanitized_encoded}"
                         if isinstance(doc_data, dict):
                             doc_data["url"] = sanitized_url
                     elif isinstance(doc_data, dict):
@@ -554,12 +557,12 @@ class PromptSecurityGuardrail(CustomGuardrail):
         except HTTPException:
             raise
         except Exception as e:
-            verbose_proxy_logger.error(f"Error sanitizing document: {e!s}")
-            raise HTTPException(status_code=500, detail=f"Document sanitization failed: {e!s}")
+            verbose_proxy_logger.error("Error sanitizing document: %s", e)
+            raise HTTPException(status_code=500, detail=f"Document sanitization failed: {e}")
 
     async def process_message_files(self, messages: list, user_api_key_alias: str | None = None) -> list:
         """Process messages and sanitize any file content (images, documents, PDFs, etc.)."""
-        processed_messages = []
+        processed_messages: Final = []
 
         for message in messages:
             content = message.get("content")
@@ -594,8 +597,8 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         This allows checking tool results for indirect prompt injection when enabled.
         """
-        supported_roles = ["system", "user", "assistant"]
-        filtered_messages = []
+        supported_roles: Final = ["system", "user", "assistant"]
+        filtered_messages: Final = []
         transformed_count = 0
         filtered_count = 0
 
@@ -639,7 +642,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         return filtered_messages
 
     def _build_headers(self, user_api_key_alias: str | None = None) -> dict:
-        headers = {"APP-ID": self.api_key, "Content-Type": "application/json"}
+        headers: Final = {"APP-ID": self.api_key, "Content-Type": "application/json"}
         if user_api_key_alias:
             headers["X-LiteLLM-Key-Alias"] = user_api_key_alias
         return headers

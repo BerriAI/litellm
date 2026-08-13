@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 from litellm import verbose_logger
 
@@ -8,7 +8,7 @@ _db = Any
 # Keeping these in one place avoids repeating the check across all view blocks
 # and prevents overly broad matches (e.g. bare 'undefined' would also match
 # 'undefined function' or 'column undefined_col referenced in query').
-_VIEW_NOT_FOUND_MARKERS = ("does not exist", "no such table", "undefined table")
+_VIEW_NOT_FOUND_MARKERS: Final = ("does not exist", "no such table", "undefined table")
 
 
 async def create_missing_views(db: _db):
@@ -230,15 +230,15 @@ async def should_create_missing_views(db: _db) -> bool:
     If SpendLogs table already has values, then don't create views on startup.
     """
 
-    sql_query = """
+    sql_query: Final = """
     SELECT reltuples::BIGINT
     FROM pg_class
     WHERE oid = '"LiteLLM_SpendLogs"'::regclass;
     """
 
-    result = await db.query_raw(query=sql_query)
+    result: Final = await db.query_raw(query=sql_query)
 
-    verbose_logger.debug(f"Estimated Row count of LiteLLM_SpendLogs = {result}")
+    verbose_logger.debug("Estimated Row count of LiteLLM_SpendLogs = %s", result)
     if (
         result
         and isinstance(result, list)

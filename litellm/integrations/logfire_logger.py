@@ -4,7 +4,7 @@
 import os
 import traceback
 from enum import Enum
-from typing import Any, NamedTuple
+from typing import Any, Final, NamedTuple
 
 from typing_extensions import LiteralString
 
@@ -35,7 +35,7 @@ class LogfireLogger:
             if logfire.DEFAULT_LOGFIRE_INSTANCE.config.send_to_logfire:
                 logfire.configure(token=os.getenv("LOGFIRE_TOKEN"))
         except Exception as e:
-            print_verbose(f"Got exception on init logfire client {e!s}")
+            print_verbose(f"Got exception on init logfire client {e}")
             raise e
 
     def _get_span_config(self, payload) -> SpanConfig:
@@ -90,18 +90,18 @@ class LogfireLogger:
         try:
             import logfire
 
-            verbose_logger.debug(f"logfire Logging - Enters logging function for model {kwargs}")
+            verbose_logger.debug("logfire Logging - Enters logging function for model %s", kwargs)
 
             if not response_obj:
                 response_obj = {}
-            litellm_params = kwargs.get("litellm_params", {})
-            metadata = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
-            messages = kwargs.get("messages")
-            optional_params = kwargs.get("optional_params", {})
-            call_type = kwargs.get("call_type", "completion")
-            cache_hit = kwargs.get("cache_hit", False)
-            usage = response_obj.get("usage", {})
-            id = response_obj.get("id", str(uuid.uuid4()))
+            litellm_params: Final = kwargs.get("litellm_params", {})
+            metadata: Final = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
+            messages: Final = kwargs.get("messages")
+            optional_params: Final = kwargs.get("optional_params", {})
+            call_type: Final = kwargs.get("call_type", "completion")
+            cache_hit: Final = kwargs.get("cache_hit", False)
+            usage: Final = response_obj.get("usage", {})
+            id: Final = response_obj.get("id", str(uuid.uuid4()))
             try:
                 response_time = (end_time - start_time).total_seconds()
             except Exception:
@@ -126,7 +126,7 @@ class LogfireLogger:
             clean_metadata = redact_user_api_key_info(metadata=clean_metadata)
 
             # Build the initial payload
-            payload = {
+            payload: Final = {
                 "id": id,
                 "call_type": call_type,
                 "cache_hit": cache_hit,
@@ -142,7 +142,7 @@ class LogfireLogger:
                 "usage": usage,
                 "metadata": clean_metadata,
             }
-            logfire_openai = logfire.with_settings(custom_scope_suffix="openai")
+            logfire_openai: Final = logfire.with_settings(custom_scope_suffix="openai")
             message_template, span_data = self._get_span_config(payload)
             if level == LogfireLevel.INFO:
                 logfire_openai.info(
@@ -159,4 +159,4 @@ class LogfireLogger:
 
             print_verbose(f"Logfire Layer Logging - final response object: {response_obj}")
         except Exception as e:
-            verbose_logger.debug(f"Logfire Layer Error - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.debug("Logfire Layer Error - %s\n%s", e, traceback.format_exc())

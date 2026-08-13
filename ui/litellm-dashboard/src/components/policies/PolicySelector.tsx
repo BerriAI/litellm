@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Select } from "antd";
+import useCan from "@/app/(dashboard)/hooks/useCan";
 import { Policy } from "./types";
 import { getPoliciesList } from "../networking";
 
@@ -51,12 +52,13 @@ const PolicySelector: React.FC<PolicySelectorProps> = ({
   disabled,
   onPoliciesLoaded,
 }) => {
+  const canViewPolicies = useCan("viewPolicies");
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const fetchPolicies = async () => {
-      if (!accessToken) return;
+      if (!accessToken || !canViewPolicies) return;
 
       setLoading(true);
       try {
@@ -73,11 +75,15 @@ const PolicySelector: React.FC<PolicySelectorProps> = ({
     };
 
     fetchPolicies();
-  }, [accessToken, onPoliciesLoaded]);
+  }, [accessToken, canViewPolicies, onPoliciesLoaded]);
 
   const handlePolicyChange = (selectedValues: string[]) => {
     onChange(selectedValues);
   };
+
+  if (!canViewPolicies) {
+    return null;
+  }
 
   return (
     <div>

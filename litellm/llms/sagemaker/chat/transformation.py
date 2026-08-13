@@ -7,7 +7,7 @@ LiteLLM Docs: https://docs.litellm.ai/docs/providers/aws_sagemaker#sagemaker-mes
 Huggingface Docs: https://huggingface.co/docs/text-generation-inference/en/messages_api
 """
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._models import Headers
@@ -65,7 +65,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        aws_region_name = self._get_aws_region_name(
+        aws_region_name: Final = self._get_aws_region_name(
             optional_params=optional_params,
             model=model,
             model_id=None,
@@ -75,7 +75,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         else:
             api_base = f"https://runtime.sagemaker.{aws_region_name}.amazonaws.com/endpoints/{model}/invocations"
 
-        sagemaker_base_url = cast(str | None, optional_params.get("sagemaker_base_url"))
+        sagemaker_base_url: Final = cast(str | None, optional_params.get("sagemaker_base_url"))
         if sagemaker_base_url is not None:
             api_base = sagemaker_base_url
 
@@ -129,7 +129,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             client = _get_httpx_client(params={})
 
         try:
-            response = client.post(
+            response: Final = client.post(
                 api_base,
                 headers=headers,
                 data=signed_json_body if signed_json_body is not None else data,
@@ -142,10 +142,10 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         if response.status_code != 200:
             raise SagemakerError(status_code=response.status_code, message=response.text)
 
-        custom_stream_decoder = AWSEventStreamDecoder(model="", is_messages_api=True)
-        completion_stream = custom_stream_decoder.iter_bytes(response.iter_bytes())
+        custom_stream_decoder: Final = AWSEventStreamDecoder(model="", is_messages_api=True)
+        completion_stream: Final = custom_stream_decoder.iter_bytes(response.iter_bytes())
 
-        streaming_response = CustomStreamWrapper(
+        streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -175,7 +175,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             client = get_async_httpx_client(llm_provider=llm_provider, params={})
 
         try:
-            response = await client.post(
+            response: Final = await client.post(
                 api_base,
                 headers=headers,
                 data=signed_json_body if signed_json_body is not None else data,
@@ -188,10 +188,10 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         if response.status_code != 200:
             raise SagemakerError(status_code=response.status_code, message=response.text)
 
-        custom_stream_decoder = AWSEventStreamDecoder(model="", is_messages_api=True)
-        completion_stream = custom_stream_decoder.aiter_bytes(response.aiter_bytes())
+        custom_stream_decoder: Final = AWSEventStreamDecoder(model="", is_messages_api=True)
+        completion_stream: Final = custom_stream_decoder.aiter_bytes(response.aiter_bytes())
 
-        streaming_response = CustomStreamWrapper(
+        streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider=custom_llm_provider,

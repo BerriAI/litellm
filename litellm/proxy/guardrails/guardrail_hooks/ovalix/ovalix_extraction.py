@@ -4,15 +4,15 @@ import posixpath
 import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import NamedTuple
+from typing import Final, NamedTuple
 from urllib.parse import unquote, urlparse
 
-_TOOL_NAME_MAX_LENGTH = 100
-_DEFAULT_TOOL_RESULT_NAME = "tool_result"
-_NO_TOOL_INPUT: Mapping[str, object] = MappingProxyType({})
+_TOOL_NAME_MAX_LENGTH: Final = 100
+_DEFAULT_TOOL_RESULT_NAME: Final = "tool_result"
+_NO_TOOL_INPUT: Final[Mapping[str, object]] = MappingProxyType({})
 
-_DATA_URL_RE = re.compile(r"^data:(?P<mime>[^;,]+)?(?P<params>(?:;[^;,]+)*?)(?P<b64>;base64)?,", re.IGNORECASE)
-_URLSAFE_TO_STANDARD_B64 = str.maketrans("-_", "+/")
+_DATA_URL_RE: Final = re.compile(r"^data:(?P<mime>[^;,]+)?(?P<params>(?:;[^;,]+)*?)(?P<b64>;base64)?,", re.IGNORECASE)
+_URLSAFE_TO_STANDARD_B64: Final = str.maketrans("-_", "+/")
 
 
 class FilePart(NamedTuple):
@@ -25,34 +25,39 @@ class FilePart(NamedTuple):
 
 
 def _split_data_url(value: str) -> tuple[str | None, str | None]:
-    match = _DATA_URL_RE.match(value)
+    match: Final = _DATA_URL_RE.match(value)
     if not match:
         if value.lower().startswith("data:"):
             return None, None
         return None, value
-    mime = match.group("mime") or None
+    mime: Final = match.group("mime") or None
     if not match.group("b64"):
         return mime, None
     return mime, value[match.end() :]
 
 
+def _b64decode_or_none(payload: str) -> bytes | None:
+    try:
+        return base64.b64decode(payload, validate=True)
+    except ValueError:
+        return None
+
+
 def _decode_base64_with_limit(b64_payload: str, size_limit: int | None) -> tuple[bytes | None, bool]:
-    cleaned = "".join(b64_payload.split())
+    cleaned: Final = "".join(b64_payload.split())
     if not cleaned:
         return None, False
     if size_limit is not None and (len(cleaned) * 3) // 4 - 2 > size_limit:
         return None, True
-    data = None
-    try:
-        data = base64.b64decode(cleaned, validate=True)
-    except ValueError:
-        if "-" in cleaned or "_" in cleaned:
-            try:
-                data = base64.b64decode(cleaned.translate(_URLSAFE_TO_STANDARD_B64), validate=True)
-            except ValueError:
-                return None, False
-        else:
-            return None, False
+    strict: Final = _b64decode_or_none(cleaned)
+    urlsafe: Final = (
+        _b64decode_or_none(cleaned.translate(_URLSAFE_TO_STANDARD_B64))
+        if strict is None and ("-" in cleaned or "_" in cleaned)
+        else None
+    )
+    data: Final = strict if strict is not None else urlsafe
+    if data is None:
+        return None, False
     if size_limit is not None and len(data) > size_limit:
         return None, True
     return (data, False) if data else (None, False)
@@ -66,11 +71,11 @@ def _name_from_url(url: str) -> str | None:
 
 
 def _part_from_file_block(block: Mapping[str, object], size_limit: int | None, message_index: int) -> FilePart | None:
-    file_obj = block.get("file")
+    file_obj: Final = block.get("file")
     if not isinstance(file_obj, dict):
         return None
-    name = file_obj.get("filename") or file_obj.get("file_id") or None
-    file_data = file_obj.get("file_data")
+    name: Final = file_obj.get("filename") or file_obj.get("file_id") or None
+    file_data: Final = file_obj.get("file_data")
     if isinstance(file_data, str) and file_data:
         mime_hint, payload = _split_data_url(file_data)
         data, oversize = _decode_base64_with_limit(payload, size_limit) if payload else (None, False)
@@ -82,8 +87,8 @@ def _part_from_file_block(block: Mapping[str, object], size_limit: int | None, m
 def _part_from_image_url_block(
     block: Mapping[str, object], size_limit: int | None, message_index: int
 ) -> FilePart | None:
-    image_url = block.get("image_url")
-    url = image_url.get("url") if isinstance(image_url, dict) else image_url
+    image_url: Final = block.get("image_url")
+    url: Final = image_url.get("url") if isinstance(image_url, dict) else image_url
     if not isinstance(url, str) or not url:
         return None
     if url.startswith("data:"):
@@ -98,50 +103,53 @@ def _part_from_image_url_block(
 def _part_from_input_file_block(
     block: Mapping[str, object], size_limit: int | None, message_index: int
 ) -> FilePart | None:
-    name = block.get("filename") or block.get("file_id") or None
-    file_data = block.get("file_data")
+    declared_name: Final = block.get("filename") or block.get("file_id") or None
+    file_data: Final = block.get("file_data")
     if isinstance(file_data, str) and file_data:
         mime_hint, payload = _split_data_url(file_data)
         data, oversize = _decode_base64_with_limit(payload, size_limit) if payload else (None, False)
         if data is not None or oversize:
-            return FilePart(name, data, mime_hint, True, oversize, message_index)
-    file_url = block.get("file_url")
-    if isinstance(file_url, str) and file_url and not name:
-        name = _name_from_url(file_url)
+            return FilePart(declared_name, data, mime_hint, True, oversize, message_index)
+    file_url: Final = block.get("file_url")
+    name: Final = (
+        _name_from_url(file_url) if isinstance(file_url, str) and file_url and not declared_name else declared_name
+    )
     return FilePart(name, None, None, False, False, message_index)
 
 
 def _part_from_input_audio_block(
     block: Mapping[str, object], size_limit: int | None, message_index: int
 ) -> FilePart | None:
-    audio = block.get("input_audio")
+    audio: Final = block.get("input_audio")
     if not isinstance(audio, dict):
         return None
-    data_b64 = audio.get("data")
+    data_b64: Final = audio.get("data")
     if not isinstance(data_b64, str) or not data_b64:
         return None
-    name = f"audio.{audio.get('format') or 'bin'}"
+    name: Final = f"audio.{audio.get('format') or 'bin'}"
     data, oversize = _decode_base64_with_limit(data_b64, size_limit)
     if data is None and not oversize:
         return FilePart(name, None, None, False, False, message_index)
     return FilePart(name, data, None, True, oversize, message_index)
 
 
-_BLOCK_PARSERS: Mapping[str, Callable[[Mapping[str, object], int | None, int], FilePart | None]] = MappingProxyType(
-    {
-        "file": _part_from_file_block,
-        "image_url": _part_from_image_url_block,
-        "input_image": _part_from_image_url_block,
-        "input_file": _part_from_input_file_block,
-        "input_audio": _part_from_input_audio_block,
-    }
+_BLOCK_PARSERS: Final[Mapping[str, Callable[[Mapping[str, object], int | None, int], FilePart | None]]] = (
+    MappingProxyType(
+        {
+            "file": _part_from_file_block,
+            "image_url": _part_from_image_url_block,
+            "input_image": _part_from_image_url_block,
+            "input_file": _part_from_input_file_block,
+            "input_audio": _part_from_input_audio_block,
+        }
+    )
 )
 
 
 def _file_parts_of_message(
     message: Mapping[str, object], size_limit: int | None, message_index: int
 ) -> Iterator[FilePart]:
-    content = message.get("content")
+    content: Final = message.get("content")
     if not isinstance(content, list):
         return
     for block in content:
@@ -162,7 +170,7 @@ def _file_parts_of_message(
 
 
 def extract_file_parts_from_messages(
-    structured_messages: Sequence[Mapping[str, object]] | None, size_limit: int | None = None
+    structured_messages: Sequence[object] | None, size_limit: int | None = None
 ) -> tuple[FilePart, ...]:
     return tuple(
         part
@@ -174,7 +182,7 @@ def extract_file_parts_from_messages(
 
 def _file_part_of_image(value: str, size_limit: int | None, index: int) -> FilePart | None:
     if value.startswith(("http://", "https://")):
-        name = _name_from_url(value)
+        name: Final = _name_from_url(value)
         return FilePart(name, None, None, False, False, index) if name else None
     mime_hint, payload = _split_data_url(value)
     data, oversize = _decode_base64_with_limit(payload, size_limit) if payload else (None, False)
@@ -183,8 +191,10 @@ def _file_part_of_image(value: str, size_limit: int | None, index: int) -> FileP
     return FilePart(None, data, mime_hint, True, oversize, index)
 
 
-def extract_file_parts_from_images(images: Sequence[str] | None, size_limit: int | None = None) -> tuple[FilePart, ...]:
-    candidates = (
+def extract_file_parts_from_images(
+    images: Sequence[object] | None, size_limit: int | None = None
+) -> tuple[FilePart, ...]:
+    candidates: Final = (
         _file_part_of_image(value, size_limit, index)
         for index, value in enumerate(images or ())
         if isinstance(value, str) and value
@@ -195,10 +205,9 @@ def extract_file_parts_from_images(images: Sequence[str] | None, size_limit: int
 def make_tool_data(
     name: str, content: str | None, tool_input: Mapping[str, object] | None = None
 ) -> Mapping[str, object]:
-    action_name = str(name) if str(name).strip() else _DEFAULT_TOOL_RESULT_NAME
-    tool_name = action_name[:_TOOL_NAME_MAX_LENGTH]
-    if not tool_name.strip():
-        tool_name = _DEFAULT_TOOL_RESULT_NAME
+    action_name: Final = str(name) if str(name).strip() else _DEFAULT_TOOL_RESULT_NAME
+    truncated: Final = action_name[:_TOOL_NAME_MAX_LENGTH]
+    tool_name: Final = truncated if truncated.strip() else _DEFAULT_TOOL_RESULT_NAME
     return {
         "content": content,
         "tool_name": tool_name,
@@ -224,7 +233,7 @@ def _parsed_tool_input(raw_arguments: str) -> Mapping[str, object]:
     if not raw_arguments:
         return _NO_TOOL_INPUT
     try:
-        parsed = json.loads(raw_arguments)
+        parsed: Final = json.loads(raw_arguments)
     except (ValueError, TypeError):
         return _NO_TOOL_INPUT
     return parsed if isinstance(parsed, dict) else _NO_TOOL_INPUT
@@ -241,11 +250,13 @@ def _tool_content_and_input(raw_arguments: object) -> tuple[str, Mapping[str, ob
 
 
 def tool_call_to_tool_data(tool_call: object) -> Mapping[str, object] | None:
-    function = _tool_call_field(tool_call, "function")
-    name = function.get("name") if isinstance(function, dict) else getattr(function, "name", None)
+    function: Final = _tool_call_field(tool_call, "function")
+    name: Final = function.get("name") if isinstance(function, dict) else getattr(function, "name", None)
     if not name or not str(name).strip():
         return None
-    raw_arguments = function.get("arguments") if isinstance(function, dict) else getattr(function, "arguments", None)
+    raw_arguments: Final = (
+        function.get("arguments") if isinstance(function, dict) else getattr(function, "arguments", None)
+    )
     content, tool_input = _tool_content_and_input(raw_arguments)
     return make_tool_data(name, content, tool_input)
 
@@ -260,18 +271,26 @@ def _tool_content_blocks(content: Sequence[object]) -> Iterator[str]:
             yield block
 
 
-def _extract_tool_content(content: object) -> str | None:
+def _normalized_tool_content(content: object) -> object:
     if isinstance(content, list):
-        content = "\n".join(_tool_content_blocks(content))
-    elif isinstance(content, dict):
-        content = _json_or_str(content)
-    if not isinstance(content, str) or not content.strip():
-        return None
+        return "\n".join(_tool_content_blocks(content))
+    if isinstance(content, dict):
+        return _json_or_str(content)
     return content
 
 
+def _extract_tool_content(content: object) -> str | None:
+    text: Final = _normalized_tool_content(content)
+    if not isinstance(text, str) or not text.strip():
+        return None
+    return text
+
+
 def _declared_names_for_call(message: Mapping[str, object], call_id: str) -> Iterator[str]:
-    for tool_call in message.get("tool_calls") or ():
+    tool_calls: Final = message.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return
+    for tool_call in tool_calls:
         if not isinstance(tool_call, Mapping) or tool_call.get("id") != call_id:
             continue
         function = tool_call.get("function")
@@ -280,10 +299,10 @@ def _declared_names_for_call(message: Mapping[str, object], call_id: str) -> Ite
             yield name
 
 
-def _resolve_tool_name(messages: Sequence[Mapping[str, object]], tool_index: int, tool_call_id: object) -> str:
+def _resolve_tool_name(messages: Sequence[object], tool_index: int, tool_call_id: object) -> str:
     if not isinstance(tool_call_id, str) or not tool_call_id:
         return _DEFAULT_TOOL_RESULT_NAME
-    declared = tuple(
+    declared: Final = tuple(
         name
         for message in messages[:tool_index]
         if isinstance(message, Mapping) and message.get("role") == "assistant"
@@ -293,9 +312,9 @@ def _resolve_tool_name(messages: Sequence[Mapping[str, object]], tool_index: int
 
 
 def extract_tool_results(
-    structured_messages: Sequence[Mapping[str, object]] | None,
+    structured_messages: Sequence[object] | None,
 ) -> tuple[tuple[str, str, str | None], ...]:
-    messages = tuple(structured_messages or ())
+    messages: Final = tuple(structured_messages or ())
 
     def _results() -> Iterator[tuple[str, str, str | None]]:
         for index, message in enumerate(messages):
@@ -310,7 +329,7 @@ def extract_tool_results(
     return tuple(_results())
 
 
-def _message_text_origins(structured_messages: Sequence[Mapping[str, object]] | None) -> Iterator[tuple[str, bool]]:
+def _message_text_origins(structured_messages: Sequence[object] | None) -> Iterator[tuple[str, bool]]:
     for message in structured_messages or ():
         if not isinstance(message, Mapping):
             continue
@@ -324,9 +343,7 @@ def _message_text_origins(structured_messages: Sequence[Mapping[str, object]] | 
                     yield block["text"], from_tool_result
 
 
-def tool_result_text_indices(
-    structured_messages: Sequence[Mapping[str, object]] | None, texts: Sequence[str]
-) -> frozenset[int]:
+def tool_result_text_indices(structured_messages: Sequence[object] | None, texts: Sequence[str]) -> frozenset[int]:
     """Positions in ``texts`` that hold content already submitted under the TOOL policy.
 
     The chat-completions guardrail flow builds ``texts`` and ``structured_messages`` from the
@@ -335,7 +352,7 @@ def tool_result_text_indices(
     so the mapping is only trusted when replaying it reproduces ``texts`` exactly; anything else
     falls back to checking every text.
     """
-    origins = tuple(_message_text_origins(structured_messages))
+    origins: Final = tuple(_message_text_origins(structured_messages))
     if tuple(text for text, _ in origins) != tuple(texts):
         return frozenset()
     return frozenset(index for index, (_, from_tool_result) in enumerate(origins) if from_tool_result)

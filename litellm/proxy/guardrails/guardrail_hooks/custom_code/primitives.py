@@ -7,7 +7,7 @@ and provide safe, sandboxed functionality for common guardrail operations.
 
 import json
 import re
-from typing import Any
+from typing import Any, Final
 from urllib.parse import urlparse
 
 import httpx
@@ -42,7 +42,7 @@ def block(reason: str, detection_info: dict[str, Any] | None = None) -> dict[str
     Returns:
         Dict indicating the request should be blocked
     """
-    result: dict[str, Any] = {"action": "block", "reason": reason}
+    result: Final[dict[str, Any]] = {"action": "block", "reason": reason}
     if detection_info:
         result["detection_info"] = detection_info
     return result
@@ -64,7 +64,7 @@ def modify(
     Returns:
         Dict indicating the content should be modified
     """
-    result: dict[str, Any] = {"action": "modify"}
+    result: Final[dict[str, Any]] = {"action": "modify"}
     if texts is not None:
         result["texts"] = texts
     if images is not None:
@@ -94,7 +94,7 @@ def regex_match(text: str, pattern: str, flags: int = 0) -> bool:
     try:
         return bool(re.search(pattern, text, flags))
     except re.error as e:
-        verbose_proxy_logger.warning(f"Starlark regex_match error: {e}")
+        verbose_proxy_logger.warning("Starlark regex_match error: %s", e)
         return False
 
 
@@ -113,7 +113,7 @@ def regex_match_all(text: str, pattern: str, flags: int = 0) -> bool:
     try:
         return bool(re.fullmatch(pattern, text, flags))
     except re.error as e:
-        verbose_proxy_logger.warning(f"Starlark regex_match_all error: {e}")
+        verbose_proxy_logger.warning("Starlark regex_match_all error: %s", e)
         return False
 
 
@@ -133,7 +133,7 @@ def regex_replace(text: str, pattern: str, replacement: str, flags: int = 0) -> 
     try:
         return re.sub(pattern, replacement, text, flags=flags)
     except re.error as e:
-        verbose_proxy_logger.warning(f"Starlark regex_replace error: {e}")
+        verbose_proxy_logger.warning("Starlark regex_replace error: %s", e)
         return text
 
 
@@ -152,7 +152,7 @@ def regex_find_all(text: str, pattern: str, flags: int = 0) -> list[str]:
     try:
         return re.findall(pattern, text, flags)
     except re.error as e:
-        verbose_proxy_logger.warning(f"Starlark regex_find_all error: {e}")
+        verbose_proxy_logger.warning("Starlark regex_find_all error: %s", e)
         return []
 
 
@@ -174,7 +174,7 @@ def json_parse(text: str) -> Any | None:
     try:
         return json.loads(text)
     except (json.JSONDecodeError, TypeError) as e:
-        verbose_proxy_logger.debug(f"Starlark json_parse error: {e}")
+        verbose_proxy_logger.debug("Starlark json_parse error: %s", e)
         return None
 
 
@@ -191,7 +191,7 @@ def json_stringify(obj: Any) -> str:
     try:
         return json.dumps(obj)
     except (TypeError, ValueError) as e:
-        verbose_proxy_logger.warning(f"Starlark json_stringify error: {e}")
+        verbose_proxy_logger.warning("Starlark json_stringify error: %s", e)
         return ""
 
 
@@ -222,7 +222,7 @@ def json_schema_valid(obj: Any, schema: dict[str, Any]) -> bool:
                 return False
             raise
     except Exception as e:
-        verbose_proxy_logger.warning(f"Custom code json_schema_valid error: {e}")
+        verbose_proxy_logger.warning("Custom code json_schema_valid error: %s", e)
         return False
 
 
@@ -234,7 +234,7 @@ def _basic_json_schema_validate(obj: Any, schema: dict[str, Any], max_depth: int
     Uses an iterative approach with a stack to avoid recursion limits.
     max_depth limits nesting to prevent infinite loops from circular schemas.
     """
-    type_map: dict[str, type | tuple[type, ...]] = {
+    type_map: Final[dict[str, type | tuple[type, ...]]] = {
         "object": dict,
         "array": list,
         "string": str,
@@ -245,7 +245,7 @@ def _basic_json_schema_validate(obj: Any, schema: dict[str, Any], max_depth: int
     }
 
     # Stack of (obj, schema, depth) tuples to process
-    stack: list[tuple[Any, dict[str, Any], int]] = [(obj, schema, 0)]
+    stack: Final[list[tuple[Any, dict[str, Any], int]]] = [(obj, schema, 0)]
 
     while stack:
         current_obj, current_schema, depth = stack.pop()
@@ -283,7 +283,7 @@ def _basic_json_schema_validate(obj: Any, schema: dict[str, Any], max_depth: int
 
 
 # Common URL pattern for extraction
-_URL_PATTERN = re.compile(r"https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+[^\s]*", re.IGNORECASE)
+_URL_PATTERN: Final = re.compile(r"https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+[^\s]*", re.IGNORECASE)
 
 
 def extract_urls(text: str) -> list[str]:
@@ -310,7 +310,7 @@ def is_valid_url(url: str) -> bool:
         True if the URL is valid, False otherwise
     """
     try:
-        result = urlparse(url)
+        result: Final = urlparse(url)
         return all([result.scheme, result.netloc])
     except Exception:
         return False
@@ -326,7 +326,7 @@ def all_urls_valid(text: str) -> bool:
     Returns:
         True if all URLs are valid (or no URLs), False otherwise
     """
-    urls = extract_urls(text)
+    urls: Final = extract_urls(text)
     return all(is_valid_url(url) for url in urls)
 
 
@@ -341,7 +341,7 @@ def get_url_domain(url: str) -> str | None:
         The domain, or None if invalid
     """
     try:
-        result = urlparse(url)
+        result: Final = urlparse(url)
         return result.netloc if result.netloc else None
     except Exception:
         return None
@@ -352,10 +352,10 @@ def get_url_domain(url: str) -> str | None:
 # =============================================================================
 
 # Default timeout for HTTP requests (in seconds)
-_HTTP_DEFAULT_TIMEOUT = 30.0
+_HTTP_DEFAULT_TIMEOUT: Final = 30.0
 
 # Maximum allowed timeout (in seconds)
-_HTTP_MAX_TIMEOUT = 60.0
+_HTTP_MAX_TIMEOUT: Final = 60.0
 
 
 def _http_error_response(error: str) -> dict[str, Any]:
@@ -452,7 +452,7 @@ async def http_request(
 
     # Validate and normalize method
     method = method.upper()
-    allowed_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
+    allowed_methods: Final = {"GET", "POST", "PUT", "DELETE", "PATCH"}
     if method not in allowed_methods:
         return _http_error_response(f"Invalid HTTP method: {method}. Allowed: {', '.join(allowed_methods)}")
 
@@ -463,27 +463,27 @@ async def http_request(
         timeout = min(max(0.1, timeout), _HTTP_MAX_TIMEOUT)
 
     # Get the global cached async HTTP client
-    client = get_async_httpx_client(
+    client: Final = get_async_httpx_client(
         llm_provider=httpxSpecialProvider.GuardrailCallback,
         params={"timeout": httpx.Timeout(timeout=timeout, connect=5.0)},
     )
 
     try:
-        response = await _execute_http_request(client, method, url, headers, body, timeout)
+        response: Final = await _execute_http_request(client, method, url, headers, body, timeout)
         return _http_success_response(response)
 
     except httpx.TimeoutException as e:
-        verbose_proxy_logger.warning(f"Custom code http_request timeout: {e}")
+        verbose_proxy_logger.warning("Custom code http_request timeout: %s", e)
         return _http_error_response(f"Request timeout after {timeout}s")
     except httpx.HTTPStatusError as e:
         # Return the response even for non-2xx status codes
         return _http_success_response(e.response)
     except httpx.RequestError as e:
-        verbose_proxy_logger.warning(f"Custom code http_request error: {e}")
-        return _http_error_response(f"Request failed: {e!s}")
+        verbose_proxy_logger.warning("Custom code http_request error: %s", e)
+        return _http_error_response(f"Request failed: {e}")
     except Exception as e:
-        verbose_proxy_logger.warning(f"Custom code http_request unexpected error: {e}")
-        return _http_error_response(f"Unexpected error: {e!s}")
+        verbose_proxy_logger.warning("Custom code http_request unexpected error: %s", e)
+        return _http_error_response(f"Unexpected error: {e}")
 
 
 async def _execute_http_request(
@@ -561,7 +561,7 @@ async def http_post(
 
 
 # Common code patterns for detection
-_CODE_PATTERNS = {
+_CODE_PATTERNS: Final = {
     "sql": [
         r"\b(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE)\b.*\b(FROM|INTO|TABLE|SET|WHERE)\b",
         r"\b(SELECT)\s+[\w\*,\s]+\s+FROM\s+\w+",
@@ -635,7 +635,7 @@ def detect_code_languages(text: str) -> list[str]:
     Returns:
         List of detected language names
     """
-    detected = []
+    detected: Final = []
     for lang, patterns in _CODE_PATTERNS.items():
         for pattern in patterns:
             try:
@@ -658,7 +658,7 @@ def contains_code_language(text: str, languages: list[str]) -> bool:
     Returns:
         True if any of the specified languages are detected
     """
-    detected = detect_code_languages(text)
+    detected: Final = detect_code_languages(text)
     return any(lang.lower() in [d.lower() for d in detected] for lang in languages)
 
 

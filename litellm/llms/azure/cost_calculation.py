@@ -3,6 +3,8 @@ Helper util for handling azure openai-specific cost calculation
 - e.g.: prompt caching, audio tokens
 """
 
+from typing import Final
+
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import Usage
@@ -26,7 +28,7 @@ def cost_per_token(
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
     ## GET MODEL INFO
-    model_info = get_model_info(model=model, custom_llm_provider="azure")
+    model_info: Final = get_model_info(model=model, custom_llm_provider="azure")
 
     ## Speech / Audio cost calculation (cost per second for TTS models)
     if (
@@ -35,11 +37,14 @@ def cost_per_token(
         and response_time_ms is not None
     ):
         verbose_logger.debug(
-            f"For model={model} - output_cost_per_second: {model_info.get('output_cost_per_second')}; response time: {response_time_ms}"
+            "For model=%s - output_cost_per_second: %s; response time: %s",
+            model,
+            model_info.get("output_cost_per_second"),
+            response_time_ms,
         )
         ## COST PER SECOND ##
-        prompt_cost = 0.0
-        completion_cost = model_info["output_cost_per_second"] * response_time_ms / 1000
+        prompt_cost: Final = 0.0
+        completion_cost: Final = model_info["output_cost_per_second"] * response_time_ms / 1000
         return prompt_cost, completion_cost
 
     ## Use generic cost calculator for all other cases

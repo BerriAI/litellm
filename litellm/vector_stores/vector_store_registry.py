@@ -1,7 +1,7 @@
 # litellm/proxy/vector_stores/vector_store_registry.py
 import json
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, get_args
+from typing import TYPE_CHECKING, Any, Final, get_args
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import remove_items_at_indices
@@ -81,9 +81,9 @@ class VectorStoreIndexRegistry:
         """
         Get vector stores from the database
         """
-        vector_stores_from_db: list[LiteLLM_ManagedVectorStoreIndex] = []
+        vector_stores_from_db: Final[list[LiteLLM_ManagedVectorStoreIndex]] = []
         if prisma_client is not None:
-            _vector_stores_from_db = await ManagedVectorStoreIndexRepository(prisma_client).table.find_many(
+            _vector_stores_from_db: Final = await ManagedVectorStoreIndexRepository(prisma_client).table.find_many(
                 order={"created_at": "desc"},
             )
             for vector_store in _vector_stores_from_db:
@@ -105,10 +105,10 @@ class VectorStoreRegistry:
         Dynamically extracts all parameters defined in VECTOR_STORE_OPENAI_PARAMS.
         """
         # Get the list of supported param names from the Literal type
-        supported_params = get_args(VECTOR_STORE_OPENAI_PARAMS)
+        supported_params: Final = get_args(VECTOR_STORE_OPENAI_PARAMS)
 
         # Extract only the params that exist in the tool
-        kwargs = {param: tool.get(param) for param in supported_params if param in tool}
+        kwargs: Final = {param: tool.get(param) for param in supported_params if param in tool}
 
         return VectorStoreToolParams(**kwargs)
 
@@ -121,7 +121,7 @@ class VectorStoreRegistry:
         vector_store_ids: list[str] = []
 
         # 1. check if vector_store_ids is provided in the non_default_params
-        vector_store_ids_param = non_default_params.get("vector_store_ids")
+        vector_store_ids_param: Final = non_default_params.get("vector_store_ids")
         if isinstance(vector_store_ids_param, list):
             vector_store_ids.extend(vector_store_ids_param)
 
@@ -145,7 +145,7 @@ class VectorStoreRegistry:
         Returns:
             Dict mapping vector_store_id to its extracted tool parameters
         """
-        params_by_id: dict[str, VectorStoreToolParams] = {}
+        params_by_id: Final[dict[str, VectorStoreToolParams]] = {}
 
         if not tools:
             return params_by_id
@@ -153,7 +153,7 @@ class VectorStoreRegistry:
         if vector_store_ids is None:
             vector_store_ids = []
 
-        tools_to_remove: list[int] = []
+        tools_to_remove: Final[list[int]] = []
 
         for i, tool in enumerate(tools):
             tool_vector_store_ids = tool.get("vector_store_ids", [])
@@ -192,7 +192,7 @@ class VectorStoreRegistry:
 
         This will return the first vector store found in the registry.
         """
-        vector_store_ids = self.get_vector_store_ids_to_run(non_default_params=non_default_params, tools=tools)
+        vector_store_ids: Final = self.get_vector_store_ids_to_run(non_default_params=non_default_params, tools=tools)
 
         # check if the vector store ids are in the registry
         if len(vector_store_ids) <= 0:
@@ -221,21 +221,21 @@ class VectorStoreRegistry:
         This ensures synchronization across multiple instances.
         """
         # First check in-memory registry
-        vector_store = self.get_litellm_managed_vector_store_from_registry(vector_store_id)
+        vector_store: Final = self.get_litellm_managed_vector_store_from_registry(vector_store_id)
         if vector_store is not None:
             return vector_store
 
         # Fall back to database if not found in memory
         if prisma_client is not None:
             try:
-                vector_stores_from_db = await self._get_vector_stores_from_db(prisma_client=prisma_client)
+                vector_stores_from_db: Final = await self._get_vector_stores_from_db(prisma_client=prisma_client)
                 for db_vector_store in vector_stores_from_db:
                     if db_vector_store.get("vector_store_id") == vector_store_id:
                         # Add to in-memory registry for future use
                         self.add_vector_store_to_registry(vector_store=db_vector_store)
                         return db_vector_store
             except Exception as e:
-                verbose_logger.debug(f"Error fetching vector store from database: {e!s}")
+                verbose_logger.debug("Error fetching vector store from database: %s", e)
 
         return None
 
@@ -266,12 +266,12 @@ class VectorStoreRegistry:
             List of vector stores with tool parameters merged into litellm_params
         """
         # Pop vector_store_ids from params
-        vector_store_ids: list[str] = non_default_params.pop("vector_store_ids", None) or []
+        vector_store_ids: Final[list[str]] = non_default_params.pop("vector_store_ids", None) or []
 
         # Extract params from tools and collect IDs
         params_by_id = self.get_and_pop_recognised_vector_store_tools(tools=tools, vector_store_ids=vector_store_ids)
 
-        vector_stores_to_run: list[LiteLLM_ManagedVectorStore] = []
+        vector_stores_to_run: Final[list[LiteLLM_ManagedVectorStore]] = []
 
         for vector_store_id in vector_store_ids:
             for vector_store in self.vector_stores:
@@ -314,12 +314,12 @@ class VectorStoreRegistry:
             List of vector stores with tool parameters merged into litellm_params
         """
         # Pop vector_store_ids from params
-        vector_store_ids: list[str] = non_default_params.pop("vector_store_ids", None) or []
+        vector_store_ids: Final[list[str]] = non_default_params.pop("vector_store_ids", None) or []
 
         # Extract params from tools and collect IDs
         params_by_id = self.get_and_pop_recognised_vector_store_tools(tools=tools, vector_store_ids=vector_store_ids)
 
-        vector_stores_to_run: list[LiteLLM_ManagedVectorStore] = []
+        vector_stores_to_run: Final[list[LiteLLM_ManagedVectorStore]] = []
 
         for vector_store_id in vector_store_ids:
             vector_store = None
@@ -341,12 +341,13 @@ class VectorStoreRegistry:
                     if db_vector_store is None:
                         # Vector store was deleted from database, remove from cache
                         verbose_logger.debug(
-                            f"Vector store {vector_store_id} found in memory but deleted from database, removing from cache"
+                            "Vector store %s found in memory but deleted from database, removing from cache",
+                            vector_store_id,
                         )
                         self.delete_vector_store_from_registry(vector_store_id=vector_store_id)
                         vector_store = None
                 except Exception as e:
-                    verbose_logger.debug(f"Error verifying vector store {vector_store_id} in database: {e!s}")
+                    verbose_logger.debug("Error verifying vector store %s in database: %s", vector_store_id, e)
 
             # Fall back to database if not found in memory (or was deleted)
             if vector_store is None and prisma_client is not None:
@@ -355,7 +356,7 @@ class VectorStoreRegistry:
                         vector_store_id=vector_store_id, prisma_client=prisma_client
                     )
                 except Exception as e:
-                    verbose_logger.debug(f"Error fetching vector store {vector_store_id} from database: {e!s}")
+                    verbose_logger.debug("Error fetching vector store %s from database: %s", vector_store_id, e)
 
             if vector_store is not None:
                 # Create a copy to avoid modifying the registry
@@ -431,7 +432,7 @@ class VectorStoreRegistry:
             LiteLLM_ManagedVectorStoreListResponse: A standardized response with vector store data
         """
         # Prepare the response
-        response = LiteLLM_ManagedVectorStoreListResponse(
+        response: Final = LiteLLM_ManagedVectorStoreListResponse(
             object="list",
             data=self.vector_stores,
             total_count=len(self.vector_stores),
@@ -447,7 +448,7 @@ class VectorStoreRegistry:
 
         Only add the vector store if it is not already in the registry
         """
-        vector_store_id = vector_store.get("vector_store_id")
+        vector_store_id: Final = vector_store.get("vector_store_id")
         for _vector_store in self.vector_stores:
             if _vector_store.get("vector_store_id") == vector_store_id:
                 return
@@ -482,9 +483,9 @@ class VectorStoreRegistry:
         """
         Get vector stores from the database
         """
-        vector_stores_from_db: list[LiteLLM_ManagedVectorStore] = []
+        vector_stores_from_db: Final[list[LiteLLM_ManagedVectorStore]] = []
         if prisma_client is not None:
-            _vector_stores_from_db = await ManagedVectorStoresRepository(prisma_client).table.find_many(
+            _vector_stores_from_db: Final = await ManagedVectorStoresRepository(prisma_client).table.find_many(
                 order={"created_at": "desc"},
             )
             for vector_store in _vector_stores_from_db:

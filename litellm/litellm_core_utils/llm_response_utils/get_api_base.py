@@ -1,3 +1,5 @@
+from typing import Final
+
 import litellm
 from litellm import verbose_logger
 
@@ -53,14 +55,14 @@ def get_api_base(model: str, optional_params: dict | LiteLLM_Params) -> str | No
             api_key=_optional_params.api_key,
         )
     except Exception as e:
-        verbose_logger.debug(f"Error occurred in getting api base - {e!s}")
+        verbose_logger.debug("Error occurred in getting api base - %s", e)
         custom_llm_provider = None
         dynamic_api_base = None
 
     if dynamic_api_base is not None:
         return dynamic_api_base
 
-    stream: bool = getattr(optional_params, "stream", False)
+    stream: Final[bool] = getattr(optional_params, "stream", False)
 
     if _optional_params.vertex_location is not None and _optional_params.vertex_project is not None:
         from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
