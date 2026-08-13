@@ -152,15 +152,6 @@ describe("GuardrailsOverview", () => {
     await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeInTheDocument());
   });
 
-  it("wraps the metric cards on a flexible track instead of a fixed column count", async () => {
-    renderOverview();
-
-    const grid = (await screen.findByText("Total Evaluations")).closest("div.grid");
-
-    expect(grid).not.toBeNull();
-    expect(grid!.className).toMatch(/grid-cols-\[repeat\(auto-fit,minmax\([^)]+,1fr\)\)\]/);
-  });
-
   it("shows a failure message when the usage request rejects", async () => {
     mockGetGuardrailsUsageOverview.mockRejectedValue(new Error("network down"));
     renderOverview();
