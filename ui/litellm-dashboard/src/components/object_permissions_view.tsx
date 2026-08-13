@@ -3,21 +3,10 @@ import { Text } from "@tremor/react";
 import VectorStorePermissions from "./permissions/VectorStorePermissions";
 import MCPServerPermissions from "./permissions/MCPServerPermissions";
 import AgentPermissions from "./permissions/AgentPermissions";
-
-interface ObjectPermission {
-  object_permission_id: string;
-  mcp_servers: string[];
-  mcp_access_groups?: string[];
-  mcp_tool_permissions?: Record<string, string[]>;
-  mcp_toolsets?: string[];
-  vector_stores: string[];
-  agents?: string[];
-  agent_access_groups?: string[];
-  search_tools?: string[];
-}
+import type { ObjectPermission } from "./object_permission_types";
 
 interface ObjectPermissionsViewProps {
-  objectPermission?: ObjectPermission;
+  objectPermission?: ObjectPermission | null;
   variant?: "card" | "inline";
   className?: string;
   accessToken?: string | null;
@@ -39,7 +28,7 @@ export function ObjectPermissionsView({
   const searchTools = objectPermission?.search_tools || [];
 
   const content = (
-    <div className={variant === "card" ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" : "space-y-4"}>
+    <div className={variant === "card" ? "grid grid-cols-1 @xl:grid-cols-2 @4xl:grid-cols-3 gap-6" : "space-y-4"}>
       <VectorStorePermissions vectorStores={vectorStores} accessToken={accessToken} />
       <MCPServerPermissions
         mcpServers={mcpServers}
@@ -64,7 +53,7 @@ export function ObjectPermissionsView({
 
   if (variant === "card") {
     return (
-      <div className={`bg-white border border-gray-200 rounded-lg p-6 ${className}`}>
+      <div className={`@container bg-white border border-gray-200 rounded-lg p-6 ${className}`}>
         <div className="flex items-center gap-2 mb-6">
           <div>
             <Text className="font-semibold text-gray-900">Object Permissions</Text>

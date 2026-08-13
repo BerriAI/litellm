@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { sessionSpendLogsCall } from "../../networking";
 import { LogEntry } from "../columns";
+import { AutoRouterModelGroupsProvider } from "@/components/shared/table_cells";
 
 vi.mock("../../networking", () => ({
   sessionSpendLogsCall: vi.fn(),
@@ -20,6 +21,10 @@ vi.mock("./LogDetailContent", () => ({
 
 vi.mock("./DrawerHeader", () => ({
   DrawerHeader: () => null,
+}));
+
+vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
+  useAutoRouterModelGroups: vi.fn(() => new Set(["smart-router"])),
 }));
 
 const makeLog = (overrides: Partial<LogEntry>): LogEntry => ({
@@ -116,5 +121,46 @@ describe("LogDetailsDrawer session sidebar sorting", () => {
     rerender(drawer(true));
 
     await waitFor(() => expect(sidebarEventNames()).toEqual(["tool-early", "llm-late", "llm-early", "tool-late"]));
+  });
+});
+
+describe("LogDetailsDrawer session sidebar auto-router icon", () => {
+  const routedSessionLogs = [
+    makeLog({ request_id: "routed", model: "claude-opus-4-8", model_group: "smart-router" }),
+    makeLog({ request_id: "direct", model: "claude-haiku-4-5", model_group: "claude-haiku" }),
+  ];
+
+  const renderRoutedSession = () => {
+    vi.mocked(sessionSpendLogsCall).mockResolvedValue({ data: routedSessionLogs, total: 2, total_pages: 1 });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <AutoRouterModelGroupsProvider>
+          <LogDetailsDrawer open onClose={() => {}} logEntry={null} sessionId="session-1" accessToken="token" />
+        </AutoRouterModelGroupsProvider>
+      </QueryClientProvider>,
+    );
+  };
+
+  const rowFor = (label: string): HTMLElement => {
+    const row = Array.from(document.body.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes(label),
+    );
+    if (!row) throw new Error(`no sidebar row for ${label}`);
+    return row;
+  };
+
+  it("marks the auto-routed entry with the router icon and leaves a direct call on the default icon", async () => {
+    renderRoutedSession();
+
+    await waitFor(() => expect(screen.queryByText("claude-opus-4-8")).not.toBeNull());
+
+    const routedRow = rowFor("claude-opus-4-8");
+    const directRow = rowFor("claude-haiku-4-5");
+
+    expect(routedRow.querySelector(".lucide-waypoints")).not.toBeNull();
+    expect(routedRow.querySelector(".lucide-sparkles")).toBeNull();
+    expect(directRow.querySelector(".lucide-sparkles")).not.toBeNull();
+    expect(directRow.querySelector(".lucide-waypoints")).toBeNull();
   });
 });

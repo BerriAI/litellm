@@ -2,7 +2,7 @@ import { act, fireEvent, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import { Team } from "../key_team_helpers/key_list";
-import { userFilterUICall } from "../networking";
+import { getPoliciesList, getPromptsList, userFilterUICall } from "../networking";
 import CreateKey from "./create_key_button";
 
 const { formMock, setFieldsValueMock, radioGroupValueRef, formStateRef, mockKeyCreateCall, teamDropdownTeamsRef } =
@@ -443,6 +443,36 @@ describe("CreateKey", () => {
     });
   });
 
+  it("should include mcp_toolsets in keyCreateCall payload when only toolsets are selected", async () => {
+    renderWithProviders(<CreateKey {...defaultProps} />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /create key/i })).toBeInTheDocument();
+    });
+
+    act(() => {
+      formMock.setFieldValue("key_alias", "Test Key");
+      formMock.setFieldValue("allowed_mcp_servers_and_groups", {
+        servers: [],
+        accessGroups: [],
+        toolsets: ["ts-1"],
+      });
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /create key/i }));
+    });
+
+    await waitFor(() => {
+      expect(mockKeyCreateCall).toHaveBeenCalled();
+    });
+    expect(mockKeyCreateCall.mock.calls[0][2].object_permission?.mcp_toolsets).toEqual(["ts-1"]);
+  });
+
   it("should prefill models when provided without team_id", async () => {
     renderWithProviders(
       <CreateKey
@@ -745,6 +775,49 @@ describe("CreateKey", () => {
         expect(screen.getByText("production")).toBeInTheDocument();
         expect(screen.getByText("staging")).toBeInTheDocument();
       });
+    });
+  });
+
+  describe("policy and prompt fields", () => {
+    const POLICIES_PLACEHOLDER = "Premium feature - Upgrade to set policies by key";
+    const PROMPTS_PLACEHOLDER = "Premium feature - Upgrade to set prompts by key";
+
+    const openModal = () => {
+      renderWithProviders(<CreateKey {...defaultProps} />);
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+      });
+    };
+
+    beforeEach(() => {
+      vi.mocked(getPoliciesList).mockResolvedValue({ policies: [{ policy_name: "policy-a" }] });
+      vi.mocked(getPromptsList).mockResolvedValue({ prompts: [{ prompt_id: "prompt-a" }] } as any);
+    });
+
+    it("should load and offer both selectors for an admin", async () => {
+      openModal();
+
+      await waitFor(() => {
+        expect(screen.getByRole("option", { name: "policy-a" })).toBeInTheDocument();
+        expect(screen.getByRole("option", { name: "prompt-a" })).toBeInTheDocument();
+      });
+      expect(getPoliciesList).toHaveBeenCalledWith("test-token");
+      expect(getPromptsList).toHaveBeenCalledWith("test-token");
+      expect(screen.getByPlaceholderText(POLICIES_PLACEHOLDER)).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(PROMPTS_PLACEHOLDER)).toBeInTheDocument();
+    });
+
+    it("should omit both selectors and fire neither admin-only request for an internal user", async () => {
+      authorizedState = { ...defaultAuthorizedState, userRole: "Internal User" };
+
+      openModal();
+
+      expect(await screen.findByTestId("org-dropdown")).toBeInTheDocument();
+
+      expect(getPoliciesList).not.toHaveBeenCalled();
+      expect(getPromptsList).not.toHaveBeenCalled();
+      expect(screen.queryByPlaceholderText(POLICIES_PLACEHOLDER)).not.toBeInTheDocument();
+      expect(screen.queryByPlaceholderText(PROMPTS_PLACEHOLDER)).not.toBeInTheDocument();
     });
   });
 });

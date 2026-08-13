@@ -15,12 +15,6 @@ interface AddPromptFormProps {
   onSuccess: () => void;
 }
 
-interface PromptFormData {
-  prompt_id: string;
-  prompt_integration: string;
-  prompt_file?: File;
-}
-
 const AddPromptForm: React.FC<AddPromptFormProps> = ({ visible, onClose, accessToken, onSuccess }) => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);

@@ -3,39 +3,22 @@ import createQueryClient from "openapi-react-query";
 import type { paths } from "./schema";
 import { ApiError, deriveErrorMessage } from "./client";
 import { getAuthHeaderName, getAuthToken, getRequestBaseUrl, reportError } from "./runtime";
+import { resolveRequestUrl } from "./resolveApiBase";
 
-const rebaseUrl = (requestUrl: string, base: string): string => {
-  const { pathname, search } = new URL(requestUrl);
-  return `${base.replace(/\/+$/, "")}${pathname}${search}`;
-};
-
-const rebaseRequest = async (request: Request, url: string): Promise<Request> => {
-  const init: RequestInit = {
-    method: request.method,
-    headers: request.headers,
-    body: request.body ? await request.arrayBuffer() : undefined,
-    mode: request.mode,
-    credentials: request.credentials,
-    cache: request.cache,
-    redirect: request.redirect,
-    referrer: request.referrer,
-    referrerPolicy: request.referrerPolicy,
-    integrity: request.integrity,
-    keepalive: request.keepalive,
-    signal: request.signal,
-  };
-  return new Request(url, init);
-};
+const BaseAwareRequest = function (url: string, init?: RequestInit): Request {
+  const target = resolveRequestUrl(url, {
+    registeredBase: getRequestBaseUrl(),
+    pageOrigin: globalThis.location?.origin,
+  });
+  return new globalThis.Request(target, init);
+} as unknown as typeof Request;
 
 const middleware: Middleware = {
-  async onRequest({ request }) {
-    const base = getRequestBaseUrl();
-    const next = base ? await rebaseRequest(request, rebaseUrl(request.url, base)) : request;
+  onRequest({ request }) {
     const token = getAuthToken();
     if (token) {
-      next.headers.set(getAuthHeaderName(), `Bearer ${token}`);
+      request.headers.set(getAuthHeaderName(), `Bearer ${token}`);
     }
-    return next;
   },
   async onResponse({ response }) {
     if (response.ok) return response;
@@ -58,12 +41,13 @@ const middleware: Middleware = {
  * (`fetchClient.GET("/path", { params })`) and for imperative calls; path
  * params, query params, and request bodies are inferred from schema.d.ts.
  *
- * The creation-time base is the current origin so request URLs are absolute; the
- * middleware rebases each call onto the runtime base when one is registered (a
- * split-origin proxy or worker URL), injects the auth header, and maps non-2xx
- * responses to ApiError so query functions can just read `.data`.
+ * The base URL is injected, not fixed at import: every request is built against
+ * whatever registerBaseUrlGetter supplies at call time (a split-origin proxy or
+ * worker URL), falling back to the current origin. The middleware injects the
+ * auth header and maps non-2xx responses to ApiError so query functions can just
+ * read `.data`.
  */
-export const fetchClient = createFetchClient<paths>({ baseUrl: globalThis.location?.origin ?? "" });
+export const fetchClient = createFetchClient<paths>({ Request: BaseAwareRequest });
 fetchClient.use(middleware);
 
 /**
