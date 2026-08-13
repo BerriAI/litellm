@@ -104,6 +104,9 @@ from litellm.proxy.management_endpoints.organization_endpoints import (
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
 )
+from litellm.proxy.management_helpers.access_group_team_sync import (
+    sync_team_access_group_membership,
+)
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     enforce_all_proxy_mcp_servers_grant_is_admin_only,
@@ -1509,6 +1512,8 @@ async def new_team(
             include={"litellm_model_table": True},
         )
 
+        await sync_team_access_group_membership(prisma_client=prisma_client, team_id=team_row.team_id)
+
         ## ADD TEAM ID TO USER TABLE ##
         team_member_add_request: Final = TeamMemberAddRequest(
             team_id=data.team_id,
@@ -2210,6 +2215,7 @@ async def update_team(
             )
 
         verbose_proxy_logger.info("Successfully updated team - %s, info", team_row.team_id)
+        await sync_team_access_group_membership(prisma_client=prisma_client, team_id=team_row.team_id)
         await _refresh_cached_team(
             team_row=team_row,
             user_api_key_cache=user_api_key_cache,
@@ -3790,6 +3796,10 @@ async def delete_team(
 
     ## DELETE TEAMS
     deleted_teams: Final = await prisma_client.delete_data(team_id_list=data.team_ids, table_name="team")
+
+    for deleted_team in team_rows:
+        await sync_team_access_group_membership(prisma_client=prisma_client, team_id=deleted_team.team_id)
+
     return deleted_teams
 
 
