@@ -1,11 +1,14 @@
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, SelectItem, TextInput, Textarea } from "@tremor/react";
-import { Checkbox, Form, Select, Tooltip } from "antd";
+import { Checkbox, Form, Input, Select, Tooltip } from "antd";
 import React, { useState } from "react";
 import { all_admin_roles } from "@/utils/roles";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
 import NumericalInput from "@/components/shared/numerical_input";
+import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
+import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
+import type { ObjectPermission } from "@/components/object_permission_types";
 
 interface UserEditViewProps {
   userData: any;
@@ -18,7 +21,17 @@ interface UserEditViewProps {
   userModels: string[];
   possibleUIRoles: Record<string, Record<string, string>> | null;
   isBulkEdit?: boolean;
+  objectPermission?: ObjectPermission | null;
 }
+
+const buildMcpFieldValues = (objectPermission: ObjectPermission | null | undefined) => ({
+  mcp_servers_and_groups: {
+    servers: objectPermission?.mcp_servers ?? [],
+    accessGroups: objectPermission?.mcp_access_groups ?? [],
+    toolsets: objectPermission?.mcp_toolsets ?? [],
+  },
+  mcp_tool_permissions: objectPermission?.mcp_tool_permissions ?? {},
+});
 
 export function UserEditView({
   userData,
@@ -31,9 +44,11 @@ export function UserEditView({
   userModels,
   possibleUIRoles,
   isBulkEdit = false,
+  objectPermission,
 }: UserEditViewProps) {
   const [form] = Form.useForm();
   const [unlimitedBudget, setUnlimitedBudget] = useState(false);
+  const canEditMcpPermissions = !isBulkEdit && all_admin_roles.includes(userRole || "");
 
   // Set initial form values
   React.useEffect(() => {
@@ -50,8 +65,9 @@ export function UserEditView({
       max_budget: isUnlimited ? "" : maxBudget,
       budget_duration: userData.user_info?.budget_duration,
       metadata: userData.user_info?.metadata ? JSON.stringify(userData.user_info.metadata, null, 2) : undefined,
+      ...(canEditMcpPermissions ? buildMcpFieldValues(objectPermission) : {}),
     });
-  }, [userData, form]);
+  }, [userData, objectPermission, canEditMcpPermissions, form]);
 
   const handleUnlimitedBudgetChange = (e: any) => {
     const checked = e.target.checked;
@@ -185,6 +201,52 @@ export function UserEditView({
       <Form.Item label="Metadata" name="metadata">
         <Textarea rows={4} placeholder="Enter metadata as JSON" />
       </Form.Item>
+
+      {canEditMcpPermissions && (
+        <>
+          <Form.Item
+            label={
+              <span>
+                MCP Servers / Access Groups{" "}
+                <Tooltip title="Caps which MCP servers, access groups, and tools this user may reach. Every key the user holds is limited to this set.">
+                  <InfoCircleOutlined />
+                </Tooltip>
+              </span>
+            }
+            name="mcp_servers_and_groups"
+          >
+            <MCPServerSelector
+              onChange={(val) => form.setFieldValue("mcp_servers_and_groups", val)}
+              value={form.getFieldValue("mcp_servers_and_groups")}
+              accessToken={accessToken || ""}
+              placeholder="Select MCP servers or access groups (optional)"
+            />
+          </Form.Item>
+
+          <Form.Item name="mcp_tool_permissions" initialValue={{}} hidden>
+            <Input type="hidden" />
+          </Form.Item>
+
+          <Form.Item
+            noStyle
+            shouldUpdate={(prevValues, currentValues) =>
+              prevValues.mcp_servers_and_groups !== currentValues.mcp_servers_and_groups ||
+              prevValues.mcp_tool_permissions !== currentValues.mcp_tool_permissions
+            }
+          >
+            {() => (
+              <div className="mb-6">
+                <MCPToolPermissions
+                  accessToken={accessToken || ""}
+                  selectedServers={form.getFieldValue("mcp_servers_and_groups")?.servers || []}
+                  toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
+                  onChange={(toolPerms) => form.setFieldsValue({ mcp_tool_permissions: toolPerms })}
+                />
+              </div>
+            )}
+          </Form.Item>
+        </>
+      )}
 
       <div className="flex justify-end space-x-2">
         <Button variant="secondary" type="button" onClick={onCancel}>

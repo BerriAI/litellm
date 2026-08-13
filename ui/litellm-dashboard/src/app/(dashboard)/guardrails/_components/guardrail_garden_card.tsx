@@ -1,42 +1,7 @@
 import React, { useState } from "react";
 import { CheckCircleFilled } from "@ant-design/icons";
 import { GuardrailCardInfo } from "./guardrail_garden_data";
-import { resolveLogoSrc } from "@/lib/assetPaths";
-
-const LogoWithFallback: React.FC<{ src: string; name: string }> = ({ src, name }) => {
-  const [hasError, setHasError] = useState(false);
-
-  if (hasError || !src) {
-    return (
-      <div
-        style={{
-          width: 28,
-          height: 28,
-          borderRadius: 6,
-          backgroundColor: "#e5e7eb",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: 13,
-          fontWeight: 600,
-          color: "#6b7280",
-          flexShrink: 0,
-        }}
-      >
-        {name?.charAt(0) || "?"}
-      </div>
-    );
-  }
-
-  return (
-    <img
-      src={resolveLogoSrc(src)}
-      alt=""
-      style={{ width: 28, height: 28, borderRadius: 6, objectFit: "contain", flexShrink: 0 }}
-      onError={() => setHasError(true)}
-    />
-  );
-};
+import { Logo } from "@/components/molecules/logo/Logo";
 
 const GuardrailCard: React.FC<{ card: GuardrailCardInfo; onClick: () => void }> = ({ card, onClick }) => {
   const [hovered, setHovered] = useState(false);
@@ -61,7 +26,7 @@ const GuardrailCard: React.FC<{ card: GuardrailCardInfo; onClick: () => void }> 
     >
       {/* Icon + Name row */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-        <LogoWithFallback src={card.logo} name={card.name} />
+        <Logo src={card.logo} label={card.name} className="w-7 h-7 rounded-md object-contain shrink-0" />
         <span style={{ fontSize: 14, fontWeight: 600, color: "#111827", lineHeight: 1.3 }}>{card.name}</span>
       </div>
 

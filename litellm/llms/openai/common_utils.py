@@ -7,17 +7,7 @@ import inspect
 import json
 import os
 import ssl
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Literal,
-    NamedTuple,
-    Optional,
-    Tuple,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Optional
 
 import httpx
 import openai
@@ -35,13 +25,13 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 
 
-def _get_client_init_params(cls: type) -> Tuple[str, ...]:
+def _get_client_init_params(cls: type) -> tuple[str, ...]:
     """Extract __init__ parameter names (excluding 'self') from a class."""
-    return tuple(p for p in inspect.signature(cls.__init__).parameters if p != "self")  # type: ignore[misc]
+    return tuple(p for p in inspect.signature(cls.__init__).parameters if p != "self")
 
 
-_OPENAI_INIT_PARAMS: Tuple[str, ...] = _get_client_init_params(OpenAI)
-_AZURE_OPENAI_INIT_PARAMS: Tuple[str, ...] = _get_client_init_params(AzureOpenAI)
+_OPENAI_INIT_PARAMS: Final[tuple[str, ...]] = _get_client_init_params(OpenAI)
+_AZURE_OPENAI_INIT_PARAMS: Final[tuple[str, ...]] = _get_client_init_params(AzureOpenAI)
 
 
 class OpenAIError(BaseLLMException):
@@ -49,10 +39,10 @@ class OpenAIError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        request: Optional[httpx.Request] = None,
-        response: Optional[httpx.Response] = None,
-        headers: Optional[Union[dict, httpx.Headers]] = None,
-        body: Optional[dict] = None,
+        request: httpx.Request | None = None,
+        response: httpx.Response | None = None,
+        headers: dict | httpx.Headers | None = None,
+        body: dict | None = None,
     ):
         self.status_code = status_code
         self.message = message
@@ -78,9 +68,9 @@ class OpenAIError(BaseLLMException):
 ####### Error Handling Utils for OpenAI API #######################
 ###################################################################
 def drop_params_from_unprocessable_entity_error(
-    e: Union[openai.UnprocessableEntityError, httpx.HTTPStatusError],
-    data: Dict[str, Any],
-) -> Dict[str, Any]:
+    e: openai.UnprocessableEntityError | httpx.HTTPStatusError,
+    data: dict[str, Any],
+) -> dict[str, Any]:
     """
     Helper function to read OpenAI UnprocessableEntityError and drop the params that raised an error from the error message.
 
@@ -91,10 +81,10 @@ def drop_params_from_unprocessable_entity_error(
     Returns:
     Dict[str, Any]: A new dictionary with invalid parameters removed
     """
-    invalid_params: List[str] = []
+    invalid_params: Final[list[str]] = []
     if isinstance(e, httpx.HTTPStatusError):
-        error_json = e.response.json()
-        error_message = error_json.get("error", {})
+        error_json: Final = e.response.json()
+        error_message: Final = error_json.get("error", {})
         error_body = error_message
     else:
         error_body = e.body
@@ -105,9 +95,9 @@ def drop_params_from_unprocessable_entity_error(
                 message = json.loads(message)
             except json.JSONDecodeError:
                 message = {"detail": message}
-        detail = message.get("detail")
+        detail: Final = message.get("detail")
 
-        if isinstance(detail, List) and len(detail) > 0 and isinstance(detail[0], dict):
+        if isinstance(detail, list) and len(detail) > 0 and isinstance(detail[0], dict):
             for error_dict in detail:
                 if (
                     error_dict.get("loc")
@@ -116,7 +106,7 @@ def drop_params_from_unprocessable_entity_error(
                 ):
                     invalid_params.append(error_dict["loc"][1])
 
-    new_data = {k: v for k, v in data.items() if k not in invalid_params}
+    new_data: Final = {k: v for k, v in data.items() if k not in invalid_params}
 
     return new_data
 
@@ -129,23 +119,43 @@ class BaseOpenAILLM:
     @staticmethod
     def get_cached_openai_client(
         client_initialization_params: dict, client_type: Literal["openai", "azure"]
-    ) -> Optional[Union[OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI]]:
+    ) -> OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None:
         """Retrieves the OpenAI client from the in-memory cache based on the client initialization parameters"""
-        _cache_key = BaseOpenAILLM.get_openai_client_cache_key(
+        _cache_key: Final = BaseOpenAILLM.get_openai_client_cache_key(
             client_initialization_params=client_initialization_params,
             client_type=client_type,
         )
-        _cached_client = litellm.in_memory_llm_clients_cache.get_cache(_cache_key)
+        _cached_client: Final = litellm.in_memory_llm_clients_cache.get_cache(_cache_key)
         return _cached_client
 
     @staticmethod
+    def owns_wrapped_http_client(http_client: httpx.Client | httpx.AsyncClient | None) -> bool:
+        """Whether litellm may close an SDK client built around ``http_client``.
+
+        ``_get_async_http_client`` / ``_get_sync_http_client`` hand back
+        ``litellm.aclient_session`` / ``litellm.client_session`` when the caller
+        configured one. The SDK's ``close()`` closes whatever http client it was
+        given, so an SDK client wrapping one of those shared sessions must never be
+        closed on eviction; the caller goes on using the session. ``None`` means the
+        SDK built its own http client, which litellm does own.
+        """
+        if http_client is None:
+            return True
+        return http_client is not litellm.aclient_session and http_client is not litellm.client_session
+
+    @staticmethod
     def set_cached_openai_client(
-        openai_client: Union[OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI],
+        openai_client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI,
         client_type: Literal["openai", "azure"],
         client_initialization_params: dict,
+        litellm_owned_client: bool = False,
     ):
-        """Stores the OpenAI client in the in-memory cache for _DEFAULT_TTL_FOR_HTTPX_CLIENTS SECONDS"""
-        _cache_key = BaseOpenAILLM.get_openai_client_cache_key(
+        """Stores the OpenAI client in the in-memory cache for _DEFAULT_TTL_FOR_HTTPX_CLIENTS SECONDS
+
+        ``litellm_owned_client`` says litellm built this client, so the cache may close it once it
+        is evicted. A client the caller supplied stays open, since litellm does not own it.
+        """
+        _cache_key: Final = BaseOpenAILLM.get_openai_client_cache_key(
             client_initialization_params=client_initialization_params,
             client_type=client_type,
         )
@@ -153,6 +163,7 @@ class BaseOpenAILLM:
             key=_cache_key,
             value=openai_client,
             ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+            litellm_owned_client=litellm_owned_client,
         )
 
     @staticmethod
@@ -160,23 +171,23 @@ class BaseOpenAILLM:
         """Creates a cache key for the OpenAI client based on the client initialization parameters"""
         hashed_api_key = None
         if client_initialization_params.get("api_key") is not None:
-            hash_object = hashlib.sha256(client_initialization_params.get("api_key", "").encode())
+            hash_object: Final = hashlib.sha256(client_initialization_params.get("api_key", "").encode())
             # Hexadecimal representation of the hash
             hashed_api_key = hash_object.hexdigest()
 
         # Create a more readable cache key using a list of key-value pairs
-        key_parts = [
+        key_parts: Final = [
             f"hashed_api_key={hashed_api_key}",
             f"is_async={client_initialization_params.get('is_async')}",
         ]
 
-        LITELLM_CLIENT_SPECIFIC_PARAMS = (
+        LITELLM_CLIENT_SPECIFIC_PARAMS: Final = (
             "timeout",
             "max_retries",
             "organization",
             "api_base",
         )
-        openai_client_fields = (
+        openai_client_fields: Final = (
             BaseOpenAILLM.get_openai_client_initialization_param_fields(client_type=client_type)
             + LITELLM_CLIENT_SPECIFIC_PARAMS
         )
@@ -184,13 +195,13 @@ class BaseOpenAILLM:
         for param in openai_client_fields:
             key_parts.append(f"{param}={client_initialization_params.get(param)}")
 
-        _cache_key = ",".join(key_parts)
+        _cache_key: Final = ",".join(key_parts)
         return _cache_key
 
     @staticmethod
     def get_openai_client_initialization_param_fields(
         client_type: Literal["openai", "azure"],
-    ) -> Tuple[str, ...]:
+    ) -> tuple[str, ...]:
         """Returns a tuple of fields that are used to initialize the OpenAI client"""
         if client_type == "openai":
             return _OPENAI_INIT_PARAMS
@@ -200,7 +211,7 @@ class BaseOpenAILLM:
     @staticmethod
     def _get_async_http_client(
         shared_session: Optional["ClientSession"] = None,
-    ) -> Optional[httpx.AsyncClient]:
+    ) -> httpx.AsyncClient | None:
         if litellm.aclient_session is not None:
             return litellm.aclient_session
 
@@ -210,7 +221,7 @@ class BaseOpenAILLM:
             return httpx.AsyncClient(transport=MockOpenAITransport())
 
         # Get unified SSL configuration
-        ssl_config = get_ssl_configuration()
+        ssl_config: Final = get_ssl_configuration()
 
         return httpx.AsyncClient(
             verify=ssl_config,
@@ -223,7 +234,7 @@ class BaseOpenAILLM:
         )
 
     @staticmethod
-    def _get_sync_http_client() -> Optional[httpx.Client]:
+    def _get_sync_http_client() -> httpx.Client | None:
         if litellm.client_session is not None:
             return litellm.client_session
 
@@ -233,7 +244,7 @@ class BaseOpenAILLM:
             return httpx.Client(transport=MockOpenAITransport())
 
         # Get unified SSL configuration
-        ssl_config = get_ssl_configuration()
+        ssl_config: Final = get_ssl_configuration()
 
         return httpx.Client(
             verify=ssl_config,
@@ -243,17 +254,17 @@ class BaseOpenAILLM:
 
 class OpenAICredentials(NamedTuple):
     api_base: str
-    api_key: Optional[str]
-    organization: Optional[str]
+    api_key: str | None
+    organization: str | None
 
 
 def get_openai_credentials(
-    api_base: Optional[str] = None,
-    api_key: Optional[str] = None,
-    organization: Optional[str] = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+    organization: str | None = None,
 ) -> OpenAICredentials:
     """Resolve OpenAI credentials from params, litellm globals, and env vars."""
-    resolved_api_base = (
+    resolved_api_base: Final = (
         api_base
         or litellm.api_base
         or os.getenv("OPENAI_BASE_URL")
@@ -261,7 +272,7 @@ def get_openai_credentials(
         or "https://api.openai.com/v1"
     )
     resolved_organization = organization or litellm.organization or os.getenv("OPENAI_ORGANIZATION", None) or None
-    resolved_api_key = api_key or litellm.api_key or litellm.openai_key or os.getenv("OPENAI_API_KEY")
+    resolved_api_key: Final = api_key or litellm.api_key or litellm.openai_key or os.getenv("OPENAI_API_KEY")
     return OpenAICredentials(
         api_base=resolved_api_base,
         api_key=resolved_api_key,

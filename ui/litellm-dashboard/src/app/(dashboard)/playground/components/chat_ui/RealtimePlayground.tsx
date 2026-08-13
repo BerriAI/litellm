@@ -37,8 +37,6 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
-  const playbackQueueRef = useRef<ArrayBuffer[]>([]);
-  const isPlayingRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const nextPlayTimeRef = useRef(0);
 

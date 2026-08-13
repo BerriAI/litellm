@@ -1,4 +1,3 @@
-from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -307,7 +306,7 @@ EXPECTED_RESPONSE_MODELS = {
     "/customer/update": CustomerResponse,
     "/customer/delete": DeleteCustomersResponse,
     "/customer/info": CustomerResponse,
-    "/customer/list": List[CustomerResponse],
+    "/customer/list": list[CustomerResponse],
     "/customer/daily/activity": SpendAnalyticsPaginatedResponse,
 }
 
@@ -748,6 +747,40 @@ def test_char_new_body(mock_prisma_client, mock_user_api_key_auth):
     response = client.post("/customer/new", json={"user_id": "c1"}, headers={"Authorization": "Bearer k"})
     assert response.status_code == 200
     assert response.json() == _EXPECTED_CUSTOMER
+
+
+@pytest.mark.parametrize("bad_duration", ["0s", "-5m"])
+def test_customer_new_rejects_a_duration_that_never_advances(
+    mock_prisma_client, mock_user_api_key_auth, bad_duration
+):
+    """A zero-length window resets to "now", leaving the customer's budget row
+    permanently due for the reset job to re-read every tick."""
+    mock_prisma_client.db.litellm_endusertable.create = AsyncMock(return_value=_row(_FULL_DB_ROW))
+
+    response = client.post(
+        "/customer/new",
+        json={"user_id": "c1", "max_budget": 10.0, "budget_duration": bad_duration},
+        headers={"Authorization": "Bearer k"},
+    )
+
+    assert response.status_code == 400, response.text
+    assert "Invalid budget_duration" in response.text
+    mock_prisma_client.db.litellm_endusertable.create.assert_not_awaited()
+
+
+def test_customer_new_accepts_a_normal_duration(mock_prisma_client, mock_user_api_key_auth):
+    mock_prisma_client.db.litellm_endusertable.create = AsyncMock(return_value=_row(_FULL_DB_ROW))
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(
+        return_value=_row({"budget_id": "b1", "max_budget": 10.0})
+    )
+
+    response = client.post(
+        "/customer/new",
+        json={"user_id": "c1", "max_budget": 10.0, "budget_duration": "30d"},
+        headers={"Authorization": "Bearer k"},
+    )
+
+    assert response.status_code == 200, response.text
 
 
 def test_char_update_body(mock_prisma_client, mock_user_api_key_auth):

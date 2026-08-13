@@ -626,6 +626,7 @@ def _moderation_guardrail() -> MagicMock:
     cb.should_run_guardrail = MagicMock(return_value=True)
     cb.async_moderation_hook = AsyncMock(return_value=None)
     cb.async_post_call_success_hook = AsyncMock(return_value=None)
+    cb.run_in_parallel = False
     return cb
 
 

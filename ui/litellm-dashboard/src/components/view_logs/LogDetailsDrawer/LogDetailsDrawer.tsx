@@ -3,8 +3,10 @@ import { Button, Drawer, Segmented } from "antd";
 import { CheckOutlined, CopyOutlined, LeftOutlined, RightOutlined } from "@ant-design/icons";
 import { Bot, Sparkles, Wrench } from "lucide-react";
 import { LogEntry } from "../columns";
+import { AutoRouterIcon, useIsAutoRoutedModelGroup } from "@/components/shared/table_cells";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
 import { getEventDisplayName } from "../utils";
+import { ClassifyTag } from "./ClassifyTag";
 import { DrawerHeader } from "./DrawerHeader";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
 import { LogDetailContent, GuardrailJumpLink } from "./LogDetailContent";
@@ -46,9 +48,17 @@ interface TraceEventRowProps {
   onClick: () => void;
 }
 
+const TRACE_EVENT_ICON_CLASS = "text-slate-500 shrink-0";
+
+function TraceEventIcon({ callType, isAutoRouted }: { callType: string; isAutoRouted: boolean }) {
+  if (MCP_CALL_TYPES.includes(callType)) return <Wrench size={12} className={TRACE_EVENT_ICON_CLASS} />;
+  if (AGENT_CALL_TYPES.includes(callType)) return <Bot size={12} className={TRACE_EVENT_ICON_CLASS} />;
+  if (isAutoRouted) return <AutoRouterIcon size={12} className={TRACE_EVENT_ICON_CLASS} />;
+  return <Sparkles size={12} className={TRACE_EVENT_ICON_CLASS} />;
+}
+
 function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
-  const isMcp = MCP_CALL_TYPES.includes(row.call_type);
-  const isAgent = AGENT_CALL_TYPES.includes(row.call_type);
+  const isAutoRouted = useIsAutoRoutedModelGroup(row.model_group);
   const durationValue =
     row.request_duration_ms != null
       ? (row.request_duration_ms / 1000).toFixed(3)
@@ -65,16 +75,11 @@ function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
       onClick={onClick}
     >
       <div className="flex items-center gap-1">
-        {isMcp ? (
-          <Wrench size={12} className="text-slate-500 shrink-0" />
-        ) : isAgent ? (
-          <Bot size={12} className="text-slate-500 shrink-0" />
-        ) : (
-          <Sparkles size={12} className="text-slate-500 shrink-0" />
-        )}
+        <TraceEventIcon callType={row.call_type} isAutoRouted={isAutoRouted} />
         <span className="text-xs font-medium text-slate-900 truncate">
           {getEventDisplayName(row.call_type, row.model)}
         </span>
+        <ClassifyTag origin={row.metadata?.internal_call_origin} className="ml-auto" />
       </div>
       <div className="text-[10px] text-slate-500 mt-0 flex items-center gap-1.5 font-mono">
         <span>{durationValue}s</span>

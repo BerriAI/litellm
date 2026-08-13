@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Button } from "antd";
 import { ArrowLeftOutlined } from "@ant-design/icons";
 import AddGuardrailForm from "./add_guardrail_form";
-import { resolveLogoSrc } from "@/lib/assetPaths";
+import { Logo } from "@/components/molecules/logo/Logo";
 import { GUARDRAIL_PRESETS } from "./guardrail_garden_configs";
 import { GuardrailCardInfo } from "./guardrail_garden_data";
 
@@ -60,14 +60,7 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
 
       {/* ── Header block (Vertex-style) ── */}
       <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 8 }}>
-        <img
-          src={resolveLogoSrc(card.logo)}
-          alt=""
-          style={{ width: 40, height: 40, borderRadius: 8, objectFit: "contain" }}
-          onError={(e) => {
-            (e.target as HTMLImageElement).style.display = "none";
-          }}
-        />
+        <Logo src={card.logo} label={card.name} className="w-10 h-10 rounded-lg object-contain shrink-0" />
         <h1 style={{ fontSize: 28, fontWeight: 400, color: "#202124", margin: 0, lineHeight: 1.2 }}>{card.name}</h1>
       </div>
 

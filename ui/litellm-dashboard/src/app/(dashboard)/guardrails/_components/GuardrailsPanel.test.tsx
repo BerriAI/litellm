@@ -1,7 +1,7 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import GuardrailsPanel from "./GuardrailsPanel";
-import { getGuardrailsList } from "@/components/networking";
+import { getGuardrailsList, deleteGuardrailCall } from "@/components/networking";
 
 vi.mock("@/components/networking", () => ({
   getGuardrailsList: vi.fn(),
@@ -48,7 +48,8 @@ vi.mock("@/utils/roles", () => ({
   isAdminRole: vi.fn((role: string) => role === "admin"),
 }));
 
-vi.mock("./guardrail_info_helpers", () => ({
+vi.mock("./guardrail_info_helpers", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./guardrail_info_helpers")>()),
   getGuardrailLogoAndName: vi.fn(() => ({
     logo: null,
     displayName: "Test Provider",
@@ -78,6 +79,7 @@ describe("GuardrailsPanel", () => {
   };
 
   const mockGetGuardrailsList = vi.mocked(getGuardrailsList);
+  const mockDeleteGuardrailCall = vi.mocked(deleteGuardrailCall);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -106,5 +108,36 @@ describe("GuardrailsPanel", () => {
     // Activate the Guardrails tab so its content (including the Add button) is rendered
     fireEvent.click(screen.getByText("Guardrails"));
     expect(screen.getByText("Add New Guardrail")).toBeInTheDocument();
+  });
+
+  it("should delete the clicked guardrail after confirming in the modal", async () => {
+    render(<GuardrailsPanel {...defaultProps} />);
+    fireEvent.click(screen.getByText("Guardrails"));
+
+    fireEvent.click(await screen.findByTestId("delete-button"));
+
+    const modal = within(await screen.findByRole("dialog"));
+    expect(modal.getByText("Delete Guardrail")).toBeInTheDocument();
+    expect(modal.getByText("test-guardrail-1")).toBeInTheDocument();
+    expect(modal.getByText("Test Provider")).toBeInTheDocument();
+
+    fireEvent.click(modal.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => {
+      expect(mockDeleteGuardrailCall).toHaveBeenCalledWith("test-token", "test-guardrail-1");
+    });
+    expect(mockGetGuardrailsList).toHaveBeenCalledTimes(2);
+  });
+
+  it("should not delete anything when the modal is cancelled", async () => {
+    render(<GuardrailsPanel {...defaultProps} />);
+    fireEvent.click(screen.getByText("Guardrails"));
+
+    fireEvent.click(await screen.findByTestId("delete-button"));
+    const modal = within(await screen.findByRole("dialog"));
+
+    fireEvent.click(modal.getByRole("button", { name: "Cancel" }));
+
+    expect(mockDeleteGuardrailCall).not.toHaveBeenCalled();
   });
 });

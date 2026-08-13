@@ -135,16 +135,22 @@ locals {
     "export DATABASE_URL_READ_REPLICA=\"postgresql://$${DATABASE_USER}:$${DATABASE_PASSWORD}@$${DATABASE_HOST_READ_REPLICA}:$${DATABASE_PORT_READ_REPLICA}/$${DATABASE_NAME}\"",
   ]
 
+  gateway_uvicorn_args = "--host 0.0.0.0 --port 4000 --workers ${var.gateway_num_workers}"
+  backend_uvicorn_args = "--host 0.0.0.0 --port 4001"
+
+  gateway_launch_cmd = "if [ \"$USE_DDTRACE\" = \"true\" ]; then export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn gateway.main:app ${local.gateway_uvicorn_args}; else exec uvicorn gateway.main:app ${local.gateway_uvicorn_args}; fi"
+  backend_launch_cmd = "if [ \"$USE_DDTRACE\" = \"true\" ]; then export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn backend.main:app ${local.backend_uvicorn_args}; else exec uvicorn backend.main:app ${local.backend_uvicorn_args}; fi"
+
   gateway_args = join(" && ", concat(
     local.redis_ca_fragment,
     local.database_url_fragment,
-    ["exec uvicorn gateway.main:app --host 0.0.0.0 --port 4000 --workers ${var.gateway_num_workers}"],
+    [local.gateway_launch_cmd],
   ))
 
   backend_args = join(" && ", concat(
     local.redis_ca_fragment,
     local.database_url_fragment,
-    ["exec uvicorn backend.main:app --host 0.0.0.0 --port 4001"],
+    [local.backend_launch_cmd],
   ))
 
   # Env shipped to the migrations Job. The migrations image runs run.py
