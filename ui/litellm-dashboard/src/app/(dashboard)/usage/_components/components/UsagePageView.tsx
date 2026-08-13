@@ -104,8 +104,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const canViewOrganizationUsage = hasCapability(userRole, "viewOrganizationUsage");
   const canViewAgentUsage = hasCapability(userRole, "viewAgentUsage");
 
-  // The selector debounces its own input, so this holds the already-settled query.
-  const [debouncedUserSearch, setDebouncedUserSearch] = useState("");
+  const [settledUserSearch, setSettledUserSearch] = useState("");
 
   const {
     data: usersInfiniteData,
@@ -113,7 +112,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     hasNextPage: hasNextUsersPage,
     isFetchingNextPage: isFetchingNextUsersPage,
     isLoading: isLoadingUsers,
-  } = useInfiniteUsers(50, debouncedUserSearch || undefined);
+  } = useInfiniteUsers(50, settledUserSearch || undefined);
 
   const userOptions = useMemo(() => {
     if (!usersInfiniteData?.pages) return [];
@@ -533,7 +532,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     options={userOptions}
                     value={selectedUserId ?? undefined}
                     onValueChange={(value) => setSelectedUserId(value === "" ? null : value)}
-                    onSearchChange={setDebouncedUserSearch}
+                    onSearchChange={setSettledUserSearch}
                     onLoadMore={fetchNextUsersPage}
                     hasNextPage={hasNextUsersPage}
                     isLoading={isLoadingUsers}
