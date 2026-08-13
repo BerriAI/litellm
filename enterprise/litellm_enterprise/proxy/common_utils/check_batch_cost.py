@@ -227,12 +227,15 @@ class CheckBatchCost:
     def _has_unified_id_without_model(job: "LiteLLM_ManagedObjectTable") -> bool:
         """A unified id that decodes but carries no model_id can never be routed."""
         from litellm.proxy.openai_files_endpoints.common_utils import (
-            _is_base64_encoded_unified_file_id,
+            convert_b64_uid_to_unified_uid,
             get_model_id_from_unified_batch_id,
         )
 
-        decoded: Final = _is_base64_encoded_unified_file_id(job.unified_object_id)
-        return bool(decoded) and get_model_id_from_unified_batch_id(decoded) is None
+        decoded: Final = convert_b64_uid_to_unified_uid(job.unified_object_id)
+        return (
+            decoded != job.unified_object_id
+            and get_model_id_from_unified_batch_id(decoded) is None
+        )
 
     @staticmethod
     def _is_batch_gone_at_provider(error: Exception, batch_id: str) -> bool:
