@@ -46,10 +46,7 @@ describe("Workflows page access by role", () => {
       renderAs(userRole);
 
       expect(await screen.findByText("Workflow Runs is only available to admin users.")).toBeInTheDocument();
-      // Scoped to this page's own endpoint, not every request. Resolving whether a caller is an org
-      // admin goes through /organization/list for every role, so a blanket "no fetch at all" would
-      // fail on a request that has nothing to do with this page's gate.
-      expect(requestedUrls().filter((url) => url.includes("/v1/workflows"))).toEqual([]);
+      await waitFor(() => expect(requestedUrls().filter((url) => url.includes("/v1/workflows"))).toEqual([]));
     },
   );
 

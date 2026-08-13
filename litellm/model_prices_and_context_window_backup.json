@@ -40,6 +40,7 @@
         "vector_store_cost_per_gb_per_day": 0.0
     },
     "1024-x-1024/50-steps/bedrock/amazon.nova-canvas-v1:0": {
+        "deprecation_date": "2026-09-30",
         "litellm_provider": "bedrock",
         "max_input_tokens": 2600,
         "mode": "image_generation",
@@ -110,6 +111,7 @@
         "output_cost_per_token": 1.88e-05
     },
     "ai21.jamba-1-5-large-v1:0": {
+        "deprecation_date": "2026-11-26",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 256000,
@@ -119,6 +121,7 @@
         "output_cost_per_token": 8e-06
     },
     "ai21.jamba-1-5-mini-v1:0": {
+        "deprecation_date": "2026-11-26",
         "input_cost_per_token": 2e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 256000,
@@ -287,6 +290,7 @@
         "supports_vision": true
     },
     "amazon.nova-canvas-v1:0": {
+        "deprecation_date": "2026-09-30",
         "litellm_provider": "bedrock",
         "max_input_tokens": 2600,
         "mode": "image_generation",
@@ -294,6 +298,7 @@
         "supports_nova_canvas_image_edit": true
     },
     "us.amazon.nova-canvas-v1:0": {
+        "deprecation_date": "2026-09-30",
         "litellm_provider": "bedrock",
         "max_input_tokens": 2600,
         "mode": "image_generation",
@@ -620,6 +625,7 @@
         "mode": "image_generation"
     },
     "twelvelabs.marengo-embed-2-7-v1:0": {
+        "deprecation_date": "2026-11-30",
         "input_cost_per_token": 7e-05,
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
@@ -631,6 +637,7 @@
         "supports_image_input": true
     },
     "us.twelvelabs.marengo-embed-2-7-v1:0": {
+        "deprecation_date": "2026-11-30",
         "input_cost_per_token": 7e-05,
         "input_cost_per_video_per_second": 0.0007,
         "input_cost_per_audio_per_second": 0.00014,
@@ -645,6 +652,7 @@
         "supports_image_input": true
     },
     "eu.twelvelabs.marengo-embed-2-7-v1:0": {
+        "deprecation_date": "2026-11-30",
         "input_cost_per_token": 7e-05,
         "input_cost_per_video_per_second": 0.0007,
         "input_cost_per_audio_per_second": 0.00014,
@@ -861,6 +869,7 @@
         "supports_vision": true
     },
     "anthropic.claude-3-haiku-20240307-v1:0": {
+        "deprecation_date": "2026-09-10",
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 200000,
@@ -892,6 +901,7 @@
         "cache_creation_input_token_cost": 1.875e-05
     },
     "anthropic.claude-3-sonnet-20240229-v1:0": {
+        "deprecation_date": "2026-07-30",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 200000,
@@ -920,6 +930,7 @@
     "anthropic.claude-opus-4-1-20250805-v1:0": {
         "cache_creation_input_token_cost": 1.875e-05,
         "cache_read_input_token_cost": 1.5e-06,
+        "deprecation_date": "2027-01-08",
         "input_cost_per_token": 1.5e-05,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
@@ -2411,6 +2422,7 @@
     "anthropic.claude-sonnet-4-20250514-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
+        "deprecation_date": "2026-10-14",
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_above_200k_tokens": 6e-06,
         "output_cost_per_token_above_200k_tokens": 2.25e-05,
@@ -2652,6 +2664,7 @@
         "supports_vision": true
     },
     "apac.anthropic.claude-3-5-sonnet-20240620-v1:0": {
+        "deprecation_date": "2026-07-30",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 200000,
@@ -2670,6 +2683,7 @@
     "apac.anthropic.claude-3-5-sonnet-20241022-v2:0": {
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
+        "deprecation_date": "2026-07-30",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 200000,
@@ -2687,6 +2701,7 @@
         "supports_vision": true
     },
     "apac.anthropic.claude-3-haiku-20240307-v1:0": {
+        "deprecation_date": "2026-09-10",
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 200000,
@@ -2728,6 +2743,7 @@
         "prompt_cache_min_tokens": 4096
     },
     "apac.anthropic.claude-3-sonnet-20240229-v1:0": {
+        "deprecation_date": "2026-07-30",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 200000,
@@ -2746,6 +2762,7 @@
     "apac.anthropic.claude-sonnet-4-20250514-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
+        "deprecation_date": "2026-10-14",
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_above_200k_tokens": 6e-06,
         "output_cost_per_token_above_200k_tokens": 2.25e-05,
@@ -9690,6 +9707,7 @@
         "output_cost_per_token": 2.22e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
@@ -9813,6 +9831,7 @@
         "output_cost_per_token": 2.22e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
@@ -9905,6 +9924,7 @@
         "output_cost_per_token": 2.22e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
@@ -9990,6 +10010,7 @@
         "output_cost_per_token": 2.22e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
@@ -10393,6 +10414,7 @@
         "output_cost_per_token": 2.22e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
@@ -10607,6 +10629,7 @@
         "output_cost_per_token": 1.85e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
@@ -10684,6 +10707,7 @@
         "output_cost_per_token": 1.85e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
@@ -10812,6 +10836,7 @@
         "output_cost_per_token": 1.5e-06
     },
     "bedrock/us-gov-east-1/anthropic.claude-3-5-sonnet-20240620-v1:0": {
+        "deprecation_date": "2026-07-30",
         "input_cost_per_token": 3.6e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 200000,
@@ -10828,6 +10853,7 @@
         "cache_creation_input_token_cost": 4.5e-06
     },
     "bedrock/us-gov-east-1/anthropic.claude-3-haiku-20240307-v1:0": {
+        "deprecation_date": "2026-09-10",
         "input_cost_per_token": 3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 200000,
@@ -10975,6 +11001,7 @@
     "bedrock/us-gov-west-1/anthropic.claude-3-7-sonnet-20250219-v1:0": {
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_read_input_token_cost": 3.6e-07,
+        "deprecation_date": "2026-07-30",
         "input_cost_per_token": 3.6e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 200000,
@@ -10993,6 +11020,7 @@
         "supports_vision": true
     },
     "bedrock/us-gov-west-1/anthropic.claude-3-5-sonnet-20240620-v1:0": {
+        "deprecation_date": "2026-07-30",
         "input_cost_per_token": 3.6e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 200000,
@@ -11009,6 +11037,7 @@
         "cache_creation_input_token_cost": 4.5e-06
     },
     "bedrock/us-gov-west-1/anthropic.claude-3-haiku-20240307-v1:0": {
+        "deprecation_date": "2026-09-10",
         "input_cost_per_token": 3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 200000,
@@ -11240,6 +11269,7 @@
         "output_cost_per_token": 1.85e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
@@ -12654,6 +12684,7 @@
         "supports_tool_choice": true
     },
     "cohere.command-r-plus-v1:0": {
+        "deprecation_date": "2026-08-19",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -12664,6 +12695,7 @@
         "supports_tool_choice": true
     },
     "cohere.command-r-v1:0": {
+        "deprecation_date": "2026-08-19",
         "input_cost_per_token": 5e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -12915,6 +12947,103 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": false
+    },
+    "dashscope/deepseek-v4-flash": {
+        "cache_read_input_token_cost": 4e-08,
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "dashscope",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
+        "mode": "chat",
+        "output_cost_per_token": 4e-07,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "dashscope/deepseek-v4-flash-0731": {
+        "cache_read_input_token_cost": 4e-08,
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "dashscope",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
+        "mode": "chat",
+        "output_cost_per_token": 4e-07,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "dashscope/deepseek-v4-pro": {
+        "cache_read_input_token_cost": 2e-07,
+        "input_cost_per_token": 2.4e-06,
+        "litellm_provider": "dashscope",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
+        "mode": "chat",
+        "output_cost_per_token": 4.8e-06,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "dashscope/glm-5.1": {
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "dashscope",
+        "max_input_tokens": 202745,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "dashscope/glm-5.2": {
+        "cache_read_input_token_cost": 2.8e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "dashscope",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "dashscope/kimi-k2.7-code": {
+        "cache_read_input_token_cost": 1.9e-07,
+        "input_cost_per_token": 9.5e-07,
+        "litellm_provider": "dashscope",
+        "max_input_tokens": 229376,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "dashscope/qwen-coder": {
         "input_cost_per_token": 3e-07,
@@ -13708,6 +13837,23 @@
                 ]
             }
         ]
+    },
+    "dashscope/qwen3.8-max": {
+        "cache_read_input_token_cost": 2.5e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "dashscope",
+        "max_input_tokens": 991808,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 6e-06,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "dashscope/qwq-plus": {
         "input_cost_per_token": 8e-07,
@@ -15406,6 +15552,17 @@
         "supports_tool_choice": true,
         "supports_function_calling": true
     },
+    "deepinfra/nvidia/NVIDIA-Nemotron-3.5-Lightning": {
+        "max_input_tokens": 262144,
+        "input_cost_per_token": 5e-08,
+        "output_cost_per_token": 2e-07,
+        "litellm_provider": "deepinfra",
+        "mode": "chat",
+        "source": "https://deepinfra.com/nvidia/NVIDIA-Nemotron-3.5-Lightning",
+        "supports_tool_choice": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true
+    },
     "deepinfra/nvidia/NVIDIA-Nemotron-Nano-9B-v2": {
         "max_tokens": 131072,
         "max_input_tokens": 131072,
@@ -15897,6 +16054,7 @@
         ]
     },
     "embed-english-light-v2.0": {
+        "deprecation_date": "2026-04-04",
         "input_cost_per_token": 1e-07,
         "litellm_provider": "cohere",
         "max_input_tokens": 1024,
@@ -15913,6 +16071,7 @@
         "output_cost_per_token": 0.0
     },
     "embed-english-v2.0": {
+        "deprecation_date": "2026-04-04",
         "input_cost_per_token": 1e-07,
         "litellm_provider": "cohere",
         "max_input_tokens": 4096,
@@ -15935,6 +16094,7 @@
         "supports_image_input": true
     },
     "embed-multilingual-v2.0": {
+        "deprecation_date": "2026-04-04",
         "input_cost_per_token": 1e-07,
         "litellm_provider": "cohere",
         "max_input_tokens": 768,
@@ -16102,6 +16262,7 @@
         "cache_creation_input_token_cost": 3.75e-06
     },
     "eu.anthropic.claude-3-haiku-20240307-v1:0": {
+        "deprecation_date": "2026-09-10",
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 200000,
@@ -16133,6 +16294,7 @@
         "cache_creation_input_token_cost": 1.875e-05
     },
     "eu.anthropic.claude-3-sonnet-20240229-v1:0": {
+        "deprecation_date": "2026-07-30",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 200000,
@@ -16203,6 +16365,7 @@
     "eu.anthropic.claude-sonnet-4-20250514-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
+        "deprecation_date": "2026-10-14",
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_above_200k_tokens": 6e-06,
         "output_cost_per_token_above_200k_tokens": 2.25e-05,
@@ -19870,6 +20033,7 @@
     },
     "gemini/gemini-2.5-flash-preview-09-2025": {
         "cache_read_input_token_cost": 7.5e-08,
+        "deprecation_date": "2026-02-17",
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "gemini",
@@ -22088,6 +22252,7 @@
     "global.anthropic.claude-sonnet-4-20250514-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
+        "deprecation_date": "2026-10-14",
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_above_200k_tokens": 6e-06,
         "output_cost_per_token_above_200k_tokens": 2.25e-05,
@@ -27723,6 +27888,7 @@
         "supports_native_structured_output": true
     },
     "mistral/codestral-2405": {
+        "deprecation_date": "2025-06-16",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "mistral",
         "max_input_tokens": 32000,
@@ -27773,6 +27939,7 @@
         "supports_tool_choice": true
     },
     "mistral/devstral-medium-2507": {
+        "deprecation_date": "2026-05-31",
         "input_cost_per_token": 4e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 128000,
@@ -27787,6 +27954,7 @@
         "supports_tool_choice": true
     },
     "mistral/devstral-small-2505": {
+        "deprecation_date": "2025-11-30",
         "input_cost_per_token": 1e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 128000,
@@ -27801,6 +27969,7 @@
         "supports_tool_choice": true
     },
     "mistral/devstral-small-2507": {
+        "deprecation_date": "2026-05-31",
         "input_cost_per_token": 1e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 128000,
@@ -27829,6 +27998,7 @@
         "supports_tool_choice": true
     },
     "mistral/labs-devstral-small-2512": {
+        "deprecation_date": "2026-03-31",
         "input_cost_per_token": 1e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 256000,
@@ -27871,6 +28041,7 @@
         "supports_tool_choice": true
     },
     "mistral/devstral-2512": {
+        "deprecation_date": "2026-07-31",
         "input_cost_per_token": 4e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 256000,
@@ -27885,6 +28056,7 @@
         "supports_tool_choice": true
     },
     "mistral/magistral-medium-2506": {
+        "deprecation_date": "2025-11-30",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "mistral",
         "max_input_tokens": 40000,
@@ -27900,6 +28072,7 @@
         "supports_tool_choice": true
     },
     "mistral/magistral-medium-2509": {
+        "deprecation_date": "2026-07-31",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "mistral",
         "max_input_tokens": 40000,
@@ -27915,6 +28088,7 @@
         "supports_tool_choice": true
     },
     "mistral/magistral-medium-1-2-2509": {
+        "deprecation_date": "2026-07-31",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "mistral",
         "max_input_tokens": 40000,
@@ -27950,6 +28124,7 @@
         "source": "https://mistral.ai/pricing#api-pricing"
     },
     "mistral/mistral-ocr-2505-completion": {
+        "deprecation_date": "2026-05-31",
         "litellm_provider": "mistral",
         "ocr_cost_per_page": 0.001,
         "annotation_cost_per_page": 0.003,
@@ -27985,6 +28160,7 @@
         "supports_tool_choice": true
     },
     "mistral/magistral-small-2506": {
+        "deprecation_date": "2025-11-30",
         "input_cost_per_token": 5e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 40000,
@@ -28015,6 +28191,7 @@
         "supports_tool_choice": true
     },
     "mistral/magistral-small-1-2-2509": {
+        "deprecation_date": "2026-07-31",
         "input_cost_per_token": 5e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 40000,
@@ -28051,6 +28228,7 @@
         "mode": "embedding"
     },
     "mistral/mistral-large-2402": {
+        "deprecation_date": "2025-06-16",
         "input_cost_per_token": 4e-06,
         "litellm_provider": "mistral",
         "max_input_tokens": 32000,
@@ -28064,6 +28242,7 @@
         "supports_tool_choice": true
     },
     "mistral/mistral-large-2407": {
+        "deprecation_date": "2025-03-30",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "mistral",
         "max_input_tokens": 128000,
@@ -28077,6 +28256,7 @@
         "supports_tool_choice": true
     },
     "mistral/mistral-large-2411": {
+        "deprecation_date": "2026-05-31",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "mistral",
         "max_input_tokens": 128000,
@@ -28147,6 +28327,7 @@
         "supports_tool_choice": true
     },
     "mistral/mistral-medium-2312": {
+        "deprecation_date": "2025-06-16",
         "input_cost_per_token": 2.7e-06,
         "litellm_provider": "mistral",
         "max_input_tokens": 32000,
@@ -28159,6 +28340,7 @@
         "supports_tool_choice": true
     },
     "mistral/mistral-medium-2505": {
+        "deprecation_date": "2026-08-31",
         "input_cost_per_token": 4e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 131072,
@@ -28172,6 +28354,7 @@
         "supports_tool_choice": true
     },
     "mistral/mistral-medium-2508": {
+        "deprecation_date": "2026-08-31",
         "input_cost_per_token": 4e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 131072,
@@ -28219,6 +28402,7 @@
         "supports_vision": true
     },
     "mistral/mistral-medium-3-1-2508": {
+        "deprecation_date": "2026-08-31",
         "input_cost_per_token": 4e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 131072,
@@ -28278,6 +28462,7 @@
         "supports_vision": true
     },
     "mistral/mistral-small-3-2-2506": {
+        "deprecation_date": "2026-07-31",
         "input_cost_per_token": 6e-08,
         "litellm_provider": "mistral",
         "max_input_tokens": 131072,
@@ -28380,6 +28565,7 @@
         "supports_tool_choice": true
     },
     "mistral/open-codestral-mamba": {
+        "deprecation_date": "2025-06-06",
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 256000,
@@ -28392,6 +28578,7 @@
         "supports_tool_choice": true
     },
     "mistral/open-mistral-7b": {
+        "deprecation_date": "2025-03-30",
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 32000,
@@ -28417,6 +28604,7 @@
         "supports_tool_choice": true
     },
     "mistral/open-mistral-nemo-2407": {
+        "deprecation_date": "2026-07-31",
         "input_cost_per_token": 3e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 128000,
@@ -28430,6 +28618,7 @@
         "supports_tool_choice": true
     },
     "mistral/open-mixtral-8x22b": {
+        "deprecation_date": "2025-03-30",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "mistral",
         "max_input_tokens": 65336,
@@ -28443,6 +28632,7 @@
         "supports_tool_choice": true
     },
     "mistral/open-mixtral-8x7b": {
+        "deprecation_date": "2025-03-30",
         "input_cost_per_token": 7e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 32000,
@@ -28456,6 +28646,7 @@
         "supports_tool_choice": true
     },
     "mistral/pixtral-12b-2409": {
+        "deprecation_date": "2025-12-31",
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 128000,
@@ -28470,6 +28661,7 @@
         "supports_vision": true
     },
     "mistral/pixtral-large-2411": {
+        "deprecation_date": "2026-05-31",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "mistral",
         "max_input_tokens": 128000,
@@ -31572,6 +31764,17 @@
         "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true
+    },
+    "openrouter/nvidia/nemotron-3.5-lightning": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2e-07,
+        "source": "https://openrouter.ai/nvidia/nemotron-3.5-lightning",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
     },
     "openrouter/openai/gpt-3.5-turbo": {
         "input_cost_per_token": 1.5e-06,
@@ -35242,6 +35445,7 @@
         "supports_response_schema": true
     },
     "us.amazon.nova-premier-v1:0": {
+        "deprecation_date": "2026-09-14",
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
@@ -35369,6 +35573,7 @@
         "supports_vision": true
     },
     "us.anthropic.claude-3-haiku-20240307-v1:0": {
+        "deprecation_date": "2026-09-10",
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 200000,
@@ -35400,6 +35605,7 @@
         "cache_creation_input_token_cost": 1.875e-05
     },
     "us.anthropic.claude-3-sonnet-20240229-v1:0": {
+        "deprecation_date": "2026-07-30",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 200000,
@@ -35418,6 +35624,7 @@
     "us.anthropic.claude-opus-4-1-20250805-v1:0": {
         "cache_creation_input_token_cost": 1.875e-05,
         "cache_read_input_token_cost": 1.5e-06,
+        "deprecation_date": "2027-01-08",
         "input_cost_per_token": 1.5e-05,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
@@ -35655,6 +35862,7 @@
     "us.anthropic.claude-sonnet-4-20250514-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
+        "deprecation_date": "2026-10-14",
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_above_200k_tokens": 6e-06,
         "output_cost_per_token_above_200k_tokens": 2.25e-05,
@@ -35705,6 +35913,7 @@
         "output_cost_per_token": 1.85e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true
     },
     "eu.deepseek.v3.2": {
@@ -35717,6 +35926,7 @@
         "output_cost_per_token": 2.22e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true
     },
     "us.meta.llama3-1-405b-instruct-v1:0": {
@@ -45993,6 +46203,7 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
@@ -46007,6 +46218,7 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },

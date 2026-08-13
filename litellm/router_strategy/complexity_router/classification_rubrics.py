@@ -74,4 +74,6 @@ def calibration_examples_section(
     preset: ClassificationRubric, labeled_tiers: Sequence[tuple[ComplexityTier, str]]
 ) -> str:
     """The preset's worked examples, each tier named in the operator's own vocabulary."""
-    return _CALIBRATION_EXAMPLES[preset].format(**{tier.value: label for tier, label in labeled_tiers})
+    return _CALIBRATION_EXAMPLES[preset].format_map(
+        MappingProxyType({tier.value: label for tier, label in labeled_tiers})
+    )

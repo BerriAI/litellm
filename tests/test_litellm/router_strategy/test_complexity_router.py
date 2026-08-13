@@ -1158,8 +1158,8 @@ class TestPreRoutingStrategyRegistry:
                 TaggedPreRoutingStrategy(tags=("us",), strategy=us),
             ]
         }
-        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["us"]}}) is us
-        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["cn"]}}) is cn
+        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["us"]}}).strategy is us
+        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["cn"]}}).strategy is cn
         assert router._select_pre_routing_strategy("missing", {"metadata": {"tags": ["cn"]}}) is None
 
         router.complexity_routers = {
@@ -1168,14 +1168,14 @@ class TestPreRoutingStrategyRegistry:
                 TaggedPreRoutingStrategy(tags=("default",), strategy=fallback),
             ]
         }
-        assert router._select_pre_routing_strategy("smart", {}) is fallback
+        assert router._select_pre_routing_strategy("smart", {}).strategy is fallback
         router.complexity_routers = {
             "smart": [
                 TaggedPreRoutingStrategy(tags=("cn",), strategy=cn),
                 TaggedPreRoutingStrategy(tags=("us",), strategy=us),
             ]
         }
-        assert router._select_pre_routing_strategy("smart", {}) is cn
+        assert router._select_pre_routing_strategy("smart", {}).strategy is cn
 
 
 class TestAsyncPreRoutingHookMultiFormat:
@@ -2040,6 +2040,44 @@ class TestRouterPreRoutingAliasOverrides:
         assert result is not None
         assert request_kwargs["drop_params"] is True
         assert request_kwargs["cache_control_injection_points"] == [{"location": "message", "role": "system"}]
+
+    @pytest.mark.asyncio
+    async def test_alias_custom_pricing_is_not_applied_to_request_kwargs(self):
+        """Custom pricing on the alias prices the alias, not the tier deployment
+        the hook picked. Unlike the router-only fields, pricing fields are real
+        call params, so forwarding them would re-register the routed deployment
+        at the alias's price - an explicit 0 billing every request as free."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "smart-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                        "input_cost_per_second": 0.0,
+                        "drop_params": True,
+                        "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini"}},
+                        "complexity_router_default_model": "gpt-4o",
+                    },
+                },
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "openai/gpt-4o-mini"}},
+                {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o"}},
+            ]
+        )
+        request_kwargs: dict = {}
+
+        result = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert result is not None
+        # Non-pricing alias params still carry over.
+        assert request_kwargs["drop_params"] is True
+        for field in ("input_cost_per_token", "output_cost_per_token", "input_cost_per_second"):
+            assert field not in request_kwargs
 
     @pytest.mark.asyncio
     async def test_alias_overrides_exclude_only_model(self):
