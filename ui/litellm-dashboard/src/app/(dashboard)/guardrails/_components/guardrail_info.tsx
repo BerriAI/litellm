@@ -35,22 +35,6 @@ export interface GuardrailInfoProps {
   isAdmin: boolean;
 }
 
-interface ProviderParam {
-  param: string;
-  description: string;
-  required: boolean;
-  default_value?: string;
-  options?: string[];
-  type?: string;
-  fields?: { [key: string]: ProviderParam };
-  dict_key_options?: string[];
-  dict_value_type?: string;
-}
-
-interface ProviderParamsResponse {
-  [provider: string]: { [key: string]: ProviderParam };
-}
-
 const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose, accessToken, isAdmin }) => {
   const [guardrailData, setGuardrailData] = useState<any>(null);
   const [guardrailProviderSpecificParams, setGuardrailProviderSpecificParams] = useState<any>(null);
@@ -243,11 +227,6 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
   useEffect(() => {
     resetToolPermissionEditor();
   }, [resetToolPermissionEditor]);
-
-  const handleToolPermissionConfigChange = (config: ToolPermissionConfig) => {
-    setToolPermissionConfig(config);
-    setToolPermissionDirty(true);
-  };
 
   const handlePiiEntitySelect = (entity: string) => {
     setSelectedPiiEntities((prev) => {

@@ -10,7 +10,9 @@ requests itself imports.
 
 from __future__ import annotations
 
-from typing import Generic, Iterator, Literal, NewType, TypeVar, cast
+import time
+from collections.abc import Callable
+from typing import Generic, Iterator, Literal, NewType, Protocol, TypeVar, cast
 
 import pytest
 import requests
@@ -137,6 +139,7 @@ class StreamingResponse(BaseModel):
     # quota) arrive as SSE error events inside an otherwise-successful response;
     # the consumed body is elided, so this is the only place they surface.
     stream_error: str | None = None
+    stream_done: bool = False
 
     @property
     def ok(self) -> bool:
@@ -216,6 +219,17 @@ def require_successful_call(result: StreamingResponse) -> None:
     )
 
 
+def assert_client_error(result: StreamingResponse, context: str) -> None:
+    assert 400 <= result.status_code < 500, (
+        f"{context}: expected 4xx, got {result.status_code}: {result.body[:300]}"
+    )
+
+
+def assert_auth_denied(result: StreamingResponse, context: str) -> None:
+    assert result.status_code in (401, 403), (
+        f"{context}: expected 401/403, got {result.status_code}: {result.body[:300]}"
+    )
+
 def _headers(headers: BaseModel) -> dict[str, str]:
     dumped: dict[str, object] = headers.model_dump(by_alias=True, exclude_none=True)
     return {key: str(value) for key, value in dumped.items()}
@@ -226,6 +240,49 @@ def _params(params: BaseModel | None) -> dict[str, str]:
         return {}
     dumped: dict[str, object] = params.model_dump(by_alias=True, exclude_none=True)
     return {key: str(value) for key, value in dumped.items()}
+
+
+TRANSIENT_STATUSES: frozenset[int] = frozenset({529})
+RETRY_ATTEMPTS: int = 3
+RETRY_BACKOFF_SECONDS: float = 0.5
+
+
+class RetryableResponse(Protocol):
+    status_code: int
+
+    def close(self) -> None: ...
+
+
+def request_with_retry[T: RetryableResponse](
+    issue: Callable[[], T], *, sleep: Callable[[float], None] = time.sleep
+) -> T:
+    """Bounded retry on statuses attributable to the PROVIDER, never the proxy.
+
+    The system under test is the proxy, so the transport may only absorb
+    statuses the proxy itself cannot emit; today that is exactly 529, the
+    Anthropic overloaded_error passed through verbatim (their own SDK retries
+    it too). 500/502/503/504 stay first-class failures: at this layer a 5xx
+    from the proxy is indistinguishable from one it relayed, and retrying them
+    could mask an intermittently failing proxy. Widen the set only for a
+    status litellm provably never originates, with an observed flake in hand.
+
+    Also deliberately NOT retried: 429, because this suite asserts the proxy's
+    own rate-limit and budget 429s; network errors and timeouts, because a
+    hang should surface as a hang instead of doubling the wall clock. Every
+    retry prints, so flakiness stays visible in the run log instead of
+    vanishing into green."""
+    for attempt in range(1, RETRY_ATTEMPTS):
+        resp = issue()
+        if resp.status_code not in TRANSIENT_STATUSES:
+            return resp
+        delay = RETRY_BACKOFF_SECONDS * (1 << (attempt - 1))
+        print(
+            f"e2e-http: transient {resp.status_code}; retry {attempt}/{RETRY_ATTEMPTS - 1} in {delay}s",
+            flush=True,
+        )
+        resp.close()
+        sleep(delay)
+    return issue()
 
 
 def _classify[R: BaseModel](
@@ -252,11 +309,13 @@ def post[R: BaseModel](
     timeout: float = 30.0,
 ) -> Result[R]:
     try:
-        resp = requests.post(
-            str(url),
-            headers=_headers(headers),
-            json=json.model_dump(by_alias=True, exclude_none=True),
-            timeout=timeout,
+        resp = request_with_retry(
+            lambda: requests.post(
+                str(url),
+                headers=_headers(headers),
+                json=json.model_dump(by_alias=True, exclude_none=True),
+                timeout=timeout,
+            )
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
@@ -272,11 +331,13 @@ def get[R: BaseModel](
     timeout: float = 30.0,
 ) -> Result[R]:
     try:
-        resp = requests.get(
-            str(url),
-            headers=_headers(headers),
-            params=params.model_dump(by_alias=True, exclude_none=True),
-            timeout=timeout,
+        resp = request_with_retry(
+            lambda: requests.get(
+                str(url),
+                headers=_headers(headers),
+                params=params.model_dump(by_alias=True, exclude_none=True),
+                timeout=timeout,
+            )
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
@@ -313,12 +374,14 @@ def delete[R: BaseModel](
     timeout: float = 30.0,
 ) -> Result[R]:
     try:
-        resp = requests.delete(
-            str(url),
-            headers=_headers(headers),
-            json=json.model_dump(by_alias=True, exclude_none=True),
-            params=_params(params),
-            timeout=timeout,
+        resp = request_with_retry(
+            lambda: requests.delete(
+                str(url),
+                headers=_headers(headers),
+                json=json.model_dump(by_alias=True, exclude_none=True),
+                params=_params(params),
+                timeout=timeout,
+            )
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
@@ -334,11 +397,13 @@ def patch[R: BaseModel](
     timeout: float = 30.0,
 ) -> Result[R]:
     try:
-        resp = requests.patch(
-            str(url),
-            headers=_headers(headers),
-            json=json.model_dump(by_alias=True, exclude_none=True),
-            timeout=timeout,
+        resp = request_with_retry(
+            lambda: requests.patch(
+                str(url),
+                headers=_headers(headers),
+                json=json.model_dump(by_alias=True, exclude_none=True),
+                timeout=timeout,
+            )
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
@@ -354,11 +419,13 @@ def put[R: BaseModel](
     timeout: float = 30.0,
 ) -> Result[R]:
     try:
-        resp = requests.put(
-            str(url),
-            headers=_headers(headers),
-            json=json.model_dump(by_alias=True, exclude_none=True),
-            timeout=timeout,
+        resp = request_with_retry(
+            lambda: requests.put(
+                str(url),
+                headers=_headers(headers),
+                json=json.model_dump(by_alias=True, exclude_none=True),
+                timeout=timeout,
+            )
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
@@ -369,11 +436,13 @@ def probe(
     url: URL, *, headers: BaseModel, params: BaseModel, timeout: float = 30.0
 ) -> ProbeResult:
     try:
-        resp = requests.get(
-            str(url),
-            headers=_headers(headers),
-            params=params.model_dump(by_alias=True, exclude_none=True),
-            timeout=timeout,
+        resp = request_with_retry(
+            lambda: requests.get(
+                str(url),
+                headers=_headers(headers),
+                params=params.model_dump(by_alias=True, exclude_none=True),
+                timeout=timeout,
+            )
         )
     except requests.RequestException as exc:
         return ProbeResult(status_code=-1, body=str(exc))
@@ -408,6 +477,7 @@ def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingRespon
     chunks = 0
     stream_error: str | None = None
     stream_events: list[str] = []
+    stream_done = False
     for line in lines:
         if not line:
             continue
@@ -415,7 +485,9 @@ def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingRespon
         decoded_line = line.decode(errors="replace")
         if decoded_line.startswith("data: "):
             payload = decoded_line.removeprefix("data: ")
-            if payload != "[DONE]":
+            if payload == "[DONE]":
+                stream_done = True
+            else:
                 stream_events.append(payload)
         if stream_error is None and (
             line.startswith(b"event: error")
@@ -433,6 +505,7 @@ def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingRespon
         body="<streamed>",
         chunks=chunks,
         stream_events=stream_events,
+        stream_done=stream_done,
         stream_error=stream_error,
     )
 
@@ -451,13 +524,15 @@ def send(
     status rather than a typed JSON model (e.g. a budget block is a non-2xx). With
     ``stream=True`` the SSE body is consumed and its events counted instead."""
     try:
-        resp = requests.post(
-            str(url),
-            headers=_headers(headers),
-            params=_params(params),
-            json=json.model_dump(by_alias=True, exclude_none=True),
-            stream=stream,
-            timeout=timeout,
+        resp = request_with_retry(
+            lambda: requests.post(
+                str(url),
+                headers=_headers(headers),
+                params=_params(params),
+                json=json.model_dump(by_alias=True, exclude_none=True),
+                stream=stream,
+                timeout=timeout,
+            )
         )
     except requests.RequestException as exc:
         return StreamingResponse(status_code=-1, body=str(exc))
@@ -492,13 +567,15 @@ def upload[R: BaseModel](
     dumped: dict[str, object] = form.model_dump(by_alias=True, exclude_none=True)
     data = {key: str(value) for key, value in dumped.items()}
     try:
-        resp = requests.post(
-            str(url),
-            headers=_headers(headers),
-            params=_params(params),
-            data=data,
-            files={file_field: (filename, content, file_content_type)},
-            timeout=timeout,
+        resp = request_with_retry(
+            lambda: requests.post(
+                str(url),
+                headers=_headers(headers),
+                params=_params(params),
+                data=data,
+                files={file_field: (filename, content, file_content_type)},
+                timeout=timeout,
+            )
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))

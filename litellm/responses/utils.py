@@ -1,18 +1,7 @@
 import base64
 import re
-from typing import (
-    Any,
-    Dict,
-    Iterable,
-    List,
-    Mapping,
-    Optional,
-    Type,
-    Union,
-    cast,
-    get_type_hints,
-    overload,
-)
+from collections.abc import Iterable, Mapping
+from typing import Any, Final, Optional, Union, cast, get_type_hints, overload
 
 from pydantic import BaseModel
 
@@ -42,7 +31,7 @@ def normalize_responses_api_stream_options(
 ) -> ResponsesAPIStreamOptions | None:
     if not isinstance(stream_options, Mapping):
         return None
-    include_obfuscation = stream_options.get("include_obfuscation")
+    include_obfuscation: Final = stream_options.get("include_obfuscation")
     if not isinstance(include_obfuscation, bool):
         return None
     return ResponsesAPIStreamOptions(include_obfuscation=include_obfuscation)
@@ -60,8 +49,8 @@ class ResponsesAPIRequestUtils:
         if isinstance(original_input, str):
             return [*merged_input]
 
-        original_items = tuple(original_input)
-        client_item_ids = frozenset(id(item) for item in client_input)
+        original_items: Final = tuple(original_input)
+        client_item_ids: Final = frozenset(id(item) for item in client_input)
         message_positions = tuple(index for index, item in enumerate(original_items) if id(item) in client_item_ids)
 
         if len(message_positions) == len(original_items):
@@ -72,13 +61,13 @@ class ResponsesAPIRequestUtils:
             )
             return [*original_items]
 
-        corresponding_messages = len(client_input) == len(merged_input) and all(
+        corresponding_messages: Final = len(client_input) == len(merged_input) and all(
             original.get("role") == merged.get("role")
             and (not isinstance(original.get("id"), str) or original.get("id") == merged.get("id"))
             for original, merged in zip(client_input, merged_input)
         )
         if corresponding_messages:
-            merged_by_position = dict(zip(message_positions, merged_input))
+            merged_by_position: Final = dict(zip(message_positions, merged_input))
             return [
                 merged_by_position[index] if index in merged_by_position else item
                 for index, item in enumerate(original_items)
@@ -86,13 +75,13 @@ class ResponsesAPIRequestUtils:
 
         all_messages_preserved = all(any(original is merged for merged in merged_input) for original in client_input)
         if all_messages_preserved:
-            prefixes = {
+            prefixes: Final = {
                 id(original_items[position]): original_items[
                     message_positions[index - 1] + 1 if index else 0 : position
                 ]
                 for index, position in enumerate(message_positions)
             }
-            trailing_items = original_items[message_positions[-1] + 1 :]
+            trailing_items: Final = original_items[message_positions[-1] + 1 :]
             return [item for merged in merged_input for item in (*prefixes.get(id(merged), ()), merged)] + list(
                 trailing_items
             )
@@ -103,17 +92,39 @@ class ResponsesAPIRequestUtils:
         return [*merged_input]
 
     @staticmethod
+    def merge_client_forwarded_headers(
+        extra_headers: dict[str, object] | None,
+        client_headers: dict[str, str] | None,
+    ) -> dict[str, object] | None:
+        """
+        Merge headers forwarded by the proxy (`headers` kwarg, set when
+        `forward_client_headers_to_llm_api` is enabled) into `extra_headers`.
+
+        `extra_headers` wins on conflicts, since it is set explicitly by the caller.
+        Header names are compared case-insensitively, as HTTP defines them.
+        """
+        if not client_headers:
+            return extra_headers
+        if not extra_headers:
+            return dict(client_headers)
+        explicit_names: Final = frozenset(name.lower() for name in extra_headers)
+        return {
+            **{name: value for name, value in client_headers.items() if name.lower() not in explicit_names},
+            **extra_headers,
+        }
+
+    @staticmethod
     def _check_valid_arg(
-        supported_params: Optional[List[str]],
-        non_default_params: Dict,
-        drop_params: Optional[bool],
-        custom_llm_provider: Optional[str],
+        supported_params: list[str] | None,
+        non_default_params: dict,
+        drop_params: bool | None,
+        custom_llm_provider: str | None,
         model: str,
     ):
         if supported_params is None:
             return
-        unsupported_params = {}
-        for k in non_default_params.keys():
+        unsupported_params: Final = {}
+        for k in non_default_params:
             if k not in supported_params:
                 unsupported_params[k] = non_default_params[k]
         if unsupported_params:
@@ -130,9 +141,9 @@ class ResponsesAPIRequestUtils:
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
-        allowed_openai_params: Optional[List[str]] = None,
+        allowed_openai_params: list[str] | None = None,
         drop_params: bool | None = None,
-    ) -> Dict:
+    ) -> dict:
         """
         Get optional parameters for the responses API.
 
@@ -148,11 +159,11 @@ class ResponsesAPIRequestUtils:
 
         # Remove None values and internal parameters
         # Get supported parameters for the model
-        supported_params = responses_api_provider_config.get_supported_openai_params(model)
+        supported_params: Final = responses_api_provider_config.get_supported_openai_params(model)
 
-        should_drop_params = litellm.drop_params or drop_params is True
+        should_drop_params: Final = litellm.drop_params or drop_params is True
 
-        non_default_params = cast(Dict, response_api_optional_params)
+        non_default_params: Final = cast(dict, response_api_optional_params)
         # Check for unsupported parameters
         ResponsesAPIRequestUtils._check_valid_arg(
             supported_params=supported_params + (allowed_openai_params or []),
@@ -163,14 +174,14 @@ class ResponsesAPIRequestUtils:
         )
 
         # Map parameters to provider-specific format
-        mapped_params = responses_api_provider_config.map_openai_params(
+        mapped_params: Final = responses_api_provider_config.map_openai_params(
             response_api_optional_params=response_api_optional_params,
             model=model,
             drop_params=should_drop_params,
         )
 
-        stream_options = normalize_responses_api_stream_options(mapped_params.get("stream_options"))
-        params_with_normalized_stream_options = {
+        stream_options: Final = normalize_responses_api_stream_options(mapped_params.get("stream_options"))
+        params_with_normalized_stream_options: Final = {
             **{key: value for key, value in mapped_params.items() if key != "stream_options"},
             **({} if stream_options is None else {"stream_options": stream_options}),
         }
@@ -184,7 +195,7 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def get_requested_response_api_optional_param(
-        params: Dict[str, Any],
+        params: dict[str, Any],
     ) -> ResponsesAPIOptionalRequestParams:
         """
         Filter parameters to only include those defined in ResponsesAPIOptionalRequestParams.
@@ -197,12 +208,12 @@ class ResponsesAPIRequestUtils:
         """
         from litellm.utils import PreProcessNonDefaultParams
 
-        valid_keys = get_type_hints(ResponsesAPIOptionalRequestParams).keys()
-        custom_llm_provider = params.pop("custom_llm_provider", None)
-        special_params = params.pop("kwargs", {})
+        valid_keys: Final = get_type_hints(ResponsesAPIOptionalRequestParams).keys()
+        custom_llm_provider: Final = params.pop("custom_llm_provider", None)
+        special_params: Final[dict[str, object]] = params.pop("kwargs", {})
 
-        additional_drop_params = params.pop("additional_drop_params", None)
-        non_default_params = PreProcessNonDefaultParams.base_pre_process_non_default_params(
+        additional_drop_params: Final[list[str] | None] = params.pop("additional_drop_params", None)
+        non_default_params: Final = PreProcessNonDefaultParams.base_pre_process_non_default_params(
             passed_params=params,
             special_params=special_params,
             custom_llm_provider=custom_llm_provider,
@@ -213,7 +224,7 @@ class ResponsesAPIRequestUtils:
 
         # decode previous_response_id if it's a litellm encoded id
         if "previous_response_id" in non_default_params:
-            decoded_previous_response_id = (
+            decoded_previous_response_id: Final = (
                 ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
                     non_default_params["previous_response_id"]
                 )
@@ -223,7 +234,7 @@ class ResponsesAPIRequestUtils:
         if "metadata" in non_default_params:
             from litellm.utils import add_openai_metadata
 
-            converted_metadata = add_openai_metadata(non_default_params["metadata"])
+            converted_metadata: Final = add_openai_metadata(non_default_params["metadata"])
             if converted_metadata is not None:
                 non_default_params["metadata"] = converted_metadata
             else:
@@ -236,36 +247,36 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _update_responses_api_response_id_with_model_id(
         responses_api_response: ResponsesAPIResponse,
-        custom_llm_provider: Optional[str],
-        litellm_metadata: Optional[Dict[str, Any]] = None,
+        custom_llm_provider: str | None,
+        litellm_metadata: dict[str, Any] | None = None,
     ) -> ResponsesAPIResponse: 
         ...
 
     @overload
     @staticmethod
     def _update_responses_api_response_id_with_model_id(
-        responses_api_response: Dict[str, Any],
-        custom_llm_provider: Optional[str],
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]: 
+        responses_api_response: dict[str, Any],
+        custom_llm_provider: str | None,
+        litellm_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: 
         ...
 
     # fmt: on
 
     @staticmethod
     def _update_responses_api_response_id_with_model_id(
-        responses_api_response: Union[ResponsesAPIResponse, Dict[str, Any]],
-        custom_llm_provider: Optional[str],
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[ResponsesAPIResponse, Dict[str, Any]]:
+        responses_api_response: ResponsesAPIResponse | dict[str, Any],
+        custom_llm_provider: str | None,
+        litellm_metadata: dict[str, Any] | None = None,
+    ) -> ResponsesAPIResponse | dict[str, Any]:
         """Update the responses_api_response_id with model_id and custom_llm_provider.
 
         Handles both ``ResponsesAPIResponse`` objects and plain dictionaries returned
         by some streaming providers.
         """
         litellm_metadata = litellm_metadata or {}
-        model_info: Dict[str, Any] = litellm_metadata.get("model_info", {}) or {}
-        model_id = model_info.get("id")
+        model_info: Final[dict[str, Any]] = litellm_metadata.get("model_info", {}) or {}
+        model_id: Final = model_info.get("id")
 
         # access the response id based on the object type
         if isinstance(responses_api_response, dict):
@@ -280,7 +291,7 @@ class ResponsesAPIRequestUtils:
         if ResponsesAPIRequestUtils._is_litellm_encoded_response_id(response_id):
             return responses_api_response
 
-        updated_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        updated_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
             model_id=model_id,
             custom_llm_provider=custom_llm_provider,
             response_id=response_id,
@@ -312,12 +323,12 @@ class ResponsesAPIRequestUtils:
 
         Format: ``encitem_{base64("litellm:model_id:{model_id};item_id:{original_id}")}``
         """
-        assembled = f"litellm:model_id:{model_id};item_id:{item_id}"
-        encoded = base64.b64encode(assembled.encode("utf-8")).decode("utf-8")
+        assembled: Final = f"litellm:model_id:{model_id};item_id:{item_id}"
+        encoded: Final = base64.b64encode(assembled.encode("utf-8")).decode("utf-8")
         return f"encitem_{encoded}"
 
     @staticmethod
-    def _decode_encrypted_item_id(encoded_id: str) -> Optional[Dict[str, str]]:
+    def _decode_encrypted_item_id(encoded_id: str) -> dict[str, str] | None:
         """Decode a litellm-encoded encrypted-content item ID.
 
         Returns a dict with ``model_id`` and ``item_id`` keys, or ``None`` if
@@ -328,16 +339,16 @@ class ResponsesAPIRequestUtils:
         try:
             cleaned = encoded_id[len("encitem_") :]
             # Restore any padding that may have been stripped in transit
-            missing = len(cleaned) % 4
+            missing: Final = len(cleaned) % 4
             if missing:
                 cleaned += "=" * (4 - missing)
-            decoded = base64.b64decode(cleaned.encode("utf-8")).decode("utf-8")
+            decoded: Final = base64.b64decode(cleaned.encode("utf-8")).decode("utf-8")
             # Split on first ";" only so that semicolons inside item_id are preserved
-            parts = decoded.split(";", 1)
+            parts: Final = decoded.split(";", 1)
             if len(parts) < 2:
                 return None
-            model_id = parts[0].replace("litellm:model_id:", "")
-            item_id = parts[1].replace("item_id:", "")
+            model_id: Final = parts[0].replace("litellm:model_id:", "")
+            item_id: Final = parts[1].replace("item_id:", "")
             return {"model_id": model_id, "item_id": item_id}
         except Exception:
             return None
@@ -351,14 +362,14 @@ class ResponsesAPIRequestUtils:
 
         Format: ``litellm_enc:{base64("model_id:{model_id}")};{original_encrypted_content}``
         """
-        metadata = f"model_id:{model_id}"
-        encoded_metadata = base64.b64encode(metadata.encode("utf-8")).decode("utf-8")
+        metadata: Final = f"model_id:{model_id}"
+        encoded_metadata: Final = base64.b64encode(metadata.encode("utf-8")).decode("utf-8")
         return f"litellm_enc:{encoded_metadata};{encrypted_content}"
 
     @staticmethod
     def _unwrap_encrypted_content_with_model_id(
         wrapped_content: str,
-    ) -> tuple[Optional[str], str]:
+    ) -> tuple[str | None, str]:
         """Unwrap encrypted_content to extract model_id and original content.
 
         Returns:
@@ -370,29 +381,29 @@ class ResponsesAPIRequestUtils:
 
         try:
             # Split on first ";" to separate metadata from content
-            parts = wrapped_content.split(";", 1)
+            parts: Final = wrapped_content.split(";", 1)
             if len(parts) < 2:
                 return None, wrapped_content
 
             metadata_b64 = parts[0].replace("litellm_enc:", "")
-            original_content = parts[1]
+            original_content: Final = parts[1]
 
             # Restore padding if needed
-            missing = len(metadata_b64) % 4
+            missing: Final = len(metadata_b64) % 4
             if missing:
                 metadata_b64 += "=" * (4 - missing)
 
-            decoded_metadata = base64.b64decode(metadata_b64.encode("utf-8")).decode("utf-8")
-            model_id = decoded_metadata.replace("model_id:", "")
+            decoded_metadata: Final = base64.b64decode(metadata_b64.encode("utf-8")).decode("utf-8")
+            model_id: Final = decoded_metadata.replace("model_id:", "")
             return model_id, original_content
         except Exception:
             return None, wrapped_content
 
     @staticmethod
     def _update_encrypted_content_item_ids_in_response(
-        response: Union["ResponsesAPIResponse", Dict[str, Any]],
-        model_id: Optional[str],
-    ) -> Union["ResponsesAPIResponse", Dict[str, Any]]:
+        response: Union["ResponsesAPIResponse", dict[str, object]],
+        model_id: str | None,
+    ) -> Union["ResponsesAPIResponse", dict[str, object]]:
         """Rewrite item IDs for output items that contain ``encrypted_content``.
 
         Encodes ``model_id`` into the item ID so that follow-up requests can be
@@ -404,7 +415,7 @@ class ResponsesAPIRequestUtils:
         if not model_id:
             return response
 
-        output: Optional[list] = None
+        output: object = None
         if isinstance(response, dict):
             output = response.get("output")
         else:
@@ -448,7 +459,7 @@ class ResponsesAPIRequestUtils:
         return response
 
     @staticmethod
-    def _restore_encrypted_content_item_ids_in_input(request_input: Any) -> Any:
+    def _restore_encrypted_content_item_ids_in_input(request_input: object) -> Any:
         """Decode litellm-encoded item IDs in request input back to original IDs.
 
         Called before forwarding the request to the upstream provider so the
@@ -482,15 +493,15 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def _build_responses_api_response_id(
-        custom_llm_provider: Optional[str],
-        model_id: Optional[str],
+        custom_llm_provider: str | None,
+        model_id: str | None,
         response_id: str,
     ) -> str:
         """Build the responses_api_response_id"""
-        assembled_id: str = str(SpecialEnums.LITELLM_MANAGED_RESPONSE_COMPLETE_STR.value).format(
+        assembled_id: Final[str] = str(SpecialEnums.LITELLM_MANAGED_RESPONSE_COMPLETE_STR.value).format(
             custom_llm_provider, model_id, response_id
         )
-        base64_encoded_id: str = base64.b64encode(assembled_id.encode("utf-8")).decode("utf-8")
+        base64_encoded_id: Final[str] = base64.b64encode(assembled_id.encode("utf-8")).decode("utf-8")
         return f"resp_{base64_encoded_id}"
 
     @staticmethod
@@ -505,8 +516,8 @@ class ResponsesAPIRequestUtils:
         """
         try:
             # Remove prefix and decode
-            cleaned_id = response_id.replace("resp_", "")
-            decoded_id = base64.b64decode(cleaned_id.encode("utf-8")).decode("utf-8")
+            cleaned_id: Final = response_id.replace("resp_", "")
+            decoded_id: Final = base64.b64decode(cleaned_id.encode("utf-8")).decode("utf-8")
 
             # Parse components using known prefixes
             if ";" not in decoded_id:
@@ -516,16 +527,16 @@ class ResponsesAPIRequestUtils:
                     response_id=response_id,
                 )
 
-            parts = decoded_id.split(";")
+            parts: Final = decoded_id.split(";")
 
             # Format: litellm:custom_llm_provider:{};model_id:{};response_id:{}
             custom_llm_provider = None
             model_id = None
 
             if len(parts) >= 3:  # Full format with custom_llm_provider, model_id, and response_id
-                custom_llm_provider_part = parts[0]
-                model_id_part = parts[1]
-                response_part = parts[2]
+                custom_llm_provider_part: Final = parts[0]
+                model_id_part: Final = parts[1]
+                response_part: Final = parts[2]
 
                 custom_llm_provider = custom_llm_provider_part.replace("litellm:custom_llm_provider:", "")
                 model_id = model_id_part.replace("model_id:", "")
@@ -539,7 +550,7 @@ class ResponsesAPIRequestUtils:
                 response_id=decoded_response_id,
             )
         except Exception as e:
-            verbose_logger.debug(f"Error decoding response_id '{response_id}': {e}")
+            verbose_logger.debug("Error decoding response_id '%s': %s", response_id, e)
             return DecodedResponseId(
                 custom_llm_provider=None,
                 model_id=None,
@@ -548,18 +559,18 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def _is_litellm_encoded_response_id(response_id: str) -> bool:
-        decoded_response_id = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
+        decoded_response_id: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
         return (
             decoded_response_id.get("model_id") is not None
             or decoded_response_id.get("custom_llm_provider") is not None
         )
 
     @staticmethod
-    def get_model_id_from_response_id(response_id: Optional[str]) -> Optional[str]:
+    def get_model_id_from_response_id(response_id: str | None) -> str | None:
         """Get the model_id from the response_id"""
         if response_id is None:
             return None
-        decoded_response_id = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
+        decoded_response_id: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
         return decoded_response_id.get("model_id") or None
 
     @staticmethod
@@ -579,13 +590,13 @@ class ResponsesAPIRequestUtils:
         Returns:
             The original previous_response_id
         """
-        decoded_response_id = ResponsesAPIRequestUtils._decode_responses_api_response_id(previous_response_id)
+        decoded_response_id: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(previous_response_id)
         return decoded_response_id.get("response_id", previous_response_id)
 
     @staticmethod
     def _build_container_id(
-        custom_llm_provider: Optional[str],
-        model_id: Optional[str],
+        custom_llm_provider: str | None,
+        model_id: str | None,
         container_id: str,
     ) -> str:
         """Build a managed container ID with provider and model info encoded.
@@ -593,10 +604,10 @@ class ResponsesAPIRequestUtils:
         Format: cntr_{base64("litellm:custom_llm_provider:{provider};model_id:{model};container_id:{original}")}
         """
         # Avoid serializing Python None as the literal string "None" (breaks router affinity).
-        provider_part = "" if custom_llm_provider is None else custom_llm_provider
-        model_part = "" if model_id is None else model_id
+        provider_part: Final = "" if custom_llm_provider is None else custom_llm_provider
+        model_part: Final = "" if model_id is None else model_id
         assembled_id = f"litellm:custom_llm_provider:{provider_part};model_id:{model_part};container_id:{container_id}"
-        base64_encoded_id = base64.b64encode(assembled_id.encode("utf-8")).decode("utf-8")
+        base64_encoded_id: Final = base64.b64encode(assembled_id.encode("utf-8")).decode("utf-8")
         return f"cntr_{base64_encoded_id}"
 
     @staticmethod
@@ -616,8 +627,8 @@ class ResponsesAPIRequestUtils:
                 )
 
             # Remove prefix and decode
-            cleaned_id = container_id.replace("cntr_", "")
-            decoded_id = base64.b64decode(cleaned_id.encode("utf-8")).decode("utf-8")
+            cleaned_id: Final = container_id.replace("cntr_", "")
+            decoded_id: Final = base64.b64decode(cleaned_id.encode("utf-8")).decode("utf-8")
 
             # Parse components using regex to handle semicolons in the container_id
             if not decoded_id.startswith("litellm:"):
@@ -630,8 +641,8 @@ class ResponsesAPIRequestUtils:
             # Use regex to extract the three parts, allowing semicolons in container_id
             # Format: litellm:custom_llm_provider:{provider};model_id:{model};container_id:{container}
             # * for provider/model allows empty segments (missing router model_id).
-            pattern = r"^litellm:custom_llm_provider:([^;]*);model_id:([^;]*);container_id:(.+)$"
-            match = re.match(pattern, decoded_id)
+            pattern: Final = r"^litellm:custom_llm_provider:([^;]*);model_id:([^;]*);container_id:(.+)$"
+            match: Final = re.match(pattern, decoded_id)
 
             if not match:
                 return DecodedResponseId(
@@ -640,11 +651,11 @@ class ResponsesAPIRequestUtils:
                     response_id=container_id,
                 )
 
-            raw_provider = match.group(1)
-            raw_model_id = match.group(2)
-            custom_llm_provider = None if raw_provider in ("", "None") else raw_provider
-            model_id = None if raw_model_id in ("", "None") else raw_model_id
-            original_container_id = match.group(3)
+            raw_provider: Final = match.group(1)
+            raw_model_id: Final = match.group(2)
+            custom_llm_provider: Final = None if raw_provider in ("", "None") else raw_provider
+            model_id: Final = None if raw_model_id in ("", "None") else raw_model_id
+            original_container_id: Final = match.group(3)
 
             return DecodedResponseId(
                 custom_llm_provider=custom_llm_provider,
@@ -652,7 +663,7 @@ class ResponsesAPIRequestUtils:
                 response_id=original_container_id,
             )
         except Exception as e:
-            verbose_logger.debug(f"Error decoding container_id '{container_id}': {e}")
+            verbose_logger.debug("Error decoding container_id '%s': %s", container_id, e)
             return DecodedResponseId(
                 custom_llm_provider=None,
                 model_id=None,
@@ -666,14 +677,14 @@ class ResponsesAPIRequestUtils:
         This is used when making upstream API calls - we need to send the original
         container ID that the provider issued, not our encoded version.
         """
-        decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
+        decoded: Final = ResponsesAPIRequestUtils._decode_container_id(container_id)
         return decoded.get("response_id", container_id)
 
     @staticmethod
     def _encode_container_ids_in_annotations(
         annotations: Any,
-        custom_llm_provider: Optional[str],
-        model_id: Optional[str],
+        custom_llm_provider: str | None,
+        model_id: str | None,
     ) -> None:
         """Encode ``container_id`` on each annotation (e.g. ``container_file_citation``)."""
         if not annotations or not isinstance(annotations, list):
@@ -688,8 +699,8 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _encode_container_ids_in_message_content(
         content: Any,
-        custom_llm_provider: Optional[str],
-        model_id: Optional[str],
+        custom_llm_provider: str | None,
+        model_id: str | None,
     ) -> None:
         """Walk message ``content`` parts and encode citation ``container_id`` values."""
         if not content:
@@ -712,8 +723,8 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _encode_container_id_on_output_item(
         item: Any,
-        custom_llm_provider: Optional[str],
-        model_id: Optional[str],
+        custom_llm_provider: str | None,
+        model_id: str | None,
     ) -> None:
         """Mutate one output item (dict or object): wrap raw ``container_id`` as LiteLLM-managed.
 
@@ -728,8 +739,8 @@ class ResponsesAPIRequestUtils:
         if item is None:
             return
 
-        def _maybe_encode(container_id: str) -> Optional[str]:
-            decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
+        def _maybe_encode(container_id: str) -> str | None:
+            decoded: Final = ResponsesAPIRequestUtils._decode_container_id(container_id)
             if decoded.get("custom_llm_provider") is not None:
                 return None
             return ResponsesAPIRequestUtils._build_container_id(
@@ -739,14 +750,14 @@ class ResponsesAPIRequestUtils:
             )
 
         if isinstance(item, dict):
-            cid = item.get("container_id")
+            cid: Final = item.get("container_id")
             if isinstance(cid, str):
                 enc = _maybe_encode(cid)
                 if enc is not None:
                     item["container_id"] = enc
-            nested = item.get("code_interpreter_call")
+            nested: Final = item.get("code_interpreter_call")
             if isinstance(nested, dict):
-                nc = nested.get("container_id")
+                nc: Final = nested.get("container_id")
                 if isinstance(nc, str):
                     enc = _maybe_encode(nc)
                     if enc is not None:
@@ -759,7 +770,7 @@ class ResponsesAPIRequestUtils:
                 )
             return
 
-        cid_attr = getattr(item, "container_id", None)
+        cid_attr: Final = getattr(item, "container_id", None)
         if isinstance(cid_attr, str):
             enc = _maybe_encode(cid_attr)
             if enc is not None:
@@ -771,7 +782,7 @@ class ResponsesAPIRequestUtils:
                         exc_info=True,
                     )
 
-        nested_obj = getattr(item, "code_interpreter_call", None)
+        nested_obj: Final = getattr(item, "code_interpreter_call", None)
         if nested_obj is not None:
             ResponsesAPIRequestUtils._encode_container_id_on_output_item(
                 nested_obj,
@@ -826,12 +837,12 @@ class ResponsesAPIRequestUtils:
             return
 
         if isinstance(item, dict):
-            cid = item.get("container_id")
+            cid: Final = item.get("container_id")
             if isinstance(cid, str) and cid:
                 collected.add(cid)
-            nested = item.get("code_interpreter_call")
+            nested: Final = item.get("code_interpreter_call")
             if isinstance(nested, dict):
-                nc = nested.get("container_id")
+                nc: Final = nested.get("container_id")
                 if isinstance(nc, str) and nc:
                     collected.add(nc)
             if item.get("type") == "message":
@@ -841,11 +852,11 @@ class ResponsesAPIRequestUtils:
                 )
             return
 
-        cid_attr = getattr(item, "container_id", None)
+        cid_attr: Final = getattr(item, "container_id", None)
         if isinstance(cid_attr, str) and cid_attr:
             collected.add(cid_attr)
 
-        nested_obj = getattr(item, "code_interpreter_call", None)
+        nested_obj: Final = getattr(item, "code_interpreter_call", None)
         if nested_obj is not None:
             ResponsesAPIRequestUtils._collect_container_ids_from_output_item(nested_obj, collected)
 
@@ -856,7 +867,7 @@ class ResponsesAPIRequestUtils:
             )
 
     @staticmethod
-    def collect_container_ids_from_responses_response(response: Any) -> list[str]:
+    def collect_container_ids_from_responses_response(response: object) -> list[str]:
         """Return unique container IDs referenced in a Responses API payload."""
         if response is None:
             return []
@@ -866,7 +877,7 @@ class ResponsesAPIRequestUtils:
         else:
             output = getattr(response, "output", []) or []
 
-        collected: set[str] = set()
+        collected: Final[set[str]] = set()
         if output:
             for item in output:
                 ResponsesAPIRequestUtils._collect_container_ids_from_output_item(item, collected)
@@ -874,18 +885,18 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def _update_container_ids_in_response(
-        responses_api_response: Union[ResponsesAPIResponse, Dict[str, Any]],
-        custom_llm_provider: Optional[str],
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[ResponsesAPIResponse, Dict[str, Any]]:
+        responses_api_response: ResponsesAPIResponse | dict[str, Any],
+        custom_llm_provider: str | None,
+        litellm_metadata: dict[str, Any] | None = None,
+    ) -> ResponsesAPIResponse | dict[str, Any]:
         """Encode container IDs in the response output with provider/model info.
 
         This walks through all output items and encodes any container_id fields
         so that follow-up container API calls can auto-route to the correct provider.
         """
         litellm_metadata = litellm_metadata or {}
-        model_info: Dict[str, Any] = litellm_metadata.get("model_info", {}) or {}
-        model_id = model_info.get("id")
+        model_info: Final[dict[str, Any]] = litellm_metadata.get("model_info", {}) or {}
+        model_id: Final = model_info.get("id")
 
         # Get the output list
         if isinstance(responses_api_response, dict):
@@ -907,7 +918,7 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def convert_text_format_to_text_param(
-        text_format: Optional[Union[Type["BaseModel"], dict]],
+        text_format: type["BaseModel"] | dict | None,
         text: Optional["ResponseText"] = None,
     ) -> Optional["ResponseText"]:
         """
@@ -924,7 +935,7 @@ class ResponsesAPIRequestUtils:
             from litellm.llms.base_llm.base_utils import type_to_response_format_param
 
             # Convert Pydantic model to response format
-            response_format = type_to_response_format_param(text_format)
+            response_format: Final = type_to_response_format_param(text_format)
             if response_format is not None:
                 # Create ResponseText object with the format
                 # The responses API expects the format to have name at the top level
@@ -941,13 +952,13 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def extract_mcp_headers_from_request(
-        secret_fields: Optional[Dict[str, Any]],
-        tools: Optional[Iterable[Any]],
+        secret_fields: dict[str, Any] | None,
+        tools: Iterable[object] | None,
     ) -> tuple[
-        Optional[str],
-        Optional[Dict[str, Dict[str, str]]],
-        Optional[Dict[str, str]],
-        Optional[Dict[str, str]],
+        str | None,
+        dict[str, dict[str, str]] | None,
+        dict[str, str] | None,
+        dict[str, str] | None,
     ]:
         """
         Extract MCP auth headers from the request to pass to MCP server.
@@ -960,17 +971,17 @@ class ResponsesAPIRequestUtils:
         )
 
         # Extract headers from secret_fields which contains the original request headers
-        raw_headers_from_request: Optional[Dict[str, str]] = None
+        raw_headers_from_request: dict[str, str] | None = None
         if secret_fields and isinstance(secret_fields, dict):
             raw_headers_from_request = secret_fields.get("raw_headers")
 
         # Extract MCP-specific headers using MCPRequestHandler methods
-        mcp_auth_header: Optional[str] = None
-        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None
-        oauth2_headers: Optional[Dict[str, str]] = None
+        mcp_auth_header: str | None = None
+        mcp_server_auth_headers: dict[str, dict[str, str]] | None = None
+        oauth2_headers: dict[str, str] | None = None
 
         if raw_headers_from_request:
-            headers_obj = Headers(raw_headers_from_request)
+            headers_obj: Final = Headers(raw_headers_from_request)
             mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers_obj)
             mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
             oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers_obj)
@@ -1012,7 +1023,7 @@ class ResponsesAPIRequestUtils:
 
 class ResponseAPILoggingUtils:
     @staticmethod
-    def _is_response_api_usage(usage: Union[dict, ResponseAPIUsage]) -> bool:
+    def _is_response_api_usage(usage: dict | ResponseAPIUsage) -> bool:
         """returns True if usage is from OpenAI Response API"""
         if isinstance(usage, ResponseAPIUsage):
             return True
@@ -1022,13 +1033,18 @@ class ResponseAPILoggingUtils:
 
     @staticmethod
     def _transform_response_api_usage_to_chat_usage(
-        usage_input: Optional[Union[dict, ResponseAPIUsage]],
+        usage_input: Mapping[str, object] | ResponseAPIUsage | Usage | None,
     ) -> Usage:
         """
         Transforms ResponseAPIUsage or ImageUsage to a Usage object.
 
         Both have the same spec with input_tokens, output_tokens, and
         input_tokens_details (text_tokens, image_tokens).
+
+        Usage inputs are returned as-is so re-running this helper never drops
+        fields. Non-standard provider fields (e.g. xAI's
+        server_side_tool_usage_details) are carried onto the returned Usage so
+        provider cost calculators can read them after normalization.
         """
         if usage_input is None:
             return Usage(
@@ -1036,6 +1052,10 @@ class ResponseAPILoggingUtils:
                 completion_tokens=0,
                 total_tokens=0,
             )
+        if isinstance(usage_input, Usage):
+            return usage_input
+        if isinstance(usage_input, dict) and not ResponseAPILoggingUtils._is_response_api_usage(usage_input):
+            return Usage(**usage_input)
         response_api_usage: ResponseAPIUsage
         if isinstance(usage_input, dict):
             usage_input = dict(usage_input)  # shallow copy; avoid mutating caller
@@ -1044,19 +1064,17 @@ class ResponseAPILoggingUtils:
                 usage_input["input_tokens_details"] = usage_input["input_token_details"]
             if usage_input.get("output_tokens_details") is None and "output_token_details" in usage_input:
                 usage_input["output_tokens_details"] = usage_input["output_token_details"]
-            total_tokens = usage_input.get("total_tokens")
-            if total_tokens is None:
-                input_tokens = usage_input.get("input_tokens")
-                output_tokens = usage_input.get("output_tokens")
-                if input_tokens is not None and output_tokens is not None:
-                    total_tokens = input_tokens + output_tokens
-                    usage_input["total_tokens"] = total_tokens
+            if usage_input.get("total_tokens") is None:
+                input_tokens: Final = usage_input.get("input_tokens")
+                output_tokens: Final = usage_input.get("output_tokens")
+                if isinstance(input_tokens, int) and isinstance(output_tokens, int):
+                    usage_input["total_tokens"] = input_tokens + output_tokens
             response_api_usage = ResponseAPIUsage(**usage_input)
         else:
             response_api_usage = usage_input
-        prompt_tokens: int = response_api_usage.input_tokens or 0
-        completion_tokens: int = response_api_usage.output_tokens or 0
-        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        prompt_tokens: Final[int] = response_api_usage.input_tokens or 0
+        completion_tokens: Final[int] = response_api_usage.output_tokens or 0
+        prompt_tokens_details: PromptTokensDetailsWrapper | None = None
         if response_api_usage.input_tokens_details:
             if isinstance(response_api_usage.input_tokens_details, dict):
                 prompt_tokens_details = PromptTokensDetailsWrapper(**response_api_usage.input_tokens_details)
@@ -1068,8 +1086,8 @@ class ResponseAPILoggingUtils:
                     image_tokens=getattr(response_api_usage.input_tokens_details, "image_tokens", None),
                     cache_write_tokens=getattr(response_api_usage.input_tokens_details, "cache_write_tokens", None),
                 )
-        completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
-        output_tokens_details = getattr(response_api_usage, "output_tokens_details", None)
+        completion_tokens_details: CompletionTokensDetailsWrapper | None = None
+        output_tokens_details: Final = getattr(response_api_usage, "output_tokens_details", None)
         if output_tokens_details:
             completion_tokens_details = CompletionTokensDetailsWrapper(
                 reasoning_tokens=getattr(output_tokens_details, "reasoning_tokens", None),
@@ -1078,12 +1096,27 @@ class ResponseAPILoggingUtils:
                 audio_tokens=getattr(output_tokens_details, "audio_tokens", None),
             )
 
-        chat_usage = Usage(
+        extra_usage_fields: Final = {
+            key: value
+            for key, value in (response_api_usage.model_extra or {}).items()
+            if key
+            not in (
+                "input_token_details",
+                "output_token_details",
+                "prompt_tokens",
+                "completion_tokens",
+                "total_tokens",
+                "prompt_tokens_details",
+                "completion_tokens_details",
+            )
+        }
+        chat_usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
             prompt_tokens_details=prompt_tokens_details,
             completion_tokens_details=completion_tokens_details,
+            **extra_usage_fields,
         )
 
         # Preserve cost attribute if it exists on ResponseAPIUsage

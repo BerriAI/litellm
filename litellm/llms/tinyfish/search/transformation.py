@@ -7,7 +7,7 @@ Docs: https://docs.tinyfish.ai/search-api
 from __future__ import annotations
 
 import json
-from typing import Literal
+from typing import Final, Literal
 from urllib.parse import urlencode
 
 import httpx
@@ -22,13 +22,13 @@ from litellm.llms.base_llm.search.transformation import (
 )
 from litellm.secret_managers.main import get_secret_str
 
-_UrlEncodableParams = TypeAdapter(dict[str, str | int | bool])
-_StrList = TypeAdapter(list[str])
-_StrFrozenSet = TypeAdapter(frozenset[str])
+_UrlEncodableParams: Final = TypeAdapter(dict[str, str | int | bool])
+_StrList: Final = TypeAdapter(list[str])
+_StrFrozenSet: Final = TypeAdapter(frozenset[str])
 
-_TINYFISH_PARAMS_KEY = "_tinyfish_params"
-_TINYFISH_DOCS_URL = "https://docs.tinyfish.ai/search-api"
-_TINYFISH_RESULT_CAP = 10  # TinyFish's natural per-page SERP ceiling
+_TINYFISH_PARAMS_KEY: Final = "_tinyfish_params"
+_TINYFISH_DOCS_URL: Final = "https://docs.tinyfish.ai/search-api"
+_TINYFISH_RESULT_CAP: Final = 10  # TinyFish's natural per-page SERP ceiling
 
 
 class TinyfishSearchConfig(BaseSearchConfig):
@@ -56,7 +56,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
         api_base: str | None = None,
         **kwargs: object,
     ) -> dict[str, str]:
-        resolved_key = self.resolve_server_api_key(
+        resolved_key: Final = self.resolve_server_api_key(
             caller_api_key=api_key,
             caller_api_base=api_base,
             key_env_vars=("TINYFISH_API_KEY",),
@@ -74,9 +74,9 @@ class TinyfishSearchConfig(BaseSearchConfig):
         data: dict[str, object] | list[dict[str, object]] | None = None,
         **kwargs: object,
     ) -> str:
-        resolved_base = api_base or get_secret_str("TINYFISH_API_BASE") or self.TINYFISH_API_BASE
+        resolved_base: Final = api_base or get_secret_str("TINYFISH_API_BASE") or self.TINYFISH_API_BASE
         if isinstance(data, dict) and _TINYFISH_PARAMS_KEY in data:
-            validated_params = _UrlEncodableParams.validate_python(data[_TINYFISH_PARAMS_KEY])
+            validated_params: Final = _UrlEncodableParams.validate_python(data[_TINYFISH_PARAMS_KEY])
             return f"{resolved_base}?{urlencode(validated_params, doseq=True)}"
         return resolved_base
 
@@ -118,16 +118,16 @@ class TinyfishSearchConfig(BaseSearchConfig):
         if domains:
             resolved_query = _append_domain_filters(resolved_query, domains)
 
-        request_data: dict[str, object] = {"query": resolved_query}
+        request_data: Final[dict[str, object]] = {"query": resolved_query}
 
-        country = optional_params.get("country")
+        country: Final = optional_params.get("country")
         if isinstance(country, str):
             request_data["location"] = country
 
         # max_results is enforced client-side on the response (TinyFish ignores
         # the param and always returns ~10). Clamp to [1, 10] and stash on self
         # so transform_search_response can slice without re-reading the URL.
-        raw_max = optional_params.get("max_results")
+        raw_max: Final = optional_params.get("max_results")
         if isinstance(raw_max, (int, float, str)):
             try:
                 self._caller_max_results = max(1, min(int(raw_max), _TINYFISH_RESULT_CAP))
@@ -138,10 +138,10 @@ class TinyfishSearchConfig(BaseSearchConfig):
                     raw_max,
                 )
 
-        raw_supported: object = (
+        raw_supported: Final[object] = (
             self.get_supported_perplexity_optional_params()  # any-ok: base class returns bare set
         )
-        supported_perplexity = _StrFrozenSet.validate_python(raw_supported)
+        supported_perplexity: Final = _StrFrozenSet.validate_python(raw_supported)
         for param, value in optional_params.items():
             if param not in supported_perplexity and param not in request_data:
                 # `fetch` expects a JSON-encoded object on the wire; accept the
@@ -201,7 +201,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
             )
 
         try:
-            raw_json: object = raw_response.json()  # any-ok: httpx Response.json() -> Any
+            raw_json: Final[object] = raw_response.json()  # any-ok: httpx Response.json() -> Any
         except json.JSONDecodeError:
             raise self._wrap_error(
                 error_message=f"Expected JSON response, got: {raw_response.text[:200]}",
@@ -212,7 +212,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
         _default_missing_result_fields(raw_json)
 
         try:
-            parsed = SearchResponse.model_validate(raw_json)
+            parsed: Final = SearchResponse.model_validate(raw_json)
         except ValidationError as e:
             raise self._wrap_error(
                 error_message=(f"Response shape does not match LiteLLM's SearchResponse schema: {e}"),
@@ -222,7 +222,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
 
         _emit_parameter_warnings(parsed)
 
-        max_results = self._caller_max_results or _TINYFISH_RESULT_CAP
+        max_results: Final = self._caller_max_results or _TINYFISH_RESULT_CAP
         return SearchResponse(results=list(parsed.results[:max_results]))
 
     def _wrap_error(
@@ -248,11 +248,11 @@ class TinyfishSearchConfig(BaseSearchConfig):
         # for non-ux-labs responses (CDN HTML pages, other JSON envelopes, plain text).
         inner_message = error_message
         try:
-            body: object = json.loads(error_message)  # any-ok: json.loads -> Any
+            body: Final[object] = json.loads(error_message)  # any-ok: json.loads -> Any
             if isinstance(body, dict):
-                error_obj: object = body.get("error")  # any-ok: untyped dict
+                error_obj: Final[object] = body.get("error")  # any-ok: untyped dict
                 if isinstance(error_obj, dict):
-                    candidate: object = error_obj.get("message")  # any-ok: untyped dict
+                    candidate: Final[object] = error_obj.get("message")  # any-ok: untyped dict
                     if isinstance(candidate, str) and candidate:
                         inner_message = candidate
         except (json.JSONDecodeError, TypeError):
@@ -266,7 +266,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
 
 
 def _append_domain_filters(query: str, domains: list[str]) -> str:
-    domain_clauses = " OR ".join(f"site:{d}" for d in domains)
+    domain_clauses: Final = " OR ".join(f"site:{d}" for d in domains)
     return f"({query}) ({domain_clauses})"
 
 
@@ -278,7 +278,7 @@ def _default_missing_result_fields(raw_json: object) -> None:
     """
     if not isinstance(raw_json, dict):
         return
-    results_in = raw_json.get("results")
+    results_in: Final = raw_json.get("results")
     if not isinstance(results_in, list):
         return
     for item in results_in:
@@ -296,9 +296,7 @@ def _emit_parameter_warnings(parsed: SearchResponse) -> None:
     entry (or an early/partial rollout of the field) never throws.
     Schema per entry: ``{type, parameter, message, docs_url?}``.
     """
-    warnings_field: object = (
-        getattr(parsed, "parameter_warnings", None)  # any-ok: extras=allow field
-    )
+    warnings_field: Final[object] = getattr(parsed, "parameter_warnings", None)  # any-ok: extras=allow field
     if not isinstance(warnings_field, list):
         return
     for entry in warnings_field:

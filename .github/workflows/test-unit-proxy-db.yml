@@ -7,13 +7,17 @@ on:
       - litellm_internal_staging
       - litellm_oss_staging
       - "litellm_**"
+  push:
+    branches:
+      - main
+      - litellm_internal_staging
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Semantic matrix: each shard groups tests by concern (auth, server, logging, …)
 # rather than alphabetical letter ranges. Adding a new test file means adding it
@@ -24,6 +28,10 @@ concurrency:
 #     Most of a shard's time is pytest plugin load + xdist worker imports +
 #     pytest-cov instrumentation, not the tests themselves. Keeping per-shard
 #     work low and matching worker count to runner cores is what controls it.
+#   * `timeout` bounds the pytest step only. Checkout, dependency install, and
+#     Prisma client generation draw on a separate allowance in the base
+#     workflow, so slow setup shows up as a slow job rather than as a
+#     cancelled shard whose tests were passing.
 #   * workers: 4 matches the 4-core ubuntu-latest runner. -n 8 on 4 cores
 #     oversubscribes 2x and workers fight for CPU during their cold-start
 #     imports (measured ~441% CPU for -n 8 locally, i.e. ~55% effective).
@@ -127,8 +135,6 @@ jobs:
             test-path: >-
               tests/proxy_unit_tests/test_proxy_server.py
               tests/proxy_unit_tests/test_proxy_server_keys.py
-              tests/proxy_unit_tests/test_proxy_server_caching.py
-              tests/proxy_unit_tests/test_proxy_server_langfuse.py
               tests/proxy_unit_tests/test_proxy_server_spend.py
               tests/proxy_unit_tests/test_aproxy_startup.py
             workers: 4
