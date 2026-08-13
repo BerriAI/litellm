@@ -582,6 +582,7 @@ async def test_concurrent_success_is_not_cancelled_by_another_calls_failure():
         pytest.param("ConnectionError", True, id="connection_refused_is_unhealthy"),
         pytest.param("TimeoutError", True, id="timeout_is_unhealthy"),
         pytest.param("BusyLoadingError", True, id="loading_is_unhealthy"),
+        pytest.param("RedisClusterException", True, id="cluster_unreachable_is_unhealthy"),
         pytest.param("ResponseError", False, id="wrong_type_command_is_not"),
         pytest.param("DataError", False, id="bad_data_is_not"),
     ],
@@ -608,3 +609,42 @@ async def test_only_connectivity_failures_open_the_breaker(error, opens_breaker)
             await _run_under_circuit_breaker(breaker, "op", failing_call)
 
     assert breaker.is_open() is opens_breaker
+
+
+@pytest.mark.asyncio
+async def test_cluster_connect_timeout_swallowed_set_opens_breaker():
+    """Staging 2026-08-13: redis-py wraps connect timeouts as RedisClusterException.
+
+    ``async_set_cache`` swallows the error so a dead cluster degrades instead of
+    500ing. The breaker must still open — RedisClusterException subclasses
+    Exception, not TimeoutError — otherwise every later request retries CLUSTER
+    SLOTS and the worker hangs for the connect timeout (the 60s ALB read timeout).
+    """
+    from redis.exceptions import RedisClusterException
+
+    from litellm.caching.redis_cache import (
+        RedisCircuitBreaker,
+        _is_redis_health_failure,
+        _record_swallowed_redis_failure,
+        _run_under_circuit_breaker,
+    )
+
+    production = RedisClusterException(
+        "Redis Cluster cannot be connected. Please provide at least one reachable node: "
+        "Timeout connecting to server"
+    )
+    assert _is_redis_health_failure(production) is True
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+
+    async def swallowed_cluster_timeout():
+        _record_swallowed_redis_failure(breaker, production)
+        return None
+
+    for _ in range(breaker.failure_threshold):
+        await _run_under_circuit_breaker(breaker, "async_set_cache", swallowed_cluster_timeout)
+
+    assert breaker.is_open() is True
+
+    with pytest.raises(Exception, match="circuit breaker is open"):
+        await _run_under_circuit_breaker(breaker, "async_set_cache", swallowed_cluster_timeout)

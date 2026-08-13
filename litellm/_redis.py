@@ -478,6 +478,20 @@ def _get_redis_client_logic(**env_overrides):
     return redis_kwargs
 
 
+def _apply_redis_cluster_reconnect_defaults(cluster_kwargs: dict) -> None:
+    """Fail-fast reconnect defaults so a dropped cluster node cannot stall callers.
+
+    redis-py rediscovers CLUSTER SLOTS on a dead connection. Without a connect
+    timeout, health check, and keepalive that rediscovery blocks for the OS TCP
+    timeout (tens of seconds) — the 2026-08-13 staging e2e 60s ALB hang. Explicit
+    kwargs from config still win.
+    """
+    cluster_kwargs.setdefault("health_check_interval", REDIS_CLUSTER_HEALTH_CHECK_INTERVAL)
+    cluster_kwargs.setdefault("socket_keepalive", True)
+    cluster_kwargs.setdefault("socket_timeout", REDIS_SOCKET_TIMEOUT)
+    cluster_kwargs.setdefault("socket_connect_timeout", cluster_kwargs["socket_timeout"])
+
+
 def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
     _redis_cluster_nodes_in_env: Final[str | None] = get_secret("REDIS_CLUSTER_NODES")
     if _redis_cluster_nodes_in_env is not None:
@@ -503,6 +517,7 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
         new_startup_nodes.append(ClusterNode(**item))
 
     cluster_kwargs.pop("startup_nodes", None)
+    _apply_redis_cluster_reconnect_defaults(cluster_kwargs)
     return redis.RedisCluster(startup_nodes=new_startup_nodes, **cluster_kwargs)
 
 
@@ -630,8 +645,7 @@ def get_redis_async_client(
         # by a cluster restart (e.g. ElastiCache Serverless maintenance) is revalidated and
         # reconnected before reuse instead of stalling in re-initialization; an explicit value
         # from config still wins.
-        cluster_kwargs.setdefault("health_check_interval", REDIS_CLUSTER_HEALTH_CHECK_INTERVAL)
-        cluster_kwargs.setdefault("socket_keepalive", True)
+        _apply_redis_cluster_reconnect_defaults(cluster_kwargs)
 
         # Create async RedisCluster with IAM token as password if available
         cluster_client: Final = async_redis.RedisCluster(

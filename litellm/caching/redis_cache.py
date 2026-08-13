@@ -184,14 +184,28 @@ def _redis_health_error_types() -> tuple[type, ...]:
     a caller trip the shared breaker on demand, dropping rate limiting to per-process
     counters that spreading traffic across replicas can outrun.
 
+    RedisClusterException is the wrapper redis-py raises when CLUSTER SLOTS / startup
+    nodes are unreachable (``Redis Cluster cannot be connected ... Timeout connecting
+    to server``). It subclasses ``Exception`` directly, not TimeoutError/ConnectionError,
+    so omitting it leaves every cache write retrying a dead cluster and blocking the
+    request for the connect timeout — the 2026-08-13 staging e2e hang.
+
     Imported lazily because this module is reachable from a base ``import litellm`` while
     redis is not a base dependency.
     """
-    from redis.exceptions import BusyLoadingError, ClusterDownError
+    from redis.exceptions import BusyLoadingError, ClusterDownError, RedisClusterException
     from redis.exceptions import ConnectionError as RedisConnectionError
     from redis.exceptions import TimeoutError as RedisTimeoutError
 
-    return (RedisConnectionError, RedisTimeoutError, BusyLoadingError, ClusterDownError, OSError, asyncio.TimeoutError)
+    return (
+        RedisConnectionError,
+        RedisTimeoutError,
+        BusyLoadingError,
+        ClusterDownError,
+        RedisClusterException,
+        OSError,
+        asyncio.TimeoutError,
+    )
 
 
 def _is_redis_health_failure(exc: BaseException) -> bool:
