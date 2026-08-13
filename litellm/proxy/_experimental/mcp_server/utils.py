@@ -903,7 +903,7 @@ def _mcp_client_side_auth_header_name() -> str:
     from .auth.user_api_key_auth_mcp import MCPRequestHandler
 
     try:
-        return MCPRequestHandler._get_mcp_client_side_auth_header_name()
+        return MCPRequestHandler.get_mcp_client_side_auth_header_name()
     except ImportError:
         return MCPRequestHandler.LITELLM_MCP_AUTH_HEADER_NAME
 
