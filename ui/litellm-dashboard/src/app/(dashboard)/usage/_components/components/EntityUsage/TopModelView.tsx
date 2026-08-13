@@ -1,9 +1,9 @@
 import { BarChart } from "@/components/shared/charts";
+import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { Segmented } from "antd";
 import { useState } from "react";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { DataTable } from "@/components/view_logs/table";
 
 type TopModel = {
   key: string;
@@ -100,9 +100,7 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
           />
         </div>
       ) : (
-        <div className="border rounded-lg overflow-hidden max-h-[600px] overflow-y-auto">
-          <DataTable columns={columns} data={processedTopModels} isLoading={false} />
-        </div>
+        <DataTable columns={columns} data={processedTopModels} isLoading={false} maxBodyHeight={600} size="compact" />
       )}
     </>
   );
