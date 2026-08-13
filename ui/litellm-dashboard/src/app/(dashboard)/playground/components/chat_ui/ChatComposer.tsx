@@ -38,12 +38,16 @@ export function ChatComposer({
   onSuggestionSelect,
   className,
 }: ChatComposerProps) {
+  const submitIfAllowed = () => {
+    if (!submitDisabled && !isLoading) {
+      onSubmit();
+    }
+  };
+
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
-      if (!submitDisabled && !isLoading) {
-        onSubmit();
-      }
+      submitIfAllowed();
     }
   };
 
@@ -67,15 +71,7 @@ export function ChatComposer({
         </div>
       )}
 
-      <form
-        className="w-full"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!submitDisabled && !isLoading) {
-            onSubmit();
-          }
-        }}
-      >
+      <div className="w-full">
         <InputGroup
           className={cn(
             "h-auto min-h-[7.5rem] flex-col overflow-hidden rounded-2xl border border-border bg-card",
@@ -117,11 +113,12 @@ export function ChatComposer({
               </InputGroupButton>
             ) : (
               <InputGroupButton
-                type="submit"
+                type="button"
                 size="icon-sm"
                 aria-label="Send message"
                 data-testid="chat-send-button"
                 disabled={submitDisabled || isLoading}
+                onClick={submitIfAllowed}
                 className={cn(
                   "size-8 rounded-xl transition-all duration-200",
                   !submitDisabled && !isLoading
@@ -134,7 +131,7 @@ export function ChatComposer({
             )}
           </InputGroupAddon>
         </InputGroup>
-      </form>
+      </div>
     </div>
   );
 }
