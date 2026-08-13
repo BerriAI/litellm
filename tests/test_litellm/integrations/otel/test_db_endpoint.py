@@ -89,6 +89,69 @@ def test_percent_encoded_database_name_is_decoded():
     assert endpoint is not None and endpoint.namespace == "litellm prod"
 
 
+MISPARSED_AUTHORITY_DSNS = (
+    ("postgresql://litellm:/kJ8xQz+9wT@db.internal:5432/litellm", "kJ8xQz+9wT"),
+    ("postgresql://litellm:12345/aBcD@db.internal:5432/litellm", "aBcD"),
+)
+
+
+@pytest.mark.parametrize(("dsn", "secret"), MISPARSED_AUTHORITY_DSNS)
+def test_unencoded_slash_in_password_never_yields_an_endpoint(dsn, secret):
+    """An unencoded '/' truncates the authority, so urlparse reports the username
+    as the host and the password tail as the database. Postgres drivers reject
+    such a DSN outright, so the only safe reading is no endpoint at all."""
+    assert parse_database_endpoint(dsn) is None
+
+
+@pytest.mark.parametrize(("dsn", "secret"), MISPARSED_AUTHORITY_DSNS)
+def test_unencoded_slash_in_password_never_reaches_a_span(dsn, secret):
+    attrs = _resolve("postgres", "get_data", database_url=dsn)
+    exported = " ".join(str(value) for value in attrs.values())
+    assert secret not in exported
+    assert "db.namespace" not in attrs
+    assert "server.address" not in attrs
+
+
+def test_extra_path_segment_yields_no_endpoint():
+    """A database name cannot hold an unencoded '/', so a second path segment
+    means the authority was mis-split even when no '@' survived into the path."""
+    assert parse_database_endpoint("postgresql://db.internal:5432/litellm/extra") is None
+
+
+def test_percent_encoded_password_still_resolves_the_endpoint():
+    """The encoded spelling is the one a driver accepts, so it must keep working."""
+    assert parse_database_endpoint("postgresql://litellm:pa%2Fssw0rd@db.internal:5432/litellm") == DatabaseEndpoint(
+        address="db.internal", port=5432, namespace="litellm"
+    )
+
+
+def test_hostless_socket_dsn_still_names_the_database():
+    """``postgresql:///litellm`` is a valid local-socket DSN that Prisma accepts,
+    so the database is knowable even though no server address is."""
+    assert parse_database_endpoint("postgresql:///litellm") == DatabaseEndpoint(
+        address=None, port=None, namespace="litellm"
+    )
+
+
+def test_hostless_socket_dsn_emits_namespace_without_a_server():
+    attrs = _resolve("postgres", "get_data", database_url="postgresql:///litellm")
+    assert attrs["db.namespace"] == "litellm"
+    assert "server.address" not in attrs
+    assert "server.port" not in attrs
+
+
+def test_dsn_with_neither_host_nor_database_yields_no_endpoint():
+    assert parse_database_endpoint("postgresql://") is None
+
+
+@pytest.mark.parametrize("spelling", ["public", "PUBLIC", "Public"])
+def test_default_schema_is_implicit_whatever_its_case(spelling):
+    """An unquoted PostgreSQL identifier case-folds, so every spelling of the
+    default schema is the same namespace and must not split a group-by."""
+    endpoint = parse_database_endpoint(f"postgresql://u:p@db.internal/litellm?schema={spelling}")
+    assert endpoint is not None and endpoint.namespace == "litellm"
+
+
 def test_postgres_scheme_alias_is_accepted():
     assert parse_database_endpoint("postgres://u:p@db.internal/litellm") == DatabaseEndpoint(
         address="db.internal", port=5432, namespace="litellm"
