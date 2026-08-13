@@ -10,6 +10,7 @@ tracer. This lets a single logger fan requests out to many tenants without
 needing a logger per tenant.
 """
 
+import threading
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -92,9 +93,10 @@ class TenantRoute:
 
     tracer: Tracer
     detached: bool
-    #: The provider ``tracer`` came from, or ``None`` on the default route. A
-    #: caller that keeps a span open across callbacks must ``hold``/``release``
-    #: it so LRU eviction can't shut the provider down under the open span.
+    #: The provider ``tracer`` came from, or ``None`` on the default route. It
+    #: is returned already held (counted as an open span, atomically with the
+    #: cache update), so LRU eviction can't shut it down before the caller's
+    #: span lands; the caller must ``release`` it exactly once when done.
     provider: TracerProvider | None = None
 
 
@@ -110,6 +112,10 @@ class TenantTracerCache:
         self._config = config
         self._callback_name = callback_name
         self._tracer_name = tracer_name
+        # Guards the three mutable structures below: ``pre_call`` can run on
+        # thread-pool workers concurrently with the event loop, so cache
+        # updates, span counts, and retirement must be atomic.
+        self._lock: Final = threading.Lock()
         self._providers: OrderedDict[tuple[_HeaderItems, _HeaderItems], TracerProvider] = OrderedDict()
         self._open_span_counts: dict[TracerProvider, int] = {}  # mutable-ok: live refcount state
         self._retired: set[TracerProvider] = set()  # mutable-ok: evicted providers draining open spans
@@ -119,34 +125,26 @@ class TenantTracerCache:
         )
         self._warned_project_unroutable = False
 
-    def hold(self, provider: TracerProvider) -> None:
-        """Count an open span on ``provider`` so eviction defers its shutdown."""
-        self._open_span_counts[provider] = self._open_span_counts.get(provider, 0) + 1
+    def release(self, provider: TracerProvider | None) -> None:
+        """Drop one open-span count; shut a retired provider down once drained.
 
-    def release(self, provider: TracerProvider) -> None:
-        """Drop one open-span count; shut a retired provider down once drained."""
-        remaining: Final = self._open_span_counts.get(provider, 0) - 1
-        if remaining > 0:
-            self._open_span_counts[provider] = remaining
-            return
-        self._open_span_counts.pop(provider, None)
-        if provider in self._retired:
-            self._retired.discard(provider)
-            _shutdown_provider(provider)
-
-    def _retire(self, provider: TracerProvider) -> None:
-        """Shut an evicted provider down, or defer while spans are still open.
-
-        Shutting down immediately would stop the provider's processors while a
-        span opened at ``pre_call`` is still live, silently dropping it at end
-        instead of exporting it. A retired provider is pinned only by its open
-        spans, and the logger's open-call map is itself bounded, so a request
-        that never reaches a close callback still releases it eventually.
+        ``None`` (the default route) is a no-op so callers can release a
+        ``TenantRoute.provider`` unconditionally. The shutdown itself runs
+        outside the lock: it force-flushes over the network and must not stall
+        every concurrently routing request.
         """
-        if self._open_span_counts.get(provider, 0) > 0:
-            self._retired.add(provider)
+        if provider is None:
             return
-        _shutdown_provider(provider)
+        with self._lock:
+            remaining: Final = self._open_span_counts.get(provider, 0) - 1
+            if remaining > 0:
+                self._open_span_counts[provider] = remaining
+                return
+            self._open_span_counts.pop(provider, None)
+            drained: Final = provider in self._retired
+            self._retired.discard(provider)
+        if drained:
+            _shutdown_provider(provider)
 
     def route_for(
         self,
@@ -160,6 +158,11 @@ class TenantTracerCache:
         project require a scoped tracer, in which case build (or reuse) one. The
         cache is a bounded LRU: the least-recently-used provider is flushed and
         shut down on overflow so its exporter threads don't accumulate.
+
+        A routed provider is returned already held — its open-span count is
+        incremented in the same critical section as the cache update — so a
+        concurrent overflow eviction can't shut it down between selection and
+        the caller's span start. The caller must ``release`` it exactly once.
         """
         credential_headers: Final = dynamic_otlp_headers(self._callback_name, dynamic_params) or _NO_HEADERS
         project_headers: Final = self._project_headers(auth_metadata)
@@ -169,20 +172,49 @@ class TenantTracerCache:
             tuple(sorted(credential_headers.items())),
             tuple(sorted(project_headers.items())),
         )
-        provider = self._providers.get(cache_key)
-        if provider is not None:
-            self._providers.move_to_end(cache_key)
-        else:
-            provider = build_tracer_provider(self._routed_config(credential_headers, project_headers))
-            self._providers[cache_key] = provider
-            if len(self._providers) > _MAX_CACHED_PROVIDERS:
-                _, evicted = self._providers.popitem(last=False)
-                self._retire(evicted)
+        with self._lock:
+            provider: Final = self._cached_provider_locked(cache_key, credential_headers, project_headers)
+            self._open_span_counts[provider] = self._open_span_counts.get(provider, 0) + 1
+            evicted: Final = self._evicted_on_overflow_locked()
+        if evicted is not None:
+            _shutdown_provider(evicted)
         return TenantRoute(
             tracer=get_tracer(provider, self._tracer_name),
             detached=bool(project_headers),
             provider=provider,
         )
+
+    def _cached_provider_locked(
+        self,
+        cache_key: tuple[_HeaderItems, _HeaderItems],
+        credential_headers: Mapping[str, str],
+        project_headers: Mapping[str, str],
+    ) -> TracerProvider:
+        cached: Final = self._providers.get(cache_key)
+        if cached is not None:
+            self._providers.move_to_end(cache_key)
+            return cached
+        built: Final = build_tracer_provider(self._routed_config(credential_headers, project_headers))
+        self._providers[cache_key] = built
+        return built
+
+    def _evicted_on_overflow_locked(self) -> TracerProvider | None:
+        """Pop the LRU provider past the cap; return it if the caller must shut it down.
+
+        A provider with open spans is retired to drain instead: stopping its
+        processors while a span opened at ``pre_call`` is still live would
+        silently drop that span at end instead of exporting it. A retired
+        provider is pinned only by its open spans, and the logger's open-call
+        map is itself bounded, so a request that never reaches a close callback
+        still releases it eventually.
+        """
+        if len(self._providers) <= _MAX_CACHED_PROVIDERS:
+            return None
+        _, evicted = self._providers.popitem(last=False)
+        if self._open_span_counts.get(evicted, 0) > 0:
+            self._retired.add(evicted)
+            return None
+        return evicted
 
     def _project_headers(self, auth_metadata: Mapping[str, str] | None) -> Mapping[str, str]:
         """The per-request project-routing headers, if this cache can apply them.

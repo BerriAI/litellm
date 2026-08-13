@@ -288,19 +288,23 @@ class OpenTelemetryV2(CustomLogger):
         # trace) — see ``TenantRoute.detached``.
         route: Final = self._tenant_tracers.route_for(self.tracer, call.dynamic_params, call.auth_metadata)
         parent_context: Final = resolve_request_span_context()
-        if is_recordable_span(get_current_span(parent_context)):
-            span = self._emitter.start_span(
-                SpanRole.LLM_CALL,
-                call.provisional_span_name,
-                parent_context=(
-                    set_span_in_context(INVALID_SPAN, parent_context) if route.detached else parent_context
-                ),
-                start_time_ns=start_time_ns,
-                tracer=route.tracer,
-                links=_request_trace_links(parent_context) if route.detached else None,
-            )
-        if span is not None and route.provider is not None:
-            self._tenant_tracers.hold(route.provider)
+        try:
+            if is_recordable_span(get_current_span(parent_context)):
+                span = self._emitter.start_span(
+                    SpanRole.LLM_CALL,
+                    call.provisional_span_name,
+                    parent_context=(
+                        set_span_in_context(INVALID_SPAN, parent_context) if route.detached else parent_context
+                    ),
+                    start_time_ns=start_time_ns,
+                    tracer=route.tracer,
+                    links=_request_trace_links(parent_context) if route.detached else None,
+                )
+        finally:
+            # No span means route_for's hold has no owner (creation deferred to
+            # the close callback, which re-routes) — drop it here.
+            if span is None:
+                self._tenant_tracers.release(route.provider)
         self._open_llm_calls[call_id] = _LLMCallSpan(
             span=span,
             start_time_ns=start_time_ns,
@@ -407,17 +411,20 @@ class OpenTelemetryV2(CustomLogger):
         if data.identity.call_id:
             self._release_carrier(self._open_llm_calls.pop(data.identity.call_id, None))
         route: Final = self._tenant_tracers.route_for(self.tracer, None, auth_metadata(payload, kwargs))
-        parent_context, links = resolve_mcp_span_context()
-        seeded: Final = self._seed_identity_baggage(data.identity, None, parent_context)
-        self._emitter.emit(
-            SpanRole.MCP_TOOL_CALL,
-            data,
-            parent_context=(set_span_in_context(INVALID_SPAN, seeded) if route.detached else seeded),
-            start_time_ns=to_ns(start_time),
-            end_time_ns=to_ns(end_time),
-            links=((*(links or ()), *(_request_trace_links(seeded) or ())) if route.detached else links),
-            tracer=route.tracer,
-        )
+        try:
+            parent_context, links = resolve_mcp_span_context()
+            seeded: Final = self._seed_identity_baggage(data.identity, None, parent_context)
+            self._emitter.emit(
+                SpanRole.MCP_TOOL_CALL,
+                data,
+                parent_context=(set_span_in_context(INVALID_SPAN, seeded) if route.detached else seeded),
+                start_time_ns=to_ns(start_time),
+                end_time_ns=to_ns(end_time),
+                links=((*(links or ()), *(_request_trace_links(seeded) or ())) if route.detached else links),
+                tracer=route.tracer,
+            )
+        finally:
+            self._tenant_tracers.release(route.provider)
         return True
 
     def _emit_mcp_list_tools(
@@ -445,17 +452,20 @@ class OpenTelemetryV2(CustomLogger):
         if data.identity.call_id:
             self._release_carrier(self._open_llm_calls.pop(data.identity.call_id, None))
         route: Final = self._tenant_tracers.route_for(self.tracer, None, auth_metadata(payload, kwargs))
-        parent_context, links = resolve_mcp_span_context()
-        seeded: Final = self._seed_identity_baggage(data.identity, None, parent_context)
-        self._emitter.emit(
-            SpanRole.MCP_LIST_TOOLS,
-            data,
-            parent_context=(set_span_in_context(INVALID_SPAN, seeded) if route.detached else seeded),
-            start_time_ns=to_ns(start_time),
-            end_time_ns=to_ns(end_time),
-            links=((*(links or ()), *(_request_trace_links(seeded) or ())) if route.detached else links),
-            tracer=route.tracer,
-        )
+        try:
+            parent_context, links = resolve_mcp_span_context()
+            seeded: Final = self._seed_identity_baggage(data.identity, None, parent_context)
+            self._emitter.emit(
+                SpanRole.MCP_LIST_TOOLS,
+                data,
+                parent_context=(set_span_in_context(INVALID_SPAN, seeded) if route.detached else seeded),
+                start_time_ns=to_ns(start_time),
+                end_time_ns=to_ns(end_time),
+                links=((*(links or ()), *(_request_trace_links(seeded) or ())) if route.detached else links),
+                tracer=route.tracer,
+            )
+        finally:
+            self._tenant_tracers.release(route.provider)
         return True
 
     def _close_llm_call(
@@ -486,7 +496,7 @@ class OpenTelemetryV2(CustomLogger):
 
     def _release_carrier(self, carrier: "_LLMCallSpan | None") -> None:
         """Release the routed provider a removed carrier was holding open."""
-        if carrier is not None and carrier.provider is not None:
+        if carrier is not None:
             self._tenant_tracers.release(carrier.provider)
 
     def _finish_carrier(
@@ -520,16 +530,19 @@ class OpenTelemetryV2(CustomLogger):
         # Baggage so the span — and the SDK path, which has none — is labeled
         # consistently. A detached route roots its own trace instead, linked back.
         route: Final = self._tenant_tracers.route_for(self.tracer, call.dynamic_params, call.auth_metadata)
-        parent_ctx = self._seed_identity_baggage(data.identity, data.request_model, resolve_request_span_context())
-        return self._emitter.emit(
-            SpanRole.LLM_CALL,
-            data,
-            parent_context=(set_span_in_context(INVALID_SPAN, parent_ctx) if route.detached else parent_ctx),
-            start_time_ns=carrier.start_time_ns,
-            end_time_ns=end_time_ns,
-            tracer=route.tracer,
-            links=_request_trace_links(parent_ctx) if route.detached else None,
-        )
+        try:
+            parent_ctx = self._seed_identity_baggage(data.identity, data.request_model, resolve_request_span_context())
+            return self._emitter.emit(
+                SpanRole.LLM_CALL,
+                data,
+                parent_context=(set_span_in_context(INVALID_SPAN, parent_ctx) if route.detached else parent_ctx),
+                start_time_ns=carrier.start_time_ns,
+                end_time_ns=end_time_ns,
+                tracer=route.tracer,
+                links=_request_trace_links(parent_ctx) if route.detached else None,
+            )
+        finally:
+            self._tenant_tracers.release(route.provider)
 
     # ====================================================================== #
     #  Service hooks

@@ -101,10 +101,11 @@ def test_provider_cache_is_bounded_and_evicts_lru(monkeypatch):
     def creds(space):
         return {"arize_space_id": space, "arize_api_key": "K"}
 
-    cache.route_for(default, creds("1"))
-    cache.route_for(default, creds("2"))
-    cache.route_for(default, creds("1"))  # touch "1" → "2" is now LRU
-    cache.route_for(default, creds("3"))  # overflow → evict "2"
+    # route_for returns a held provider; release models the span closing.
+    cache.release(cache.route_for(default, creds("1")).provider)
+    cache.release(cache.route_for(default, creds("2")).provider)
+    cache.release(cache.route_for(default, creds("1")).provider)  # touch "1" → "2" is now LRU
+    cache.release(cache.route_for(default, creds("3")).provider)  # overflow → evict "2"
 
     assert len(cache._providers) == 2
     assert len(shut_down) == 1  # exactly the evicted provider was shut down
@@ -303,7 +304,10 @@ def test_grpc_exporter_gets_no_project_routing():
 def test_eviction_defers_shutdown_while_a_span_is_open(monkeypatch):
     # An LLM span opened at pre_call stays open until the close callback; LRU
     # eviction in that window must not stop the provider's processors, or the
-    # span is silently dropped at end instead of exported.
+    # span is silently dropped at end instead of exported. route_for itself
+    # takes the hold, atomically with the cache update, so a concurrent
+    # eviction can never shut a just-selected provider down before the caller
+    # records its span.
     from litellm.integrations.otel.plumbing import routing as routing_mod
 
     monkeypatch.setattr(routing_mod, "_MAX_CACHED_PROVIDERS", 1)
@@ -316,9 +320,8 @@ def test_eviction_defers_shutdown_while_a_span_is_open(monkeypatch):
 
     route_a = cache.route_for(default, {"arize_space_id": "A", "arize_api_key": "K"})
     assert route_a.provider is not None
-    cache.hold(route_a.provider)
     cache.route_for(default, {"arize_space_id": "B", "arize_api_key": "K"})  # evicts A
-    assert shut_down == []  # deferred: A still has an open span
+    assert shut_down == []  # deferred: A is still held by route_a
     cache.release(route_a.provider)
     assert shut_down == [route_a.provider]
 
@@ -332,6 +335,6 @@ def test_release_without_eviction_keeps_provider_alive(monkeypatch):
     )
     cache = _cache("arize")
     route = cache.route_for(NoOpTracer(), {"arize_space_id": "A", "arize_api_key": "K"})
-    cache.hold(route.provider)
     cache.release(route.provider)
     assert shut_down == []  # still cached, never retired
+    cache.release(None)  # default-route release is a no-op
