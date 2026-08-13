@@ -2556,6 +2556,8 @@ class ExperimentalUIJWTToken:
         user_info: LiteLLM_UserTable,
         team_id: str | None = None,
         team_alias: str | None = None,
+        team_models: Sequence[str] | None = None,
+        team_model_aliases: Mapping[str, str] | None = None,
         max_budget: float | None = None,
     ) -> str:
         """
@@ -2568,6 +2570,8 @@ class ExperimentalUIJWTToken:
             user_info: User information from the database
             team_id: Team ID for the user (optional, uses user's team if available)
             team_alias: Team alias for the selected team, if available
+            team_models: Model allowlist granted by the selected team
+            team_model_aliases: Team model aliases for the selected team
 
         Returns:
             Encrypted JWT token string
@@ -2606,7 +2610,9 @@ class ExperimentalUIJWTToken:
             user_id=user_info.user_id,
             team_id=_team_id,
             team_alias=team_alias,
-            models=user_info.models,
+            team_models=list(team_models) if team_models is not None else [],
+            team_model_aliases=dict(team_model_aliases) if team_model_aliases is not None else None,
+            models=[] if _team_id is not None else user_info.models,
             max_parallel_requests=None,
             user_role=LitellmUserRoles(user_info.user_role),
             is_session_token=True,
