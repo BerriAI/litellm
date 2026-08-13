@@ -14,6 +14,7 @@ import copy
 import json
 import re
 import sys
+import time
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import accumulate, groupby
@@ -41,6 +42,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import _serialize_http_exception_detail
+from litellm.proxy.common_utils.sse_keepalive import keepalive_ping_has_fired
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
     anthropic_sse_error_frames,
@@ -2587,6 +2589,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         from litellm.types.utils import TextCompletionResponse
 
         # Collect all chunks to process them together
+        started_at: Final = time.monotonic()
         all_chunks: Final[list[ModelResponseStream]] = []
         async for chunk in response:
             all_chunks.append(chunk)
@@ -2627,14 +2630,19 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             except HTTPException as block_exc:
                 block_detail: Final = block_exc.detail
                 # A policy block is the only 400 carrying a structured detail; a service failure
-                # either details a plain string or reports a non-400 status, and re-raising those
-                # keeps their real status instead of reporting an outage as a guardrail decision
-                if not raw_sse or block_exc.status_code != 400 or not isinstance(block_detail, Mapping):
+                # either details a plain string or reports a non-400 status. Re-raising a service
+                # failure keeps its real status, but only while the headers are unflushed: past the
+                # first keepalive ping the raise reaches nobody, so it has to travel as a frame too
+                is_block: Final = raw_sse and block_exc.status_code == 400 and isinstance(block_detail, Mapping)
+                headers_flushed: Final = keepalive_ping_has_fired(
+                    time.monotonic() - started_at, litellm.anthropic_sse_ping_interval_seconds
+                )
+                if not raw_sse or (not is_block and not headers_flushed):
                     raise
-                # past the keepalive ping the headers are already flushed, so a raise cannot reach
-                # the client; the block travels as a frame
                 block_message, _ = _serialize_http_exception_detail(block_detail)
-                for error_frame in anthropic_sse_error_frames(block_message):
+                for error_frame in anthropic_sse_error_frames(
+                    block_message if is_block else f"{block_exc.status_code}: {block_message}"
+                ):
                     yield error_frame
                 return
             except ModifyResponseException as e:

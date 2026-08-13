@@ -2973,6 +2973,27 @@ async def test_streaming_hook_reraises_guardrail_service_failures():
 
 
 @pytest.mark.asyncio
+async def test_streaming_hook_frames_a_service_failure_once_a_keepalive_ping_flushed_the_headers():
+    """Past the ping the status line is already on the wire, so a raise reaches the client as nothing.
+
+    The failure has to travel as a frame instead, carrying its real status in the message.
+    """
+    guardrail = _sse_guardrail()
+
+    with (
+        patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api,
+        patch.object(litellm, "anthropic_sse_ping_interval_seconds", 0.0001),
+    ):
+        mock_api.side_effect = HTTPException(status_code=503, detail="Bedrock is unavailable")
+        delivered = await _drain_streaming_hook(guardrail)
+
+    body = b"".join(delivered).decode()
+    frame = next(line for line in body.splitlines() if line.startswith("data: "))
+    message = json.loads(frame[6:])["error"]["message"]
+    assert message == "503: Bedrock is unavailable"
+
+
+@pytest.mark.asyncio
 async def test_streaming_hook_reraises_a_service_failure_that_details_a_mapping():
     """InvokeGuardrailChecks details a Mapping on its 500, so detail shape alone cannot mean "block"."""
     guardrail = _sse_guardrail()
