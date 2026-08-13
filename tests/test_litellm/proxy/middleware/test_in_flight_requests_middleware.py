@@ -99,11 +99,12 @@ def test_non_http_scopes_not_counted():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status, expected_calls", [(429, 1), (503, 1), (200, 0), (400, 0), (500, 0)])
-async def test_only_shed_responses_are_counted(status, expected_calls):
-    """A 500 is the proxy failing, not declining. Counting it here would blur the
+async def test_only_shed_responses_the_proxy_itself_produced_are_counted(status, expected_calls):
+    """A 500 is the proxy failing, not declining. Counting it would blur the
     signal an operator uses to decide between throttling and scaling out."""
     from unittest.mock import MagicMock, patch
 
+    from litellm.proxy.common_utils.request_pressure_metrics import mark_request_shed_by_proxy
     from litellm.proxy.middleware.in_flight_requests_middleware import (
         InFlightRequestsMiddleware,
     )
@@ -117,6 +118,7 @@ async def test_only_shed_responses_are_counted(status, expected_calls):
         return {"type": "http.request"}
 
     async def app(scope, receive, send):
+        mark_request_shed_by_proxy()
         await send({"type": "http.response.start", "status": status, "headers": []})
         await send({"type": "http.response.body", "body": b""})
 
@@ -125,36 +127,53 @@ async def test_only_shed_responses_are_counted(status, expected_calls):
         await InFlightRequestsMiddleware(app)({"type": "http"}, receive, send)
 
     assert logger.record_request_shed.call_count == expected_calls
-    if expected_calls:
-        logger.record_request_shed.assert_called_once_with(status)
     assert [m["type"] for m in sent] == ["http.response.start", "http.response.body"], (
         "the wrapped send must still forward every message downstream"
     )
 
 
 @pytest.mark.asyncio
-async def test_a_broken_metric_never_breaks_the_response():
-    from unittest.mock import patch
+async def test_a_provider_rate_limit_is_not_counted_as_this_pod_shedding():
+    """litellm forwards an upstream 429 with the same status the proxy uses for
+    its own limits. Counting it would tell an operator to scale out when the
+    bottleneck is the provider."""
+    from unittest.mock import MagicMock, patch
 
     from litellm.proxy.middleware.in_flight_requests_middleware import (
         InFlightRequestsMiddleware,
     )
 
-    sent = []
-
     async def send(message):
-        sent.append(message)
+        return None
 
     async def receive():
         return {"type": "http.request"}
 
     async def app(scope, receive, send):
+        # no mark: the 429 came back from the provider, not from a proxy limiter
         await send({"type": "http.response.start", "status": 429, "headers": []})
 
-    with patch(
-        "litellm.integrations.prometheus.PrometheusLogger.get_instance",
-        side_effect=RuntimeError("metrics down"),
-    ):
+    logger = MagicMock()
+    with patch("litellm.integrations.prometheus.PrometheusLogger.get_instance", return_value=logger):
         await InFlightRequestsMiddleware(app)({"type": "http"}, receive, send)
 
-    assert len(sent) == 1
+    logger.record_request_shed.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_the_proxys_own_rate_limit_error_marks_the_request():
+    """ProxyRateLimitError is the one class litellm raises for its own 429s, so
+    constructing it is what distinguishes the two cases."""
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+    from litellm.proxy.common_utils.request_pressure_metrics import (
+        proxy_shed_request,
+        was_request_shed_by_proxy,
+    )
+
+    token = proxy_shed_request.set(False)
+    try:
+        assert was_request_shed_by_proxy() is False
+        ProxyRateLimitError(detail={"error": "limit"})
+        assert was_request_shed_by_proxy() is True
+    finally:
+        proxy_shed_request.reset(token)

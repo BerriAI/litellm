@@ -83,13 +83,18 @@ class InFlightRequestsMiddleware:
         return InFlightRequestsMiddleware._gauge
 
 
-# Statuses that mean the proxy declined to serve rather than failed to. Kept to
-# a fixed set so the metric label cannot grow.
+# Statuses the proxy uses when it declines to serve. A response only counts once
+# the request is also marked as shed by this proxy, since litellm forwards
+# upstream 429s with the same status.
 _SHED_STATUSES: Final = frozenset({429, 503})
 
 
 def _record_shed_response(status: int) -> None:
     if status not in _SHED_STATUSES:
+        return
+    from litellm.proxy.common_utils.request_pressure_metrics import was_request_shed_by_proxy
+
+    if not was_request_shed_by_proxy():
         return
     try:
         from litellm.integrations.prometheus import PrometheusLogger

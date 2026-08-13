@@ -98,6 +98,9 @@ def _coerce_message(detail: Any) -> str:
 # Both narrowings are intentional and handled at construction time — every
 # instance always has status_code == 429 and a Dict-typed headers — so we
 # silence the ATTR-overlap check rather than relax the annotations.
+from litellm.proxy.common_utils.request_pressure_metrics import mark_request_shed_by_proxy
+
+
 class ProxyRateLimitError(HTTPException, RateLimitError):
     """
     A 429 raised by litellm's proxy-side rate limiting hooks.
@@ -155,6 +158,7 @@ class ProxyRateLimitError(HTTPException, RateLimitError):
         # instance whose `.llm_provider` attribute is `None` — that would
         # break Prometheus' `_get_exception_class_name` (it calls
         # `.capitalize()` on the provider string).
+        mark_request_shed_by_proxy()
         model = model or ""
         llm_provider = llm_provider or "litellm_proxy"
         message: Final = _coerce_message(detail)

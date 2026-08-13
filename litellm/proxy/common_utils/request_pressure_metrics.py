@@ -15,11 +15,27 @@ See LIT-5460 for the enforcement gap itself.
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 
 UNBOUNDED: Final = float("inf")
+
+# Set where the proxy itself declines a request. litellm forwards upstream
+# rate limits with the same 429 the proxy uses for its own, so response status
+# alone cannot tell "this pod shed load" from "the provider throttled us", and
+# only the former should count toward a decision to throttle or scale out.
+proxy_shed_request: Final[ContextVar[bool]] = ContextVar("litellm_proxy_shed_request", default=False)
+
+
+def mark_request_shed_by_proxy() -> None:
+    """Record that this proxy, not an upstream, declined the current request."""
+    proxy_shed_request.set(True)
+
+
+def was_request_shed_by_proxy() -> bool:
+    return proxy_shed_request.get()
 
 
 def is_global_limit_enforced() -> bool:
