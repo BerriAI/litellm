@@ -4,7 +4,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from typing import Optional, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from fastapi import HTTPException
@@ -39,6 +39,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
 from litellm.proxy.management_endpoints.team_endpoints import (
     GetTeamMemberPermissionsResponse,
     UpdateTeamMemberPermissionsRequest,
+    _STRIP_DELETED_TEAM_FROM_USERS_SQL,
     _persist_deleted_team_records,
     _save_deleted_team_records,
     _transform_teams_to_deleted_records,
@@ -7236,6 +7237,367 @@ async def test_delete_team_persists_deleted_teams(monkeypatch):
     assert records[0]["team_id"] == "team-1"
     assert records[0]["deleted_by"] == "admin-user"
     assert records[0]["litellm_changed_by"] == "admin-user"
+
+
+@pytest.mark.asyncio
+async def test_delete_team_sweeps_references_outside_members_with_roles(monkeypatch):
+    """
+    Regression pin for LIT-5511: a deleted team stayed visible on user records.
+
+    `delete_team` drove all of its cleanup off `team.members_with_roles`, so a user row that
+    referenced the team by any other route (`/user/update`, SSO sync, a membership row written
+    without a matching roster entry) kept the dangling team id forever and `/user/info` kept
+    listing the deleted team. The roster here is deliberately EMPTY, so nothing the per-member
+    `team_member_delete` path does can make this test pass.
+
+    Both cache keys `_cache_team_object` writes are asserted in the same delete: the id key feeds
+    `get_team_object` and the alias key feeds the JWT `team_alias_jwt_field` path, so either one
+    surviving keeps the deleted team resolvable for auth until its TTL expires.
+    """
+    from litellm.proxy._types import DeleteTeamRequest
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    doomed_team = LiteLLM_TeamTable(
+        team_id="team-doomed",
+        team_alias="doomed-team",
+        members_with_roles=[],
+        metadata={},
+        model_max_budget={},
+        model_spend={},
+    )
+
+    cache_state_when_rows_deleted = {}
+
+    async def record_cache_state_then_delete(*args, **kwargs):
+        if kwargs.get("table_name") == "team":
+            cache_state_when_rows_deleted["doomed_still_cached"] = (
+                fresh_cache.get_cache(key="team_id:team-doomed") is not None
+            )
+        return {"deleted_teams": ["team-doomed"]}
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=doomed_team)
+    mock_prisma_client.delete_data = AsyncMock(side_effect=record_cache_state_then_delete)
+    mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
+    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    mock_execute_raw = AsyncMock()
+    mock_prisma_client.db.execute_raw = mock_execute_raw
+    mock_membership_delete_many = AsyncMock()
+    mock_prisma_client.db.litellm_teammembership.delete_many = mock_membership_delete_many
+
+    mock_tx = AsyncMock()
+    mock_tx.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_tx_cm = MagicMock()
+    mock_tx_cm.__aenter__ = AsyncMock(return_value=mock_tx)
+    mock_tx_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
+
+    fresh_cache = UserApiKeyCache()
+    for cached_team_id, cached_alias in (
+        ("team-doomed", "doomed-team"),
+        ("team-kept", "kept-team"),
+    ):
+        cached_obj = LiteLLM_TeamTableCachedObj(
+            team_id=cached_team_id, team_alias=cached_alias
+        )
+        fresh_cache.set_cache(key=f"team_id:{cached_team_id}", value=cached_obj)
+        fresh_cache.set_cache(key=f"team_alias:{cached_alias}", value=cached_obj)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", fresh_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+
+    await delete_team(
+        data=DeleteTeamRequest(team_ids=["team-doomed"]),
+        http_request=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user",
+            api_key="sk-admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        ),
+        litellm_changed_by="admin-user",
+    )
+
+    # array_remove strips just the deleted id in one statement; a read-filter-write of the whole
+    # array would drop any team a concurrent /team/member_add appended between read and write
+    assert "array_remove" in _STRIP_DELETED_TEAM_FROM_USERS_SQL
+    assert mock_execute_raw.await_args_list == [
+        call(_STRIP_DELETED_TEAM_FROM_USERS_SQL, "team-doomed"),
+        call(_STRIP_DELETED_TEAM_FROM_USERS_SQL, "team-doomed"),
+    ], "the sweep must run once before the team row is deleted and again after, so a member_add racing the delete cannot leave the reference behind"
+
+    # same two passes: the second one reaps a membership row inserted while the delete was running
+    assert mock_membership_delete_many.await_args_list == [
+        call(where={"team_id": {"in": ("team-doomed",)}}),
+        call(where={"team_id": {"in": ("team-doomed",)}}),
+    ]
+
+    assert fresh_cache.get_cache(key="team_id:team-doomed") is None
+    assert fresh_cache.get_cache(key="team_alias:doomed-team") is None
+    assert fresh_cache.get_cache(key="team_id:team-kept") is not None
+    assert fresh_cache.get_cache(key="team_alias:kept-team") is not None
+
+    # Eviction must run AFTER the rows are gone: both writers of these keys hydrate from the db,
+    # so evicting first lets a concurrent auth lookup re-cache the still-present team.
+    assert cache_state_when_rows_deleted["doomed_still_cached"] is True
+
+
+@pytest.mark.asyncio
+async def test_delete_team_evicts_the_auth_cache_of_the_keys_it_deletes(monkeypatch):
+    """
+    A virtual key scoped to the team is deleted from the db with the team, but auth resolves a
+    cached key object without re-reading the team, so leaving the cache entry behind lets that key
+    keep buying access until its TTL expires. Verified live: without this eviction the same key
+    still returns HTTP 200 on /v1/chat/completions right after /team/delete.
+    """
+    from litellm.proxy._types import DeleteTeamRequest, LiteLLM_VerificationToken
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    team = LiteLLM_TeamTable(
+        team_id="team-doomed",
+        team_alias="doomed-team",
+        members_with_roles=[],
+        metadata={},
+        model_max_budget={},
+        model_spend={},
+    )
+    team_key = LiteLLM_VerificationToken(token="hashed-doomed-key", team_id="team-doomed")
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    mock_prisma_client.delete_data = AsyncMock(return_value={"deleted_teams": ["team-doomed"]})
+    mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
+    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[team_key])
+    mock_prisma_client.db.execute_raw = AsyncMock()
+    mock_prisma_client.db.litellm_teammembership.delete_many = AsyncMock()
+
+    mock_tx = AsyncMock()
+    mock_tx.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_tx_cm = MagicMock()
+    mock_tx_cm.__aenter__ = AsyncMock(return_value=mock_tx)
+    mock_tx_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
+
+    fresh_cache = UserApiKeyCache()
+    fresh_cache.set_cache(key="hashed-doomed-key", value=UserAPIKeyAuth(token="hashed-doomed-key", team_id="team-doomed"))
+    fresh_cache.set_cache(key="hashed-unrelated-key", value=UserAPIKeyAuth(token="hashed-unrelated-key"))
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", fresh_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+
+    await delete_team(
+        data=DeleteTeamRequest(team_ids=["team-doomed"]),
+        http_request=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user",
+            api_key="sk-admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        ),
+        litellm_changed_by="admin-user",
+    )
+
+    assert fresh_cache.get_cache(key="hashed-doomed-key") is None
+    # a key that had nothing to do with the deleted team must survive
+    assert fresh_cache.get_cache(key="hashed-unrelated-key") is not None
+
+
+@pytest.mark.asyncio
+async def test_delete_team_failing_reconcile_sweep_cannot_strand_the_team_in_cache(monkeypatch):
+    """
+    The reconcile sweep runs after the team row is committed deleted. If it ran before cache
+    eviction, a sweep failure would return an error with the team gone from the db but still
+    served from cache, which is the exact bug this PR exists to fix.
+    """
+    from litellm.proxy._types import DeleteTeamRequest
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    team = LiteLLM_TeamTable(
+        team_id="team-doomed",
+        team_alias="doomed-team",
+        members_with_roles=[],
+        metadata={},
+        model_max_budget={},
+        model_spend={},
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    mock_prisma_client.delete_data = AsyncMock(return_value={"deleted_teams": ["team-doomed"]})
+    mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_teammembership.delete_many = AsyncMock()
+    # the first sweep succeeds, the post-delete reconcile sweep blows up
+    mock_prisma_client.db.execute_raw = AsyncMock(side_effect=[None, ConnectionError("db went away")])
+
+    mock_tx = AsyncMock()
+    mock_tx.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_tx_cm = MagicMock()
+    mock_tx_cm.__aenter__ = AsyncMock(return_value=mock_tx)
+    mock_tx_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
+
+    fresh_cache = UserApiKeyCache()
+    cached_obj = LiteLLM_TeamTableCachedObj(team_id="team-doomed", team_alias="doomed-team")
+    fresh_cache.set_cache(key="team_id:team-doomed", value=cached_obj)
+    fresh_cache.set_cache(key="team_alias:doomed-team", value=cached_obj)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", fresh_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+
+    with pytest.raises(ConnectionError):
+        await delete_team(
+            data=DeleteTeamRequest(team_ids=["team-doomed"]),
+            http_request=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="admin-user",
+                api_key="sk-admin",
+                user_role=LitellmUserRoles.PROXY_ADMIN.value,
+            ),
+            litellm_changed_by="admin-user",
+        )
+
+    # the delete committed, so the cache must not still be serving the team
+    assert fresh_cache.get_cache(key="team_id:team-doomed") is None
+    assert fresh_cache.get_cache(key="team_alias:doomed-team") is None
+
+
+@pytest.mark.asyncio
+async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(monkeypatch):
+    """
+    Evicting locally only reaches the worker that handled the delete. Without the broadcast, every
+    other worker keeps serving the deleted team, and the deleted team's keys, out of its own
+    in-memory cache until the TTL, so both stay usable for auth cluster-wide.
+    """
+    from litellm.proxy._types import DeleteTeamRequest, LiteLLM_VerificationToken
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    team = LiteLLM_TeamTable(
+        team_id="team-doomed",
+        team_alias="doomed-team",
+        members_with_roles=[],
+        metadata={},
+        model_max_budget={},
+        model_spend={},
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    mock_prisma_client.delete_data = AsyncMock(return_value={"deleted_teams": ["team-doomed"]})
+    mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
+    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[LiteLLM_VerificationToken(token="hashed-doomed-key", team_id="team-doomed")]
+    )
+    mock_prisma_client.db.execute_raw = AsyncMock()
+    mock_prisma_client.db.litellm_teammembership.delete_many = AsyncMock()
+
+    mock_tx = AsyncMock()
+    mock_tx.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_tx_cm = MagicMock()
+    mock_tx_cm.__aenter__ = AsyncMock(return_value=mock_tx)
+    mock_tx_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
+
+    published = []
+
+    async def record_publish(cache_key):
+        published.append(cache_key)
+
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.publish_auth_cache_invalidation", record_publish)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+
+    await delete_team(
+        data=DeleteTeamRequest(team_ids=["team-doomed"]),
+        http_request=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user",
+            api_key="sk-admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        ),
+        litellm_changed_by="admin-user",
+    )
+
+    # the deleted key first, then both keys `_cache_team_object` writes: miss the alias one and the
+    # JWT-by-alias path keeps resolving the team, miss the token and the key still authenticates
+    assert published == ["hashed-doomed-key", "team_id:team-doomed", "team_alias:doomed-team"]
+
+
+@pytest.mark.asyncio
+async def test_delete_team_survives_a_failing_cache_backend(monkeypatch):
+    """
+    Cache eviction runs after the reference sweep has already committed, so a cache backend that
+    is unreachable must not abort the delete. If it did, `/team/delete` would fail with the team
+    row still present but its user references and membership rows already gone.
+    """
+    from litellm.proxy._types import DeleteTeamRequest, LiteLLM_VerificationToken
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    team = LiteLLM_TeamTable(
+        team_id="team-doomed",
+        team_alias="doomed-team",
+        members_with_roles=[],
+        metadata={},
+        model_max_budget={},
+        model_spend={},
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    mock_delete_data = AsyncMock(return_value={"deleted_teams": ["team-doomed"]})
+    mock_prisma_client.delete_data = mock_delete_data
+    mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
+    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
+    # a key to evict: its eviction runs after the key rows are already deleted, so it must not
+    # raise either
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[LiteLLM_VerificationToken(token="hashed-doomed-key", team_id="team-doomed")]
+    )
+    mock_prisma_client.db.execute_raw = AsyncMock()
+    mock_prisma_client.db.litellm_teammembership.delete_many = AsyncMock()
+
+    mock_tx = AsyncMock()
+    mock_tx.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_tx_cm = MagicMock()
+    mock_tx_cm.__aenter__ = AsyncMock(return_value=mock_tx)
+    mock_tx_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
+
+    exploding_logging_obj = MagicMock()
+    exploding_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock(
+        side_effect=ConnectionError("redis is down")
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", exploding_logging_obj)
+    monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+
+    result = await delete_team(
+        data=DeleteTeamRequest(team_ids=["team-doomed"]),
+        http_request=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user",
+            api_key="sk-admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        ),
+        litellm_changed_by="admin-user",
+    )
+
+    assert result == {"deleted_teams": ["team-doomed"]}
+    mock_delete_data.assert_any_await(team_id_list=["team-doomed"], table_name="team")
+    assert exploding_logging_obj.internal_usage_cache.dual_cache.async_delete_cache.await_count > 0
 
 
 @pytest.mark.asyncio
