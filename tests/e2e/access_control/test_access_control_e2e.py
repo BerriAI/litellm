@@ -48,7 +48,9 @@ class TestAccessControl:
         result = client.chat_status(
             key, ALLOWED_MODEL, f"capital of France? {unique_marker()}"
         )
-        assert result.status_code == 200, (
+        # DELIBERATE FAILURE, TEMPORARY. Proving the e2e gate turns a litellm PR
+        # red when a selected test fails. Reverted once the red is observed.
+        assert result.status_code == 418, (
             f"key allow-listed for {ALLOWED_MODEL!r} must be able to call it, got "
             f"{result.status_code}: {result.body[:300]}"
         )
