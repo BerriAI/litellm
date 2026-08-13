@@ -29,7 +29,9 @@ const alerts = [
   { name: "slack", variables: { SLACK_WEBHOOK_URL: "https://hooks.example.com" } },
 ];
 
-const inputNamed = (name: string) => document.querySelector<HTMLInputElement>(`input[name="${name}"]`)!;
+const inputNamed = (name: string) =>
+  document.querySelector<HTMLInputElement>(`input[name="${name}"][data-slot="input-group-control"]`) ||
+  document.querySelector<HTMLInputElement>(`input[name="${name}"]`)!;
 
 describe("EmailSettings", () => {
   beforeEach(() => {
@@ -123,5 +125,25 @@ describe("EmailSettings", () => {
     renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} />);
 
     expect(screen.getByText("email event settings")).toBeInTheDocument();
+  });
+
+  it("toggles credential visibility when eye icon is clicked", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} />);
+
+    const passwordInput = inputNamed("SMTP_PASSWORD");
+    expect(passwordInput).toHaveAttribute("type", "password");
+
+    const showButtons = screen.getAllByLabelText("Show credential");
+    expect(showButtons.length).toBeGreaterThan(0);
+
+    await user.click(showButtons[0]);
+
+    expect(passwordInput).toHaveAttribute("type", "text");
+
+    const hideButton = screen.getByLabelText("Hide credential");
+    await user.click(hideButton);
+
+    expect(passwordInput).toHaveAttribute("type", "password");
   });
 });

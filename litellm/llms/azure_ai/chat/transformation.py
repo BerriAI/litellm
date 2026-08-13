@@ -248,7 +248,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
-            encoding=encoding,
+            encoding=encoding if encoding is not None else None,
             api_key=api_key,
             json_mode=json_mode,
         )

@@ -23,6 +23,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { v4 as uuidv4 } from "uuid";
+import useCan from "@/app/(dashboard)/hooks/useCan";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
 import PolicySelector from "@/components/policies/PolicySelector";
 import MCPToolArgumentsForm, { MCPToolArgumentsFormRef } from "@/components/mcp_tools/MCPToolArgumentsForm";
@@ -118,6 +119,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   simplified = false,
   fixedModel,
 }) => {
+  const canViewPolicies = useCan("viewPolicies");
   const [mcpServers, setMCPServers] = useState<MCPServer[]>([]);
   const [mcpToolsets, setMCPToolsets] = useState<MCPToolset[]>([]);
   const [isToolsetsInfoModalVisible, setIsToolsetsInfoModalVisible] = useState(false);
@@ -1681,30 +1683,32 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   />
                 </div>
 
-                <div>
-                  <div className="mb-2 flex items-center gap-1 text-sm font-medium text-gray-700">
-                    <Shield className="mr-1 size-4" aria-hidden="true" /> Policies
-                    <Tooltip>
-                      <TooltipTrigger aria-label="About policies">
-                        <Info className="size-3.5 text-gray-400" />
-                      </TooltipTrigger>
-                      <TooltipContent className="max-w-xs">
-                        Select policy/policies to apply to this LLM API call. Policies define which guardrails are
-                        applied based on conditions. You can set up your policies{" "}
-                        <a href="?page=policies" className="text-blue-500 underline">
-                          here
-                        </a>
-                        .
-                      </TooltipContent>
-                    </Tooltip>
+                {canViewPolicies && (
+                  <div>
+                    <div className="mb-2 flex items-center gap-1 text-sm font-medium text-gray-700">
+                      <Shield className="mr-1 size-4" aria-hidden="true" /> Policies
+                      <Tooltip>
+                        <TooltipTrigger aria-label="About policies">
+                          <Info className="size-3.5 text-gray-400" />
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-xs">
+                          Select policy/policies to apply to this LLM API call. Policies define which guardrails are
+                          applied based on conditions. You can set up your policies{" "}
+                          <a href="?page=policies" className="text-blue-500 underline">
+                            here
+                          </a>
+                          .
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                    <PolicySelector
+                      value={selectedPolicies}
+                      onChange={setSelectedPolicies}
+                      className="mb-4"
+                      accessToken={accessToken || ""}
+                    />
                   </div>
-                  <PolicySelector
-                    value={selectedPolicies}
-                    onChange={setSelectedPolicies}
-                    className="mb-4"
-                    accessToken={accessToken || ""}
-                  />
-                </div>
+                )}
 
                 {endpointType === EndpointType.RESPONSES && (
                   <div>
