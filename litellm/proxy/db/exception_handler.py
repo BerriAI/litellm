@@ -1,4 +1,5 @@
 from collections.abc import Awaitable, Callable
+from types import ModuleType
 from typing import Any, Final, TypeVar
 
 from litellm._logging import verbose_proxy_logger
@@ -14,7 +15,7 @@ from litellm.secret_managers.main import str_to_bool
 _MAX_EXCEPTION_CHAIN_DEPTH: Final = 20
 
 
-def _try_import_prisma():
+def _try_import_prisma() -> ModuleType | None:
     """Return the ``prisma`` module, or ``None`` if it isn't installed.
 
     ``prisma`` is only present when the proxy was started against a
