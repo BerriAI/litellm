@@ -10019,11 +10019,9 @@ class Router:
         deployments: Final = self.get_model_list(model_name=model_name, team_id=team_id) or []
         if not self._are_all_deployments_blocked(deployments):
             return False
-        if reachable_fallbacks is not None and self._has_reachable_fallback(
+        return reachable_fallbacks is None or not self._has_reachable_fallback(
             model_name=model_name, fallbacks=reachable_fallbacks, team_id=team_id
-        ):
-            return False
-        return True
+        )
 
     async def async_get_fully_unhealthy_model_names(self) -> set[str]:
         """

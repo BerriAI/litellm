@@ -145,3 +145,39 @@ class TestHasReachableFallback:
             ]
         )
         assert router._has_reachable_fallback("primary", fallbacks=["fallback"]) is True
+
+
+class TestIsBlockedWithoutReachableFallback:
+    def test_blocked_and_no_fallback_returns_true(self):
+        router = Router(model_list=[_deployment("primary", "p0", blocked=True)])
+        assert router._is_blocked_without_reachable_fallback("primary", reachable_fallbacks=None, team_id=None) is True
+
+    def test_not_all_blocked_returns_false(self):
+        router = Router(model_list=[_deployment("primary", "p0", blocked=False)])
+        assert router._is_blocked_without_reachable_fallback("primary", reachable_fallbacks=None, team_id=None) is False
+
+    def test_blocked_with_reachable_fallback_returns_false(self):
+        router = Router(
+            model_list=[
+                _deployment("primary", "p0", blocked=True),
+                _deployment("fallback", "f0", blocked=False),
+            ]
+        )
+        reachable = [{"primary": ["fallback"]}]
+        assert (
+            router._is_blocked_without_reachable_fallback("primary", reachable_fallbacks=reachable, team_id=None)
+            is False
+        )
+
+    def test_blocked_with_fully_blocked_fallback_returns_true(self):
+        router = Router(
+            model_list=[
+                _deployment("primary", "p0", blocked=True),
+                _deployment("fallback", "f0", blocked=True),
+            ]
+        )
+        reachable = [{"primary": ["fallback"]}]
+        assert (
+            router._is_blocked_without_reachable_fallback("primary", reachable_fallbacks=reachable, team_id=None)
+            is True
+        )
