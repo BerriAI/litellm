@@ -45569,7 +45569,9 @@
         "source": "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-tts-preview",
         "supported_endpoints": [
             "/v1/audio/speech"
-        ]
+        ],
+        "tpm": 4000000,
+        "rpm": 10
     },
     "gemini-2.5-flash-preview-tts": {
         "input_cost_per_token": 3e-07,
