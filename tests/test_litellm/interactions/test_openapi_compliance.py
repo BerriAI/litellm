@@ -4,37 +4,35 @@ OpenAPI compliance tests for Google Interactions API.
 Validates that our SDK requests/responses match the OpenAPI spec at:
 https://ai.google.dev/static/api/interactions.openapi.json
 
+These assertions run against the pinned copy of that spec sitting next to this
+file, so they never depend on the network and never change meaning under an
+unrelated PR. Refresh the copy deliberately:
+
+    curl -sSfo tests/test_litellm/interactions/interactions.openapi.json \
+        https://ai.google.dev/static/api/interactions.openapi.json
+
+then fix whatever the assertions catch in the same PR. That review of the diff
+is the notification this suite exists to give us.
+
 Run with: pytest tests/test_litellm/interactions/test_openapi_compliance.py -v
 """
 
 import json
 import os
+from pathlib import Path
 from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
-import httpx
 import pytest
 from openapi_core import OpenAPI
 
 OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
+PINNED_SPEC_PATH = Path(__file__).parent / "interactions.openapi.json"
 
 
 def _load_openapi_spec_dict() -> Dict[str, Any]:
-    """
-    Load the OpenAPI spec JSON.
-
-    In CI or offline environments, network access may not be available.
-    In that case, gracefully skip these tests instead of erroring.
-    """
-    try:
-        response = httpx.get(OPENAPI_SPEC_URL, timeout=5.0)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:  # pragma: no cover - defensive, env-dependent
-        pytest.skip(
-            f"Skipping Google Interactions OpenAPI compliance tests - "
-            f"unable to load spec from {OPENAPI_SPEC_URL}: {e}"
-        )
+    """Load the pinned copy of the OpenAPI spec."""
+    return json.loads(PINNED_SPEC_PATH.read_text())
 
 
 def _declared_type_value(variant_schema: Dict[str, Any]) -> Any:
@@ -167,17 +165,52 @@ class TestRequestCompliance:
         assert text_schema["properties"]["type"].get("const") == "text"
         print("✓ TextContent schema is correct")
 
-    def test_turn_schema(self, spec_dict):
-        """Verify Turn schema for multi-turn conversations."""
-        turn_schema = spec_dict["components"]["schemas"]["Turn"]
+    def test_multi_turn_input_is_a_list_of_role_tagged_steps(self, spec_dict):
+        """Verify a multi-turn conversation can be sent as alternating user/model steps.
 
-        assert "role" in turn_schema["properties"]
-        assert "content" in turn_schema["properties"]
+        Google dropped the `Turn` schema that used to carry an explicit `role`; a turn is now
+        a `Step`, and the role is the step's own `type` value. What our transformation needs is
+        that the input accepts a list of steps and that user and model steps stay distinguishable
+        and each carry content.
+        """
+        schemas = spec_dict["components"]["schemas"]
 
-        # Content can be string or Content[]
-        content_prop = turn_schema["properties"]["content"]
-        assert "oneOf" in content_prop
-        print("✓ Turn schema supports role + content")
+        step_list_variants = [
+            variant
+            for variant in schemas["InteractionsInput"]["oneOf"]
+            if variant.get("type") == "array"
+            and variant.get("items", {}).get("$ref", "").endswith("/Step")
+        ]
+        assert step_list_variants, (
+            f"input no longer accepts a list of steps: {schemas['InteractionsInput']['oneOf']}"
+        )
+
+        step_variants = {
+            option["$ref"].split("/")[-1]
+            for option in schemas["Step"].get("oneOf", [])
+            if "$ref" in option
+        }
+        assert {"UserInputStep", "ModelOutputStep"} <= step_variants, (
+            f"Step must cover both conversation roles, got {sorted(step_variants)}"
+        )
+
+        roles_by_step = {
+            step: _declared_type_value(schemas[step])
+            for step in ("UserInputStep", "ModelOutputStep")
+        }
+        assert roles_by_step == {
+            "UserInputStep": "user_input",
+            "ModelOutputStep": "model_output",
+        }, f"conversation roles are no longer reachable by step type, got {roles_by_step}"
+
+        for step in roles_by_step:
+            content_prop = schemas[step]["properties"]["content"]
+            assert content_prop["type"] == "array", f"{step}.content is not a list"
+            assert content_prop["items"]["$ref"].endswith(
+                "/Content"
+            ), f"{step}.content does not hold Content parts"
+
+        print(f"✓ Multi-turn input is a list of steps, roles: {roles_by_step}")
 
 
 class TestResponseCompliance:
@@ -188,14 +221,11 @@ class TestResponseCompliance:
         # The response is the dedicated `Interaction` schema. Google moved the
         # output-only fields (notably the `steps` array, formerly `outputs`)
         # off `CreateModelInteractionParams` and onto `Interaction`; the request
-        # schema no longer carries `steps`. Google later moved `role` off
-        # `Interaction` onto the per-turn `Turn` schema (asserted in
-        # test_turn_schema), so it is no longer a top-level output field here.
-        # Keep this aligned with the live spec.
+        # schema no longer carries `steps`. `role` is not an output field here
+        # either: it is carried by each step's own `type` (asserted in
+        # test_multi_turn_input_is_a_list_of_role_tagged_steps).
         schema = spec_dict["components"]["schemas"]["Interaction"]
 
-        # Output fields (readOnly). `role` was removed from the `Interaction`
-        # schema by Google; it now lives only on `Turn`.
         output_fields = [
             "id",
             "status",
@@ -314,11 +344,8 @@ class TestEndpointCompliance:
 
 if __name__ == "__main__":
     # Quick manual test
-    import httpx
-
-    print("Loading OpenAPI spec...")
-    response = httpx.get(OPENAPI_SPEC_URL)
-    spec = response.json()
+    print(f"Loading pinned OpenAPI spec ({PINNED_SPEC_PATH})...")
+    spec = _load_openapi_spec_dict()
 
     print(f"\nSpec version: {spec.get('openapi')}")
     print(f"API title: {spec.get('info', {}).get('title')}")
