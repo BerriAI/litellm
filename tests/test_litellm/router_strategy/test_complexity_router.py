@@ -32,9 +32,11 @@ from litellm.router_strategy.complexity_router.complexity_router import (
     classification_system_prompt,
 )
 from litellm.router_strategy.complexity_router.config import (
+    DEFAULT_CLASSIFICATION_RUBRIC,
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     DEFAULT_COMPLEXITY_CONFIG,
     DEFAULT_TECHNICAL_KEYWORDS,
+    ClassifierLLMConfig,
     ComplexityRouterConfig,
     ComplexityTier,
     ClassificationRubric,
@@ -6747,6 +6749,17 @@ class TestClassificationRubrics:
                     "system_prompt": "Grade the data sensitivity of the request.",
                 },
             )
+
+    def test_the_documented_default_is_the_default_a_router_gets(self):
+        """This description is the config schema an operator reads, in the OpenAPI spec and in editor
+        autocomplete. Naming a preset there that an omitted field does not actually select sends someone
+        to production expecting calibrated routing and gives them the uncalibrated rubric."""
+        description = ClassifierLLMConfig.model_fields["classification_rubric"].description
+        assert description is not None
+        assert f"Leave unset for '{DEFAULT_CLASSIFICATION_RUBRIC.value}'" in description
+        for other in ClassificationRubric:
+            if other is not DEFAULT_CLASSIFICATION_RUBRIC:
+                assert f"Leave unset for '{other.value}'" not in description
 
     def test_custom_prompt_alone_is_accepted(self):
         config = ComplexityRouterConfig(
