@@ -5,6 +5,8 @@ import asyncio
 import atexit
 import contextvars
 import logging
+import threading
+import weakref
 from collections.abc import Coroutine
 from typing import Final
 
@@ -28,7 +30,7 @@ class LoggingTask(TypedDict):
     the original task's context.
     """
 
-    coroutine: Coroutine
+    coroutine: Coroutine[object, object, object]
     context: contextvars.Context
 
 
@@ -46,20 +48,21 @@ class LoggingWorker:
         timeout: float = LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
         max_queue_size: int = LOGGING_WORKER_MAX_QUEUE_SIZE,
         concurrency: int = LOGGING_WORKER_CONCURRENCY,
+        register_atexit: bool = True,
     ):
         self.timeout = timeout
         self.max_queue_size = max_queue_size
         self.concurrency = concurrency
         self._queue: asyncio.Queue[LoggingTask] | None = None
-        self._worker_task: asyncio.Task | None = None
-        self._running_tasks: set[asyncio.Task] = set()
-        self._sem: asyncio.Semaphore | None = None
+        self._worker_task: asyncio.Task[None] | None = None
+        self._running_tasks: set[asyncio.Task[None]] = set()  # mutable-ok: tracks live tasks for cancellation
         self._bound_loop: asyncio.AbstractEventLoop | None = None
+        self._stopping: bool = False
         self._last_aggressive_clear_time: float = 0.0
         self._aggressive_clear_in_progress: bool = False
 
-        # Register cleanup handler to flush remaining events on exit
-        atexit.register(self._flush_on_exit)
+        if register_atexit:
+            atexit.register(self._flush_on_exit)
 
     def _ensure_queue(self) -> None:
         """Initialize the queue if it doesn't exist or if event loop has changed."""
@@ -74,7 +77,6 @@ class LoggingWorker:
             verbose_logger.debug("LoggingWorker: Event loop changed, reinitializing queue and worker")
             # Clear old state - these are bound to the old loop
             self._queue = None
-            self._sem = None
             self._worker_task = None
             self._running_tasks.clear()
 
@@ -85,56 +87,53 @@ class LoggingWorker:
     def start(self) -> None:
         """Start the logging worker. Idempotent - safe to call multiple times."""
         self._ensure_queue()
-        if self._sem is None:
-            self._sem = asyncio.Semaphore(self.concurrency)
-        if self._worker_task is None or self._worker_task.done():
-            self._worker_task = asyncio.create_task(self._worker_loop())
 
-    async def _process_log_task(self, task: LoggingTask, sem: asyncio.Semaphore):
-        """Runs the logging task and handles cleanup. Releases semaphore when done."""
+    async def _process_log_task(self, task: LoggingTask) -> None:
+        """Run one logging task and update the queue completion counter."""
         try:
-            if self._queue is not None:
-                try:
-                    # Run the coroutine in its original context
-                    await asyncio.wait_for(
-                        task["context"].run(asyncio.create_task, task["coroutine"]),
-                        timeout=self.timeout,
-                    )
-                except Exception as e:
-                    verbose_logger.exception("LoggingWorker error: %s", e)
-                finally:
-                    self._queue.task_done()
+            await asyncio.wait_for(task["coroutine"], timeout=self.timeout)
+        except Exception as e:
+            verbose_logger.exception("LoggingWorker error: %s", e)
         finally:
-            # Always release semaphore, even if queue is None
-            sem.release()
+            if self._queue is not None:
+                self._queue.task_done()
 
-    async def _worker_loop(self) -> None:
-        """Main worker loop that gets tasks and schedules them to run concurrently."""
+    def _start_queued_tasks(self) -> None:
+        if self._queue is None or self._stopping:
+            return
         try:
-            if self._queue is None or self._sem is None:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        while len(self._running_tasks) < self.concurrency:
+            if not self._start_one_queued_task():
                 return
 
-            while True:
-                # Acquire semaphore before removing task from queue to prevent
-                # unbounded growth of waiting tasks
-                await self._sem.acquire()
-                try:
-                    task = await self._queue.get()
-                    # Track each spawned coroutine so we can cancel on shutdown.
-                    processing_task = asyncio.create_task(self._process_log_task(task, self._sem))
-                    self._running_tasks.add(processing_task)
-                    processing_task.add_done_callback(self._running_tasks.discard)
-                except Exception:
-                    # If task creation fails, release semaphore to prevent deadlock
-                    self._sem.release()
-                    raise
+    def _start_one_queued_task(self) -> bool:
+        if self._queue is None:
+            return False
+        try:
+            logging_task: Final = self._queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return False
 
-        except asyncio.CancelledError:
-            verbose_logger.debug("LoggingWorker cancelled during shutdown")
-            # Attempt to clear remaining items to prevent "never awaited" warnings
-            await self.clear_queue()
+        processing_task: Final = logging_task["context"].run(
+            asyncio.create_task,
+            self._process_log_task(logging_task),
+        )
+        self._running_tasks.add(processing_task)
+        self._worker_task = processing_task
+        processing_task.add_done_callback(self._processing_task_done)
+        return True
 
-    def enqueue(self, coroutine: Coroutine) -> None:
+    def _processing_task_done(self, task: asyncio.Task[None]) -> None:
+        self._running_tasks.discard(task)
+        if self._worker_task is task:
+            self._worker_task = next(iter(self._running_tasks), None)
+        self._start_queued_tasks()
+
+    def enqueue(self, coroutine: Coroutine[object, object, object]) -> None:
         """
         Add a coroutine to the logging queue.
         Hot path: never blocks, aggressively clears queue if full.
@@ -147,6 +146,7 @@ class LoggingWorker:
 
         try:
             self._queue.put_nowait(task)
+            self._start_queued_tasks()
         except asyncio.QueueFull:
             # Queue is full - handle it appropriately
             verbose_logger.exception("LoggingWorker queue is full")
@@ -330,7 +330,7 @@ class LoggingWorker:
         # Process all tasks concurrently for maximum speed
         await asyncio.gather(*[self._process_single_task(task) for task in tasks])
 
-    def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine):
+    def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine[object, object, object]) -> None:
         """
         Ensure the logging worker is initialized and enqueue the coroutine.
         """
@@ -340,13 +340,11 @@ class LoggingWorker:
     async def stop(self) -> None:
         """Stop the logging worker and clean up resources."""
         if self._worker_task is None and not self._running_tasks:
-            # No worker launched and no in-flight tasks to drain.
+            await self.clear_queue()
             return
 
-        tasks_to_cancel: Final[list[asyncio.Task]] = list(self._running_tasks)
-        if self._worker_task:
-            # Include the main worker loop so it stops fetching work.
-            tasks_to_cancel.append(self._worker_task)
+        self._stopping = True
+        tasks_to_cancel: Final[list[asyncio.Task[None]]] = list(self._running_tasks)
 
         for task in tasks_to_cancel:
             # Propagate cancellation to every pending task.
@@ -358,6 +356,8 @@ class LoggingWorker:
         self._worker_task = None
         # Drop references to completed tasks so we can restart cleanly.
         self._running_tasks.clear()
+        await self.clear_queue()
+        self._stopping = False
 
     async def flush(self) -> None:
         """Flush the logging queue.
@@ -519,6 +519,100 @@ class LoggingWorker:
         finally:
             loop.close()
 
+    def flush_on_exit(self) -> None:
+        self._flush_on_exit()
+
+
+class LoopAwareLoggingWorker:
+    def __init__(
+        self,
+        timeout: float = LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
+        max_queue_size: int = LOGGING_WORKER_MAX_QUEUE_SIZE,
+        concurrency: int = LOGGING_WORKER_CONCURRENCY,
+    ) -> None:
+        self.timeout = timeout
+        self.max_queue_size = max_queue_size
+        self.concurrency = concurrency
+        self._workers: dict[  # mutable-ok: registry is updated as event loops appear and close
+            int,
+            tuple[weakref.ReferenceType[asyncio.AbstractEventLoop], LoggingWorker],
+        ] = {}
+        self._lock = threading.Lock()
+        atexit.register(self._flush_on_exit)
+
+    def _worker_for_current_loop(self, *, create: bool = True) -> LoggingWorker | None:
+        try:
+            loop: Final = asyncio.get_running_loop()
+        except RuntimeError:
+            return None
+
+        with self._lock:
+            stale_loop_ids: Final = tuple(
+                loop_id
+                for loop_id, (loop_ref, _worker) in self._workers.items()
+                if (tracked_loop := loop_ref()) is None or tracked_loop.is_closed()
+            )
+            stale_workers: Final = tuple(self._workers.pop(loop_id)[1] for loop_id in stale_loop_ids)
+            worker_entry: Final = self._workers.get(id(loop))
+            worker: LoggingWorker | None = (
+                worker_entry[1] if worker_entry is not None and worker_entry[0]() is loop else None
+            )
+            if worker is None and create:
+                worker = LoggingWorker(
+                    timeout=self.timeout,
+                    max_queue_size=self.max_queue_size,
+                    concurrency=self.concurrency,
+                    register_atexit=False,
+                )
+                self._workers[id(loop)] = (weakref.ref(loop), worker)
+
+        for stale_worker in stale_workers:
+            stale_worker.flush_on_exit()
+        return worker
+
+    def start(self) -> None:
+        worker: Final = self._worker_for_current_loop()
+        if worker is not None:
+            worker.start()
+
+    def enqueue(self, coroutine: Coroutine[object, object, object]) -> None:
+        worker: Final = self._worker_for_current_loop()
+        if worker is not None:
+            worker.enqueue(coroutine)
+
+    def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine[object, object, object]) -> None:
+        worker: Final = self._worker_for_current_loop()
+        if worker is not None:
+            worker.ensure_initialized_and_enqueue(async_coroutine)
+
+    async def stop(self) -> None:
+        loop: Final = asyncio.get_running_loop()
+        worker: Final = self._worker_for_current_loop(create=False)
+        if worker is None:
+            return
+
+        await worker.stop()
+        with self._lock:
+            worker_entry: Final = self._workers.get(id(loop))
+            if worker_entry is not None and worker_entry[0]() is loop:
+                self._workers.pop(id(loop))
+
+    async def flush(self) -> None:
+        worker: Final = self._worker_for_current_loop(create=False)
+        if worker is not None:
+            await worker.flush()
+
+    async def clear_queue(self) -> None:
+        worker: Final = self._worker_for_current_loop(create=False)
+        if worker is not None:
+            await worker.clear_queue()
+
+    def _flush_on_exit(self) -> None:
+        with self._lock:
+            workers: Final = tuple(worker for _loop_ref, worker in self._workers.values())
+        for worker in workers:
+            worker.flush_on_exit()
+
 
 # Global instance for backward compatibility
-GLOBAL_LOGGING_WORKER: Final = LoggingWorker()
+GLOBAL_LOGGING_WORKER: Final = LoopAwareLoggingWorker()

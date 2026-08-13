@@ -6,12 +6,17 @@ import asyncio
 import contextvars
 import io
 import logging
+import queue
+import threading
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from litellm.constants import LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS
-from litellm.litellm_core_utils.logging_worker import LoggingWorker
+from litellm.litellm_core_utils.logging_worker import (
+    LoggingWorker,
+    LoopAwareLoggingWorker,
+)
 
 
 class TestLoggingWorker:
@@ -26,27 +31,19 @@ class TestLoggingWorker:
     async def test_graceful_shutdown_with_clear_queue(self, logging_worker):
         """Test that cancellation triggers clear_queue to prevent 'never awaited' warnings."""
         # Mock the clear_queue method to verify it's called during cancellation
-        with patch.object(
-            logging_worker, "clear_queue", new_callable=AsyncMock
-        ) as mock_clear_queue:
-            # Start the worker
-            logging_worker.start()
+        with patch.object(logging_worker, "clear_queue", new_callable=AsyncMock) as mock_clear_queue:
+            started = asyncio.Event()
 
-            # Give it a moment to start
-            await asyncio.sleep(0.1)
+            async def wait_until_cancelled():
+                started.set()
+                await asyncio.Event().wait()
 
-            # Cancel the worker task to simulate shutdown
-            if logging_worker._worker_task:
-                logging_worker._worker_task.cancel()
+            logging_worker.ensure_initialized_and_enqueue(wait_until_cancelled())
 
-                # Wait for the task to handle the cancellation
-                try:
-                    await logging_worker._worker_task
-                except asyncio.CancelledError:
-                    # Expected during cancellation
-                    pass
+            await started.wait()
 
-            # Verify that clear_queue was called during cancellation
+            await logging_worker.stop()
+
             mock_clear_queue.assert_called_once()
 
     @pytest.mark.asyncio
@@ -122,9 +119,7 @@ class TestLoggingWorker:
     async def test_worker_handles_cancellation_gracefully(self, logging_worker):
         """Test that the worker handles cancellation without throwing exceptions."""
         # Mock verbose_logger to capture debug messages
-        with patch(
-            "litellm.litellm_core_utils.logging_worker.verbose_logger"
-        ) as mock_logger:
+        with patch("litellm.litellm_core_utils.logging_worker.verbose_logger") as mock_logger:
             # Start the worker
             logging_worker.start()
 
@@ -141,6 +136,29 @@ class TestLoggingWorker:
                 if "LoggingWorker cancelled during shutdown" in str(call)
             ]
             assert len(debug_calls) >= 0  # May be 0 if no cancellation occurred
+
+    @pytest.mark.asyncio
+    async def test_stop_drains_queue_without_leaving_runners(self):
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10, concurrency=1)
+        started = asyncio.Event()
+        queued_ran = False
+
+        async def wait_until_cancelled() -> None:
+            started.set()
+            await asyncio.Event().wait()
+
+        async def queued_task() -> None:
+            nonlocal queued_ran
+            queued_ran = True
+
+        worker.ensure_initialized_and_enqueue(wait_until_cancelled())
+        worker.ensure_initialized_and_enqueue(queued_task())
+        await started.wait()
+
+        await worker.stop()
+
+        assert queued_ran is True
+        assert worker._running_tasks == set()
 
     @pytest.mark.asyncio
     async def test_enqueue_and_process_single_item(self, logging_worker):
@@ -187,33 +205,34 @@ class TestLoggingWorker:
     async def test_queue_full_handling(self, logging_worker):
         """Test that queue full condition is handled gracefully."""
         # Create a worker with very small queue size
-        small_worker = LoggingWorker(timeout=1.0, max_queue_size=2)
+        small_worker = LoggingWorker(timeout=1.0, max_queue_size=2, concurrency=0)
         small_worker._ensure_queue()
 
         # Mock verbose_logger to capture exception messages
-        with patch(
-            "litellm.litellm_core_utils.logging_worker.verbose_logger"
-        ) as mock_logger:
+        with patch("litellm.litellm_core_utils.logging_worker.verbose_logger") as mock_logger:
             # Fill the queue beyond capacity
-            mock_coro = AsyncMock()
+            async def mock_coro() -> None:
+                pass
+
+            pending_coroutines = []
             for _ in range(5):  # More than max_queue_size of 2
-                small_worker.enqueue(mock_coro())
+                coroutine = mock_coro()
+                pending_coroutines.append(coroutine)
+                small_worker.enqueue(coroutine)
 
             # Should have logged queue full exceptions
-            exception_calls = [
-                call
-                for call in mock_logger.exception.call_args_list
-                if "queue is full" in str(call)
-            ]
+            exception_calls = [call for call in mock_logger.exception.call_args_list if "queue is full" in str(call)]
             assert len(exception_calls) > 0
+
+        await small_worker.clear_queue()
+        for coroutine in pending_coroutines:
+            coroutine.close()
 
     @pytest.mark.asyncio
     async def test_context_propagation(self, logging_worker):
         """Test that enqueued tasks execute in their original context."""
         # Create a context variable for testing
-        test_context_var: contextvars.ContextVar[str] = contextvars.ContextVar(
-            "test_context_var"
-        )
+        test_context_var: contextvars.ContextVar[str] = contextvars.ContextVar("test_context_var")
 
         # Track results from multiple tasks using asyncio.Event for synchronization
         task_results = []
@@ -291,16 +310,12 @@ class TestLoggingWorker:
         task_results.sort(key=lambda x: x["task_id"])
 
         # Verify that each task saw its own context
-        assert (
-            len(task_results) == 3
-        ), f"Expected 3 results, got {len(task_results)}: {task_results}"
+        assert len(task_results) == 3, f"Expected 3 results, got {len(task_results)}: {task_results}"
 
         # Task 1 should see "context_1"
         task1_result = next((r for r in task_results if r["task_id"] == "task_1"), None)
         assert task1_result is not None, "Task 1 result not found"
-        assert (
-            task1_result["context_accessible"] is True
-        ), "Task 1 should have access to context variable"
+        assert task1_result["context_accessible"] is True, "Task 1 should have access to context variable"
         assert (
             task1_result["context_value"] == "context_1"
         ), f"Task 1 should see 'context_1', got: {task1_result['context_value']}"
@@ -308,9 +323,7 @@ class TestLoggingWorker:
         # Task 2 should see "context_2"
         task2_result = next((r for r in task_results if r["task_id"] == "task_2"), None)
         assert task2_result is not None, "Task 2 result not found"
-        assert (
-            task2_result["context_accessible"] is True
-        ), "Task 2 should have access to context variable"
+        assert task2_result["context_accessible"] is True, "Task 2 should have access to context variable"
         assert (
             task2_result["context_value"] == "context_2"
         ), f"Task 2 should see 'context_2', got: {task2_result['context_value']}"
@@ -318,9 +331,7 @@ class TestLoggingWorker:
         # Task 3 should not have access to the context variable
         task3_result = next((r for r in task_results if r["task_id"] == "task_3"), None)
         assert task3_result is not None, "Task 3 result not found"
-        assert (
-            task3_result["context_accessible"] is False
-        ), "Task 3 should not have access to context variable"
+        assert task3_result["context_accessible"] is False, "Task 3 should not have access to context variable"
 
     @pytest.mark.asyncio
     async def test_semaphore_concurrency_limit(self):
@@ -413,3 +424,69 @@ class TestLoggingWorker:
         assert worker2._bound_loop is not None
 
         await worker2.stop()
+
+
+def test_loop_aware_worker_keeps_event_loop_queues_isolated():
+    worker = LoopAwareLoggingWorker(timeout=1.0, max_queue_size=10)
+    ready = threading.Barrier(2)
+    processed: queue.Queue[int] = queue.Queue()
+    errors: queue.Queue[BaseException | dict[str, object]] = queue.Queue()
+
+    def run_worker(index: int) -> None:
+        loop = asyncio.new_event_loop()
+        loop.set_exception_handler(lambda _loop, context: errors.put(context))
+        ready.wait()
+
+        async def run() -> None:
+            completed = asyncio.Event()
+
+            async def record_and_complete() -> None:
+                processed.put(index)
+                completed.set()
+
+            worker.ensure_initialized_and_enqueue(record_and_complete())
+            await asyncio.wait_for(completed.wait(), timeout=2.0)
+            await worker.flush()
+            await worker.stop()
+
+        try:
+            loop.run_until_complete(run())
+        except BaseException as exc:
+            errors.put(exc)
+        finally:
+            loop.close()
+
+    threads = tuple(threading.Thread(target=run_worker, args=(index,)) for index in range(2))
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5.0)
+
+    assert all(not thread.is_alive() for thread in threads)
+    collected_errors = tuple(errors.get_nowait() for _ in range(errors.qsize()))
+    processed_indexes = tuple(processed.get_nowait() for _ in range(processed.qsize()))
+    assert collected_errors == ()
+    assert sorted(processed_indexes) == [0, 1]
+    assert worker._workers == {}
+
+
+def test_loop_aware_worker_does_not_strand_tasks_when_event_loops_close():
+    worker = LoopAwareLoggingWorker(timeout=1.0, max_queue_size=10)
+    errors: queue.Queue[dict[str, object]] = queue.Queue()
+
+    async def noop() -> None:
+        pass
+
+    for _ in range(2):
+
+        async def run() -> None:
+            worker.ensure_initialized_and_enqueue(noop())
+            await asyncio.sleep(0)
+
+        loop = asyncio.new_event_loop()
+        loop.set_exception_handler(lambda _loop, context: errors.put(context))
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(run())
+        loop.close()
+
+    assert errors.empty()
