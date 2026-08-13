@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Final, TypeAlias
 
 from fastapi import Request, Response
 from fastapi.responses import StreamingResponse
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
@@ -34,40 +34,40 @@ _JsonList: TypeAlias = list[object]
 
 
 class _OutputItem(TypedDict, total=False):
-    id: str
-    content: Sequence[object]
+    id: ReadOnly[str]
+    content: ReadOnly[Sequence[object]]
 
 
 class _TerminalResponse(TypedDict, total=False):
-    status: ResponsesAPIStatus
-    error: _JsonDict
-    usage: _JsonDict
-    reasoning: _JsonDict
-    tool_choice: object
-    tools: _JsonList
-    model: str
-    instructions: str
-    temperature: float
-    top_p: float
-    max_output_tokens: int
-    previous_response_id: str
-    text: _JsonDict
-    truncation: str
-    parallel_tool_calls: bool
-    user: str
-    store: bool
-    incomplete_details: _JsonDict
-    output: Sequence[_OutputItem]
+    status: ReadOnly[ResponsesAPIStatus]
+    error: ReadOnly[_JsonDict]
+    usage: ReadOnly[_JsonDict]
+    reasoning: ReadOnly[_JsonDict]
+    tool_choice: ReadOnly[object]
+    tools: ReadOnly[_JsonList]
+    model: ReadOnly[str]
+    instructions: ReadOnly[str]
+    temperature: ReadOnly[float]
+    top_p: ReadOnly[float]
+    max_output_tokens: ReadOnly[int]
+    previous_response_id: ReadOnly[str]
+    text: ReadOnly[_JsonDict]
+    truncation: ReadOnly[str]
+    parallel_tool_calls: ReadOnly[bool]
+    user: ReadOnly[str]
+    store: ReadOnly[bool]
+    incomplete_details: ReadOnly[_JsonDict]
+    output: ReadOnly[Sequence[_OutputItem]]
 
 
 class _StreamEvent(TypedDict, total=False):
-    type: str
-    item: _OutputItem
-    item_id: str
-    content_index: int
-    delta: str
-    part: object
-    response: _TerminalResponse
+    type: ReadOnly[str]
+    item: ReadOnly[_OutputItem]
+    item_id: ReadOnly[str]
+    content_index: ReadOnly[int]
+    delta: ReadOnly[str]
+    part: ReadOnly[object]
+    response: ReadOnly[_TerminalResponse]
 
 
 class _StreamEventParser:
@@ -237,7 +237,10 @@ async def background_streaming_task(
                             if item_id and item_id in output_items:
                                 # Update the output item with new content
                                 added_item = output_items[item_id]
-                                added_item["content"] = (*added_item.get("content", ()), content_part)
+                                output_items[item_id] = {
+                                    **added_item,
+                                    "content": (*added_item.get("content", ()), content_part),
+                                }
                                 state_dirty = True
 
                         elif event_type == "response.output_text.delta":
@@ -277,10 +280,13 @@ async def background_streaming_task(
                                 if "content" in done_item:
                                     content_list = done_item["content"]
                                     if content_index < len(content_list):
-                                        done_item["content"] = tuple(
-                                            content_part if part_index == content_index else existing_part
-                                            for part_index, existing_part in enumerate(content_list)
-                                        )
+                                        output_items[item_id] = {
+                                            **done_item,
+                                            "content": tuple(
+                                                content_part if part_index == content_index else existing_part
+                                                for part_index, existing_part in enumerate(content_list)
+                                            ),
+                                        }
                                 state_dirty = True
 
                         elif event_type == "response.output_item.done":

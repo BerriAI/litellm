@@ -142,7 +142,7 @@ export default function TeamMemberTab({
       ),
       key: "spend",
       render: (_: unknown, record: Member) => (
-        <MoneyCell value={getUserCurrentCycleSpend(record.user_id)} decimals={4} />
+        <MoneyCell value={getUserCurrentCycleSpend(record.user_id)} decimals={2} />
       ),
     },
     {
@@ -155,13 +155,13 @@ export default function TeamMemberTab({
         </Space>
       ),
       key: "total_spend",
-      render: (_: unknown, record: Member) => <MoneyCell value={getUserTotalSpend(record.user_id)} decimals={4} />,
+      render: (_: unknown, record: Member) => <MoneyCell value={getUserTotalSpend(record.user_id)} decimals={2} />,
     },
     {
       title: "Team Member Budget (USD)",
       key: "budget",
       render: (_: unknown, record: Member) => (
-        <MoneyCell value={getUserBudget(record.user_id)} decimals={4} emptyText="Unlimited" showZero />
+        <MoneyCell value={getUserBudget(record.user_id)} decimals={2} emptyText="Unlimited" showZero />
       ),
     },
     {

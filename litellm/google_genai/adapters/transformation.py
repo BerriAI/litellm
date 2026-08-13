@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias, cast
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm import verbose_logger
 from litellm.litellm_core_utils.json_validation_rule import normalize_tool_schema
@@ -41,57 +41,57 @@ _JsonDictList: TypeAlias = list[_JsonDict]
 
 
 class _ToolCallAccumulator(TypedDict):
-    name: str
-    arguments: str
+    name: ReadOnly[str]
+    arguments: ReadOnly[str]
 
 
 class _GenAIFunctionCall(TypedDict):
-    name: str
-    args: Mapping[str, object]
+    name: ReadOnly[str]
+    args: ReadOnly[Mapping[str, object]]
 
 
 class _GenAIPart(TypedDict, total=False):
-    text: str
-    functionCall: _GenAIFunctionCall
+    text: ReadOnly[str]
+    functionCall: ReadOnly[_GenAIFunctionCall]
 
 
 class _GenAIFunctionResponse(TypedDict, total=False):
-    name: str
-    response: object
+    name: ReadOnly[str]
+    response: ReadOnly[object]
 
 
 class _GenAIRequestFunctionCall(TypedDict, total=False):
-    name: str
-    args: Mapping[str, object]
+    name: ReadOnly[str]
+    args: ReadOnly[Mapping[str, object]]
 
 
 class _GenAIContentPart(TypedDict, total=False):
-    text: str
-    inline_data: Mapping[str, str]
-    functionResponse: _GenAIFunctionResponse
-    functionCall: _GenAIRequestFunctionCall
+    text: ReadOnly[str]
+    inline_data: ReadOnly[Mapping[str, str]]
+    functionResponse: ReadOnly[_GenAIFunctionResponse]
+    functionCall: ReadOnly[_GenAIRequestFunctionCall]
 
 
 class _GenAIFunctionDeclaration(TypedDict, total=False):
-    name: str
-    description: str
-    parametersJsonSchema: object
+    name: ReadOnly[str]
+    description: ReadOnly[str]
+    parametersJsonSchema: ReadOnly[object]
 
 
 class _GenAITool(TypedDict, total=False):
-    functionDeclarations: Sequence[_GenAIFunctionDeclaration]
+    functionDeclarations: ReadOnly[Sequence[_GenAIFunctionDeclaration]]
 
 
 class _GenAIFunctionCallingConfig(TypedDict, total=False):
-    mode: str
+    mode: ReadOnly[str]
 
 
 class _GenAIToolConfig(TypedDict, total=False):
-    functionCallingConfig: _GenAIFunctionCallingConfig
+    functionCallingConfig: ReadOnly[_GenAIFunctionCallingConfig]
 
 
 class _GenAISystemInstruction(TypedDict, total=False):
-    parts: Sequence[Mapping[str, str]]
+    parts: ReadOnly[Sequence[Mapping[str, str]]]
 
 
 _EMPTY_STR_MAPPING: Final[Mapping[str, str]] = MappingProxyType({})
@@ -748,11 +748,11 @@ class GoogleGenAIAdapter:
                 verbose_logger.debug("Skipping empty tool call chunk for index: %s", tool_call_index)
                 continue
 
-            if function_name:
-                wrapper.accumulated_tool_calls[tool_call_index]["name"] = function_name
-
-            if args_chunk:
-                wrapper.accumulated_tool_calls[tool_call_index]["arguments"] += args_chunk
+            previous_data: _ToolCallAccumulator = wrapper.accumulated_tool_calls[tool_call_index]
+            wrapper.accumulated_tool_calls[tool_call_index] = _ToolCallAccumulator(
+                name=function_name or previous_data["name"],
+                arguments=previous_data["arguments"] + (args_chunk or ""),
+            )
 
             # Attempt to parse and emit a complete tool call
             accumulated_data = wrapper.accumulated_tool_calls[tool_call_index]

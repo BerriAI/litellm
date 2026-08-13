@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
 
 import httpx
 from httpx._types import FileTypes, RequestFiles
-from typing_extensions import NotRequired
+from typing_extensions import NotRequired, ReadOnly
 
 import litellm
 from litellm.constants import RUNWAYML_DEFAULT_API_VERSION
@@ -34,28 +34,38 @@ else:
 
 
 class _RunwayTaskResponse(TypedDict, total=False):
-    id: str
-    status: str
-    createdAt: str
-    completedAt: str
-    output: Sequence[str] | str
-    progress: int
-    failureCode: str
-    failure: str
+    id: ReadOnly[str]
+    status: ReadOnly[str]
+    createdAt: ReadOnly[str]
+    completedAt: ReadOnly[str]
+    output: ReadOnly[Sequence[str] | str]
+    progress: ReadOnly[int]
+    failureCode: ReadOnly[str]
+    failure: ReadOnly[str]
 
 
 class _RunwayVideoData(TypedDict):
-    id: str
-    object: Literal["video"]
-    status: str
-    created_at: int
-    output_url: NotRequired[str]
-    completed_at: NotRequired[int]
-    progress: NotRequired[int]
-    error: NotRequired[Mapping[str, str]]
-    model: NotRequired[str]
-    size: NotRequired[str]
-    seconds: NotRequired[str]
+    id: ReadOnly[str]
+    object: ReadOnly[Literal["video"]]
+    status: ReadOnly[str]
+    created_at: ReadOnly[int]
+    output_url: ReadOnly[NotRequired[str]]
+    completed_at: ReadOnly[NotRequired[int]]
+    progress: ReadOnly[NotRequired[int]]
+    error: ReadOnly[NotRequired[Mapping[str, str]]]
+    model: ReadOnly[NotRequired[str]]
+    size: ReadOnly[NotRequired[str]]
+    seconds: ReadOnly[NotRequired[str]]
+
+
+class _RunwayVideoOptionalData(TypedDict, total=False):
+    output_url: ReadOnly[str]
+    completed_at: ReadOnly[int]
+    progress: ReadOnly[int]
+    error: ReadOnly[Mapping[str, str]]
+    model: ReadOnly[str]
+    size: ReadOnly[str]
+    seconds: ReadOnly[str]
 
 
 class RunwayMLVideoConfig(BaseVideoConfig):
@@ -254,40 +264,61 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         """
         response_data: Final[_RunwayTaskResponse] = self._parse_task_response(raw_response)
 
+        # RunwayML returns output as array of URLs when task succeeds
+        output: Final = response_data.get("output")
+        output_kwargs: Final = (
+            _RunwayVideoOptionalData(output_url=output if isinstance(output, str) else output[0])
+            if output
+            else _RunwayVideoOptionalData()
+        )
+        completed_at_kwargs: Final = (
+            _RunwayVideoOptionalData(completed_at=self._parse_runway_timestamp(response_data.get("completedAt")))
+            if "completedAt" in response_data
+            else _RunwayVideoOptionalData()
+        )
+        error_kwargs: Final = (
+            _RunwayVideoOptionalData(
+                error={
+                    "code": response_data.get("failureCode", "unknown"),
+                    "message": response_data.get("failure", "Video generation failed"),
+                }
+            )
+            if "failureCode" in response_data or "failure" in response_data
+            else _RunwayVideoOptionalData()
+        )
+
+        # Add model and size info if available from request
+        model_kwargs: Final = (
+            _RunwayVideoOptionalData(model=request_data["model"])
+            if request_data and "model" in request_data
+            else _RunwayVideoOptionalData()
+        )
+        # Convert ratio back to size format
+        ratio: Final = request_data.get("ratio") if request_data else None
+        size_kwargs: Final = (
+            _RunwayVideoOptionalData(size=ratio.replace(":", "x"))
+            if isinstance(ratio, str) and ":" in ratio
+            else _RunwayVideoOptionalData()
+        )
+        seconds_kwargs: Final = (
+            _RunwayVideoOptionalData(seconds=str(request_data["duration"]))
+            if request_data and "duration" in request_data
+            else _RunwayVideoOptionalData()
+        )
+
         # Map RunwayML task response to VideoObject format
         video_data: Final[_RunwayVideoData] = {
             "id": response_data.get("id", ""),
             "object": "video",
             "status": self._map_runway_status(response_data.get("status", "pending")),
             "created_at": self._parse_runway_timestamp(response_data.get("createdAt")),
+            **output_kwargs,
+            **completed_at_kwargs,
+            **error_kwargs,
+            **model_kwargs,
+            **size_kwargs,
+            **seconds_kwargs,
         }
-
-        # Add optional fields if present
-        if "output" in response_data and response_data["output"]:
-            # RunwayML returns output as array of URLs when task succeeds
-            output: Final = response_data["output"]
-            video_data["output_url"] = output if isinstance(output, str) else output[0]
-
-        if "completedAt" in response_data:
-            video_data["completed_at"] = self._parse_runway_timestamp(response_data.get("completedAt"))
-
-        if "failureCode" in response_data or "failure" in response_data:
-            video_data["error"] = {
-                "code": response_data.get("failureCode", "unknown"),
-                "message": response_data.get("failure", "Video generation failed"),
-            }
-
-        # Add model and size info if available from request
-        if request_data:
-            if "model" in request_data:
-                video_data["model"] = request_data["model"]
-            if "ratio" in request_data:
-                # Convert ratio back to size format
-                ratio: Final = request_data["ratio"]
-                if isinstance(ratio, str) and ":" in ratio:
-                    video_data["size"] = ratio.replace(":", "x")
-            if "duration" in request_data:
-                video_data["seconds"] = str(request_data["duration"])
 
         video_obj: Final = VideoObject.model_validate(video_data)
 
@@ -568,30 +599,44 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         """
         response_data: Final[_RunwayTaskResponse] = self._parse_task_response(raw_response)
 
+        output: Final = response_data.get("output")
+        output_kwargs: Final = (
+            _RunwayVideoOptionalData(output_url=output if isinstance(output, str) else output[0])
+            if output
+            else _RunwayVideoOptionalData()
+        )
+        completed_at_kwargs: Final = (
+            _RunwayVideoOptionalData(completed_at=self._parse_runway_timestamp(response_data.get("completedAt")))
+            if "completedAt" in response_data
+            else _RunwayVideoOptionalData()
+        )
+        progress_kwargs: Final = (
+            _RunwayVideoOptionalData(progress=response_data["progress"])
+            if "progress" in response_data
+            else _RunwayVideoOptionalData()
+        )
+        error_kwargs: Final = (
+            _RunwayVideoOptionalData(
+                error={
+                    "code": response_data.get("failureCode", "unknown"),
+                    "message": response_data.get("failure", "Video generation failed"),
+                }
+            )
+            if "failureCode" in response_data or "failure" in response_data
+            else _RunwayVideoOptionalData()
+        )
+
         # Map RunwayML task response to VideoObject format
         video_data: Final[_RunwayVideoData] = {
             "id": response_data.get("id", ""),
             "object": "video",
             "status": self._map_runway_status(response_data.get("status", "pending")),
             "created_at": self._parse_runway_timestamp(response_data.get("createdAt")),
+            **output_kwargs,
+            **completed_at_kwargs,
+            **progress_kwargs,
+            **error_kwargs,
         }
-
-        # Add optional fields if present
-        if "output" in response_data and response_data["output"]:
-            output: Final = response_data["output"]
-            video_data["output_url"] = output if isinstance(output, str) else output[0]
-
-        if "completedAt" in response_data:
-            video_data["completed_at"] = self._parse_runway_timestamp(response_data.get("completedAt"))
-
-        if "progress" in response_data:
-            video_data["progress"] = response_data["progress"]
-
-        if "failureCode" in response_data or "failure" in response_data:
-            video_data["error"] = {
-                "code": response_data.get("failureCode", "unknown"),
-                "message": response_data.get("failure", "Video generation failed"),
-            }
 
         video_obj: Final = VideoObject.model_validate(video_data)
 

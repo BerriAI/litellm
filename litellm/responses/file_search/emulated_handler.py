@@ -17,6 +17,8 @@ import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 
+from typing_extensions import ReadOnly
+
 from litellm._internal_context import is_internal_call
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -409,9 +411,9 @@ def _extract_tool_call_fields(tool_call: object, fallback_call_id: str) -> tuple
 
 
 class _FileSearchArguments(TypedDict, total=False):
-    queries: Sequence[str]
-    query: str
-    vector_store_id: str
+    queries: ReadOnly[Sequence[str]]
+    query: ReadOnly[str]
+    vector_store_id: ReadOnly[str]
 
 
 def _resolve_queries_from_args(args: _FileSearchArguments, input: object) -> Sequence[str]:

@@ -11,7 +11,7 @@ from typing import Final, TypedDict
 import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
-from typing_extensions import Required
+from typing_extensions import ReadOnly, Required
 
 import litellm
 from litellm._uuid import uuid
@@ -65,17 +65,17 @@ _CUSTOM_ID_RAW_LABEL_PREFIX: Final = "b32_"
 
 
 class _OpenAIBatchRequestBody(TypedDict, total=False):
-    model: str
-    messages: Sequence[AllMessageValues]
+    model: ReadOnly[str]
+    messages: ReadOnly[Sequence[AllMessageValues]]
 
 
 class _OpenAIBatchJsonlEntry(TypedDict, total=False):
-    custom_id: Required[object]
-    body: _OpenAIBatchRequestBody
+    custom_id: ReadOnly[Required[object]]
+    body: ReadOnly[_OpenAIBatchRequestBody]
 
 
 class _VertexBatchOutputRequest(TypedDict, total=False):
-    labels: Mapping[str, str]
+    labels: ReadOnly[Mapping[str, str]]
 
 
 class _VertexBatchResponse(GenerateContentResponseBody, total=False):
@@ -83,14 +83,14 @@ class _VertexBatchResponse(GenerateContentResponseBody, total=False):
 
 
 class _VertexBatchOutputRow(TypedDict, total=False):
-    request: _VertexBatchOutputRequest
-    status: str
-    processed_time: str
-    response: _VertexBatchResponse
+    request: ReadOnly[_VertexBatchOutputRequest]
+    status: ReadOnly[str]
+    processed_time: ReadOnly[str]
+    response: ReadOnly[_VertexBatchResponse]
 
 
 class _GcsObjectMetadata(TypedDict, total=False):
-    purpose: OpenAIFilesPurpose
+    purpose: ReadOnly[OpenAIFilesPurpose]
 
 
 class _GcsObjectResponse(GcsBucketResponse, total=False):
