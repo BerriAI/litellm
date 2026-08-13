@@ -1,6 +1,8 @@
 import React from "react";
-import { Typography, Select, Table, Tag, Button } from "antd";
+import { Typography, Select, Tag, Button } from "antd";
 import { DeleteOutlined } from "@ant-design/icons";
+import type { ColumnDef } from "@tanstack/react-table";
+import { DataTable } from "@/components/shared/DataTable";
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -21,44 +23,42 @@ interface PatternTableProps {
 }
 
 const PatternTable: React.FC<PatternTableProps> = ({ patterns, onActionChange, onRemove }) => {
-  const columns = [
+  const columns: ColumnDef<Pattern>[] = [
     {
-      title: "Type",
-      dataIndex: "type",
-      key: "type",
-      width: 100,
-      render: (type: string) => (
-        <Tag color={type === "prebuilt" ? "blue" : "green"}>{type === "prebuilt" ? "Prebuilt" : "Custom"}</Tag>
+      header: "Type",
+      accessorKey: "type",
+      size: 100,
+      cell: ({ row }) => (
+        <Tag color={row.original.type === "prebuilt" ? "blue" : "green"}>
+          {row.original.type === "prebuilt" ? "Prebuilt" : "Custom"}
+        </Tag>
       ),
     },
     {
-      title: "Pattern name",
-      dataIndex: "name",
-      key: "name",
-      render: (_: string, record: Pattern) => record.display_name || record.name,
+      header: "Pattern name",
+      accessorKey: "name",
+      cell: ({ row }) => row.original.display_name || row.original.name,
     },
     {
-      title: "Regex pattern",
-      dataIndex: "pattern",
-      key: "pattern",
-      render: (pattern: string) =>
-        pattern ? (
+      header: "Regex pattern",
+      accessorKey: "pattern",
+      cell: ({ row }) =>
+        row.original.pattern ? (
           <Text code style={{ fontSize: 12 }}>
-            {pattern.substring(0, 40)}...
+            {row.original.pattern.substring(0, 40)}...
           </Text>
         ) : (
           "-"
         ),
     },
     {
-      title: "Action",
-      dataIndex: "action",
-      key: "action",
-      width: 150,
-      render: (action: string, record: Pattern) => (
+      header: "Action",
+      accessorKey: "action",
+      size: 150,
+      cell: ({ row }) => (
         <Select
-          value={action}
-          onChange={(value) => onActionChange(record.id, value as "BLOCK" | "MASK")}
+          value={row.original.action}
+          onChange={(value) => onActionChange(row.original.id, value as "BLOCK" | "MASK")}
           style={{ width: 120 }}
           size="small"
         >
@@ -68,11 +68,11 @@ const PatternTable: React.FC<PatternTableProps> = ({ patterns, onActionChange, o
       ),
     },
     {
-      title: "",
-      key: "actions",
-      width: 100,
-      render: (_: any, record: Pattern) => (
-        <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={() => onRemove(record.id)}>
+      header: "",
+      id: "actions",
+      size: 100,
+      cell: ({ row }) => (
+        <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={() => onRemove(row.original.id)}>
           Delete
         </Button>
       ),
@@ -83,7 +83,7 @@ const PatternTable: React.FC<PatternTableProps> = ({ patterns, onActionChange, o
     return <div style={{ textAlign: "center", padding: "40px 0", color: "#999" }}>No patterns added.</div>;
   }
 
-  return <Table dataSource={patterns} columns={columns} rowKey="id" pagination={false} size="small" />;
+  return <DataTable data={patterns} columns={columns} getRowId={(row) => row.id} size="compact" />;
 };
 
 export default PatternTable;
