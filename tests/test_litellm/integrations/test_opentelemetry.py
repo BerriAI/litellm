@@ -6065,6 +6065,21 @@ class TestEndedParentSpanNotWritten(unittest.TestCase):
         with self.assertNoLogs("opentelemetry.sdk.trace", level="WARNING"):
             OpenTelemetry(tracer_provider=tracer_provider).safe_set_attribute(span, "gen_ai.request.model", "gpt-5")
 
+    def test_shared_safe_set_attribute_skips_ended_span(self):
+        from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import safe_set_attribute
+
+        tracer_provider = TracerProvider()
+        ended = tracer_provider.get_tracer(__name__).start_span(name="ended")
+        ended.end()
+        recording = tracer_provider.get_tracer(__name__).start_span(name="recording")
+
+        with self.assertNoLogs("opentelemetry.sdk.trace", level="WARNING"):
+            safe_set_attribute(ended, "llm.model_name", "gpt-5")
+        safe_set_attribute(recording, "llm.model_name", "gpt-5")
+        recording.end()
+
+        self.assertEqual((recording.attributes or {}).get("llm.model_name"), "gpt-5")
+
     def test_safe_set_attribute_still_writes_to_recording_span(self):
         tracer_provider = TracerProvider()
         span = tracer_provider.get_tracer(__name__).start_span(name="recording")
