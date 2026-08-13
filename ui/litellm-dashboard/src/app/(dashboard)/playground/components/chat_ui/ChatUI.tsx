@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  ArrowUp,
   Bot,
   Code2,
   Database,
@@ -48,11 +47,13 @@ import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api
 import { makeInteractionsRequest } from "../../llm_calls/interactions_api";
 import AdditionalModelSettings from "./AdditionalModelSettings";
 import { OPEN_AI_VOICE_SELECT_OPTIONS, OpenAIVoice } from "./chatConstants";
+import ChatComposer, { CodeInterpreterToggle } from "./ChatComposer";
 import ChatImageUpload from "./ChatImageUpload";
 import { createChatDisplayMessage, createChatMultimodalMessage } from "./ChatImageUtils";
 import CodeInterpreterTool from "./CodeInterpreterTool";
 import { generateCodeSnippet } from "@/components/chat_ui/CodeSnippets";
 import EndpointSelector from "./EndpointSelector";
+import { filterModelsForEndpoint, isModelCompatibleWithEndpoint } from "./EndpointUtils";
 import FilePreviewCard from "./FilePreviewCard";
 import ChatMessageBubble from "./ChatMessageBubble";
 import MCPEventsDisplay from "@/components/chat_ui/MCPEventsDisplay";
@@ -72,7 +73,6 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select as ShadcnSelect, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import {
@@ -505,14 +505,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
       }, 100);
     }
   }, [chatHistory]);
-
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault(); // Prevent default to avoid newline
-      handleSendMessage();
-    }
-    // If Shift+Enter is pressed, the default behavior (inserting a newline) will occur
-  };
 
   const handleCancelRequest = () => {
     if (abortControllerRef.current) {
@@ -1149,27 +1141,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
     NotificationsManager.success("Chat history cleared.");
   };
 
-  const currentEndpointServes = (mode: string): boolean => {
-    const modelEndpoint = getEndpointType(mode);
-    if (
-      endpointType === EndpointType.RESPONSES ||
-      endpointType === EndpointType.ANTHROPIC_MESSAGES ||
-      endpointType === EndpointType.INTERACTIONS
-    ) {
-      return modelEndpoint === endpointType || modelEndpoint === EndpointType.CHAT;
-    }
-    if (endpointType === EndpointType.IMAGE_EDITS) {
-      return modelEndpoint === endpointType || modelEndpoint === EndpointType.IMAGE;
-    }
-    return modelEndpoint === endpointType;
-  };
-
   const onModelChange = (value: string) => {
     setSelectedModel(value);
     setShowCustomModelInput(value === "custom");
 
     const model = modelInfo.find((option) => option.model_group === value);
-    if (model?.mode && !currentEndpointServes(model.mode)) {
+    if (model?.mode && !isModelCompatibleWithEndpoint(model, endpointType as EndpointType)) {
       setEndpointType(getEndpointType(model.mode));
     }
   };
@@ -1188,11 +1165,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   const supportsStreamingToggle = endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES;
+  const modelsForEndpoint = useMemo(
+    () => filterModelsForEndpoint(modelInfo, endpointType as EndpointType),
+    [modelInfo, endpointType],
+  );
   let modelEmptyText = "No models available for this key";
   if (modelLoadError) {
     modelEmptyText = "Unable to load models for this key";
   } else if (apiKeySource === "custom" && !apiKey.trim()) {
     modelEmptyText = "Enter a Virtual Key to load models";
+  } else if (modelInfo.length > 0 && modelsForEndpoint.length === 0) {
+    modelEmptyText = "No models available for this endpoint";
   }
 
   const inputPlaceholder =
@@ -1422,7 +1405,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       onValueChange={onModelChange}
                       options={[
                         { value: "custom", label: "Enter custom model" },
-                        ...modelInfo.map((model) => ({
+                        ...modelsForEndpoint.map((model) => ({
                           value: model.model_group,
                           label: model.model_group,
                           sublabel: model.mode ? `Mode: ${model.mode}` : undefined,
@@ -2004,27 +1987,24 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     </div>
                   )}
 
-                  {chatHistory.length === 0 && !isLoading && endpointType !== EndpointType.MCP && (
-                    <div className="mb-3 flex items-center gap-2 overflow-x-auto">
-                      {(endpointType === EndpointType.A2A_AGENTS
+                  <ChatComposer
+                    value={inputMessage}
+                    onChange={setInputMessage}
+                    onSubmit={handleSendMessage}
+                    onCancel={handleCancelRequest}
+                    placeholder={inputPlaceholder}
+                    disabled={isLoading}
+                    isLoading={isLoading}
+                    submitDisabled={sendDisabled}
+                    showSuggestions={chatHistory.length === 0 && !isLoading && endpointType !== EndpointType.MCP}
+                    suggestions={
+                      endpointType === EndpointType.A2A_AGENTS
                         ? ["What can you help me with?", "Tell me about yourself", "What tasks can you perform?"]
                         : ["Write me a poem", "Explain quantum computing", "Draft a polite email requesting a meeting"]
-                      ).map((prompt) => (
-                        <button
-                          key={prompt}
-                          type="button"
-                          className="shrink-0 cursor-pointer rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-600 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600"
-                          onClick={() => setInputMessage(prompt)} // lgtm[js/xss-through-dom]
-                        >
-                          {prompt}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="flex items-center gap-2">
-                    <div className="flex min-h-[44px] flex-1 items-center rounded-xl border border-gray-300 bg-white px-3 py-1">
-                      <div className="mr-2 flex shrink-0 items-center gap-1">
+                    }
+                    onSuggestionSelect={setInputMessage}
+                    tools={
+                      <>
                         {endpointType === EndpointType.RESPONSES && !responsesUploadedImage && (
                           <ResponsesImageUpload
                             responsesUploadedImage={responsesUploadedImage}
@@ -2042,47 +2022,24 @@ const ChatUI: React.FC<ChatUIProps> = ({
                           />
                         )}
                         {endpointType === EndpointType.RESPONSES && (
-                          <Tooltip>
-                            <TooltipTrigger
-                              render={
-                                <button
-                                  type="button"
-                                  className={`rounded-md p-1.5 transition-colors ${
-                                    codeInterpreter.enabled
-                                      ? "bg-blue-100 text-blue-600"
-                                      : "text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-                                  }`}
-                                  aria-label={
-                                    codeInterpreter.enabled
-                                      ? "Code Interpreter enabled (click to disable)"
-                                      : "Enable Code Interpreter"
-                                  }
-                                  onClick={() => {
-                                    codeInterpreter.toggle();
-                                    if (!codeInterpreter.enabled) {
-                                      NotificationsManager.success("Code Interpreter enabled!");
-                                    }
-                                  }}
-                                />
+                          <CodeInterpreterToggle
+                            enabled={codeInterpreter.enabled}
+                            onToggle={() => {
+                              codeInterpreter.toggle();
+                              if (!codeInterpreter.enabled) {
+                                NotificationsManager.success("Code Interpreter enabled!");
                               }
-                            >
-                              <Code2 className="size-4" />
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              {codeInterpreter.enabled
-                                ? "Code Interpreter enabled (click to disable)"
-                                : "Enable Code Interpreter"}
-                            </TooltipContent>
-                          </Tooltip>
+                            }}
+                          />
                         )}
-                      </div>
-
-                      {endpointType === EndpointType.MCP &&
+                      </>
+                    }
+                    body={
+                      endpointType === EndpointType.MCP &&
                       selectedMCPServers.length === 1 &&
                       selectedMCPServers[0] !== "__all__" &&
-                      selectedMCPDirectTool ? (
-                        <div className="max-h-48 min-h-[44px] flex-1 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50/50 p-2">
-                          {(() => {
+                      selectedMCPDirectTool
+                        ? (() => {
                             const rawSel = selectedMCPServers[0];
                             let toolPool: MCPTool[] = [];
                             if (rawSel.startsWith("toolset:")) {
@@ -2105,45 +2062,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
                                 Loading tool schema...
                               </div>
                             );
-                          })()}
-                        </div>
-                      ) : (
-                        <Textarea
-                          value={inputMessage}
-                          onChange={(event) => setInputMessage(event.target.value)}
-                          onKeyDown={handleKeyDown}
-                          placeholder={inputPlaceholder}
-                          disabled={isLoading}
-                          rows={1}
-                          className="min-h-0 flex-1 resize-none border-0 bg-transparent px-0 py-1 text-sm shadow-none focus-visible:ring-0"
-                        />
-                      )}
-
-                      <Button
-                        type="button"
-                        size="icon-sm"
-                        onClick={handleSendMessage}
-                        disabled={sendDisabled}
-                        className="ml-2 size-8 shrink-0 rounded-full bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-300 disabled:text-gray-500"
-                        aria-label="Send message"
-                      >
-                        <ArrowUp className="size-3.5" />
-                      </Button>
-                    </div>
-
-                    {isLoading && (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="border-red-200 bg-red-50 text-red-600 hover:bg-red-100"
-                        onClick={handleCancelRequest}
-                      >
-                        <Trash2 className="size-3.5" />
-                        Cancel
-                      </Button>
-                    )}
-                  </div>
+                          })()
+                        : undefined
+                    }
+                  />
                 </div>
               </>
             )}
