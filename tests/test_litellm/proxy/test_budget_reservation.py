@@ -2583,3 +2583,50 @@ async def test_streaming_slow_path_processes_and_yields_chunk(spend_counter_stat
 
     assert received == [{"content": "hi"}]
     streaming_logging_obj.async_post_call_streaming_hook.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/v1/messages/count_tokens",
+        "/anthropic/v1/messages/count_tokens",
+        "/v1beta/models/gemini-2.5-pro:countTokens",
+        "/models/gemini-2.5-pro:countTokens",
+    ],
+)
+async def test_token_counting_routes_never_reserve_budget(spend_counter_state, route):
+    """Token counting is free and never fires a cost callback, so a reservation
+    there is never reconciled and permanently bricks the key's spend counter."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-count-tokens",
+        spend=0.0,
+        max_budget=0.01,
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.01,
+    ):
+        for _ in range(2):
+            assert (
+                await reserve_budget_for_request(
+                    request_body=_request_body(),
+                    route=route,
+                    llm_router=None,
+                    valid_token=valid_token,
+                    team_object=None,
+                    user_object=None,
+                    prisma_client=None,
+                    user_api_key_cache=key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                is None
+            )
+
+    assert counter_cache.in_memory_cache.get_cache(key="spend:key:key-count-tokens") is None
+
+    # a real completion on the same key is still budget enforced
+    assert await _reserve(valid_token, 0.01, key_cache, proxy_logging_obj) is not None
