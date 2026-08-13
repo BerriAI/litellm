@@ -502,6 +502,18 @@ def test_is_bedrock_agent_control_plane_route():
             "PUT",
             "https://bedrock-agent.ap-northeast-2.amazonaws.com/knowledgebases/kb-123/datasources/ds-456/documents",
         ),
+        (
+            "knowledgebases/kb-123/datasources/ds-456/documents",
+            "POST",
+            "https://bedrock-agent-runtime.ap-northeast-2.amazonaws.com/"
+            "knowledgebases/kb-123/datasources/ds-456/documents",
+        ),
+        (
+            "knowledgebases/kb-123/datasources/ds-456/documents",
+            "DELETE",
+            "https://bedrock-agent-runtime.ap-northeast-2.amazonaws.com/"
+            "knowledgebases/kb-123/datasources/ds-456/documents",
+        ),
     ),
 )
 async def test_bedrock_agent_route_target_and_sigv4_method(

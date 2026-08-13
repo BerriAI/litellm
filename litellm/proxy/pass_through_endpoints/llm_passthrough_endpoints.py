@@ -1014,7 +1014,7 @@ async def bedrock_proxy_route(
         raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
     aws_region_name: Final = litellm.utils.get_secret(secret_name="AWS_REGION_NAME")
-    if _is_bedrock_agent_control_plane_route(endpoint=endpoint):
+    if request.method == "PUT" and _is_bedrock_agent_control_plane_route(endpoint=endpoint):
         base_target_url: Final = f"https://bedrock-agent.{aws_region_name}.amazonaws.com"
     elif _is_bedrock_agent_runtime_route(endpoint=endpoint):  # handle bedrock agents
         base_target_url: Final = f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
