@@ -189,3 +189,55 @@ async def test_create_views_creates_view_on_undefined_table_error():
     await create_missing_views(mock_db)
 
     mock_db.execute_raw.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_create_views_tolerates_concurrent_creator_and_continues():
+    """A replica that loses the CREATE race must not abort the remaining views.
+
+    Regression: two proxy pods booting on a fresh DB both see every view as
+    absent and both issue the CREATE. Postgres fails the loser with a
+    duplicate-object error, which propagated out of create_missing_views and
+    left every later view (MonthlyGlobalSpend, DailyTagSpend, ...) uncreated,
+    so /global/spend* 500'd for the life of the deployment.
+    """
+    from litellm.proxy.db.create_views import create_missing_views
+
+    mock_db = MagicMock()
+    mock_db.query_raw = AsyncMock(side_effect=Exception("relation does not exist"))
+    mock_db.execute_raw = AsyncMock(
+        side_effect=[Exception('relation "LiteLLM_VerificationTokenView" already exists')]
+        + [None] * 20
+    )
+
+    await create_missing_views(mock_db)
+
+    assert mock_db.execute_raw.await_count > 1, (
+        "lost the race on the first view and stopped; later views were never created"
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_views_reraises_genuine_ddl_error():
+    """An already-exists guard must not swallow real DDL failures."""
+    from litellm.proxy.db.create_views import create_missing_views
+
+    mock_db = MagicMock()
+    mock_db.query_raw = AsyncMock(side_effect=Exception("relation does not exist"))
+    mock_db.execute_raw = AsyncMock(side_effect=Exception("syntax error at or near"))
+
+    with pytest.raises(Exception, match="syntax error"):
+        await create_missing_views(mock_db)
+
+
+@pytest.mark.asyncio
+async def test_create_view_tolerating_race_swallows_only_already_exists():
+    from litellm.proxy.db.create_views import create_view_tolerating_race
+
+    mock_db = MagicMock()
+    mock_db.execute_raw = AsyncMock(side_effect=Exception("duplicate object"))
+    await create_view_tolerating_race(mock_db, "SomeView", "CREATE VIEW ...")
+
+    mock_db.execute_raw = AsyncMock(side_effect=Exception("permission denied"))
+    with pytest.raises(Exception, match="permission denied"):
+        await create_view_tolerating_race(mock_db, "SomeView", "CREATE VIEW ...")

@@ -10,6 +10,29 @@ _db = Any
 # 'undefined function' or 'column undefined_col referenced in query').
 _VIEW_NOT_FOUND_MARKERS: Final = ("does not exist", "no such table", "undefined table")
 
+# Markers for the inverse condition: another replica created the view between
+# our existence probe and our CREATE.
+_VIEW_ALREADY_EXISTS_MARKERS: Final = ("already exists", "duplicate object", "duplicate table")
+
+
+async def create_view_tolerating_race(db: _db, view_name: str, ddl: str) -> None:
+    """
+    Create a view, treating "a concurrent creator won" as success.
+
+    Every replica booting against the same fresh database observes the view as
+    absent and issues the CREATE; Postgres fails all but one with a
+    duplicate-object error. The desired end state is still reached, so losing
+    that race is success. Without this, the loser's exception propagates out of
+    a detached startup task and the remaining views are never created.
+    """
+    try:
+        await db.execute_raw(ddl)
+        verbose_logger.debug("%s Created!", view_name)
+    except Exception as e:
+        if not any(marker in str(e).lower() for marker in _VIEW_ALREADY_EXISTS_MARKERS):
+            raise
+        verbose_logger.debug("%s already created by a concurrent replica", view_name)
+
 
 async def create_missing_views(db: _db):
     """
@@ -34,7 +57,10 @@ async def create_missing_views(db: _db):
         if not any(marker in error_msg for marker in _VIEW_NOT_FOUND_MARKERS):
             raise
         # If an error occurs, the view does not exist, so create it
-        await db.execute_raw("""
+        await create_view_tolerating_race(
+            db,
+            "LiteLLM_VerificationTokenView",
+            """
                 CREATE VIEW "LiteLLM_VerificationTokenView" AS
                 SELECT
                 v.*,
@@ -46,9 +72,8 @@ async def create_missing_views(db: _db):
                 FROM "LiteLLM_VerificationToken" v
                 LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id
                 LEFT JOIN "LiteLLM_ProjectTable" p ON v.project_id = p.project_id;
-            """)
-
-        verbose_logger.debug("LiteLLM_VerificationTokenView Created!")
+            """,
+        )
 
     try:
         await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpend" LIMIT 1""")
@@ -218,9 +243,7 @@ async def create_missing_views(db: _db):
         ORDER BY total_spend DESC
         LIMIT 100;
         """
-        await db.execute_raw(query=sql_query)
-
-        verbose_logger.debug("Last30dTopEndUsersSpend Created!")
+        await create_view_tolerating_race(db, "Last30dTopEndUsersSpend", sql_query)
 
 
 async def should_create_missing_views(db: _db) -> bool:
