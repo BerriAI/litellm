@@ -320,10 +320,10 @@
   },
   "src/app/(dashboard)/guardrails-monitor/_components/GuardrailsOverview.tsx": {
     "no-nested-ternary": {
-      "count": 8
+      "count": 5
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/guardrails/_components/GuardrailTestPanel.tsx": {
@@ -1660,7 +1660,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/usage/_components/components/EntityUsage/EntityUsage.tsx": {
@@ -2268,11 +2268,6 @@
   "src/components/UsagePage/components/EntityUsage/TopKeyView.tsx": {
     "no-restricted-imports": {
       "count": 1
-    }
-  },
-  "src/components/UsagePage/components/KeyModelUsageView.tsx": {
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/components/UsagePage/utils/value_formatters.tsx": {
@@ -3926,14 +3921,6 @@
   "src/components/view_logs/logs_utils.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    }
-  },
-  "src/components/view_logs/table.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 2
     }
   },
   "src/components/view_model/model_name_display.tsx": {
