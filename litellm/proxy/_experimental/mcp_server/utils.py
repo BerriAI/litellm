@@ -8,10 +8,32 @@ import json
 import os
 import re
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping, MutableSequence
-from typing import Any, Final
+from collections.abc import Set as AbstractSet
+from typing import Any, Final, Protocol
 from urllib.parse import quote
 
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+
+class _McpServerLike(Protocol):
+    @property
+    def server_id(self) -> str: ...
+    @property
+    def server_name(self) -> str | None: ...
+    @property
+    def alias(self) -> str | None: ...
+    @property
+    def short_prefix(self) -> str | None: ...
+
+
+class McpServerPayloadLike(Protocol):
+    alias: str | None
+
+    @property
+    def server_name(self) -> str | None: ...
+    @property
+    def tool_name_to_display_name(self) -> Mapping[str, str] | None: ...
+
 
 # Constants
 #
@@ -102,7 +124,7 @@ def compute_short_server_prefix(server_id: str, attempt: int = 0) -> str:
     # at the end so the first emitted char comes from the high-order
     # bits of the digest (which is the position we constrain to be
     # alphabetic).
-    chars: Final = []
+    chars: Final[list[str]] = []
     for position in range(SHORT_MCP_TOOL_PREFIX_LENGTH):
         is_first_char = position == SHORT_MCP_TOOL_PREFIX_LENGTH - 1
         alphabet = _BASE52_ALPHA_ALPHABET if is_first_char else _BASE62_ALPHABET
@@ -176,34 +198,34 @@ def lookup_mcp_server_auth_in_headers(
 MCP_TOOL_ALLOWLIST_ENFORCED_KEY: Final = "tool_allowlist_enforced"
 
 
-def _parse_mcp_info_dict(mcp_info: Any) -> dict[str, Any] | None:
+def _parse_mcp_info_dict(mcp_info: object) -> Mapping[str, object] | None:
     if mcp_info is None:
         return None
     if isinstance(mcp_info, dict):
         return mcp_info
     if isinstance(mcp_info, str):
         try:
-            parsed: Final = json.loads(mcp_info)
+            parsed: Final[object] = json.loads(mcp_info)
         except (ValueError, TypeError):
             return None
         return parsed if isinstance(parsed, dict) else None
     return None
 
 
-def is_server_tool_allowlist_enforced(mcp_server: Any) -> bool:
+def is_server_tool_allowlist_enforced(mcp_server: object) -> bool:
     mcp_info: Final = _parse_mcp_info_dict(getattr(mcp_server, "mcp_info", None))
     if not mcp_info:
         return False
     return bool(mcp_info.get(MCP_TOOL_ALLOWLIST_ENFORCED_KEY))
 
 
-def server_applies_tool_allowlist(mcp_server: Any) -> bool:
+def server_applies_tool_allowlist(mcp_server: object) -> bool:
     """Whether server-level allowed_tools whitelist filtering is active."""
-    allowed_tools: Final = getattr(mcp_server, "allowed_tools", None) or []
+    allowed_tools: Final[object] = getattr(mcp_server, "allowed_tools", None) or []
     return is_server_tool_allowlist_enforced(mcp_server) or bool(allowed_tools)
 
 
-def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
+def validate_and_normalize_mcp_server_payload(payload: McpServerPayloadLike) -> None:
     """
     Validate and normalize MCP server payload fields (server_name, alias, and
     tool_name_to_display_name).
@@ -233,8 +255,8 @@ def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
         validate_tool_display_names(payload.tool_name_to_display_name)
 
     # Alias normalization and defaulting
-    alias = getattr(payload, "alias", None)
-    server_name: Final = getattr(payload, "server_name", None)
+    alias: str | None = getattr(payload, "alias", None)
+    server_name: Final[str | None] = getattr(payload, "server_name", None)
 
     if not alias and server_name:
         alias = normalize_server_name(server_name)
@@ -257,7 +279,7 @@ def add_server_prefix_to_name(name: str, server_name: str) -> str:
     )
 
 
-def get_server_prefix(server: Any) -> str:
+def get_server_prefix(server: object) -> str:
     """Return the prefix for a server.
 
     When the short-prefix mode is enabled (``LITELLM_USE_SHORT_MCP_TOOL_PREFIX``)
@@ -270,23 +292,26 @@ def get_server_prefix(server: Any) -> str:
     alias if present, else server_name, else server_id.
     """
     if is_short_mcp_tool_prefix_enabled():
-        cached: Final = getattr(server, "short_prefix", None)
+        cached: Final[str | None] = getattr(server, "short_prefix", None)
         if cached:
             return cached
-        server_id: Final = getattr(server, "server_id", None)
+        server_id: Final[str | None] = getattr(server, "server_id", None)
         if server_id:
             return compute_short_server_prefix(server_id)
 
-    if hasattr(server, "alias") and server.alias:
-        return server.alias
-    if hasattr(server, "server_name") and server.server_name:
-        return server.server_name
+    alias: Final[str | None] = getattr(server, "alias", None)
+    if alias:
+        return alias
+    server_name: Final[str | None] = getattr(server, "server_name", None)
+    if server_name:
+        return server_name
     if hasattr(server, "server_id"):
-        return server.server_id
+        fallback_server_id: Final[str] = getattr(server, "server_id", "")
+        return fallback_server_id
     return ""
 
 
-def iter_known_server_prefixes(server: Any) -> Iterator[str]:
+def iter_known_server_prefixes(server: _McpServerLike) -> Iterator[str]:
     """Yield every prefix form that may appear in tool names for ``server``.
 
     Always includes the *current* prefix returned by ``get_server_prefix``.
@@ -304,7 +329,7 @@ def iter_known_server_prefixes(server: Any) -> Iterator[str]:
     yield from _emit(get_server_prefix(server))
     yield from _emit(getattr(server, "short_prefix", None))
 
-    server_id: Final = getattr(server, "server_id", None)
+    server_id: Final[str | None] = getattr(server, "server_id", None)
     if server_id:
         try:
             yield from _emit(compute_short_server_prefix(server_id))
@@ -397,7 +422,7 @@ def match_known_server_prefix(name: str, known_prefixes: Iterable[str]) -> tuple
     return None
 
 
-def strip_known_server_prefix(name: str, server: Any | None) -> str:
+def strip_known_server_prefix(name: str, server: _McpServerLike | None) -> str:
     """Strip ``server``'s registered prefix from a prefixed tool/resource name.
 
     Unlike :func:`split_server_prefix_from_name`, which guesses the boundary at
@@ -420,7 +445,7 @@ def strip_known_server_prefix(name: str, server: Any | None) -> str:
 
 def is_tool_name_prefixed(
     tool_name: str,
-    known_server_prefixes: set | None = None,
+    known_server_prefixes: AbstractSet[str] | None = None,
 ) -> bool:
     """
     Check if tool name has a known MCP server prefix.
@@ -640,7 +665,7 @@ def parse_admin_env_vars(
         if raw is None:
             continue
         if hasattr(raw, "model_dump"):
-            entry = raw.model_dump()
+            entry: Mapping[str, object] = raw.model_dump()
         elif isinstance(raw, dict):
             entry = raw
         else:
