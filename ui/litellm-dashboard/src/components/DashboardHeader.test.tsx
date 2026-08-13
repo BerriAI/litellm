@@ -24,6 +24,7 @@ vi.mock("@/components/Navbar/BlogDropdown/BlogDropdown", () => ({ BlogDropdown: 
 vi.mock("@/components/Navbar/CommunityEngagementButtons/CommunityEngagementButtons", () => ({
   CommunityEngagementButtons: () => null,
 }));
+vi.mock("@/components/Navbar/NotificationsBell/NotificationsBell", () => ({ NotificationsBell: () => null }));
 vi.mock("@/components/Navbar/WorkerDropdown/WorkerDropdown", () => ({ default: () => null }));
 
 describe("DashboardHeader breadcrumb", () => {
@@ -52,5 +53,14 @@ describe("DashboardHeader breadcrumb", () => {
     expect(screen.getByRole("button", { name: /AI Gateway/i })).toBeInTheDocument();
     expect(screen.getByText("Logs")).toBeInTheDocument();
     expect(screen.queryByText("Observability")).not.toBeInTheDocument();
+  });
+
+  it("renders the tools divider centered rather than stretched to the top of the row", () => {
+    const { container } = render(<DashboardHeader page="logs" />);
+
+    const separators = container.querySelectorAll('[data-slot="separator"][data-orientation="vertical"]');
+    expect(separators).toHaveLength(1);
+    expect(separators[0].className).not.toMatch(/self-stretch/);
+    expect(separators[0].className).toContain("data-vertical:self-center");
   });
 });

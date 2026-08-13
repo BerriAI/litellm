@@ -2013,6 +2013,11 @@
       "count": 1
     }
   },
+  "src/components/Navbar/NotificationsBell/NotificationsBell.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
   "src/components/Navbar/UserDropdown/UserDropdown.tsx": {
     "no-restricted-imports": {
       "count": 2
