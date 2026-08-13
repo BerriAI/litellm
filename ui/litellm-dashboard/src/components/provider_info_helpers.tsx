@@ -120,6 +120,7 @@ export enum Providers {
   LLAMAFILE = "Llamafile",
   LM_STUDIO = "Lm Studio",
   LLAMA = "Meta Llama",
+  META = "Meta Model API",
   MARITALK = "Maritalk",
   MiniMax = "MiniMax",
   MistralAI = "Mistral AI",
@@ -227,6 +228,7 @@ export const provider_map: Record<string, string> = {
   LEMONADE: "lemonade",
   LLAMAFILE: "llamafile",
   LLAMA: "meta_llama",
+  META: "meta",
   LM_STUDIO: "lm_studio",
   MARITALK: "maritalk",
   MiniMax: "minimax",
@@ -281,7 +283,7 @@ export const provider_map: Record<string, string> = {
   ZAI: "zai",
 };
 
-const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle"]);
+const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle", "meta_llama"]);
 
 export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.A2A_Agent]: a2aAgentLogo.src,
@@ -327,6 +329,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.LAMBDA_AI]: lambdaLogo.src,
   [Providers.LM_STUDIO]: lmstudioLogo.src,
   [Providers.LLAMA]: metaLlamaLogo.src,
+  [Providers.META]: metaLlamaLogo.src,
   [Providers.MiniMax]: minimaxLogo.src,
   [Providers.MistralAI]: mistralLogo.src,
   [Providers.MOONSHOT]: moonshotLogo.src,
