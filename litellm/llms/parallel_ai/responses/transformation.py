@@ -96,10 +96,10 @@ class ParallelAIResponsesConfig(OpenAIResponsesAPIConfig):
         return super().transform_responses_api_request(
             model="parallel",
             input=input,
-            response_api_optional_request_params={
+            response_api_optional_request_params={  # mutable-ok: request payload
                 **response_api_optional_request_params,
-                "reasoning": {"effort": effort},
-            },  # mutable-ok: request payload
+                "reasoning": {"effort": effort},  # mutable-ok: request payload
+            },
             litellm_params=litellm_params,
             headers=headers,
         )
