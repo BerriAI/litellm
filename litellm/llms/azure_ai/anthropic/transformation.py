@@ -2,7 +2,7 @@
 Azure Anthropic transformation config - extends AnthropicConfig with Azure authentication
 """
 
-from typing import TYPE_CHECKING, Dict, Final, List, Optional, Union
+from typing import Final
 
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.azure.common_utils import BaseAzureLLM
