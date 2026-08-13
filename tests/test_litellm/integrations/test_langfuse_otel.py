@@ -211,7 +211,7 @@ class TestLangfuseOtelIntegration:
                 LangfuseSpanAttributes.GENERATION_NAME.value: "gen-name",
                 LangfuseSpanAttributes.GENERATION_ID.value: "gen-id",
                 LangfuseSpanAttributes.PARENT_OBSERVATION_ID.value: "parent-id",
-                LangfuseSpanAttributes.GENERATION_VERSION.value: "v1",
+                LangfuseSpanAttributes.VERSION.value: "t-ver",
                 LangfuseSpanAttributes.MASK_INPUT.value: True,
                 LangfuseSpanAttributes.MASK_OUTPUT.value: False,
                 LangfuseSpanAttributes.TRACE_USER_ID.value: "user-123",
@@ -221,8 +221,7 @@ class TestLangfuseOtelIntegration:
                 LangfuseSpanAttributes.TRACE_NAME.value: "trace-name",
                 LangfuseSpanAttributes.TRACE_ID.value: "traceid",  # stripped dashes
                 LangfuseSpanAttributes.TRACE_METADATA.value: json.dumps({"k": "v"}),
-                LangfuseSpanAttributes.TRACE_VERSION.value: "t-ver",
-                LangfuseSpanAttributes.TRACE_RELEASE.value: "rel-1",
+                LangfuseSpanAttributes.RELEASE.value: "rel-1",
                 LangfuseSpanAttributes.EXISTING_TRACE_ID.value: "existing-id",
                 LangfuseSpanAttributes.UPDATE_TRACE_KEYS.value: json.dumps(
                     ["key1", "key2"]
@@ -239,6 +238,52 @@ class TestLangfuseOtelIntegration:
             assert (
                 actual == expected
             ), "Mismatch between expected and actual OTEL attribute mapping."
+
+    @pytest.mark.parametrize(
+        "metadata, expected_version",
+        [
+            (
+                {"version": "v-observation", "trace_version": "v-trace"},
+                "v-trace",
+            ),
+            ({"trace_version": "v-trace"}, "v-trace"),
+            ({"version": "v-observation"}, "v-observation"),
+            ({"version": "v-observation", "trace_version": ""}, ""),
+            ({}, None),
+        ],
+        ids=[
+            "trace-version-wins-as-documented",
+            "trace-only",
+            "observation-version-is-the-fallback",
+            "empty-trace-version-is-not-absent",
+            "neither-key-emits-nothing",
+        ],
+    )
+    def test_version_emitted_on_langfuse_v4_key(self, metadata, expected_version):
+        kwargs = {"litellm_params": {"metadata": {"trace_release": "rel-9", **metadata}}}
+
+        with patch(
+            "litellm.integrations.arize._utils.safe_set_attribute"
+        ) as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(
+                MagicMock(), kwargs, None
+            )
+
+        emitted = {
+            call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list
+        }
+
+        if expected_version is None:
+            assert "langfuse.version" not in emitted
+        else:
+            assert emitted["langfuse.version"] == expected_version
+        assert emitted["langfuse.release"] == "rel-9"
+        for retired_key in (
+            "langfuse.generation.version",
+            "langfuse.trace.version",
+            "langfuse.trace.release",
+        ):
+            assert retired_key not in emitted
 
     def test_set_langfuse_specific_attributes_with_content(self):
         """Test that _set_langfuse_specific_attributes correctly sets observation.output with regular content response."""
