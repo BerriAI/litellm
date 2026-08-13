@@ -24,7 +24,13 @@ LIT002  Mutable-collection *construction*: a list/dict/set literal or comprehens
         `MappingProxyType(...)`) are not construction and pass, as does the value passed
         directly to a wrapper: it is frozen before it can escape, though anything
         mutable nested inside it still counts. Annotation-internal lists
-        (`Callable[[int], str]`) are exempt. Suppress with `# mutable-ok: <reason>`.
+        (`Callable[[int], str]`) are exempt, as is a dict display assigned directly
+        to a name annotated with a same-module TypedDict (`x: Final[MyTd] = {...}`,
+        bare or under `Final[...]`): it is the literal spelling of the `MyTd(...)`
+        call, which was never construction, and LIT012 keeps those fields ReadOnly.
+        Only the display itself is exempt (nested mutables still count), and a
+        TypedDict imported from another module is out of reach, exactly as in
+        LIT012. Suppress with `# mutable-ok: <reason>`.
 LIT003  noqa suppression without rule codes or without a reason.
         Required shape: `# noqa: TID251  # <reason>`
 LIT004  pyright/mypy ignore without bracketed codes or without a reason.
@@ -485,6 +491,33 @@ def _frozen_argument_ids(tree: ast.AST) -> frozenset[int]:
     )
 
 
+def _declared_type_name(annotation: ast.expr) -> str | None:
+    """The head name of an AnnAssign annotation, looking through a `Final[...]` wrapper."""
+    if isinstance(annotation, ast.Subscript) and _head_name(annotation.value) == "Final":
+        return _head_name(annotation.slice)
+    return _head_name(annotation)
+
+
+def _typeddict_assigned_value_ids(tree: ast.AST) -> frozenset[int]:
+    """ids() of every dict display assigned directly to a TypedDict-annotated name.
+
+    `x: MyTd = {...}` is the literal spelling of the `MyTd(...)` call, which was
+    never construction to begin with, and LIT012 keeps every same-module TypedDict
+    field ReadOnly, so neither spelling yields a payload the holder can grow. Only
+    the display itself is exempt; anything mutable nested inside it still trips
+    LIT002. A TypedDict imported from another module is invisible here, exactly as
+    in LIT012's base-class resolution.
+    """
+    typeddict_names = frozenset(cls.name for cls in _typeddict_classes(tree))
+    return frozenset(
+        id(node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.value, ast.Dict)
+        and _declared_type_name(node.annotation) in typeddict_names
+    )
+
+
 def _construction_kind(node: ast.expr) -> str | None:
     """Human label if `node` builds a mutable collection, else None."""
     if isinstance(node, ast.List):
@@ -509,10 +542,9 @@ def _construction_kind(node: ast.expr) -> str | None:
 
 
 def iter_construction_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
-    in_annotation = _annotation_node_ids(tree)
-    frozen_arguments = _frozen_argument_ids(tree)
+    exempt = _annotation_node_ids(tree) | _frozen_argument_ids(tree) | _typeddict_assigned_value_ids(tree)
     for node in ast.walk(tree):
-        if not isinstance(node, ast.expr) or id(node) in in_annotation or id(node) in frozen_arguments:
+        if not isinstance(node, ast.expr) or id(node) in exempt:
             continue
         kind = _construction_kind(node)
         if kind is None or node.lineno in comments.mutable_ok_lines:
@@ -522,8 +554,10 @@ def iter_construction_violations(path: Path, tree: ast.AST, comments: Comments) 
             f"mutable {kind}: this builds a collection that can be grown or rewritten. "
             f"Build it in one shot and freeze it -- a tuple/frozenset wrapping a generator "
             f"(`tuple(f(x) for x in xs)`), a tuple literal, a frozen dataclass / NamedTuple "
-            f"/ ReadOnly TypedDict, or (if it really must be dynamic) a MappingProxyType "
-            f"wrapping a dict literal or comprehension (suppress: `# mutable-ok: <reason>`)",
+            f"/ ReadOnly TypedDict (a dict literal assigned to a name annotated with a "
+            f"same-module TypedDict is exempt), or (if it really must be dynamic) a "
+            f"MappingProxyType wrapping a dict literal or comprehension "
+            f"(suppress: `# mutable-ok: <reason>`)",
         )
  
  

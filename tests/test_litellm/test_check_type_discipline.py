@@ -193,6 +193,37 @@ def test_lit002_fix_message_names_mappingproxytype(tmp_path):
     assert "MappingProxyType" in messages[0]
 
 
+_TYPEDDICT_PREFIX = (
+    "from typing import Final, NotRequired, ReadOnly, TypedDict\n"
+    "class Td(TypedDict):\n"
+    "    a: ReadOnly[int]\n"
+    "    b: NotRequired[ReadOnly[str]]\n"
+)
+
+
+def test_dict_literal_annotated_as_typeddict_is_exempt(tmp_path):
+    assert "LIT002" not in _codes(tmp_path, _TYPEDDICT_PREFIX + "x: Td = {'a': 1}\n")
+    assert "LIT002" not in _codes(tmp_path, _TYPEDDICT_PREFIX + "y: Final[Td] = {'a': 1, 'b': 's'}\n")
+
+
+def test_dict_literal_annotated_as_transitive_typeddict_subclass_is_exempt(tmp_path):
+    src = _TYPEDDICT_PREFIX + "class Sub(Td):\n    c: ReadOnly[int]\nz: Final[Sub] = {'a': 1, 'c': 2}\n"
+    assert "LIT002" not in _codes(tmp_path, src)
+
+
+def test_mutable_nested_inside_typeddict_literal_still_counts(tmp_path):
+    assert "LIT002" in _codes(tmp_path, _TYPEDDICT_PREFIX + "x: Td = {'a': 1, 'b': str([1])}\n")
+
+
+def test_dict_literal_annotated_as_imported_or_unknown_type_still_counts(tmp_path):
+    assert "LIT002" in _codes(tmp_path, "from other_module import Td\nx: Td = {'a': 1}\n")
+    assert "LIT002" in _codes(tmp_path, "from typing import Final\ny: Final = {'a': 1}\n")
+
+
+def test_typeddict_call_spelling_is_not_construction(tmp_path):
+    assert "LIT002" not in _codes(tmp_path, _TYPEDDICT_PREFIX + "x: Final[Td] = Td(a=1)\n")
+
+
 def test_mutable_ok_with_reason_suppresses_both_rules(tmp_path):
     codes = _codes(tmp_path, "x: dict[str, int] = {}  # mutable-ok: in-place buffer mutated hot path\n")
     assert "LIT001" not in codes
