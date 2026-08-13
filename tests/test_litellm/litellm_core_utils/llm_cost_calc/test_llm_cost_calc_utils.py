@@ -2913,10 +2913,7 @@ GEMINI_37_FLASH_LAUNCH_PRICING = [
 
 
 @pytest.mark.parametrize("model,input_cost,output_cost,cache_read_cost", GEMINI_37_FLASH_LAUNCH_PRICING)
-def test_gemini_37_flash_launch_pricing(model, input_cost, output_cost, cache_read_cost):
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
+def test_gemini_37_flash_launch_pricing(model, input_cost, output_cost, cache_read_cost, _local_model_cost_map):
     model_cost_map = litellm.model_cost[model]
     assert model_cost_map["input_cost_per_token"] == input_cost
     assert model_cost_map["output_cost_per_token"] == output_cost
@@ -2928,10 +2925,7 @@ def test_gemini_37_flash_launch_pricing(model, input_cost, output_cost, cache_re
     assert model_cost_map["max_input_tokens"] == 1048576
 
 
-def test_generic_cost_per_token_gemini_37_flash():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
+def test_generic_cost_per_token_gemini_37_flash(_local_model_cost_map):
     usage = Usage(
         prompt_tokens=1000,
         completion_tokens=500,
