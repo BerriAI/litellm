@@ -1050,3 +1050,45 @@ def test_map_openai_params_preserves_standard_openai_params_for_claude():
     )
     assert mapped.get("temperature") == 0.5
     assert mapped.get("max_tokens") == 128
+
+
+def test_non_claude_reasoning_model_forwards_reasoning_effort():
+    """Reasoning-capable non-Claude Copilot models must also keep reasoning_effort.
+
+    Copilot serves Gemini, Grok and MAI models that advertise reasoning_effort in
+    its own model catalog, but the provider previously gated the param on the
+    model id containing "claude", so every other family had it dropped while the
+    upstream API would have accepted it.
+    """
+    config = GithubCopilotConfig()
+    model = "gemini-2.5-pro"
+
+    with patch(
+        "litellm.utils.supports_reasoning",
+        return_value=True,
+    ):
+        supported = config.get_supported_openai_params(model)
+        assert "reasoning_effort" in supported
+        # thinking is Anthropic-native and must stay Claude-only
+        assert "thinking" not in supported
+
+        mapped = config.map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        assert mapped.get("reasoning_effort") == "high"
+
+
+def test_non_reasoning_model_keeps_reasoning_effort_out():
+    """A model the catalog reports as non-reasoning must not gain the param."""
+    config = GithubCopilotConfig()
+
+    with patch(
+        "litellm.utils.supports_reasoning",
+        return_value=False,
+    ):
+        supported = config.get_supported_openai_params("gpt-4o")
+        assert "reasoning_effort" not in supported
+        assert "thinking" not in supported
