@@ -505,6 +505,11 @@
           "type": "object",
           "description": "Provider-internal routing hints (e.g. bedrock_invocation_schema)."
         },
+        "regional_endpoint_uplift_multiplier": {
+          "type": "number",
+          "minimum": 1,
+          "description": "Multiplier applied to all token costs when the request is served from a regional or multi-region endpoint instead of the global one (e.g. 1.10 = +10%)."
+        },
         "regional_processing_uplift_multiplier_eu": {
           "type": "number",
           "minimum": 1,

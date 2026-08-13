@@ -26,6 +26,22 @@ Google AI Studio -> token based pricing
 
 models_without_dynamic_pricing: Final = ["gemini-1.0-pro", "gemini-pro", "gemini-2"]
 
+GLOBAL_VERTEX_LOCATION: Final = "global"
+
+
+def _regional_endpoint_uplift(model_info: ModelInfo, vertex_location: str | None) -> float:
+    """
+    Vertex bills a flat premium (currently +10%) on every token type when a request is served
+    from a regional or multi-region endpoint instead of the global one, so the location the
+    request was routed to decides the rate, not just the model.
+    """
+    if vertex_location is None or vertex_location.lower() == GLOBAL_VERTEX_LOCATION:
+        return 1.0
+    multiplier: Final = model_info.get("regional_endpoint_uplift_multiplier")
+    if multiplier is None:
+        return 1.0
+    return float(multiplier)
+
 
 def cost_router(
     model: str,
@@ -196,6 +212,7 @@ def cost_per_token(
     custom_llm_provider: str,
     usage: Usage,
     service_tier: str | None = None,
+    vertex_location: str | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -207,6 +224,8 @@ def cost_per_token(
         - completion_tokens: float, the number of output tokens
         - service_tier: optional tier derived from Gemini trafficType
           ("priority" for ON_DEMAND_PRIORITY, "flex" for FLEX/batch).
+        - vertex_location: optional Vertex location the request was served from
+          (e.g. "us-east5", "us", "global"), used to apply the regional endpoint uplift.
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -222,14 +241,17 @@ def cost_per_token(
     input_cost_per_token_above_128k_tokens: Final = model_info.get("input_cost_per_token_above_128k_tokens")
     output_cost_per_token_above_128k_tokens: Final = model_info.get("output_cost_per_token_above_128k_tokens")
     if input_cost_per_token_above_128k_tokens is not None or output_cost_per_token_above_128k_tokens is not None:
-        return _handle_128k_pricing(
+        prompt_cost, completion_cost = _handle_128k_pricing(
             model_info=model_info,
             usage=usage,
         )
+    else:
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            usage=usage,
+            service_tier=service_tier,
+        )
 
-    return generic_cost_per_token(
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        usage=usage,
-        service_tier=service_tier,
-    )
+    uplift: Final = _regional_endpoint_uplift(model_info=model_info, vertex_location=vertex_location)
+    return prompt_cost * uplift, completion_cost * uplift

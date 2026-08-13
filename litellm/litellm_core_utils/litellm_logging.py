@@ -1484,6 +1484,11 @@ class Logging(LiteLLMLoggingBaseClass):
                     if hasattr(self, "litellm_params") and self.litellm_params
                     else None
                 ),
+                "vertex_location": (
+                    self.litellm_params.get("vertex_location") or self.litellm_params.get("vertex_ai_location")
+                    if hasattr(self, "litellm_params") and self.litellm_params
+                    else None
+                ),
             }
         except Exception as e:  # error creating kwargs for cost calculation
             debug_info = StandardLoggingModelCostFailureDebugInformation(

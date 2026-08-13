@@ -37631,6 +37631,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 5e-06,
+        "regional_endpoint_uplift_multiplier": 1.1,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/haiku-4-5",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -37654,6 +37655,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 5e-06,
+        "regional_endpoint_uplift_multiplier": 1.1,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/haiku-4-5",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -37869,6 +37871,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "regional_endpoint_uplift_multiplier": 1.1,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -37897,6 +37900,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "regional_endpoint_uplift_multiplier": 1.1,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -37927,6 +37931,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "regional_endpoint_uplift_multiplier": 1.1,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -37957,6 +37962,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "regional_endpoint_uplift_multiplier": 1.1,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -37987,6 +37993,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "regional_endpoint_uplift_multiplier": 1.1,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -38018,6 +38025,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "regional_endpoint_uplift_multiplier": 1.1,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -38049,6 +38057,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 5e-05,
+        "regional_endpoint_uplift_multiplier": 1.1,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -38080,6 +38089,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 5e-05,
+        "regional_endpoint_uplift_multiplier": 1.1,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -38112,6 +38122,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "regional_endpoint_uplift_multiplier": 1.1,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -38144,6 +38155,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "regional_endpoint_uplift_multiplier": 1.1,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -38176,6 +38188,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "regional_endpoint_uplift_multiplier": 1.1,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -38208,6 +38221,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "regional_endpoint_uplift_multiplier": 1.1,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -38243,6 +38257,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "regional_endpoint_uplift_multiplier": 1.1,
         "output_cost_per_token_batches": 7.5e-06,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
@@ -38267,6 +38282,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
+        "regional_endpoint_uplift_multiplier": 1.1,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -38299,6 +38315,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "regional_endpoint_uplift_multiplier": 1.1,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -38333,6 +38350,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "regional_endpoint_uplift_multiplier": 1.1,
         "output_cost_per_token_batches": 7.5e-06,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
@@ -45925,6 +45943,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
+        "regional_endpoint_uplift_multiplier": 1.1,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -45957,6 +45976,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "regional_endpoint_uplift_multiplier": 1.1,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,

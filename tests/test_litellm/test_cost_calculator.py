@@ -3530,3 +3530,111 @@ def test_completion_cost_prices_anthropic_shaped_cache_read_tokens():
     )
 
     assert cost == pytest.approx(3 * 5e-6 + 4014 * 5e-7 + 5 * 3e-5, rel=1e-9)
+
+
+def _vertex_claude_usage() -> Usage:
+    return Usage(
+        prompt_tokens=3500,
+        completion_tokens=200,
+        total_tokens=3700,
+        cache_creation_input_tokens=500,
+        cache_read_input_tokens=2000,
+    )
+
+
+def test_vertex_claude_regional_endpoint_uplift_applied(monkeypatch):
+    """Regression: Vertex bills regional and multi-region endpoints 10% above the global
+    endpoint, so a deployment pinned to vertex_location=us-east5 was undercharged by 10%
+    on every token type while we priced it at global rates."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    usage = _vertex_claude_usage()
+    global_prompt, global_completion = cost_per_token(
+        model="claude-sonnet-4-6",
+        custom_llm_provider="vertex_ai",
+        usage_object=usage,
+        vertex_location="global",
+    )
+    regional_prompt, regional_completion = cost_per_token(
+        model="claude-sonnet-4-6",
+        custom_llm_provider="vertex_ai",
+        usage_object=usage,
+        vertex_location="us-east5",
+    )
+
+    expected_global_prompt = 1000 * 3e-6 + 500 * 3.75e-6 + 2000 * 3e-7
+    assert global_prompt == pytest.approx(expected_global_prompt, rel=1e-9)
+    assert global_completion == pytest.approx(200 * 1.5e-5, rel=1e-9)
+    assert regional_prompt == pytest.approx(global_prompt * 1.1, rel=1e-9)
+    assert regional_completion == pytest.approx(global_completion * 1.1, rel=1e-9)
+
+
+def test_vertex_claude_no_uplift_without_location(monkeypatch):
+    """An unknown location must not change pricing, so existing global-endpoint spend stays put."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    usage = _vertex_claude_usage()
+    baseline = cost_per_token(
+        model="claude-opus-4-7",
+        custom_llm_provider="vertex_ai",
+        usage_object=usage,
+    )
+    assert baseline == cost_per_token(
+        model="claude-opus-4-7",
+        custom_llm_provider="vertex_ai",
+        usage_object=usage,
+        vertex_location="GLOBAL",
+    )
+    regional = cost_per_token(
+        model="claude-opus-4-7",
+        custom_llm_provider="vertex_ai",
+        usage_object=usage,
+        vertex_location="us",
+    )
+    assert regional[0] == pytest.approx(baseline[0] * 1.1, rel=1e-9)
+    assert regional[1] == pytest.approx(baseline[1] * 1.1, rel=1e-9)
+
+
+def test_vertex_gemini_unaffected_by_location(monkeypatch):
+    """Only Vertex Claude models carry the regional uplift, Gemini pricing is location independent."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=200, total_tokens=1200)
+    assert cost_per_token(
+        model="gemini-2.5-pro",
+        custom_llm_provider="vertex_ai",
+        usage_object=usage,
+        vertex_location="us-east5",
+    ) == cost_per_token(
+        model="gemini-2.5-pro",
+        custom_llm_provider="vertex_ai",
+        usage_object=usage,
+    )
+
+
+def test_completion_cost_applies_vertex_regional_uplift(monkeypatch):
+    """End-to-end: the location on the deployment's litellm_params must reach the cost calculator."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    response = ModelResponse(
+        model="claude-sonnet-4-6",
+        usage=Usage(prompt_tokens=1000, completion_tokens=200, total_tokens=1200),
+    )
+    global_cost = completion_cost(
+        completion_response=response,
+        model="claude-sonnet-4-6",
+        custom_llm_provider="vertex_ai",
+    )
+    regional_cost = completion_cost(
+        completion_response=response,
+        model="claude-sonnet-4-6",
+        custom_llm_provider="vertex_ai",
+        vertex_location="europe-west1",
+    )
+
+    assert global_cost == pytest.approx(1000 * 3e-6 + 200 * 1.5e-5, rel=1e-9)
+    assert regional_cost == pytest.approx(global_cost * 1.1, rel=1e-9)
