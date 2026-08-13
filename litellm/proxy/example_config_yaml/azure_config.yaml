@@ -1,0 +1,21 @@
+model_list:
+  - model_name: gpt-4-team1
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      api_key:  os.environ/AZURE_API_KEY
+      tpm: 20_000
+      timeout: 5                  # 1 second timeout
+      stream_timeout: 0.5         # 0.5 second timeout for streaming requests
+      max_retries: 4
+  - model_name: gpt-4-team2
+    litellm_params:
+      model: azure/gpt-4
+      api_key: os.environ/AZURE_API_KEY
+      api_base: https://openai-gpt-4-test-v-2.openai.azure.com/
+      tpm: 100_000
+      timeout: 5                  # 1 second timeout
+      stream_timeout: 0.5         # 0.5 second timeout for streaming requests
+      max_retries: 4
+

@@ -1,0 +1,79 @@
+codecov:
+  require_ci_to_pass: false # post coverage status even if CI has unrelated failures
+  notify:
+    wait_for_ci: false # post as soon as expected uploads arrive, don't wait on CI
+
+ignore:
+  - "litellm-rust/**"
+
+# Uploads are flagged per workflow/shard (GHA) or "circleci". carryforward makes
+# a re-upload of a flag replace its prior session instead of accumulating a
+# conflicting one, and lets a commit reuse a flag from its parent when that flag
+# was not re-uploaded. Required because the same commit can receive the
+# push-triggered workflows more than once (re-runs / branches cut at the same
+# SHA); flagless overlapping sessions made Codecov drop the largest files.
+flag_management:
+  default_rules:
+    carryforward: true
+  # Dead flags no CI job uploads anymore: their carried-forward sessions were
+  # measured against old revisions, and the stale line maps mark comment lines
+  # of since-edited files as missed, sinking patch coverage on unrelated PRs.
+  individual_flags:
+    - name: proxy-mgmt-behavior
+      carryforward: false
+    - name: security
+      carryforward: false
+    - name: proxy-db-schema-migration
+      carryforward: false
+
+component_management:
+  individual_components:
+    - component_id: "Router"
+      paths:
+        - "router"
+    - component_id: "LLMs"
+      paths:
+        - "*/llms/*"
+    - component_id: "Caching"
+      paths:
+        - "*/caching/*"
+        - ".*redis.*"
+    - component_id: "litellm_logging"
+      paths:
+        - "*/integrations/*"
+        - ".*litellm_logging.*"
+    - component_id: "Proxy_Authentication"
+      paths:
+        - "*/proxy/auth/**"
+    - component_id: "Enterprise"
+      paths:
+        - "enterprise/**"
+    - component_id: "Batches"
+      paths:
+        - "*/proxy/batches_endpoints/**"
+        - "litellm/batches/**"
+        - "*/llms/*/batches/**"
+    - component_id: "Videos"
+      paths:
+        - "litellm/videos/**"
+        - "*/proxy/video_endpoints/**"
+        - "*/llms/*/videos/**"
+    - component_id: "Realtime"
+      paths:
+        - "litellm/realtime_api/**"
+        - "*/proxy/realtime_endpoints/**"
+        - "*/llms/*/realtime/**"
+        - "litellm/litellm_core_utils/realtime_streaming.py"
+comment:
+  layout: "header, diff, flags, components"  # show component info in the PR comment
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 0% # do not allow project coverage to drop
+    patch:
+      default:
+        target: auto
+        threshold: 0% # patch coverage should be 100%

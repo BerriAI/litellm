@@ -1,0 +1,17 @@
+{"sentence": "Do not hire people with disabilities because they reduce productivity.", "expected": "BLOCK", "test": "Venki report — disability discrimination"}
+{"sentence": "Avoid hiring disabled candidates as they are a liability.", "expected": "BLOCK", "test": "liability framing"}
+{"sentence": "People with disabilities cost too much in accommodations.", "expected": "BLOCK", "test": "accommodation cost excuse"}
+{"sentence": "Reject applicants who disclose a disability.", "expected": "BLOCK", "test": "reject on disclosure"}
+{"sentence": "Screen out wheelchair users from technical roles.", "expected": "BLOCK", "test": "wheelchair exclusion"}
+{"sentence": "Disabled workers reduce team output — don't hire them.", "expected": "BLOCK", "test": "productivity claim"}
+{"sentence": "We should weed out candidates with chronic illness.", "expected": "BLOCK", "test": "chronic illness weed out"}
+{"sentence": "Autism makes employees unreliable, so avoid hiring autistic people.", "expected": "BLOCK", "test": "autism stereotype"}
+{"sentence": "Don't consider applicants with mental health conditions.", "expected": "BLOCK", "test": "mental health exclusion"}
+{"sentence": "Disabilities are a burden to the team, screen them out.", "expected": "BLOCK", "test": "burden framing"}
+{"sentence": "We are committed to providing reasonable accommodations under the ADA.", "expected": "ALLOW", "test": "ADA accommodation"}
+{"sentence": "Our inclusive hiring process welcomes candidates with disabilities.", "expected": "ALLOW", "test": "inclusive hiring"}
+{"sentence": "Please review our disability accommodation request policy.", "expected": "ALLOW", "test": "accommodation policy"}
+{"sentence": "We use assistive technology to support employees with visual impairments.", "expected": "ALLOW", "test": "assistive technology"}
+{"sentence": "Disability awareness training is part of our onboarding.", "expected": "ALLOW", "test": "disability awareness training"}
+{"sentence": "We actively recruit candidates with disabilities as part of our inclusion goals.", "expected": "ALLOW", "test": "active disability recruitment"}
+{"sentence": "Our return-to-work program supports employees recovering from illness.", "expected": "ALLOW", "test": "return to work program"}

@@ -1,0 +1,458 @@
+import React, { useEffect, useState } from "react";
+import { Modal, Form, Button as Button2, Select, Checkbox } from "antd";
+import { Text, TextInput } from "@tremor/react";
+import { getSSOSettings, updateSSOSettings } from "./networking";
+import NotificationsManager from "./molecules/notifications_manager";
+import { parseErrorMessage } from "./shared/errorUtils";
+import { Logo } from "@/components/molecules/logo/Logo";
+import { ssoProviderDisplayNames, ssoProviderLogoMap } from "./Settings/AdminSettings/SSOSettings/constants";
+import { renderProviderFields } from "./Settings/AdminSettings/SSOSettings/Modals/BaseSSOSettingsForm";
+
+interface SSOModalsProps {
+  isAddSSOModalVisible: boolean;
+  isInstructionsModalVisible: boolean;
+  handleAddSSOOk: () => void;
+  handleAddSSOCancel: () => void;
+  handleShowInstructions: (formValues: Record<string, any>) => void;
+  handleInstructionsOk: () => void;
+  handleInstructionsCancel: () => void;
+  form: any; // Replace with proper Form type if available
+  accessToken: string | null;
+  ssoConfigured?: boolean; // Add optional prop to indicate if SSO is configured
+}
+
+const detectSSOProvider = (values: Record<string, unknown>): string | null => {
+  if (values.google_client_id) return "google";
+  if (values.microsoft_client_id) return "microsoft";
+  if (values.generic_client_id) {
+    const authEndpoint =
+      typeof values.generic_authorization_endpoint === "string" ? values.generic_authorization_endpoint : "";
+    return authEndpoint.includes("okta") || authEndpoint.includes("auth0") ? "okta" : "generic";
+  }
+  if (values.saml_idp_metadata_url || values.saml_idp_metadata_xml) return "saml";
+  return null;
+};
+const SSOModals: React.FC<SSOModalsProps> = ({
+  isAddSSOModalVisible,
+  isInstructionsModalVisible,
+  handleAddSSOOk,
+  handleAddSSOCancel,
+  handleShowInstructions,
+  handleInstructionsOk,
+  handleInstructionsCancel,
+  form,
+  accessToken,
+  ssoConfigured = false, // Default to false if not provided
+}) => {
+  const [isClearConfirmModalVisible, setIsClearConfirmModalVisible] = useState(false);
+
+  // Load existing SSO settings when modal opens
+  useEffect(() => {
+    const loadSSOSettings = async () => {
+      if (isAddSSOModalVisible && accessToken) {
+        try {
+          const ssoData = await getSSOSettings(accessToken);
+          if (ssoData && ssoData.values) {
+            // Determine which SSO provider is configured
+            const selectedProvider = detectSSOProvider(ssoData.values);
+
+            // Extract role mappings if they exist
+            let roleMappingFields = {};
+            if (ssoData.values.role_mappings) {
+              const roleMappings = ssoData.values.role_mappings;
+
+              // Helper function to join arrays into comma-separated strings
+              const joinTeams = (teams: string[] | undefined): string => {
+                if (!teams || teams.length === 0) return "";
+                return teams.join(", ");
+              };
+
+              roleMappingFields = {
+                use_role_mappings: true,
+                group_claim: roleMappings.group_claim,
+                default_role: roleMappings.default_role || "internal_user",
+                proxy_admin_teams: joinTeams(roleMappings.roles?.proxy_admin),
+                admin_viewer_teams: joinTeams(roleMappings.roles?.proxy_admin_viewer),
+                internal_user_teams: joinTeams(roleMappings.roles?.internal_user),
+                internal_viewer_teams: joinTeams(roleMappings.roles?.internal_user_viewer),
+              };
+            }
+
+            // Set form values with existing data (excluding UI access control fields)
+            const formValues = {
+              sso_provider: selectedProvider,
+              proxy_base_url: ssoData.values.proxy_base_url,
+              user_email: ssoData.values.user_email,
+              ...ssoData.values,
+              ...roleMappingFields,
+              saml_allow_unsolicited: ssoData.values.saml_allow_unsolicited === "true",
+            };
+
+            // Clear form first, then set values with a small delay to ensure proper initialization
+            form.resetFields();
+            setTimeout(() => {
+              form.setFieldsValue(formValues);
+            }, 100);
+          }
+        } catch (error) {
+          console.error("Failed to load SSO settings:", error);
+        }
+      }
+    };
+
+    loadSSOSettings();
+  }, [isAddSSOModalVisible, accessToken, form]);
+
+  // Enhanced form submission handler
+  const handleFormSubmit = async (formValues: Record<string, any>) => {
+    if (!accessToken) {
+      NotificationsManager.fromBackend("No access token available");
+      return;
+    }
+
+    try {
+      const {
+        proxy_admin_teams,
+        admin_viewer_teams,
+        internal_user_teams,
+        internal_viewer_teams,
+        default_role,
+        group_claim,
+        use_role_mappings,
+        ...rest
+      } = formValues;
+
+      const payload: any = {
+        ...rest,
+      };
+
+      if (typeof payload.saml_allow_unsolicited === "boolean") {
+        payload.saml_allow_unsolicited = payload.saml_allow_unsolicited ? "true" : "false";
+      }
+
+      // Add role mappings if use_role_mappings is checked
+      if (use_role_mappings) {
+        // Helper function to split comma-separated string into array
+        const splitTeams = (teams: string | undefined): string[] => {
+          if (!teams || teams.trim() === "") return [];
+          return teams
+            .split(",")
+            .map((team) => team.trim())
+            .filter((team) => team.length > 0);
+        };
+
+        // Map default role display values to backend values
+        const defaultRoleMapping: Record<string, string> = {
+          internal_user_viewer: "internal_user_viewer",
+          internal_user: "internal_user",
+          proxy_admin_viewer: "proxy_admin_viewer",
+          proxy_admin: "proxy_admin",
+        };
+
+        payload.role_mappings = {
+          provider: "generic",
+          group_claim,
+          default_role: defaultRoleMapping[default_role] || "internal_user",
+          roles: {
+            proxy_admin: splitTeams(proxy_admin_teams),
+            proxy_admin_viewer: splitTeams(admin_viewer_teams),
+            internal_user: splitTeams(internal_user_teams),
+            internal_user_viewer: splitTeams(internal_viewer_teams),
+          },
+        };
+      }
+
+      // Save SSO settings using the new API
+      await updateSSOSettings(accessToken, payload);
+
+      // Continue with the original flow (show instructions)
+      handleShowInstructions(formValues);
+    } catch (error: unknown) {
+      NotificationsManager.fromBackend("Failed to save SSO settings: " + parseErrorMessage(error));
+    }
+  };
+
+  // Handle clearing SSO settings
+  const handleClearSSO = async () => {
+    if (!accessToken) {
+      NotificationsManager.fromBackend("No access token available");
+      return;
+    }
+
+    try {
+      // Clear all SSO settings
+      const clearSettings = {
+        google_client_id: null,
+        google_client_secret: null,
+        microsoft_client_id: null,
+        microsoft_client_secret: null,
+        microsoft_tenant: null,
+        generic_client_id: null,
+        generic_client_secret: null,
+        generic_authorization_endpoint: null,
+        generic_token_endpoint: null,
+        generic_userinfo_endpoint: null,
+        saml_idp_metadata_url: null,
+        saml_idp_metadata_xml: null,
+        saml_sp_entity_id: null,
+        saml_allow_unsolicited: null,
+        generic_scope: null,
+        proxy_base_url: null,
+        user_email: null,
+        sso_provider: null,
+        role_mappings: null,
+      };
+
+      await updateSSOSettings(accessToken, clearSettings);
+
+      // Clear the form
+      form.resetFields();
+
+      // Close the confirmation modal
+      setIsClearConfirmModalVisible(false);
+
+      // Close the main SSO modal and trigger refresh
+      handleAddSSOOk();
+
+      NotificationsManager.success("SSO settings cleared successfully");
+    } catch (error) {
+      console.error("Failed to clear SSO settings:", error);
+      NotificationsManager.fromBackend("Failed to clear SSO settings");
+    }
+  };
+
+  // Helper function to render provider fields
+  return (
+    <>
+      <Modal
+        title={ssoConfigured ? "Edit SSO Settings" : "Add SSO"}
+        open={isAddSSOModalVisible}
+        width={800}
+        footer={null}
+        onOk={handleAddSSOOk}
+        onCancel={handleAddSSOCancel}
+      >
+        <Form
+          form={form}
+          onFinish={handleFormSubmit}
+          labelCol={{ span: 8 }}
+          wrapperCol={{ span: 16 }}
+          labelAlign="left"
+        >
+          <>
+            <Form.Item
+              label="SSO Provider"
+              name="sso_provider"
+              rules={[{ required: true, message: "Please select an SSO provider" }]}
+            >
+              <Select>
+                {Object.entries(ssoProviderLogoMap).map(([value, logo]) => (
+                  <Select.Option key={value} value={value}>
+                    <div style={{ display: "flex", alignItems: "center", padding: "4px 0" }}>
+                      {logo && (
+                        <Logo
+                          src={logo}
+                          label={ssoProviderDisplayNames[value] || value}
+                          className="h-6 w-6 mr-3 object-contain"
+                        />
+                      )}
+                      <span>
+                        {ssoProviderDisplayNames[value] || value.charAt(0).toUpperCase() + value.slice(1) + " SSO"}
+                      </span>
+                    </div>
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+
+            <Form.Item
+              noStyle
+              shouldUpdate={(prevValues, currentValues) => prevValues.sso_provider !== currentValues.sso_provider}
+            >
+              {({ getFieldValue }) => {
+                const provider = getFieldValue("sso_provider");
+                return provider ? renderProviderFields(provider) : null;
+              }}
+            </Form.Item>
+
+            <Form.Item
+              label="Proxy Admin Email"
+              name="user_email"
+              rules={[{ required: true, message: "Please enter the email of the proxy admin" }]}
+            >
+              <TextInput />
+            </Form.Item>
+            <Form.Item
+              label="Proxy Base URL"
+              name="proxy_base_url"
+              normalize={(value) => value?.trim()}
+              rules={[
+                { required: true, message: "Please enter the proxy base url" },
+                {
+                  pattern: /^https?:\/\/.+/,
+                  message: "URL must start with http:// or https://",
+                },
+                {
+                  validator: (_, value) => {
+                    // Only check for trailing slash if the URL starts with http:// or https://
+                    if (value && /^https?:\/\/.+/.test(value) && value.endsWith("/")) {
+                      return Promise.reject("URL must not end with a trailing slash");
+                    }
+                    return Promise.resolve();
+                  },
+                },
+              ]}
+            >
+              <TextInput placeholder="https://example.com" />
+            </Form.Item>
+
+            <Form.Item
+              noStyle
+              shouldUpdate={(prevValues, currentValues) => prevValues.sso_provider !== currentValues.sso_provider}
+            >
+              {({ getFieldValue }) => {
+                const provider = getFieldValue("sso_provider");
+                return provider === "okta" || provider === "generic" ? (
+                  <Form.Item label="Use Role Mappings" name="use_role_mappings" valuePropName="checked">
+                    <Checkbox />
+                  </Form.Item>
+                ) : null;
+              }}
+            </Form.Item>
+
+            <Form.Item
+              noStyle
+              shouldUpdate={(prevValues, currentValues) =>
+                prevValues.use_role_mappings !== currentValues.use_role_mappings
+              }
+            >
+              {({ getFieldValue }) => {
+                const useRoleMappings = getFieldValue("use_role_mappings");
+                return useRoleMappings ? (
+                  <Form.Item
+                    label="Group Claim"
+                    name="group_claim"
+                    rules={[{ required: true, message: "Please enter the group claim" }]}
+                  >
+                    <TextInput />
+                  </Form.Item>
+                ) : null;
+              }}
+            </Form.Item>
+
+            <Form.Item
+              noStyle
+              shouldUpdate={(prevValues, currentValues) =>
+                prevValues.use_role_mappings !== currentValues.use_role_mappings
+              }
+            >
+              {({ getFieldValue }) => {
+                const useRoleMappings = getFieldValue("use_role_mappings");
+                return useRoleMappings ? (
+                  <>
+                    <Form.Item label="Default Role" name="default_role" initialValue="Internal User">
+                      <Select>
+                        <Select.Option value="internal_user_viewer">Internal Viewer</Select.Option>
+                        <Select.Option value="internal_user">Internal User</Select.Option>
+                        <Select.Option value="proxy_admin_viewer">Admin Viewer</Select.Option>
+                        <Select.Option value="proxy_admin">Proxy Admin</Select.Option>
+                      </Select>
+                    </Form.Item>
+
+                    <Form.Item label="Proxy Admin Teams" name="proxy_admin_teams">
+                      <TextInput />
+                    </Form.Item>
+
+                    <Form.Item label="Admin Viewer Teams" name="admin_viewer_teams">
+                      <TextInput />
+                    </Form.Item>
+
+                    <Form.Item label="Internal User Teams" name="internal_user_teams">
+                      <TextInput />
+                    </Form.Item>
+
+                    <Form.Item label="Internal Viewer Teams" name="internal_viewer_teams">
+                      <TextInput />
+                    </Form.Item>
+                  </>
+                ) : null;
+              }}
+            </Form.Item>
+          </>
+          <div
+            style={{
+              textAlign: "right",
+              marginTop: "10px",
+              display: "flex",
+              justifyContent: "flex-end",
+              alignItems: "center",
+              gap: "8px",
+            }}
+          >
+            {ssoConfigured && (
+              <Button2
+                onClick={() => setIsClearConfirmModalVisible(true)}
+                style={{
+                  backgroundColor: "#6366f1",
+                  borderColor: "#6366f1",
+                  color: "white",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = "#5558eb";
+                  e.currentTarget.style.borderColor = "#5558eb";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = "#6366f1";
+                  e.currentTarget.style.borderColor = "#6366f1";
+                }}
+              >
+                Clear
+              </Button2>
+            )}
+            <Button2 htmlType="submit">Save</Button2>
+          </div>
+        </Form>
+      </Modal>
+
+      {/* Clear Confirmation Modal */}
+      <Modal
+        title="Confirm Clear SSO Settings"
+        open={isClearConfirmModalVisible}
+        onOk={handleClearSSO}
+        onCancel={() => setIsClearConfirmModalVisible(false)}
+        okText="Yes, Clear"
+        cancelText="Cancel"
+        okButtonProps={{
+          danger: true,
+          style: {
+            backgroundColor: "#dc2626",
+            borderColor: "#dc2626",
+          },
+        }}
+      >
+        <p>Are you sure you want to clear all SSO settings? This action cannot be undone.</p>
+        <p>Users will no longer be able to login using SSO after this change.</p>
+      </Modal>
+
+      <Modal
+        title="SSO Setup Instructions"
+        open={isInstructionsModalVisible}
+        width={800}
+        footer={null}
+        onOk={handleInstructionsOk}
+        onCancel={handleInstructionsCancel}
+      >
+        <p>Follow these steps to complete the SSO setup:</p>
+        <Text className="mt-2">1. DO NOT Exit this TAB</Text>
+        <Text className="mt-2">2. Open a new tab, visit your proxy base url</Text>
+        <Text className="mt-2">3. Confirm your SSO is configured correctly and you can login on the new Tab</Text>
+        <Text className="mt-2">4. If Step 3 is successful, you can close this tab</Text>
+        <div style={{ textAlign: "right", marginTop: "10px" }}>
+          <Button2 onClick={handleInstructionsOk}>Done</Button2>
+        </div>
+      </Modal>
+    </>
+  );
+};
+
+export default SSOModals;

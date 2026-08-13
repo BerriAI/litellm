@@ -1,0 +1,106 @@
+region = "us-west-2"
+azs    = ["us-west-2a", "us-west-2b"]
+
+# Resource naming: every AWS resource the stack creates is named
+# `${tenant}-litellm-${env}` (or that plus a per-resource suffix). E.g.
+# tenant="acme" + env="stage" → ALB `acme-litellm-stage`, ECS service
+# `acme-litellm-stage-gateway`, etc.
+tenant = "acme"
+env    = "stage"
+
+# Tenant-supplied secrets. Prefer TF_VAR_litellm_master_key /
+# TF_VAR_litellm_license / TF_VAR_ui_password env vars so the values don't
+# end up in a committed tfvars file. All three are optional — when
+# omitted the stack auto-generates a master key, runs without a license,
+# and falls back to LITELLM_MASTER_KEY for UI login.
+# litellm_master_key = "sk-..."
+# litellm_license    = "lic-..."
+# ui_password        = "..."
+
+# TLS: provide an ACM cert for production. Without one, plan fails unless
+# allow_plaintext_alb = true is set explicitly (trial/dev only).
+# acm_certificate_arn = "arn:aws:acm:us-west-2:111122223333:certificate/..."
+# allow_plaintext_alb = true
+
+# Storage retention: false (default) makes `terraform destroy` refuse on a
+# non-empty bucket / take an Aurora final snapshot. Flip to true only for
+# ephemeral / CI stacks where you accept losing the data.
+# s3_force_destroy    = false
+# skip_final_snapshot = false
+
+# Component images and per-task sizing/autoscaling are NOT exposed as
+# variables in this example (it keeps the curated surface small). They
+# default to working public GHCR images. To pin images or tune
+# CPU/memory/workers/autoscaling, set those inputs directly on the
+# `module "litellm"` block in main.tf — the full list is in
+# ../../variables.tf — or call the module from your own root config.
+
+# ---------- proxy_config (mirrors helm gateway.config.proxy_config) ----------
+# proxy_config = {
+#   model_list = [
+#     {
+#       model_name = "gpt-4o"
+#       litellm_params = {
+#         model   = "openai/gpt-4o"
+#         api_key = "os.environ/OPENAI_API_KEY"
+#       }
+#     },
+#     {
+#       model_name = "claude-sonnet-4-6"
+#       litellm_params = {
+#         model   = "anthropic/claude-sonnet-4-6"
+#         api_key = "os.environ/ANTHROPIC_API_KEY"
+#       }
+#     },
+#   ]
+#   general_settings = {
+#     master_key   = "os.environ/LITELLM_MASTER_KEY"
+#     database_url = "os.environ/DATABASE_URL"
+#
+#     # Optional. The module already exports REDIS_HOST / REDIS_PORT / REDIS_SSL
+#     # from the ElastiCache group it provisions, and the proxy falls back to
+#     # those for cross-pod rate limits, spend tracking and the pod lock manager.
+#     # Set this block only to coordinate through a Redis the module does not
+#     # manage; it overrides the REDIS_* env fallback. Cluster mode takes
+#     # `startup_nodes` and sentinel takes `sentinel_nodes` + `service_name`
+#     # coordination_redis = {
+#     #   host     = "os.environ/COORDINATION_REDIS_HOST"
+#     #   port     = "os.environ/COORDINATION_REDIS_PORT"
+#     #   password = "os.environ/COORDINATION_REDIS_PASSWORD"
+#     #   ssl      = true
+#     # }
+#   }
+# }
+
+# ---------- Extra env / secrets ----------
+# Plain-text env vars (non-sensitive). Land directly in the ECS task def.
+# gateway_extra_env = {
+#   LANGFUSE_HOST = "https://us.cloud.langfuse.com"
+# }
+
+# Backend env vars commonly tuned in prod: SSO redirect, docs branding,
+# UI admin username. UI_PASSWORD is its own first-class var (see top).
+# backend_extra_env = {
+#   AUTO_REDIRECT_UI_LOGIN_TO_SSO = "true"
+#   DOCS_TITLE                    = "Acme LiteLLM"
+#   UI_USERNAME                   = "admin"
+# }
+
+# Provider API keys, sourced from existing Secrets Manager entries. The
+# execution role auto-gains GetSecretValue on each ARN listed here. The
+# values you reference above as `os.environ/OPENAI_API_KEY` must appear
+# here. Same shape works for backend_extra_secrets.
+# gateway_extra_secrets = {
+#   OPENAI_API_KEY    = "arn:aws:secretsmanager:us-west-2:111122223333:secret:openai-api-key-AbCdEf"
+#   ANTHROPIC_API_KEY = "arn:aws:secretsmanager:us-west-2:111122223333:secret:anthropic-api-key-GhIjKl"
+# }
+
+# ---------- OpenTelemetry v2 ----------
+# OTel is gated on otel_endpoint: empty (default) and nothing is added to
+# the container env; set it and both gateway and backend gain
+# LITELLM_OTEL_V2=true plus the OTEL_* block (with OTEL_SERVICE_NAME
+# stamped per component). The knobs aren't surfaced as wrapper vars in
+# this example; set them directly on the `module "litellm"` block in
+# main.tf (otel_endpoint, otel_exporter, otel_environment_name,
+# otel_capture_message_content, otel_headers_secret_arn). Full docs in
+# ../../variables.tf.

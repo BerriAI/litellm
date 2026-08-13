@@ -1,0 +1,116 @@
+{
+    "batch": [
+        {
+            "id": "872a0a1c-4328-431b-80b6-fd55a8a44477",
+            "type": "trace-create",
+            "body": {
+                "id": "litellm-test-533ffb2d-a0a3-45b5-911c-7940466cdc8e",
+                "timestamp": "2025-01-22T17:19:11.234960Z",
+                "name": "test_trace_name",
+                "userId": "test_user_id",
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Hello!"
+                        }
+                    ]
+                },
+                "output": {
+                    "content": "Hello! How can I assist you today?",
+                    "role": "assistant",
+                    "tool_calls": null,
+                    "function_call": null,
+                    "provider_specific_fields": null
+                },
+                "sessionId": "test_session_id",
+                "version": "test_trace_version",
+                "metadata": {
+                    "test_key": "test_value"
+                },
+                "tags": [
+                    "test_tag",
+                    "test_tag_2"
+                ]
+            },
+            "timestamp": "2025-01-22T17:19:11.235169Z"
+        },
+        {
+            "id": "18d6f044-e522-4376-96e0-7eec765677ed",
+            "type": "generation-create",
+            "body": {
+                "traceId": "litellm-test-533ffb2d-a0a3-45b5-911c-7940466cdc8e",
+                "name": "test_generation_name",
+                "startTime": "2025-01-22T09:19:10.957072-08:00",
+                "metadata": {
+                    "tags": [
+                        "test_tag",
+                        "test_tag_2"
+                    ],
+                    "parent_observation_id": "test_parent_observation_id",
+                    "version": "test_version",
+                    "hidden_params": {
+                        "model_id": null,
+                        "cache_key": null,
+                        "api_base": "https://api.openai.com",
+                        "response_cost": 3.5e-05,
+                        "additional_headers": {},
+                        "litellm_overhead_time_ms": null,
+                        "batch_models": null,
+                        "litellm_model_name": "gpt-3.5-turbo",
+                        "usage_object": null
+                    },
+                    "litellm_response_cost": 3.5e-05,
+                    "cache_hit": false,
+                    "requester_metadata": {}
+                },
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Hello!"
+                        }
+                    ]
+                },
+                "output": {
+                    "content": "Hello! How can I assist you today?",
+                    "role": "assistant",
+                    "tool_calls": null,
+                    "function_call": null,
+                    "provider_specific_fields": null
+                },
+                "level": "DEFAULT",
+                "parentObservationId": "test_parent_observation_id",
+                "version": "test_version",
+                "id": "time-09-19-10-957072_chatcmpl-4da65aba-32e4-400d-aaa2-6bfe096d8141",
+                "endTime": "2025-01-22T09:19:11.234200-08:00",
+                "completionStartTime": "2025-01-22T09:19:11.234200-08:00",
+                "model": "gpt-3.5-turbo",
+                "modelParameters": {
+                    "extra_body": "{}"
+                },
+                "usage": {
+                    "input": 10,
+                    "output": 20,
+                    "unit": "TOKENS",
+                    "totalCost": 3.5e-05
+                },
+                "usageDetails": {
+                    "input": 10,
+                    "output": 20,
+                    "total": 30,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0
+                }
+            },
+            "timestamp": "2025-01-22T17:19:11.235541Z"
+        }
+    ],
+    "metadata": {
+        "batch_size": 2,
+        "sdk_integration": "litellm",
+        "sdk_name": "python",
+        "sdk_version": "2.44.1",
+        "public_key": "pk-lf-e02aaea3-8668-4c9f-8c69-771a4ea1f5c9"
+    }
+}
