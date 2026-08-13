@@ -105,8 +105,6 @@ def anthropic_sse_error_frames(message: str | Mapping[str, object]) -> tuple[byt
     travel as a frame. A structured detail is JSON-serialized into the string so it stays machine
     readable without violating the string-typed contract.
     """
-    # AnthropicErrorDetail.message is a str, so a structured detail is serialized into the string
-    # rather than nested as an object
     text: Final = message if isinstance(message, str) else json.dumps(message, default=str)
     body: Final = json.dumps(text)
     return (
