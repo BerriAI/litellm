@@ -27473,6 +27473,11 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 4.25e-06,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.0025,
+            "search_context_size_low": 0.0025,
+            "search_context_size_medium": 0.0025
+        },
         "source": "https://dev.meta.ai/docs/getting-started/pricing-rate-limits",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -27509,6 +27514,11 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 4.25e-06,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.0025,
+            "search_context_size_low": 0.0025,
+            "search_context_size_medium": 0.0025
+        },
         "source": "https://dev.meta.ai/docs/getting-started/pricing-rate-limits",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -27545,6 +27555,11 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 2e-07,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.0025,
+            "search_context_size_low": 0.0025,
+            "search_context_size_medium": 0.0025
+        },
         "source": "https://dev.meta.ai/docs/getting-started/pricing-rate-limits",
         "supported_endpoints": [
             "/v1/chat/completions",
