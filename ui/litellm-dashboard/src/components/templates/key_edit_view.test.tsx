@@ -59,6 +59,24 @@ vi.mock("../organisms/create_key_button", () => ({
   fetchTeamModels: vi.fn().mockResolvedValue(["team-model-1", "team-model-2"]),
 }));
 
+const routerSettingsMocks = vi.hoisted(() => ({
+  receivedValue: undefined as { router_settings: Record<string, unknown> } | undefined,
+  editedValue: null as Record<string, unknown> | null,
+}));
+
+vi.mock("../common_components/RouterSettingsAccordion", async () => {
+  const { forwardRef, useImperativeHandle } = await import("react");
+  return {
+    default: forwardRef(({ value }: { value?: { router_settings: Record<string, unknown> } }, ref) => {
+      routerSettingsMocks.receivedValue = value;
+      useImperativeHandle(ref, () => ({
+        getValue: () => ({ router_settings: routerSettingsMocks.editedValue ?? value?.router_settings ?? {} }),
+      }));
+      return <div data-testid="router-settings-accordion" />;
+    }),
+  };
+});
+
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: vi.fn().mockReturnValue({
     data: [
@@ -160,6 +178,83 @@ describe("KeyEditView", () => {
     last_rotation_at: undefined,
     key_rotation_at: undefined,
   };
+  describe("router settings", () => {
+    const UNSUPPORTED_STORED_FIELD = { tag_routing_prefix: "team-" };
+    const STORED_ROUTER_SETTINGS = {
+      num_retries: 2,
+      fallbacks: [{ "gpt-4": ["gpt-4o"] }],
+      ...UNSUPPORTED_STORED_FIELD,
+    };
+
+    const renderWithRouterSettings = (onSubmit: (values: Record<string, unknown>) => Promise<void>) =>
+      renderWithProviders(
+        <KeyEditView
+          keyData={{ ...MOCK_KEY_DATA, router_settings: STORED_ROUTER_SETTINGS }}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken="test-token"
+          userID="test-user"
+          userRole="proxy_admin"
+          premiumUser={true}
+        />,
+      );
+
+    beforeEach(() => {
+      routerSettingsMocks.receivedValue = undefined;
+      routerSettingsMocks.editedValue = null;
+    });
+
+    it("should load the fields it renders into the editor and withhold the ones it does not", async () => {
+      renderWithRouterSettings(async () => {});
+
+      await waitFor(() => {
+        expect(routerSettingsMocks.receivedValue).toStrictEqual({
+          router_settings: { num_retries: 2, fallbacks: [{ "gpt-4": ["gpt-4o"] }] },
+        });
+      });
+    });
+
+    it("should submit edited fallbacks alongside routing fields the editor cannot show", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderWithRouterSettings(onSubmit);
+      routerSettingsMocks.editedValue = { num_retries: 2, fallbacks: [{ "gpt-4": ["gpt-4o", "gpt-4o-mini"] }] };
+
+      fireEvent.click(screen.getByText("Save Changes"));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            router_settings: expect.objectContaining({
+              ...UNSUPPORTED_STORED_FIELD,
+              num_retries: 2,
+              fallbacks: [{ "gpt-4": ["gpt-4o", "gpt-4o-mini"] }],
+            }),
+          }),
+        );
+      });
+    });
+
+    it("should submit cleared router settings so removing every fallback is persisted", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderWithRouterSettings(onSubmit);
+      routerSettingsMocks.editedValue = { num_retries: null, fallbacks: null };
+
+      fireEvent.click(screen.getByText("Save Changes"));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            router_settings: expect.objectContaining({
+              ...UNSUPPORTED_STORED_FIELD,
+              num_retries: null,
+              fallbacks: null,
+            }),
+          }),
+        );
+      });
+    });
+  });
+
   it("should render", async () => {
     const { getByText } = renderWithProviders(
       <KeyEditView
