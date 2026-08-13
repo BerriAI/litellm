@@ -11094,3 +11094,104 @@ async def test_new_team_output_token_estimate_rejected_for_non_admin():
 
     assert str(exc.value.code) == "403"
     assert "on a team" in str(exc.value.message)
+
+
+def _wire_new_team_prisma(mock_db_client):
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    mock_db_client.get_data = AsyncMock(return_value=None)
+    mock_db_client.db = MagicMock()
+
+    created_team = MagicMock(team_id="team-defaults")
+    created_team.model_dump.return_value = {"team_id": "team-defaults"}
+
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_teamtable.create = AsyncMock(return_value=created_team)
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=created_team)
+    mock_db_client.db.litellm_usertable = MagicMock()
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    return mock_db_client.db.litellm_teamtable.create
+
+
+@pytest.mark.asyncio
+async def test_new_team_explicit_null_budget_duration_beats_configured_default(
+    mock_db_client, mock_admin_auth, monkeypatch
+):
+    """An explicit `"budget_duration": null` asks for a lifetime budget that never resets.
+
+    Gating on the value alone made that indistinguishable from omitting the field,
+    so the default overrode the opt-out and budget_reset_at got stamped.
+    """
+    from fastapi import Request
+
+    import litellm
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    monkeypatch.setattr(litellm, "default_team_settings", None)
+    monkeypatch.setattr(litellm, "default_team_params", {"budget_duration": "30d"})
+    mock_team_create = _wire_new_team_prisma(mock_db_client)
+
+    await new_team(
+        data=NewTeamRequest(team_alias="lifetime-budget-team", budget_duration=None),
+        http_request=MagicMock(spec=Request),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    team_data = mock_team_create.call_args.kwargs["data"]
+    assert team_data.get("budget_duration") is None
+    assert team_data.get("budget_reset_at") is None
+
+
+@pytest.mark.asyncio
+async def test_new_team_omitted_budget_duration_still_takes_configured_default(
+    mock_db_client, mock_admin_auth, monkeypatch
+):
+    """Omitting the field keeps applying the default, the behavior the explicit-null fix must not break."""
+    from fastapi import Request
+
+    import litellm
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    monkeypatch.setattr(litellm, "default_team_settings", None)
+    monkeypatch.setattr(litellm, "default_team_params", {"budget_duration": "30d"})
+    mock_team_create = _wire_new_team_prisma(mock_db_client)
+
+    await new_team(
+        data=NewTeamRequest(team_alias="default-budget-team"),
+        http_request=MagicMock(spec=Request),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    team_data = mock_team_create.call_args.kwargs["data"]
+    assert team_data.get("budget_duration") == "30d"
+    assert team_data.get("budget_reset_at") is not None
+
+
+@pytest.mark.asyncio
+async def test_new_team_explicit_null_max_budget_still_takes_configured_default(
+    mock_db_client, mock_admin_auth, monkeypatch
+):
+    """The explicit-null opt-out is budget_duration-only: nulling limit fields
+    (max_budget, tpm/rpm) must not skip configured defaults, or any team creator
+    could mint uncapped teams (veria finding on PR #36699)."""
+    from fastapi import Request
+
+    import litellm
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    monkeypatch.setattr(litellm, "default_team_settings", None)
+    monkeypatch.setattr(litellm, "default_team_params", {"max_budget": 100.0})
+    mock_team_create = _wire_new_team_prisma(mock_db_client)
+
+    await new_team(
+        data=NewTeamRequest(team_alias="unlimited-budget-team", max_budget=None),
+        http_request=MagicMock(spec=Request),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    team_data = mock_team_create.call_args.kwargs["data"]
+    assert team_data.get("max_budget") == 100.0
