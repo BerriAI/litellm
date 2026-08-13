@@ -1426,6 +1426,52 @@ async def test_update_daily_spend_re_raises_exception_after_logging():
 
 
 @pytest.mark.asyncio
+async def test_update_daily_spend_keeps_failed_transactions_for_retry():
+    """
+    A failed batch must stay in the caller's transaction dict, otherwise the
+    Redis re-queue in _commit_spend_updates_to_db_with_redis has nothing left to
+    push back and the spend is lost permanently.
+    """
+
+    def raise_outage():
+        raise ValueError("simulated database outage")
+
+    prisma_client = _RecordingPrisma(execute_raw=raise_outage)
+
+    daily_spend_transactions = {
+        "test_key": {
+            "user_id": "test-user",
+            "date": "2024-01-01",
+            "api_key": "test-api-key",
+            "model": "gpt-4",
+            "custom_llm_provider": "openai",
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "spend": 0.1,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        }
+    }
+    expected = dict(daily_spend_transactions)
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.failure_handler = AsyncMock()
+
+    with pytest.raises(ValueError, match="simulated database outage"):
+        await DBSpendUpdateWriter._update_daily_spend(
+            n_retry_times=0,
+            prisma_client=prisma_client,
+            proxy_logging_obj=mock_proxy_logging,
+            daily_spend_transactions=daily_spend_transactions,
+            entity_type="user",
+            entity_id_field="user_id",
+        )
+
+    assert daily_spend_transactions == expected
+
+
+@pytest.mark.asyncio
 async def test_commit_key_spend_updates_includes_last_active():
     """
     Test that _commit_spend_updates_to_db sets last_active alongside spend
